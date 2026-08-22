@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://looper.dev/schemas/v1alpha1/environment-snapshot.schema.json",
+  "title": "Looper Environment Snapshot",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "environmentId"],
+  "properties": {
+    "schemaVersion": { "const": "v1alpha1" },
+    "environmentId": { "type": "string", "minLength": 1, "maxLength": 160 },
+    "synthetic": { "type": "boolean", "default": false },
+    "systemFingerprintDigest": { "type": ["string", "null"], "pattern": "^sha256:[0-9a-f]{64}$" },
+    "hostname": { "type": ["string", "null"], "maxLength": 255 },
+    "platform": { "type": ["string", "null"], "maxLength": 255 },
+    "cpuModel": { "type": ["string", "null"], "maxLength": 255 },
+    "logicalCpuCount": { "type": ["integer", "null"], "minimum": 0 },
+    "numaNodeCount": { "type": ["integer", "null"], "minimum": 0 },
+    "memoryTotalBytes": { "type": ["integer", "null"], "minimum": 0 },
+    "disks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name"],
+        "properties": {
+          "name": { "type": "string", "minLength": 1, "maxLength": 120 },
+          "kind": { "type": ["string", "null"], "maxLength": 80 },
+          "sizeGiB": { "type": ["integer", "null"], "minimum": 0 }
+        }
+      }
+    },
+    "nics": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name"],
+        "properties": {
+          "name": { "type": "string", "minLength": 1, "maxLength": 120 },
+          "linkSpeed": { "type": ["string", "null"], "maxLength": 80 }
+        }
+      }
+    },
+    "accelerators": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["index"],
+        "properties": {
+          "index": { "type": "integer", "minimum": 0 },
+          "model": { "type": ["string", "null"] },
+          "uuid": { "type": ["string", "null"], "maxLength": 120 },
+          "memoryTotalMiB": { "type": ["integer", "null"], "minimum": 0 },
+          "pcieLink": { "type": ["string", "null"], "maxLength": 80 },
+          "nvlinkPeers": { "type": ["array", "null"], "items": { "type": "integer", "minimum": 0 } }
+        }
+      }
+    },
+    "acceleratorCount": { "type": ["integer", "null"], "minimum": 0 },
+    "interconnect": { "type": ["object", "null"] },
+    "driverVersion": { "type": ["string", "null"], "maxLength": 80 },
+    "cudaVersion": { "type": ["string", "null"], "maxLength": 80 },
+    "rocmVersion": { "type": ["string", "null"], "maxLength": 80 },
+    "communicationLibrary": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "version": { "type": ["string", "null"], "maxLength": 80 },
+        "digest": { "type": ["string", "null"], "pattern": "^sha256:[0-9a-f]{64}$" }
+      }
+    },
+    "frameworks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name"],
+        "properties": {
+          "name": { "type": "string", "minLength": 1, "maxLength": 120 },
+          "version": { "type": ["string", "null"], "maxLength": 80 },
+          "digest": { "type": ["string", "null"], "pattern": "^sha256:[0-9a-f]{64}$" }
+        }
+      }
+    },
+    "compiler": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "version": { "type": ["string", "null"], "maxLength": 80 },
+        "digest": { "type": ["string", "null"], "pattern": "^sha256:[0-9a-f]{64}$" }
+      }
+    },
+    "containerImageDigest": { "type": ["string", "null"], "pattern": "^sha256:[0-9a-f]{64}$" },
+    "performanceEnvVars": { "type": "object", "additionalProperties": { "type": "string" } },
+    "extensions": { "type": "object" },
+    "collectedAt": { "type": ["string", "null"] }
+  }
+}

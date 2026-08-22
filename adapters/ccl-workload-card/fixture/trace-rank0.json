@@ -1,0 +1,278 @@
+{
+  "schemaVersion": "looper.synthetic-trace/v1alpha1",
+  "traceSetId": "synthetic-allreduce-small-traces",
+  "rank": 0,
+  "device": 0,
+  "steps": [
+    {
+      "index": 0,
+      "phase": "warmup",
+      "compute": 950.0,
+      "communication": 250.0
+    },
+    {
+      "index": 1,
+      "phase": "warmup",
+      "compute": 950.0,
+      "communication": 250.0
+    },
+    {
+      "index": 2,
+      "phase": "warmup",
+      "compute": 950.0,
+      "communication": 250.0
+    },
+    {
+      "index": 3,
+      "phase": "warmup",
+      "compute": 950.0,
+      "communication": 250.0
+    },
+    {
+      "index": 4,
+      "phase": "warmup",
+      "compute": 950.0,
+      "communication": 250.0
+    },
+    {
+      "index": 5,
+      "phase": "measurement",
+      "compute": 850.0,
+      "communication": 150.0
+    },
+    {
+      "index": 6,
+      "phase": "measurement",
+      "compute": 850.0,
+      "communication": 150.0
+    },
+    {
+      "index": 7,
+      "phase": "measurement",
+      "compute": 850.0,
+      "communication": 150.0
+    },
+    {
+      "index": 8,
+      "phase": "measurement",
+      "compute": 850.0,
+      "communication": 150.0
+    },
+    {
+      "index": 9,
+      "phase": "measurement",
+      "compute": 850.0,
+      "communication": 150.0
+    },
+    {
+      "index": 10,
+      "phase": "measurement",
+      "compute": 850.0,
+      "communication": 150.0
+    },
+    {
+      "index": 11,
+      "phase": "measurement",
+      "compute": 850.0,
+      "communication": 150.0
+    },
+    {
+      "index": 12,
+      "phase": "measurement",
+      "compute": 850.0,
+      "communication": 150.0
+    },
+    {
+      "index": 13,
+      "phase": "measurement",
+      "compute": 850.0,
+      "communication": 150.0
+    },
+    {
+      "index": 14,
+      "phase": "measurement",
+      "compute": 850.0,
+      "communication": 150.0
+    },
+    {
+      "index": 15,
+      "phase": "measurement",
+      "compute": 850.0,
+      "communication": 150.0
+    },
+    {
+      "index": 16,
+      "phase": "measurement",
+      "compute": 850.0,
+      "communication": 150.0
+    },
+    {
+      "index": 17,
+      "phase": "measurement",
+      "compute": 850.0,
+      "communication": 150.0
+    },
+    {
+      "index": 18,
+      "phase": "measurement",
+      "compute": 850.0,
+      "communication": 150.0
+    },
+    {
+      "index": 19,
+      "phase": "measurement",
+      "compute": 850.0,
+      "communication": 150.0
+    },
+    {
+      "index": 20,
+      "phase": "measurement",
+      "compute": 850.0,
+      "communication": 150.0
+    },
+    {
+      "index": 21,
+      "phase": "measurement",
+      "compute": 850.0,
+      "communication": 150.0
+    },
+    {
+      "index": 22,
+      "phase": "measurement",
+      "compute": 850.0,
+      "communication": 150.0
+    },
+    {
+      "index": 23,
+      "phase": "measurement",
+      "compute": 850.0,
+      "communication": 150.0
+    },
+    {
+      "index": 24,
+      "phase": "measurement",
+      "compute": 850.0,
+      "communication": 150.0
+    },
+    {
+      "index": 25,
+      "phase": "measurement",
+      "compute": 850.0,
+      "communication": 150.0
+    },
+    {
+      "index": 26,
+      "phase": "measurement",
+      "compute": 850.0,
+      "communication": 150.0
+    },
+    {
+      "index": 27,
+      "phase": "measurement",
+      "compute": 850.0,
+      "communication": 150.0
+    },
+    {
+      "index": 28,
+      "phase": "measurement",
+      "compute": 850.0,
+      "communication": 150.0
+    },
+    {
+      "index": 29,
+      "phase": "measurement",
+      "compute": 850.0,
+      "communication": 150.0
+    },
+    {
+      "index": 30,
+      "phase": "measurement",
+      "compute": 850.0,
+      "communication": 150.0
+    },
+    {
+      "index": 31,
+      "phase": "measurement",
+      "compute": 850.0,
+      "communication": 150.0
+    },
+    {
+      "index": 32,
+      "phase": "measurement",
+      "compute": 850.0,
+      "communication": 150.0
+    },
+    {
+      "index": 33,
+      "phase": "measurement",
+      "compute": 850.0,
+      "communication": 150.0
+    },
+    {
+      "index": 34,
+      "phase": "measurement",
+      "compute": 850.0,
+      "communication": 150.0
+    },
+    {
+      "index": 35,
+      "phase": "measurement",
+      "compute": 850.0,
+      "communication": 150.0
+    },
+    {
+      "index": 36,
+      "phase": "measurement",
+      "compute": 850.0,
+      "communication": 150.0
+    },
+    {
+      "index": 37,
+      "phase": "measurement",
+      "compute": 850.0,
+      "communication": 150.0
+    },
+    {
+      "index": 38,
+      "phase": "measurement",
+      "compute": 850.0,
+      "communication": 150.0
+    },
+    {
+      "index": 39,
+      "phase": "measurement",
+      "compute": 850.0,
+      "communication": 150.0
+    },
+    {
+      "index": 40,
+      "phase": "measurement",
+      "compute": 850.0,
+      "communication": 150.0
+    },
+    {
+      "index": 41,
+      "phase": "measurement",
+      "compute": 850.0,
+      "communication": 150.0
+    },
+    {
+      "index": 42,
+      "phase": "measurement",
+      "compute": 850.0,
+      "communication": 150.0
+    },
+    {
+      "index": 43,
+      "phase": "measurement",
+      "compute": 850.0,
+      "communication": 150.0
+    },
+    {
+      "index": 44,
+      "phase": "measurement",
+      "compute": 850.0,
+      "communication": 150.0
+    }
+  ]
+}

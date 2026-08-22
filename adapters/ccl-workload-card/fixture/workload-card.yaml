@@ -1,5 +1,5 @@
 fixture_notice: Synthetic adapter fixture; not upstream CCL content.
-card_version: 1
+card_version: 2
 workload:
   id: synthetic-allreduce-small
   title: Synthetic Small All-Reduce
@@ -17,6 +17,45 @@ metrics:
   - name: effective_bandwidth
     unit: gigabyte/second
     direction: higher-is-better
+results:
+  - metric: completion_time
+    value: 1000.0
+    unit: microsecond
+    statistic: mean
+    sample_count: 40
+  - metric: effective_bandwidth
+    value: 1.5
+    unit: gigabyte/second
+    statistic: mean
+    sample_count: 40
+parallelism:
+  strategy: data-parallel
+  world_size: 8
+communication:
+  library: synthetic-ccl
+  version: 1.0.0
+hardware:
+  accelerator_model: Synthetic GPU 16G
+  accelerator_count: 8
+  fabric: synthetic-interconnect
 requirements:
   fabric: synthetic-interconnect
   accelerator_count: 8
+trace:
+  format: looper-synthetic-json
+  time_unit: microsecond
+  clock_domain: monotonic
+  collector:
+    name: synthetic-trace-collector
+    version: "1"
+  expected_ranks: 2
+  step_boundary_rule: >-
+    One step per all-reduce iteration; step index equals the iteration counter;
+    warmup steps are indices below execution.warmup_iterations.
+  files:
+    - rank: 0
+      device: 0
+      path: trace-rank0.json
+    - rank: 1
+      device: 1
+      path: trace-rank1.json
