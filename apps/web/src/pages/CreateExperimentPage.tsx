@@ -33,6 +33,8 @@ export function CreateExperimentPage() {
     [benchmarks.data],
   );
   const selectedBenchmark = scenarios.find(item => (item.key || item.id) === form.benchmarkKey);
+  const requiredCapabilities = new Set(selectedBenchmark?.tags || []);
+  const targetReady = (target: { runnable?: boolean; tags?: string[] }) => target.runnable && [...requiredCapabilities].every(capability => target.tags?.includes(capability));
   const mutation = useMutation({
     mutationFn: () => api.createExperiment({
       mode: 'selection',
@@ -142,10 +144,10 @@ export function CreateExperimentPage() {
           </div>}
           <div className="full"><span className="field-label">候选资源 *</span>
             <div className="target-choice-list">
-              {(targets.data?.items || []).map(target => <label key={target.id} className={form.targetIds.includes(target.id) ? 'selected' : ''}>
-                <input type="checkbox" checked={form.targetIds.includes(target.id)} onChange={() => toggleTarget(target.id, target.name)} />
+              {(targets.data?.items || []).map(target => <label key={target.id} className={form.targetIds.includes(target.id) ? 'selected' : targetReady(target) ? '' : 'disabled'}>
+                <input type="checkbox" disabled={!targetReady(target)} checked={form.targetIds.includes(target.id)} onChange={() => toggleTarget(target.id, target.name)} />
                 <span><strong>{target.name}</strong><small>{target.hardware || target.id}</small></span>
-                <em>{target.runnable ? '可运行' : target.status === 'inventory' ? '仅库存' : target.status || '未知'}</em>
+                <em>{targetReady(target) ? '可运行' : !target.runnable ? 'Worker 未就绪' : '不支持当前 Benchmark'}</em>
               </label>)}
             </div>
             {form.targetIds.length > 0 && <div className="target-binding-editor">

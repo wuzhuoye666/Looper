@@ -53,6 +53,8 @@ attrs==26.1.0
     #   referencing
 bce-python-sdk==0.9.76
     # via looper-platform
+bcrypt==5.0.0
+    # via paramiko
 certifi==2026.7.22
     # via
     #   httpcore
@@ -60,7 +62,9 @@ certifi==2026.7.22
     #   requests
     #   volcengine-python-sdk
 cffi==2.1.1 ; platform_python_implementation != 'PyPy'
-    # via cryptography
+    # via
+    #   cryptography
+    #   pynacl
 charset-normalizer==3.5.1
     # via requests
 click==8.4.2
@@ -79,7 +83,9 @@ coverage==7.15.4
 crc32c==2.8
     # via bce-python-sdk
 cryptography==50.0.0
-    # via alibabacloud-tea-openapi
+    # via
+    #   alibabacloud-tea-openapi
+    #   paramiko
 darabonba-core==1.0.8
     # via
     #   alibabacloud-ecs20140526
@@ -136,6 +142,8 @@ packaging==26.3
     # via
     #   optuna
     #   pytest
+paramiko==3.5.1
+    # via looper-platform
 pluggy==1.6.0
     # via
     #   pytest
@@ -163,6 +171,8 @@ pygments==2.21.0
     # via
     #   pytest
     #   rich
+pynacl==1.6.2
+    # via paramiko
 pytest==8.4.2
     # via
     #   looper-platform

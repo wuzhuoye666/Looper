@@ -92,6 +92,9 @@ def target_view(record: TargetRecord) -> dict[str, Any]:
         f"{fingerprint.get('logical_cpu_count')} vCPU"
         if fingerprint.get("logical_cpu_count")
         else None,
+        f"{fingerprint.get('memory_gib'):g} GiB"
+        if fingerprint.get("memory_gib")
+        else None,
     ]
     return {
         "id": record.id,

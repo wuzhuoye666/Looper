@@ -94,7 +94,13 @@ from looper_api.cloud_service import (
 from looper_api.config import Settings, get_settings
 from looper_api.database import SessionLocal, get_session, init_database
 from looper_api.evidence import build_evidence_bundle, verify_evidence_bundle
-from looper_api.external_targets import ImportExternalTargetRequest, import_external_target
+from looper_api.external_targets import (
+    ConnectExternalTargetRequest,
+    ExternalTargetError,
+    ImportExternalTargetRequest,
+    connect_external_target,
+    import_external_target,
+)
 from looper_api.models import (
     ArtifactLinkRecord,
     ArtifactRecord,
@@ -109,6 +115,7 @@ from looper_api.post_optimization import post_optimization_view, start_post_opti
 from looper_api.providers.base import CloudProviderError
 from looper_api.providers.registry import CloudProviderRegistry, get_provider_registry
 from looper_api.providers.tencent_cvm import TencentInventoryError, sync_cvm_inventory
+from looper_api.remote_worker import deploy_remote_worker, deployment_status
 from looper_api.scheduler import (
     SchedulerError,
     cancel_experiment,
@@ -259,6 +266,7 @@ async def origin_guard(request: Request, call_next: Any) -> Any:
 @app.exception_handler(CloudProviderError)
 @app.exception_handler(CloudWorkflowError)
 @app.exception_handler(RegistrationError)
+@app.exception_handler(ExternalTargetError)
 async def domain_error(_request: Request, error: Exception) -> JSONResponse:
     status_code = getattr(error, "status_code", 409)
     code = getattr(error, "code", error.__class__.__name__)
@@ -728,7 +736,7 @@ def list_targets(
     session: SessionDependency,
     include_inactive: bool = Query(default=True),
 ) -> dict[str, Any]:
-    statement = select(TargetRecord)
+    statement = select(TargetRecord).where(TargetRecord.provider != "local")
     if not include_inactive:
         statement = statement.where(TargetRecord.lifecycle_status == "active")
     records = list(session.scalars(statement.order_by(TargetRecord.name)))
@@ -756,6 +764,29 @@ def import_target(
     record = import_external_target(session, payload)
     session.commit()
     return target_view(record)
+
+
+@app.post("/api/v1/targets/connect", status_code=201)
+def connect_target(
+    payload: ConnectExternalTargetRequest,
+    session: SessionDependency,
+    app_settings: SettingsDependency,
+    _operator: OperatorDependency,
+) -> dict[str, Any]:
+    record = connect_external_target(session, payload)
+    session.commit()
+    result = target_view(record)
+    if payload.deploy_worker:
+        result["deployment"] = deploy_remote_worker(payload, record, app_settings)
+    return result
+
+
+@app.get("/api/v1/targets/{target_id}/worker")
+def get_target_worker(target_id: str, session: SessionDependency) -> dict[str, Any]:
+    record = session.get(TargetRecord, target_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="target not found")
+    return deployment_status(target_id)
 
 
 @app.get("/api/v1/experiments")
@@ -803,6 +834,8 @@ def _normalize_create_request(payload: dict[str, Any], session: Session) -> Expe
     request.description = str(payload.get("description") or request.description)
     target_id = payload.get("targetId")
     if target_id:
+        if str(target_id) == "local":
+            raise SchedulerError("local execution is disabled; select an external server")
         request.spec.target_ids = [str(target_id)]
     benchmark_id = payload.get("benchmarkId")
     if benchmark_id and benchmark_id not in {
@@ -984,6 +1017,24 @@ def get_experiment(experiment_id: str, session: SessionDependency) -> dict[str, 
     if record is None:
         raise HTTPException(status_code=404, detail="experiment not found")
     return experiment_view(session, record, detail=True)
+
+
+@app.delete("/api/v1/experiments/{experiment_id}", status_code=204)
+def delete_experiment(
+    experiment_id: str,
+    session: SessionDependency,
+    _operator: OperatorDependency,
+) -> None:
+    record = session.get(ExperimentRecord, experiment_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="experiment not found")
+    if record.status in {"queued", "running", "paused"}:
+        raise HTTPException(
+            status_code=409,
+            detail="cancel an active experiment before deleting it",
+        )
+    session.delete(record)
+    session.commit()
 
 
 @app.get("/api/v1/experiments/{experiment_id}/analysis")

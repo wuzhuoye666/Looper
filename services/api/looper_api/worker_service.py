@@ -29,6 +29,7 @@ from looper_api.models import (
     ExperimentRecord,
     ObservationRecord,
     SelectionLoadPointRecord,
+    TargetRecord,
     WorkerRecord,
 )
 from looper_api.scheduler import (
@@ -85,6 +86,25 @@ def register_worker(session: Session, settings: Settings, request: WorkerRegiste
         for field, value in values.items():
             setattr(worker, field, value)
     session.flush()
+    for target_id in request.target_ids:
+        target = session.get(TargetRecord, target_id)
+        if target is None:
+            continue
+        merged_capabilities = sorted(set(target.capabilities_json) | set(request.capabilities))
+        target.status = "available"
+        target.capabilities_json = merged_capabilities
+        target.fingerprint_json = {**target.fingerprint_json, **request.fingerprint}
+        target.runnable = True
+        target.lifecycle_status = "active"
+        target.last_inventory_seen_at = now
+        target.updated_at = now
+        target.snapshot_digest = canonical_digest(
+            {
+                "provider": target.provider,
+                "capabilities": merged_capabilities,
+                "fingerprint": target.fingerprint_json,
+            }
+        )
     return worker
 
 
@@ -332,6 +352,11 @@ def claim_attempt(
         "envelope": envelope,
         "manifest": benchmark.manifest_json,
         "benchmarkRoot": str(Path(benchmark.manifest_path or ".").resolve().parent),
+        "benchmarkRelativeRoot": (
+            str(Path("benchmarks") / Path(benchmark.manifest_path).resolve().parent.name)
+            if benchmark.manifest_path
+            else None
+        ),
     }
 
 

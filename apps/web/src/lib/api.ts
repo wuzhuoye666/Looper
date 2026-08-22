@@ -67,6 +67,7 @@ export const api = {
   dashboard: () => request<DashboardData>('/dashboard'),
   experiments: async (query = '') => list(await request<Experiment[] | ListResponse<Experiment> | { data?: Experiment[] }>(`/experiments${query}`)),
   experiment: (id: string) => request<Experiment>(`/experiments/${encodeURIComponent(id)}`),
+  deleteExperiment: (id: string) => request<void>(`/experiments/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   analysis: (id: string) => request<AnalysisData>(`/experiments/${encodeURIComponent(id)}/analysis`),
   postOptimization: (id: string) => request<PostOptimizationStatus>(`/experiments/${encodeURIComponent(id)}/post-optimization`),
   startPostOptimization: (id: string) => request<PostOptimizationStatus>(`/experiments/${encodeURIComponent(id)}/post-optimization`, { method: 'POST' }),
@@ -107,6 +108,9 @@ export const api = {
   ),
   importExternalTarget: (payload: Record<string, unknown>) => request<Target>(
     '/targets/import', { method: 'POST', body: JSON.stringify(payload) },
+  ),
+  connectExternalTarget: (payload: Record<string, unknown>) => request<Target>(
+    '/targets/connect', { method: 'POST', body: JSON.stringify(payload) },
   ),
   createExperiment: (payload: Record<string, unknown>) => request<Experiment>('/experiments', { method: 'POST', body: JSON.stringify(payload) }),
   experimentAction: (id: string, action: 'start' | 'pause' | 'resume' | 'cancel') => request<Experiment>(`/experiments/${encodeURIComponent(id)}/${action}`, { method: 'POST' }),

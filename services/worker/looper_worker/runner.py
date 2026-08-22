@@ -344,6 +344,13 @@ class LocalAttemptRunner:
             "fingerprint": fingerprint,
         }
         benchmark_root = Path(claim["benchmarkRoot"]).resolve()
+        if not benchmark_root.is_dir():
+            repository_root = os.environ.get("LOOPER_REPOSITORY_ROOT")
+            relative_root = claim.get("benchmarkRelativeRoot")
+            if repository_root and relative_root:
+                benchmark_root = (Path(repository_root) / str(relative_root)).resolve()
+        if not benchmark_root.is_dir():
+            raise RunnerError("the deployed Worker does not contain this Benchmark package")
         if runtime_type == "container":
             envelope["paths"] = {
                 "input": "/looper/input",
