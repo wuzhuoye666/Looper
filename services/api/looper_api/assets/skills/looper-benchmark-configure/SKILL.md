@@ -21,11 +21,12 @@ Create or update `benchmarks/<stable-id>/benchmark.yaml`. Keep suite-specific be
 
 Use `looper-adapter/v1`. Select the execution model from observed suite behavior. Declare:
 
+- the business category independently from `adapter.executionModel`; never infer one from the other;
 - typed parameters and workload/task identities;
 - the directed primary metric and every required correctness/SLO check ID;
 - named datasets, artifacts, endpoints, secrets, devices, or topology inputs;
 - lifecycle commands, timeouts, and allowed exit codes;
-- required raw artifacts and canonical `metrics.jsonl` and `result.json` outputs.
+- required native evidence with the `raw-result` role, plus canonical `metrics.jsonl` and `result.json` outputs.
 
 Use a fixed digest container for a remotely imported executable package. Local-process execution is only for a repository-owned trusted development fixture and cannot acquire trust through registration. Never put secret values in the manifest.
 

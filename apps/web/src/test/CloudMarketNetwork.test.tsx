@@ -58,7 +58,7 @@ describe('腾讯云购买网络选择', () => {
         maxHourlyAmount: '1',
         providers: [{ provider: 'tencent', name: '腾讯云 CVM', ready: true, missingEnvironment: [], checks: [] }],
       });
-      if (url.endsWith('/cloud/auth/status')) return response({ required: true, configured: true, authenticated: true, operatorGateReady: true });
+      if (url.endsWith('/operator/session')) return response({ required: true, configured: true, authenticated: true, operatorGateReady: true });
       if (url.includes('/cloud/catalog/tencent/region')) return response(catalog('region', [
         { provider: 'tencent', id: 'ap-test', name: '测试地域', available: true },
       ]));

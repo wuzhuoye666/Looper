@@ -35,7 +35,17 @@ class BenchmarkRegistrationDraft(RegistrationModel):
     source_url: str = Field(default="", max_length=2000)
     source_revision: str = Field(default="", max_length=80)
     license: str = Field(default="", max_length=80)
-    category: str = Field(default="cpu-iaas", max_length=80)
+    category: str = Field(default="unclassified", max_length=80)
+    execution_model: Literal[
+        "batch-suite",
+        "service-stack",
+        "database",
+        "storage",
+        "network",
+        "distributed",
+        "accelerator",
+        "custom",
+    ] = "custom"
     decision_question: str = Field(default="", max_length=1000)
     primary_metric: str = Field(default="", max_length=120)
     primary_unit: str = Field(default="", max_length=40)
@@ -235,7 +245,7 @@ def evaluate_registration_constraints(
     ]
     raw_artifacts = [
         item for item in required_artifacts
-        if item.get("role") in {"trace", "profile", "dataset", "histogram"}
+        if item.get("role") in {"raw-result", "trace", "profile", "dataset", "histogram"}
     ]
     evidence_ok = bool(
         primary
@@ -326,7 +336,12 @@ def draft_from_manifest_bytes(
         source_url=str(source.get("url") or ""),
         source_revision=str(source.get("commit") or source.get("digest") or ""),
         license=str(metadata["license"]),
-        category=str(adapter.get("executionModel") or "cpu-iaas"),
+        category=str(
+            (metadata.get("x-extensions") or {}).get("category")
+            or (spec.get("x-extensions") or {}).get("category")
+            or "unclassified"
+        ),
+        execution_model=str(adapter.get("executionModel") or "custom"),
         decision_question=str(scenario.get("decision_question") or ""),
         primary_metric=primary_metric,
         primary_unit=str(primary.get("unit") or ""),
@@ -341,7 +356,7 @@ def draft_from_manifest_bytes(
         has_reference=False,
         retains_raw_evidence=any(
             item.get("required")
-            and item.get("role") in {"trace", "profile", "dataset", "histogram"}
+            and item.get("role") in {"raw-result", "trace", "profile", "dataset", "histogram"}
             for item in artifacts
         ),
         cross_environment_audit=False,
@@ -365,11 +380,12 @@ def _event_payload(record: BenchmarkRegistrationRecord) -> dict[str, Any]:
 
 
 def registration_view(record: BenchmarkRegistrationRecord) -> dict[str, Any]:
+    draft = BenchmarkRegistrationDraft.model_validate(record.draft_json)
     return {
         "id": record.id,
         "status": record.status,
         "revision": record.revision,
-        "draft": record.draft_json,
+        "draft": draft.model_dump(mode="json", by_alias=True),
         "constraints": record.constraints_json,
         "readyToRegister": registration_ready(record.constraints_json),
         "manifestDigest": record.manifest_digest,

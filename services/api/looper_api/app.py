@@ -352,8 +352,7 @@ def cloud_purchase_readiness(
     return purchase_readiness(app_settings, registry)
 
 
-@app.get("/api/v1/cloud/auth/status")
-def cloud_auth_status(
+def operator_session_status(
     credentials: OperatorCredentials,
     app_settings: SettingsDependency,
 ) -> dict[str, bool]:
@@ -363,6 +362,22 @@ def cloud_auth_status(
         "authenticated": _operator_authenticated(credentials, app_settings),
         "operatorGateReady": operator_token_ready(app_settings),
     }
+
+
+@app.get("/api/v1/operator/session")
+def operator_session(
+    credentials: OperatorCredentials,
+    app_settings: SettingsDependency,
+) -> dict[str, bool]:
+    return operator_session_status(credentials, app_settings)
+
+
+@app.get("/api/v1/cloud/auth/status")
+def cloud_auth_status(
+    credentials: OperatorCredentials,
+    app_settings: SettingsDependency,
+) -> dict[str, bool]:
+    return operator_session_status(credentials, app_settings)
 
 
 @app.get("/api/v1/cloud/catalog/{provider}/{resource_type}")

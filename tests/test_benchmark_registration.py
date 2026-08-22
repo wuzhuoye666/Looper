@@ -41,6 +41,7 @@ def _draft() -> BenchmarkRegistrationDraft:
         sourceRevision=source["commit"],
         license=manifest["metadata"]["license"],
         category="database",
+        executionModel="database",
         decisionQuestion=manifest["spec"]["scenario"]["decision_question"],
         primaryMetric="committed_tps",
         primaryUnit="transactions/second",
@@ -72,9 +73,37 @@ def test_yaml_configuration_import_prefills_manifest_facts() -> None:
     assert draft.benchmark_id == "benchbase.smallbank.postgres"
     assert draft.runtime_type == "container"
     assert draft.primary_metric == "committed_tps"
+    assert draft.category == "unclassified"
+    assert draft.execution_model == "custom"
     assert draft.manifest is not None
+    assert draft.retains_raw_evidence is True
     assert draft.correctness_contract == ""
     assert draft.cross_environment_audit is False
+
+
+def test_raw_result_is_a_first_class_raw_evidence_role() -> None:
+    draft = _draft()
+    assert draft.manifest is not None
+    raw = next(
+        item
+        for item in draft.manifest["spec"]["outputs"]["artifacts"]
+        if item["path"] == "latency.raw.csv"
+    )
+    raw["role"] = "raw-result"
+
+    imported = draft_from_manifest_bytes(
+        yaml.safe_dump(draft.manifest).encode(), filename="benchmark.yaml"
+    )
+    assert imported.retains_raw_evidence is True
+
+    constraints, _ = evaluate_registration_constraints(draft)
+
+    assert next(item for item in constraints if item["code"] == "contract.schema")[
+        "status"
+    ] == "pass"
+    assert next(item for item in constraints if item["code"] == "evidence.minimum")[
+        "status"
+    ] == "pass"
 
 
 def test_non_scenario_adapter_uses_declared_metric_and_required_checks() -> None:

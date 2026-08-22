@@ -1,27 +1,51 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { KeyRound, ShieldCheck, X } from 'lucide-react';
-import { useState, type FormEvent } from 'react';
-import { api, getOperatorToken, setOperatorToken } from '../lib/api';
+import { createContext, useContext, useEffect, useState, type FormEvent, type ReactNode } from 'react';
+import { api, getOperatorToken, OPERATOR_AUTH_INVALID_EVENT, setOperatorToken } from '../lib/api';
 
-export function OperatorAccess() {
+type OperatorAccessContextValue = { authenticated: boolean; show: () => void };
+const OperatorAccessContext = createContext<OperatorAccessContextValue | null>(null);
+
+export function OperatorAccessButton() {
+  const access = useContext(OperatorAccessContext);
+  if (!access) throw new Error('OperatorAccessButton must be rendered inside OperatorAccessProvider');
+  return <button className={`icon-button operator-key ${access.authenticated ? 'authenticated' : ''}`} type="button" onClick={access.show} aria-label="操作员访问" title={access.authenticated ? '操作员已认证' : '操作员访问'}>
+    {access.authenticated ? <ShieldCheck size={17} /> : <KeyRound size={17} />}
+  </button>;
+}
+
+export function OperatorAccessProvider({ children }: { children: ReactNode }) {
   const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState('');
   const [error, setError] = useState('');
   const status = useQuery({
-    queryKey: ['cloud-auth-status'],
-    queryFn: api.cloudAuthStatus,
+    queryKey: ['operator-session'],
+    queryFn: api.operatorSession,
     retry: false,
     staleTime: 15_000,
   });
   const authenticated = status.data?.authenticated || false;
+
+  useEffect(() => {
+    const invalidated = (event: Event) => {
+      const message = event instanceof CustomEvent && event.detail?.message
+        ? String(event.detail.message) : '操作员会话已失效，请重新认证。';
+      setDraft('');
+      setError(message);
+      setOpen(true);
+      void queryClient.invalidateQueries();
+    };
+    window.addEventListener(OPERATOR_AUTH_INVALID_EVENT, invalidated);
+    return () => window.removeEventListener(OPERATOR_AUTH_INVALID_EVENT, invalidated);
+  }, [queryClient]);
 
   const show = () => {
     setDraft(getOperatorToken());
     setError('');
     setOpen(true);
   };
-  const apply = (event: FormEvent) => {
+  const apply = async (event: FormEvent) => {
     event.preventDefault();
     const value = draft.trim();
     if (value && value.length < 32) {
@@ -29,8 +53,21 @@ export function OperatorAccess() {
       return;
     }
     setOperatorToken(value);
-    void queryClient.invalidateQueries();
-    setOpen(false);
+    try {
+      const next = await api.operatorSession();
+      if (next.required && !next.authenticated) {
+        setOperatorToken('');
+        setError('令牌未通过服务端验证');
+        return;
+      }
+      queryClient.setQueryData(['operator-session'], next);
+      await queryClient.invalidateQueries();
+      setError('');
+      setOpen(false);
+    } catch (nextError) {
+      setOperatorToken('');
+      setError(nextError instanceof Error ? nextError.message : '认证验证失败');
+    }
   };
   const clear = () => {
     setOperatorToken('');
@@ -39,14 +76,12 @@ export function OperatorAccess() {
     void queryClient.invalidateQueries();
   };
 
-  return <>
-    <button className={`icon-button operator-key ${authenticated ? 'authenticated' : ''}`} type="button" onClick={show} aria-label="操作员访问" title={authenticated ? '操作员已认证' : '操作员访问'}>
-      {authenticated ? <ShieldCheck size={17} /> : <KeyRound size={17} />}
-    </button>
+  return <OperatorAccessContext.Provider value={{ authenticated, show }}>
+    {children}
     {open && <div className="operator-overlay" role="presentation" onMouseDown={() => setOpen(false)}>
       <form className="operator-dialog" role="dialog" aria-modal="true" aria-labelledby="operator-title" onSubmit={apply} onMouseDown={event => event.stopPropagation()}>
         <div className="operator-dialog-heading">
-          <div><span className="eyebrow">PURCHASE ACCESS</span><h2 id="operator-title">操作员认证</h2></div>
+          <div><span className="eyebrow">OPERATOR ACCESS</span><h2 id="operator-title">操作员认证</h2></div>
           <button className="icon-button" type="button" onClick={() => setOpen(false)} aria-label="关闭"><X size={18} /></button>
         </div>
         <label><span>Bearer token</span><input type="password" value={draft} onChange={event => setDraft(event.target.value)} autoFocus autoComplete="off" /></label>
@@ -62,5 +97,5 @@ export function OperatorAccess() {
         </div>
       </form>
     </div>}
-  </>;
+  </OperatorAccessContext.Provider>;
 }

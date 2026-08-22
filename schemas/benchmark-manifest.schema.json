@@ -337,7 +337,7 @@
             "required": ["path", "role", "required"],
             "properties": {
               "path": { "type": "string", "minLength": 1 },
-              "role": { "enum": ["log", "trace", "result", "profile", "dataset", "histogram", "other"] },
+              "role": { "enum": ["log", "trace", "result", "raw-result", "profile", "dataset", "histogram", "other"] },
               "mediaType": { "type": "string", "default": "application/octet-stream" },
               "required": { "type": "boolean" }
             }

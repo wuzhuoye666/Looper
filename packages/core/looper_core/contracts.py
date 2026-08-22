@@ -457,7 +457,9 @@ class ResultCheck(StrictModel):
 
 class ResultArtifact(StrictModel):
     path: str
-    role: Literal["log", "trace", "result", "profile", "dataset", "histogram", "other"]
+    role: Literal[
+        "log", "trace", "result", "raw-result", "profile", "dataset", "histogram", "other"
+    ]
     media_type: str = Field(alias="mediaType")
     description: str | None = None
 

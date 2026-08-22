@@ -8,6 +8,7 @@ import type {
 export const API_BASE = (import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000/api/v1').replace(/\/$/, '');
 
 const OPERATOR_TOKEN_KEY = 'looper.operator-token';
+export const OPERATOR_AUTH_INVALID_EVENT = 'looper:operator-auth-invalid';
 
 export function getOperatorToken() {
   try { return window.sessionStorage.getItem(OPERATOR_TOKEN_KEY) || ''; } catch { return ''; }
@@ -39,6 +40,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const body = response.status === 204 ? undefined : await response.json().catch(() => undefined);
   if (!response.ok) {
     const message = body && typeof body === 'object' && 'message' in body ? String(body.message) : `请求失败 (${response.status})`;
+    if (response.status === 401 && operatorToken) {
+      setOperatorToken('');
+      window.dispatchEvent(new CustomEvent(OPERATOR_AUTH_INVALID_EVENT, { detail: { message } }));
+    }
     throw new ApiError(message, response.status, body);
   }
   return body as T;
@@ -91,7 +96,8 @@ export const api = {
   createExperiment: (payload: Record<string, unknown>) => request<Experiment>('/experiments', { method: 'POST', body: JSON.stringify(payload) }),
   experimentAction: (id: string, action: 'start' | 'pause' | 'resume' | 'cancel') => request<Experiment>(`/experiments/${encodeURIComponent(id)}/${action}`, { method: 'POST' }),
   retryAttempt: (id: string) => request<unknown>(`/attempts/${encodeURIComponent(id)}/retry`, { method: 'POST' }),
-  cloudAuthStatus: () => request<{ required: boolean; configured: boolean; authenticated: boolean; operatorGateReady: boolean }>('/cloud/auth/status'),
+  operatorSession: () => request<{ required: boolean; configured: boolean; authenticated: boolean; operatorGateReady: boolean }>('/operator/session'),
+  cloudAuthStatus: () => api.operatorSession(),
   purchaseReadiness: () => request<CloudPurchaseReadiness>('/cloud/purchase-readiness'),
   providers: async () => list(await request<CloudProviderInfo[] | ListResponse<CloudProviderInfo>>('/cloud/providers')),
   catalog: <T>(provider: CloudProviderId, kind: string, params: Record<string, string | number | undefined> = {}) =>

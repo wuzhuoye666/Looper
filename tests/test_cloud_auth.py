@@ -87,6 +87,11 @@ def test_order_http_routes_enforce_operator_bearer(db_session, tmp_path) -> None
         async with AsyncClient(
             transport=ASGITransport(app=app), base_url="http://testserver"
         ) as client:
+            operator_session = await client.get("/api/v1/operator/session")
+            authenticated_session = await client.get(
+                "/api/v1/operator/session",
+                headers={"Authorization": f"Bearer {'o' * 48}"},
+            )
             readiness = await client.get("/api/v1/cloud/purchase-readiness")
             denied = await client.get("/api/v1/cloud/orders")
             allowed = await client.get(
@@ -111,6 +116,8 @@ def test_order_http_routes_enforce_operator_bearer(db_session, tmp_path) -> None
                 headers={"Authorization": f"Bearer {'o' * 48}"},
             )
             return (
+                operator_session,
+                authenticated_session,
                 readiness,
                 denied,
                 allowed,
@@ -124,6 +131,8 @@ def test_order_http_routes_enforce_operator_bearer(db_session, tmp_path) -> None
 
     try:
         (
+            operator_session,
+            authenticated_session,
             readiness,
             denied,
             allowed,
@@ -134,6 +143,8 @@ def test_order_http_routes_enforce_operator_bearer(db_session, tmp_path) -> None
             denied_renewal,
             allowed_evidence,
         ) = asyncio.run(exercise_routes())
+        assert operator_session.json()["authenticated"] is False
+        assert authenticated_session.json()["authenticated"] is True
         assert readiness.status_code == 200
         assert {item["provider"] for item in readiness.json()["providers"]} == {
             "tencent",

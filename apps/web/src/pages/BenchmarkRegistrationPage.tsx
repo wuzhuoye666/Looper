@@ -1,18 +1,19 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { AlertTriangle, Bot, CheckCircle2, ChevronLeft, Circle, Copy, FileCode2, Save, ShieldCheck, Upload } from 'lucide-react';
-import { useEffect, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { useEffect, useRef, useState } from 'react';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import { PageHeader } from '../components/PageHeader';
 import { API_BASE, ApiError, api } from '../lib/api';
 import type { BenchmarkRegistration, BenchmarkRegistrationDraft } from '../lib/types';
 
 const REGISTRATION_ID_KEY = 'looper.benchmark-registration-id.v1';
 const AGENT_SKILL_DOWNLOAD = `${API_BASE}/benchmark-skills/looper-benchmark-configure`;
+const KNOWN_CATEGORIES = new Set(['unclassified', 'cpu-iaas', 'online-service', 'database', 'storage', 'gpu-ai', 'network']);
 const AGENT_INSTALL_PROMPT = '请安装我附加的 looper-benchmark-configure.zip 为本机 Codex Skill，并验证 Skill 结构。安装完成后，使用 $looper-benchmark-configure 接入这个 Benchmark：<填写套件源码或目录、测试目标和约束>。只使用套件源码和权威文档作为依据，生成并校验配置；在我授权后，用浏览器打开 Looper 完成导入、约束修正、注册和可执行冒烟，不要绕过任何门禁。';
 
 const emptyDraft: BenchmarkRegistrationDraft = {
   name: '', benchmarkId: '', version: '0.1.0', sourceUrl: '', sourceRevision: '', license: '',
-  category: 'cpu-iaas', decisionQuestion: '', primaryMetric: '', primaryUnit: '', correctnessContract: '',
+  category: 'unclassified', executionModel: 'custom', decisionQuestion: '', primaryMetric: '', primaryUnit: '', correctnessContract: '',
   runtimeType: 'container', executionStatus: 'stage0-adapter-only', image: '', minimumSamples: 1,
   repeats: 3, hasReference: false, retainsRawEvidence: true, crossEnvironmentAudit: true,
 };
@@ -28,16 +29,19 @@ function errorMessage(error: unknown) {
 export function BenchmarkRegistrationPage() {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
-  const [resumeId] = useState(restoreRegistrationId);
+  const { registrationId = '' } = useParams();
+  const resumeId = registrationId || restoreRegistrationId();
+  const fileInput = useRef<HTMLInputElement>(null);
   const [draft, setDraft] = useState<BenchmarkRegistrationDraft>(emptyDraft);
   const [manifestText, setManifestText] = useState('');
   const [parseError, setParseError] = useState('');
   const [promptCopied, setPromptCopied] = useState(false);
+  const [configurationName, setConfigurationName] = useState('');
   const [record, setRecord] = useState<BenchmarkRegistration>();
   const existing = useQuery({
     queryKey: ['benchmark-registration', resumeId],
     queryFn: () => api.benchmarkRegistration(resumeId),
-    enabled: Boolean(resumeId),
+    enabled: Boolean(resumeId) && record?.id !== resumeId,
     retry: false,
   });
 
@@ -46,13 +50,21 @@ export function BenchmarkRegistrationPage() {
     setRecord(existing.data);
     setDraft(existing.data.draft);
     setManifestText(existing.data.draft.manifest ? JSON.stringify(existing.data.draft.manifest, null, 2) : '');
-  }, [existing.data]);
+    if (!registrationId) navigate(`/benchmarks/register/${existing.data.id}`, { replace: true });
+  }, [existing.data, navigate, registrationId]);
+
+  useEffect(() => {
+    if (!(existing.error instanceof ApiError) || existing.error.status !== 404) return;
+    try { window.localStorage.removeItem(REGISTRATION_ID_KEY); } catch { /* Ignore storage failures. */ }
+    if (registrationId) navigate('/benchmarks/register', { replace: true });
+  }, [existing.error, navigate, registrationId]);
 
   const acceptRecord = (next: BenchmarkRegistration) => {
     setRecord(next);
     setDraft(next.draft);
     setManifestText(next.draft.manifest ? JSON.stringify(next.draft.manifest, null, 2) : '');
     try { window.localStorage.setItem(REGISTRATION_ID_KEY, next.id); } catch { /* Server remains authoritative. */ }
+    if (registrationId !== next.id) navigate(`/benchmarks/register/${next.id}`, { replace: true });
   };
   const update = <K extends keyof BenchmarkRegistrationDraft>(key: K, value: BenchmarkRegistrationDraft[K]) => {
     setDraft(current => ({ ...current, [key]: value }));
@@ -99,7 +111,8 @@ export function BenchmarkRegistrationPage() {
   });
   const reset = () => {
     try { window.localStorage.removeItem(REGISTRATION_ID_KEY); } catch { /* Ignore storage failures. */ }
-    setRecord(undefined); setDraft(emptyDraft); setManifestText(''); setParseError('');
+    setRecord(undefined); setDraft(emptyDraft); setManifestText(''); setParseError(''); setConfigurationName('');
+    navigate('/benchmarks/register', { replace: true });
   };
   const locked = record?.status === 'registered';
   const constraints = record?.constraints || [];
@@ -120,7 +133,7 @@ export function BenchmarkRegistrationPage() {
   return <div className="page benchmark-registration-page">
     <Link className="back-link" to="/benchmarks"><ChevronLeft size={16}/>返回场景目录</Link>
     <PageHeader title="注册 Benchmark" description="服务端保存可追溯合同并计算约束；登记成功仍不等于正式审计准入。" actions={<><button className="button secondary" onClick={reset}>清空 / 新建</button>{locked&&draft.executionStatus==='executable'&&<button className="button primary" disabled={smokeMutation.isPending} onClick={()=>smokeMutation.mutate()}><ShieldCheck size={16}/>在本机冒烟测试</button>}<button className="button primary" disabled={locked || saveMutation.isPending} onClick={()=>saveMutation.mutate()}><Save size={16}/>{record?'更新服务端草稿':'保存服务端草稿'}</button></>}/>
-    <div className="benchmark-import panel"><div className="benchmark-import-summary"><Upload size={19}/><span><strong>从配置文件开始</strong><small>导入 UTF-8 YAML 或 JSON；身份、运行合同和指标直接取自文件，页面只补充审计描述。</small></span></div><div className="benchmark-import-tools"><div><a className="button agent-skill-button compact" href={AGENT_SKILL_DOWNLOAD} download="looper-benchmark-configure.zip"><Bot size={14}/>下载 Codex 配置 Skill</a><button type="button" className="button secondary compact" onClick={copyAgentPrompt}><Copy size={14}/>{promptCopied?'已复制安装提示词':'复制安装提示词'}</button><label className="button secondary"><Upload size={15}/>选择 Benchmark 配置<input type="file" accept=".yaml,.yml,.json,application/json,text/yaml" disabled={importMutation.isPending||Boolean(record)} onChange={event=>{const file=event.target.files?.[0];if(file)importMutation.mutate(file);event.target.value='';}}/></label></div><small className="codex-registration-hint">下载 ZIP 并附给你电脑上的 Codex，再复制安装提示词；Looper 本身不依赖 AI，也不会控制本地 Codex。</small></div><details className="agent-prompt"><summary>查看给本机 Codex 的完整提示词</summary><textarea aria-label="给本机 Codex 的安装提示词" readOnly rows={5} value={AGENT_INSTALL_PROMPT}/></details></div>
+    <div className="benchmark-import panel"><div className="benchmark-import-summary"><Upload size={19}/><span><strong>从配置文件开始</strong><small>导入 UTF-8 YAML 或 JSON；身份、运行合同和指标直接取自文件，页面只补充审计描述。</small></span></div><div className="benchmark-import-tools"><div><a className="button agent-skill-button compact" href={AGENT_SKILL_DOWNLOAD} download="looper-benchmark-configure.zip"><Bot size={14}/>下载 Codex 配置 Skill</a><button type="button" className="button secondary compact" onClick={copyAgentPrompt}><Copy size={14}/>{promptCopied?'已复制安装提示词':'复制安装提示词'}</button><button type="button" className="button secondary" disabled={importMutation.isPending||Boolean(record)} onClick={()=>fileInput.current?.click()}><Upload size={15}/>{importMutation.isPending?'正在校验配置…':'选择 Benchmark 配置'}</button><input ref={fileInput} className="benchmark-file-input" aria-label="Benchmark 配置文件" type="file" accept=".yaml,.yml,.json,application/json,text/yaml" disabled={importMutation.isPending||Boolean(record)} onChange={event=>{const file=event.target.files?.[0];if(file){setConfigurationName(file.name);importMutation.mutate(file);}event.target.value='';}}/></div><small className="codex-registration-hint">{configurationName?`已选择 ${configurationName}${importMutation.isSuccess?' · 服务端校验完成':''}`:'下载 ZIP 并附给你电脑上的 Codex，再复制安装提示词；Looper 本身不依赖 AI，也不会控制本地 Codex。'}</small></div><details className="agent-prompt"><summary>查看给本机 Codex 的完整提示词</summary><textarea aria-label="给本机 Codex 的安装提示词" readOnly rows={5} value={AGENT_INSTALL_PROMPT}/></details></div>
     <div className="notice warning"><AlertTriangle size={18}/><div><strong>当前实现边界</strong><p>Stage 0 配置只进入目录且不可执行；可执行配置必须使用固定 digest 容器、通用 Adapter 和 normalize 阶段。登记不代表通过正式审计。</p></div></div>
     {existing.isError&&<div className="notice error"><AlertTriangle size={18}/><div><strong>服务端草稿无法恢复</strong><p>{errorMessage(existing.error)}。可清空当前指针后新建。</p></div></div>}
     {(parseError||mutationError)&&<div className="notice error"><AlertTriangle size={18}/><div><strong>操作未完成</strong><p>{parseError||errorMessage(mutationError)}</p></div></div>}
@@ -136,7 +149,8 @@ export function BenchmarkRegistrationPage() {
             <label className="full"><span>固定 revision *</span><input value={draft.sourceRevision} onChange={e=>update('sourceRevision',e.target.value)} placeholder="完整 commit SHA 或 sha256 digest"/></label>
           </div></section>
           <section className="panel registration-section"><div className="panel-heading"><div><h2>2. 场景与结果契约</h2><p>页面摘要必须与 manifest 完全一致，避免双重事实源。</p></div></div><div className="form-grid registration-fields">
-            <label><span>场景类型 *</span><select value={draft.category} onChange={e=>update('category',e.target.value)}><option value="cpu-iaas">CPU / 综合 IaaS</option><option value="online-service">在线服务</option><option value="database">数据库</option><option value="storage">存储</option><option value="gpu-ai">GPU / AI</option><option value="network">网络</option></select></label>
+            <label><span>业务分类 *</span><select value={draft.category} onChange={e=>update('category',e.target.value)}>{!KNOWN_CATEGORIES.has(draft.category)&&<option value={draft.category}>自定义 · {draft.category}</option>}<option value="unclassified">未分类</option><option value="cpu-iaas">CPU / 综合 IaaS</option><option value="online-service">在线服务</option><option value="database">数据库</option><option value="storage">存储</option><option value="gpu-ai">GPU / AI</option><option value="network">网络</option></select></label>
+            <label><span>执行模型</span><input value={draft.executionModel || 'custom'} readOnly/><small>由 manifest adapter.executionModel 决定，不与业务分类混用。</small></label>
             <label><span>主指标 *</span><input value={draft.primaryMetric} onChange={e=>update('primaryMetric',e.target.value)} placeholder="例如 slo_goodput"/></label>
             <label className="full"><span>采购决策问题 *</span><textarea rows={3} value={draft.decisionQuestion} onChange={e=>update('decisionQuestion',e.target.value)} placeholder="这个 Benchmark 要支持什么选型决策？"/></label>
             <label><span>主指标单位 *</span><input value={draft.primaryUnit} onChange={e=>update('primaryUnit',e.target.value)} placeholder="例如 requests/s"/></label>

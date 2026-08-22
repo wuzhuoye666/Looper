@@ -31,16 +31,21 @@ def benchmark_view(
     registration: BenchmarkRegistrationRecord | None = None,
 ) -> dict[str, Any]:
     manifest = record.manifest_json
-    scenario = manifest["spec"].get("scenario")
-    adapter = manifest["spec"].get("adapter") or {}
-    extensions = manifest["spec"].get("x-extensions", {})
+    metadata = manifest["metadata"]
+    spec = manifest["spec"]
+    scenario = spec.get("scenario")
+    adapter = spec.get("adapter") or {}
+    extensions = spec.get("x-extensions", {})
     execution_status = extensions.get("executionStatus", "executable")
+    metadata_extensions = metadata.get("x-extensions") or {}
+    explicit_category = metadata_extensions.get("category") or extensions.get("category")
     return {
         "id": record.benchmark_id,
         "key": record.key,
         "name": record.name,
         "description": record.description,
-        "category": "scenario" if scenario else adapter.get("executionModel", "optimization-demo"),
+        "category": explicit_category or ("scenario" if scenario else "unclassified"),
+        "executionModel": adapter.get("executionModel", "custom"),
         "version": record.version,
         "license": record.license,
         "manifestDigest": record.manifest_digest,

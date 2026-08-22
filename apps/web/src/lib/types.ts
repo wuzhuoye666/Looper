@@ -33,6 +33,7 @@ export interface Experiment {
 export interface DashboardData { counts?: Partial<Record<ExperimentStatus, number>>; activeExperiments?: Experiment[]; recentExperiments?: Experiment[]; trend?: Array<{ time: string; score: number; baseline?: number }>; successRate?: number; totalExperiments?: number; computeHours?: number }
 export interface Benchmark {
   id: string; key?: string; name: string; description?: string; category?: string; version?: string; metrics?: string[];
+  executionModel?: BenchmarkExecutionModel;
   cases?: number; updatedAt?: string; tags?: string[]; license?: string; runnable?: boolean; executionStatus?: string;
   decisionQuestion?: string; primaryMetric?: string; scenario?: ScenarioContract;
   registrationId?: string; registrationStatus?: string;
@@ -40,9 +41,10 @@ export interface Benchmark {
 }
 export type BenchmarkRuntimeType = 'container' | 'local-process' | 'benchexec';
 export type BenchmarkExecutionStatus = 'stage0-adapter-only' | 'executable';
+export type BenchmarkExecutionModel = 'batch-suite' | 'service-stack' | 'database' | 'storage' | 'network' | 'distributed' | 'accelerator' | 'custom';
 export interface BenchmarkRegistrationDraft {
   name: string; benchmarkId: string; version: string; sourceUrl: string; sourceRevision: string;
-  license: string; category: string; decisionQuestion: string; primaryMetric: string; primaryUnit: string;
+  license: string; category: string; executionModel: BenchmarkExecutionModel; decisionQuestion: string; primaryMetric: string; primaryUnit: string;
   correctnessContract: string; runtimeType: BenchmarkRuntimeType; executionStatus: BenchmarkExecutionStatus;
   image: string; minimumSamples: number; repeats: number; hasReference: boolean;
   retainsRawEvidence: boolean; crossEnvironmentAudit: boolean; manifest?: Record<string, unknown>;

@@ -33,7 +33,7 @@
         "required": ["path", "role", "mediaType"],
         "properties": {
           "path": { "type": "string" },
-          "role": { "enum": ["log", "trace", "result", "profile", "dataset", "histogram", "other"] },
+          "role": { "enum": ["log", "trace", "result", "raw-result", "profile", "dataset", "histogram", "other"] },
           "mediaType": { "type": "string" },
           "description": { "type": ["string", "null"] }
         }

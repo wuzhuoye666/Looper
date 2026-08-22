@@ -43,7 +43,9 @@ class AttemptCompletion(AttemptHeartbeat):
 
 
 class ArtifactMetadata(AttemptHeartbeat):
-    role: Literal["log", "trace", "result", "profile", "dataset", "histogram", "other"]
+    role: Literal[
+        "log", "trace", "result", "raw-result", "profile", "dataset", "histogram", "other"
+    ]
     name: str = Field(min_length=1, max_length=255)
     media_type: str = Field(alias="mediaType", min_length=1, max_length=160)
     producer: str = Field(default="benchmark", min_length=1, max_length=120)

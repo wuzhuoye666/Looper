@@ -14,7 +14,7 @@ Looper 通过配置驱动的 Benchmark Package 接入新套件。新增普通套
 | `spec.adapter` | Adapter 协议、执行模型、主指标、必过检查、命名输入、标准输出 |
 | `spec.runtime` | 隔离方式、固定镜像、生命周期命令、超时和允许退出码 |
 | `spec.metrics` | 指标名称、单位、方向、类型和最低样本量 |
-| `spec.outputs` | 证据上限以及必须保留的原始 artifact |
+| `spec.outputs` | 证据上限以及必须保留的原始 artifact；套件原生结构化输出使用 `raw-result` |
 | `spec.scenario` | 采购问题、角色拓扑、主指标、正确性/SLO 门禁和负载策略 |
 
 目录中的事实与页面描述分开管理。版本、源码、镜像、指标和运行行为以 manifest 为唯一事实源；负责人、中文说明和业务标签可以在 Looper 中维护，但每次修改保留事件记录。
@@ -39,6 +39,7 @@ Looper 通过配置驱动的 Benchmark Package 接入新套件。新增普通套
 - manifest 声明的原始 artifact。
 
 原始套件可以继续输出任意 CSV、JSON、日志、报告或直方图。`normalize` 阶段负责转换；Looper 不解析套件私有格式。
+其中套件原生 JSON/CSV 结果使用 `raw-result`，标准化后的 Looper 结果使用 `result`。旧包原有的 `result`、`dataset` 角色继续兼容，不自动改写。
 
 ## 生命周期
 

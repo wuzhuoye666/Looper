@@ -42,7 +42,7 @@ describe('过期订单确认续期', () => {
     let renewed = false;
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
-      if (url.endsWith('/cloud/auth/status')) return response({ required: true, configured: true, authenticated: true, operatorGateReady: true });
+      if (url.endsWith('/operator/session')) return response({ required: true, configured: true, authenticated: true, operatorGateReady: true });
       if (url.endsWith('/cloud/orders/order-expired/events')) return response({
         items: renewed ? [{
           id: 'evt-renewed', sequence: 3, eventType: 'cloud.order.confirmation_renewed',
