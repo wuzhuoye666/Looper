@@ -18,6 +18,8 @@ dist/
 coverage/
 playwright-report/
 test-results/
+.qa/
+.uv-cache/
 *.tsbuildinfo
 
 # Looper runtime

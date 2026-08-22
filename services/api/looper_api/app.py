@@ -50,11 +50,13 @@ from looper_api.benchmark_registration import (
     BenchmarkRegistrationUpdate,
     RegistrationError,
     create_registration,
+    draft_from_manifest_bytes,
     get_registration,
     register_benchmark,
     registration_view,
     update_registration,
 )
+from looper_api.benchmark_runs import BenchmarkSmokeRunRequest, create_benchmark_smoke_run
 from looper_api.cloud_contracts import (
     CatalogFilters,
     OrderConfirmRequest,
@@ -535,6 +537,27 @@ def list_benchmarks(session: SessionDependency) -> dict[str, Any]:
     }
 
 
+@app.post(
+    "/api/v1/benchmarks/{benchmark_id}/versions/{version}/smoke-runs",
+    status_code=202,
+)
+def create_benchmark_smoke_run_endpoint(
+    benchmark_id: str,
+    version: str,
+    request: BenchmarkSmokeRunRequest,
+    session: SessionDependency,
+    _operator: OperatorDependency,
+) -> dict[str, Any]:
+    experiment = create_benchmark_smoke_run(
+        session,
+        benchmark_id,
+        version,
+        request,
+    )
+    session.commit()
+    return experiment_view(session, experiment, detail=True)
+
+
 @app.get("/api/v1/benchmark-registrations")
 def list_benchmark_registrations(
     session: SessionDependency,
@@ -558,6 +581,21 @@ def create_benchmark_registration(
     _operator: OperatorDependency,
 ) -> dict[str, Any]:
     record = create_registration(session, request)
+    session.commit()
+    return registration_view(record)
+
+
+@app.post("/api/v1/benchmark-registrations/import", status_code=201)
+async def import_benchmark_registration(
+    session: SessionDependency,
+    _operator: OperatorDependency,
+    configuration: UploadFile = File(...),
+) -> dict[str, Any]:
+    draft = draft_from_manifest_bytes(
+        await configuration.read(2 * 1024 * 1024 + 1),
+        filename=configuration.filename or "benchmark.yaml",
+    )
+    record = create_registration(session, draft)
     session.commit()
     return registration_view(record)
 

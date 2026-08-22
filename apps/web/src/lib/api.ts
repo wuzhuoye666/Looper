@@ -26,10 +26,11 @@ export class ApiError extends Error {
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const operatorToken = getOperatorToken();
+  const isFormData = typeof FormData !== 'undefined' && init?.body instanceof FormData;
   const response = await fetch(`${API_BASE}${path}`, {
     ...init,
     headers: {
-      'Content-Type': 'application/json',
+      ...(!isFormData ? { 'Content-Type': 'application/json' } : {}),
       Accept: 'application/json',
       ...(operatorToken ? { Authorization: `Bearer ${operatorToken}` } : {}),
       ...init?.headers,
@@ -67,6 +68,10 @@ export const api = {
   createBenchmarkRegistration: (draft: BenchmarkRegistrationDraft) => request<BenchmarkRegistration>(
     '/benchmark-registrations', { method: 'POST', body: JSON.stringify(draft) },
   ),
+  importBenchmarkRegistration: (configuration: File) => {
+    const body = new FormData(); body.append('configuration', configuration);
+    return request<BenchmarkRegistration>('/benchmark-registrations/import', { method: 'POST', body });
+  },
   updateBenchmarkRegistration: (id: string, expectedRevision: number, draft: BenchmarkRegistrationDraft) =>
     request<BenchmarkRegistration>(`/benchmark-registrations/${encodeURIComponent(id)}`, {
       method: 'PUT', body: JSON.stringify({ expectedRevision, draft }),
@@ -75,6 +80,12 @@ export const api = {
     `/benchmark-registrations/${encodeURIComponent(id)}/register`, {
       method: 'POST', body: JSON.stringify({ expectedRevision }),
     },
+  ),
+  createBenchmarkSmokeRun: (
+    benchmarkId: string, version: string, payload: { targetId?: string; workloadId?: string; parameters?: Record<string, unknown> } = {},
+  ) => request<Experiment>(
+    `/benchmarks/${encodeURIComponent(benchmarkId)}/versions/${encodeURIComponent(version)}/smoke-runs`,
+    { method: 'POST', body: JSON.stringify(payload) },
   ),
   targets: async () => list(await request<Target[] | ListResponse<Target> | { data?: Target[] }>('/targets')),
   createExperiment: (payload: Record<string, unknown>) => request<Experiment>('/experiments', { method: 'POST', body: JSON.stringify(payload) }),

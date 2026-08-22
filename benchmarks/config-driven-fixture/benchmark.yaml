@@ -1,0 +1,69 @@
+apiVersion: looper.dev/v1alpha1
+kind: Benchmark
+metadata:
+  id: looper.fixture.config-driven
+  name: Config-driven adapter contract fixture
+  version: 1.0.0
+  description: Verifies that a suite-owned producer and normalizer run without worker changes.
+  license: INTERNAL
+spec:
+  trust: trusted
+  capabilities: [python, local-process]
+  parameters:
+    scale:
+      type: integer
+      minimum: 1
+      maximum: 4
+      default: 2
+  workloads:
+    - id: fixture-small
+      name: Small contract fixture
+      metadata:
+        items: 64
+  adapter:
+    protocol: looper-adapter/v1
+    executionModel: batch-suite
+    primaryMetric: fixture_score
+    requiredChecks: [native-result-valid]
+    inputs: []
+    canonicalOutputs:
+      metrics: metrics.jsonl
+      result: result.json
+  runtime:
+    type: local-process
+    workingDirectory: .
+    commands:
+      run:
+        argv: ["{python}", "{benchmarkRoot}/producer.py", "--envelope", "{envelope}", "--output", "{output}"]
+        timeoutSeconds: 30
+        allowedExitCodes: [0]
+      normalize:
+        argv: ["{python}", "{benchmarkRoot}/normalizer.py", "--envelope", "{envelope}", "--output", "{output}"]
+        timeoutSeconds: 30
+        allowedExitCodes: [0]
+  metrics:
+    fixture_score:
+      unit: items
+      direction: maximize
+      kind: aggregate
+      required: true
+      minimumSamples: 1
+  outputs:
+    maxBytes: 1048576
+    maxMetricLines: 10
+    artifacts:
+      - path: raw-result.json
+        role: result
+        mediaType: application/json
+        required: true
+      - path: result.json
+        role: result
+        mediaType: application/json
+        required: true
+      - path: adapter.log
+        role: log
+        mediaType: text/plain
+        required: true
+  x-extensions:
+    executionStatus: executable
+    fixtureOnly: true

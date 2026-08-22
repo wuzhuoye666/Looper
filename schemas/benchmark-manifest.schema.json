@@ -51,6 +51,7 @@
           "minItems": 1,
           "items": { "$ref": "#/$defs/workload" }
         },
+        "adapter": { "$ref": "#/$defs/adapter" },
         "scenario": { "$ref": "#/$defs/scenario" },
         "runtime": { "$ref": "#/$defs/runtime" },
         "metrics": {
@@ -253,9 +254,57 @@
             "prepare": { "$ref": "#/$defs/command" },
             "warmup": { "$ref": "#/$defs/command" },
             "run": { "$ref": "#/$defs/command" },
+            "normalize": { "$ref": "#/$defs/command" },
             "validate": { "$ref": "#/$defs/command" },
             "collect": { "$ref": "#/$defs/command" },
             "cleanup": { "$ref": "#/$defs/command" }
+          }
+        }
+      }
+    },
+    "adapterInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "required"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z][a-z0-9._-]*$" },
+        "kind": {
+          "enum": ["dataset", "artifact", "config", "endpoint", "secret", "device", "topology"]
+        },
+        "required": { "type": "boolean" },
+        "mediaType": { "type": "string", "maxLength": 160 },
+        "mountPath": { "type": "string", "pattern": "^/looper/input(?:/[a-zA-Z0-9._-]+)+$" },
+        "digestRequired": { "type": "boolean", "default": false },
+        "description": { "type": "string", "maxLength": 500 }
+      }
+    },
+    "adapter": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["protocol", "executionModel", "primaryMetric", "requiredChecks", "inputs", "canonicalOutputs"],
+      "properties": {
+        "protocol": { "const": "looper-adapter/v1" },
+        "executionModel": {
+          "enum": ["batch-suite", "service-stack", "database", "storage", "network", "distributed", "accelerator", "custom"]
+        },
+        "primaryMetric": { "type": "string", "pattern": "^[a-z][a-z0-9._-]*$" },
+        "requiredChecks": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^[a-z][a-z0-9._-]*$" }
+        },
+        "inputs": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/adapterInput" }
+        },
+        "canonicalOutputs": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["metrics", "result"],
+          "properties": {
+            "metrics": { "const": "metrics.jsonl" },
+            "result": { "const": "result.json" }
           }
         }
       }

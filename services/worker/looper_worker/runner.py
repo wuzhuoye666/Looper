@@ -352,7 +352,7 @@ class LocalAttemptRunner:
         cancelled = False
         lifecycle = ["prepare"]
         lifecycle.extend(["warmup"] * int(envelope.get("extensions", {}).get("warmupRuns", 0)))
-        lifecycle.extend(["run", "validate", "collect"])
+        lifecycle.extend(["run", "normalize", "validate", "collect"])
         try:
             for stage in lifecycle:
                 command = command_map.get(stage)
@@ -400,7 +400,7 @@ class LocalAttemptRunner:
                 if cleanup_result.status != "succeeded" and failure is None:
                     failure = cleanup_result
 
-        if failure is None and not cancelled:
+        if failure is None and not cancelled and "normalize" not in command_map:
             normalizer_failure = self._run_runtime_normalizer(manifest, output_dir)
             if normalizer_failure is not None:
                 failure = normalizer_failure

@@ -11,6 +11,7 @@ from looper_api.benchmark_registration import (
     BenchmarkRegistrationUpdate,
     RegistrationError,
     create_registration,
+    draft_from_manifest_bytes,
     evaluate_registration_constraints,
     register_benchmark,
     registration_ready,
@@ -62,6 +63,42 @@ def test_server_constraints_require_complete_traceable_contract() -> None:
     assert registration_ready(constraints)
     assert digest and digest.startswith("sha256:")
     assert all(item["detail"] for item in constraints)
+
+
+def test_yaml_configuration_import_prefills_manifest_facts() -> None:
+    path = Path(__file__).parents[1] / "benchmarks" / "benchbase-smallbank" / "benchmark.yaml"
+    draft = draft_from_manifest_bytes(path.read_bytes(), filename=path.name)
+
+    assert draft.benchmark_id == "benchbase.smallbank.postgres"
+    assert draft.runtime_type == "container"
+    assert draft.primary_metric == "committed_tps"
+    assert draft.manifest is not None
+    assert draft.correctness_contract == ""
+    assert draft.cross_environment_audit is False
+
+
+def test_non_scenario_adapter_uses_declared_metric_and_required_checks() -> None:
+    path = (
+        Path(__file__).parents[1]
+        / "benchmarks"
+        / "config-driven-fixture"
+        / "benchmark.yaml"
+    )
+    draft = draft_from_manifest_bytes(path.read_bytes(), filename=path.name).model_copy(
+        update={
+            "decision_question": "Does the configured adapter execute correctly?",
+            "correctness_contract": "native-result-valid must pass",
+            "has_reference": True,
+            "cross_environment_audit": True,
+        }
+    )
+
+    constraints, _ = evaluate_registration_constraints(draft)
+    by_code = {item["code"]: item for item in constraints}
+
+    assert draft.primary_metric == "fixture_score"
+    assert by_code["contract.scenario-semantics"]["status"] == "pass"
+    assert by_code["contract.hard-gates"]["status"] == "pass"
 
 
 def test_registration_lifecycle_is_optimistically_locked_and_immutable(db_session) -> None:
@@ -144,3 +181,44 @@ def test_remote_registration_cannot_install_executable_bundle(db_session) -> Non
     assert db_session.scalar(
         select(BenchmarkRecord).where(BenchmarkRecord.benchmark_id == draft.benchmark_id)
     ) is None
+
+
+def test_generic_container_adapter_can_register_without_backend_plugin(db_session) -> None:
+    draft = _draft()
+    assert draft.manifest is not None
+    draft.execution_status = "executable"
+    draft.image = "registry.example/bench@sha256:" + "b" * 64
+    draft.manifest["spec"]["runtime"]["image"] = draft.image
+    draft.manifest["spec"]["runtime"]["commands"]["normalize"] = {
+        "argv": ["benchmark-normalize", "--output", "{output}"],
+        "timeoutSeconds": 30,
+    }
+    draft.manifest["spec"]["adapter"] = {
+        "protocol": "looper-adapter/v1",
+        "executionModel": "database",
+        "primaryMetric": draft.primary_metric,
+        "requiredChecks": ["native-correctness"],
+        "inputs": [],
+        "canonicalOutputs": {"metrics": "metrics.jsonl", "result": "result.json"},
+    }
+    draft.manifest["spec"]["x-extensions"]["executionStatus"] = "executable"
+    record = create_registration(db_session, draft)
+
+    assert record.constraints_json
+    assert registration_ready(record.constraints_json)
+    record = register_benchmark(
+        db_session,
+        record.id,
+        BenchmarkRegistrationRegister(expectedRevision=1),
+    )
+    benchmark = db_session.get(BenchmarkRecord, record.benchmark_key)
+    assert benchmark is not None
+    assert benchmark_view(benchmark, record)["runnable"] is True
+    events = list(
+        db_session.scalars(
+            select(EventRecord)
+            .where(EventRecord.entity_id == record.id)
+            .order_by(EventRecord.created_at)
+        )
+    )
+    assert events[-1].payload_json["runnable"] is True

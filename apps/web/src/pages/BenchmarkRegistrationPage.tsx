@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { AlertTriangle, CheckCircle2, ChevronLeft, Circle, FileCode2, Save, ShieldCheck } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, ChevronLeft, Circle, FileCode2, Save, ShieldCheck, Upload } from 'lucide-react';
 import { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { PageHeader } from '../components/PageHeader';
 import { ApiError, api } from '../lib/api';
 import type { BenchmarkRegistration, BenchmarkRegistrationDraft } from '../lib/types';
@@ -25,6 +25,7 @@ function errorMessage(error: unknown) {
 
 export function BenchmarkRegistrationPage() {
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
   const [resumeId] = useState(restoreRegistrationId);
   const [draft, setDraft] = useState<BenchmarkRegistrationDraft>(emptyDraft);
   const [manifestText, setManifestText] = useState('');
@@ -46,6 +47,8 @@ export function BenchmarkRegistrationPage() {
 
   const acceptRecord = (next: BenchmarkRegistration) => {
     setRecord(next);
+    setDraft(next.draft);
+    setManifestText(next.draft.manifest ? JSON.stringify(next.draft.manifest, null, 2) : '');
     try { window.localStorage.setItem(REGISTRATION_ID_KEY, next.id); } catch { /* Server remains authoritative. */ }
   };
   const update = <K extends keyof BenchmarkRegistrationDraft>(key: K, value: BenchmarkRegistrationDraft[K]) => {
@@ -73,6 +76,10 @@ export function BenchmarkRegistrationPage() {
     },
     onSuccess: acceptRecord,
   });
+  const importMutation = useMutation({
+    mutationFn: (configuration: File) => api.importBenchmarkRegistration(configuration),
+    onSuccess: acceptRecord,
+  });
   const registerMutation = useMutation({
     mutationFn: () => {
       if (!record) throw new Error('请先保存草稿');
@@ -83,13 +90,17 @@ export function BenchmarkRegistrationPage() {
       queryClient.invalidateQueries({ queryKey: ['benchmarks'] });
     },
   });
+  const smokeMutation = useMutation({
+    mutationFn: () => api.createBenchmarkSmokeRun(draft.benchmarkId, draft.version),
+    onSuccess: experiment => navigate(`/experiments/${experiment.id}`),
+  });
   const reset = () => {
     try { window.localStorage.removeItem(REGISTRATION_ID_KEY); } catch { /* Ignore storage failures. */ }
     setRecord(undefined); setDraft(emptyDraft); setManifestText(''); setParseError('');
   };
   const locked = record?.status === 'registered';
   const constraints = record?.constraints || [];
-  const mutationError = saveMutation.error || registerMutation.error;
+  const mutationError = importMutation.error || saveMutation.error || registerMutation.error || smokeMutation.error;
   const failedConstraints = mutationError instanceof ApiError && mutationError.body && typeof mutationError.body === 'object' && 'constraints' in mutationError.body
     ? (mutationError.body.constraints as BenchmarkRegistration['constraints']) : undefined;
   const visibleConstraints = failedConstraints || constraints;
@@ -97,7 +108,8 @@ export function BenchmarkRegistrationPage() {
 
   return <div className="page benchmark-registration-page">
     <Link className="back-link" to="/benchmarks"><ChevronLeft size={16}/>返回场景目录</Link>
-    <PageHeader title="注册 Benchmark" description="服务端保存可追溯合同并计算约束；登记成功仍不等于安装、信任或审计准入。" actions={<><button className="button secondary" onClick={reset}>清空 / 新建</button><button className="button primary" disabled={locked || saveMutation.isPending} onClick={()=>saveMutation.mutate()}><Save size={16}/>{record?'更新服务端草稿':'保存服务端草稿'}</button></>}/>
+    <PageHeader title="注册 Benchmark" description="服务端保存可追溯合同并计算约束；登记成功仍不等于正式审计准入。" actions={<><button className="button secondary" onClick={reset}>清空 / 新建</button>{locked&&draft.executionStatus==='executable'&&<button className="button primary" disabled={smokeMutation.isPending} onClick={()=>smokeMutation.mutate()}><ShieldCheck size={16}/>在本机冒烟测试</button>}<button className="button primary" disabled={locked || saveMutation.isPending} onClick={()=>saveMutation.mutate()}><Save size={16}/>{record?'更新服务端草稿':'保存服务端草稿'}</button></>}/>
+    <div className="benchmark-import panel"><div><Upload size={19}/><span><strong>从配置文件开始</strong><small>导入 UTF-8 YAML 或 JSON；身份、运行合同和指标直接取自文件，页面只补充审计描述。</small></span></div><label className="button secondary"><Upload size={15}/>选择 Benchmark 配置<input type="file" accept=".yaml,.yml,.json,application/json,text/yaml" disabled={importMutation.isPending||Boolean(record)} onChange={event=>{const file=event.target.files?.[0];if(file)importMutation.mutate(file);event.target.value='';}}/></label></div>
     <div className="notice warning"><AlertTriangle size={18}/><div><strong>当前实现边界</strong><p>注册 API 只允许完整 manifest 通过校验的 Stage 0 合同进入目录，并强制标记为未信任、不可执行。可执行 bundle 的安装、签名验证和人工信任审批仍是独立门禁。</p></div></div>
     {existing.isError&&<div className="notice error"><AlertTriangle size={18}/><div><strong>服务端草稿无法恢复</strong><p>{errorMessage(existing.error)}。可清空当前指针后新建。</p></div></div>}
     {(parseError||mutationError)&&<div className="notice error"><AlertTriangle size={18}/><div><strong>操作未完成</strong><p>{parseError||errorMessage(mutationError)}</p></div></div>}

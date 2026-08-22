@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from typing import Any, Literal
 
+import yaml
 from looper_core.canonical import canonical_digest, new_id, utc_now
 from looper_core.manifest import ManifestError, validate_document
 from pydantic import BaseModel, ConfigDict, Field
@@ -148,12 +149,14 @@ def evaluate_registration_constraints(
     ))
 
     scenario = spec.get("scenario") or {}
+    adapter = spec.get("adapter") or {}
     metrics = spec.get("metrics") or {}
     primary = metrics.get(draft.primary_metric) or {}
+    declared_primary_metric = scenario.get("primary_metric") or adapter.get("primaryMetric")
     scenario_matches = bool(
-        scenario
-        and scenario.get("decision_question") == draft.decision_question
-        and scenario.get("primary_metric") == draft.primary_metric
+        draft.decision_question.strip()
+        and declared_primary_metric == draft.primary_metric
+        and (not scenario or scenario.get("decision_question") == draft.decision_question)
         and primary.get("unit") == draft.primary_unit
         and primary.get("direction") in {"minimize", "maximize"}
     )
@@ -165,10 +168,11 @@ def evaluate_registration_constraints(
         gate for gate in scenario.get("slo_gates", [])
         if gate.get("hard", True) and gate.get("kind") in {"correctness", "safety", "slo"}
     ]
+    required_checks = adapter.get("requiredChecks") or []
     constraints.append(_constraint(
         "contract.hard-gates", "合同", "声明不可补偿的正确性、安全或 SLO 门禁",
-        bool(draft.correctness_contract and hard_gates),
-        "页面门禁说明非空，且 scenario.slo_gates 至少包含一个 hard gate。",
+        bool(draft.correctness_contract and (hard_gates or required_checks)),
+        "页面门禁说明非空，且 scenario.slo_gates 或 adapter.requiredChecks 至少声明一项。",
     ))
 
     runtime = spec.get("runtime") or {}
@@ -198,11 +202,32 @@ def evaluate_registration_constraints(
         isolation_ok,
         "executable 容器必须固定 @sha256；untrusted 不得使用 local-process。",
     ))
-    install_safe = draft.execution_status == "stage0-adapter-only"
+    commands = runtime.get("commands") or {}
+    adapter_protocol_ok = bool(
+        adapter.get("protocol") == "looper-adapter/v1"
+        and adapter.get("executionModel")
+        and adapter.get("primaryMetric") == draft.primary_metric
+        and adapter.get("requiredChecks")
+        and adapter.get("canonicalOutputs")
+    )
+    adapter_ready = bool(adapter_protocol_ok and commands.get("normalize"))
     constraints.append(_constraint(
-        "execution.install-boundary", "执行", "远程注册不会绕过安装和信任审批",
+        "execution.adapter-protocol",
+        "执行",
+        "可执行套件使用通用 Adapter 协议",
+        draft.execution_status == "stage0-adapter-only" or adapter_ready,
+        "可执行配置必须声明 looper-adapter/v1，并通过 normalize 阶段生成标准输出。",
+    ))
+    install_safe = draft.execution_status == "stage0-adapter-only" or bool(
+        draft.execution_status == "executable"
+        and draft.runtime_type == "container"
+        and pinned_image
+        and adapter_ready
+    )
+    constraints.append(_constraint(
+        "execution.install-boundary", "执行", "导入配置不会执行宿主机代码",
         install_safe,
-        "当前注册 API 不接收可执行 bundle，因此只允许 stage0-adapter-only 进入目录。",
+        "Stage 0 可直接登记；可执行配置只允许 digest 固定的容器和通用 Adapter。",
     ))
 
     required_artifacts = [
@@ -239,6 +264,89 @@ def evaluate_registration_constraints(
     ))
     digest = canonical_digest(manifest) if manifest_error is None and manifest is not None else None
     return constraints, digest
+
+
+def draft_from_manifest_bytes(
+    raw: bytes,
+    *,
+    filename: str,
+) -> BenchmarkRegistrationDraft:
+    if not raw:
+        raise RegistrationError(
+            "benchmark configuration file is empty",
+            status_code=422,
+            code="empty_benchmark_configuration",
+        )
+    if len(raw) > 2 * 1024 * 1024:
+        raise RegistrationError(
+            "benchmark configuration exceeds the 2 MiB limit",
+            status_code=413,
+            code="benchmark_configuration_too_large",
+        )
+    try:
+        text = raw.decode("utf-8")
+        document = (
+            yaml.safe_load(text)
+            if filename.lower().endswith((".yaml", ".yml"))
+            else __import__("json").loads(text)
+        )
+    except (UnicodeDecodeError, ValueError, yaml.YAMLError) as error:
+        raise RegistrationError(
+            "benchmark configuration must be valid UTF-8 YAML or JSON",
+            status_code=422,
+            code="invalid_benchmark_configuration",
+        ) from error
+    if not isinstance(document, dict):
+        raise RegistrationError(
+            "benchmark configuration root must be an object",
+            status_code=422,
+            code="invalid_benchmark_configuration",
+        )
+    try:
+        validate_document(document, "benchmark-manifest.schema.json")
+    except ManifestError as error:
+        raise RegistrationError(
+            f"benchmark configuration does not match the schema: {error}",
+            status_code=422,
+            code="benchmark_configuration_schema_failed",
+        ) from error
+    metadata = document["metadata"]
+    spec = document["spec"]
+    source = metadata.get("source") or {}
+    scenario = spec.get("scenario") or {}
+    adapter = spec.get("adapter") or {}
+    primary_metric = str(scenario.get("primary_metric") or adapter.get("primaryMetric") or "")
+    primary = spec.get("metrics", {}).get(primary_metric, {})
+    runtime = spec["runtime"]
+    artifacts = spec["outputs"].get("artifacts", [])
+    return BenchmarkRegistrationDraft(
+        name=str(metadata["name"]),
+        benchmark_id=str(metadata["id"]),
+        version=str(metadata["version"]),
+        source_url=str(source.get("url") or ""),
+        source_revision=str(source.get("commit") or source.get("digest") or ""),
+        license=str(metadata["license"]),
+        category=str(adapter.get("executionModel") or "cpu-iaas"),
+        decision_question=str(scenario.get("decision_question") or ""),
+        primary_metric=primary_metric,
+        primary_unit=str(primary.get("unit") or ""),
+        correctness_contract="",
+        runtime_type=str(runtime["type"]),
+        execution_status=str(
+            spec.get("x-extensions", {}).get("executionStatus", "executable")
+        ),
+        image=str(runtime.get("image") or ""),
+        minimum_samples=int(primary.get("minimumSamples", 1)),
+        repeats=3,
+        has_reference=False,
+        retains_raw_evidence=any(
+            item.get("required")
+            and item.get("role") in {"trace", "profile", "dataset", "histogram"}
+            for item in artifacts
+        ),
+        cross_environment_audit=False,
+        manifest=document,
+    )
 
 
 def registration_ready(constraints: list[dict[str, Any]]) -> bool:
@@ -430,7 +538,15 @@ def register_benchmark(
     record.revision += 1
     session.flush()
     payload = _event_payload(record)
-    payload.update({"benchmarkKey": key, "trusted": False, "runnable": False})
+    runtime = manifest["spec"]["runtime"]
+    execution_status = manifest["spec"].get("x-extensions", {}).get(
+        "executionStatus", "executable"
+    )
+    payload.update({
+        "benchmarkKey": key,
+        "trusted": False,
+        "runnable": execution_status == "executable" and runtime.get("type") == "container",
+    })
     append_event(
         session,
         experiment_id=None,

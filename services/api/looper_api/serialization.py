@@ -32,6 +32,7 @@ def benchmark_view(
 ) -> dict[str, Any]:
     manifest = record.manifest_json
     scenario = manifest["spec"].get("scenario")
+    adapter = manifest["spec"].get("adapter") or {}
     extensions = manifest["spec"].get("x-extensions", {})
     execution_status = extensions.get("executionStatus", "executable")
     return {
@@ -39,7 +40,7 @@ def benchmark_view(
         "key": record.key,
         "name": record.name,
         "description": record.description,
-        "category": "scenario" if scenario else "optimization-demo",
+        "category": "scenario" if scenario else adapter.get("executionModel", "optimization-demo"),
         "version": record.version,
         "license": record.license,
         "manifestDigest": record.manifest_digest,
@@ -49,13 +50,16 @@ def benchmark_view(
         "tags": manifest["spec"].get("capabilities", []),
         "trusted": record.trusted,
         "executionStatus": execution_status,
-        "runnable": execution_status == "executable",
+        "runnable": execution_status == "executable"
+        and (record.trusted or manifest["spec"]["runtime"].get("type") == "container"),
         "registrationId": registration.id if registration else None,
         "registrationStatus": registration.status if registration else None,
         "auditStatus": "registered-not-admitted" if registration else "legacy-unreviewed",
         "scenario": scenario,
         "decisionQuestion": scenario.get("decision_question") if scenario else None,
-        "primaryMetric": scenario.get("primary_metric") if scenario else None,
+        "primaryMetric": (
+            scenario.get("primary_metric") if scenario else adapter.get("primaryMetric")
+        ),
     }
 
 

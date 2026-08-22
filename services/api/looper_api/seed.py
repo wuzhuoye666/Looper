@@ -74,11 +74,7 @@ def seed_system(session: Session) -> None:
         target.snapshot_digest = snapshot_digest
         target.updated_at = now
 
-    manifest_paths = [
-        repository_root() / "benchmarks" / "demo" / "benchmark.yaml",
-        repository_root() / "benchmarks" / "benchbase-smallbank" / "benchmark.yaml",
-        repository_root() / "benchmarks" / "dcperf-mediawiki" / "benchmark.yaml",
-    ]
+    manifest_paths = sorted((repository_root() / "benchmarks").glob("*/benchmark.yaml"))
     for manifest_path in manifest_paths:
         manifest, manifest_digest = load_and_validate_manifest(manifest_path)
         metadata = manifest["metadata"]

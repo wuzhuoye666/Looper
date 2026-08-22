@@ -7,6 +7,7 @@ from pathlib import Path
 import httpx
 import psutil
 import pytest
+from looper_core.manifest import load_and_validate_manifest
 from looper_worker.runner import (
     LocalAttemptRunner,
     RunnerError,
@@ -23,6 +24,30 @@ class FailingHeartbeatClient:
     def heartbeat(self, _attempt_id: str, _fencing_token: int) -> dict[str, object]:
         self.pid = int(json.loads(self.process_file.read_text(encoding="utf-8"))["pid"])
         raise httpx.ConnectError("control plane is offline")
+
+
+class RecordingClient:
+    def __init__(self) -> None:
+        self.artifacts: list[str] = []
+        self.completion: dict[str, object] | None = None
+
+    def start(self, _attempt_id: str, _fencing_token: int, _envelope: dict) -> dict:
+        return {}
+
+    def heartbeat(self, _attempt_id: str, _fencing_token: int) -> dict[str, object]:
+        return {"cancelRequested": False}
+
+    def upload_artifact(
+        self, _attempt_id: str, _fencing_token: int, _path: Path, **metadata: str
+    ) -> dict:
+        self.artifacts.append(metadata["name"])
+        return {}
+
+    def complete(
+        self, _attempt_id: str, _fencing_token: int, payload: dict[str, object]
+    ) -> dict[str, object]:
+        self.completion = payload
+        return payload
 
 
 def test_heartbeat_failure_terminates_benchmark_process(tmp_path: Path) -> None:
@@ -51,6 +76,38 @@ def test_heartbeat_failure_terminates_benchmark_process(tmp_path: Path) -> None:
     assert client.pid is not None
     assert not psutil.pid_exists(client.pid)
     assert not client.process_file.exists()
+
+
+def test_configured_producer_and_normalizer_run_without_worker_plugin(tmp_path: Path) -> None:
+    root = Path("benchmarks/config-driven-fixture").resolve()
+    manifest, _digest = load_and_validate_manifest(root / "benchmark.yaml")
+    client = RecordingClient()
+    runner = LocalAttemptRunner(client, tmp_path / "worker")  # type: ignore[arg-type]
+    envelope = {
+        "schemaVersion": "v1alpha1",
+        "candidate": {"parameters": {"scale": 2}},
+        "workload": {"id": "fixture-small", "metadata": {"items": 64}},
+        "extensions": {"warmupRuns": 0},
+    }
+    result = runner.run_claim(
+        {
+            "attemptId": "configured-attempt",
+            "fencingToken": 1,
+            "manifest": manifest,
+            "envelope": envelope,
+            "benchmarkRoot": str(root),
+            "maxOutputBytes": 1024 * 1024,
+            "leaseSeconds": 30,
+        }
+    )
+
+    assert result["status"] == "succeeded"
+    assert client.completion is not None
+    observations = client.completion["observations"]
+    assert isinstance(observations, list)
+    assert observations[0]["metric"] == "fixture_score"
+    assert observations[0]["value"] == 128.0
+    assert {"raw-result.json", "result.json", "adapter.log"} <= set(client.artifacts)
 
 
 def _container_paths(tmp_path: Path) -> dict[str, Path]:
