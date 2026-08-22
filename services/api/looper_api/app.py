@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import hmac
+import io
 import json
+import zipfile
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
+from importlib.resources import files
 from typing import Annotated, Any
 
 from fastapi import (
@@ -278,6 +281,43 @@ def root() -> dict[str, str]:
 @app.get("/api/v1/health")
 def health() -> dict[str, str]:
     return {"status": "ok", "database": "ready", "artifact_store": "ready"}
+
+
+@app.get("/api/v1/benchmark-skills/looper-benchmark-configure")
+def download_benchmark_configure_skill() -> StreamingResponse:
+    archive = build_benchmark_configure_skill_archive()
+    return StreamingResponse(
+        iter([archive]),
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": 'attachment; filename="looper-benchmark-configure.zip"',
+            "Content-Length": str(len(archive)),
+        },
+    )
+
+
+def build_benchmark_configure_skill_archive() -> bytes:
+    skill_root = files("looper_api").joinpath(
+        "assets", "skills", "looper-benchmark-configure"
+    )
+    members = ("SKILL.md", "agents/openai.yaml")
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for member in members:
+            resource = skill_root.joinpath(*member.split("/"))
+            if not resource.is_file():
+                raise HTTPException(
+                    status_code=404,
+                    detail="benchmark configuration skill is unavailable",
+                )
+            info = zipfile.ZipInfo(
+                f"looper-benchmark-configure/{member}",
+                date_time=(1980, 1, 1, 0, 0, 0),
+            )
+            info.compress_type = zipfile.ZIP_DEFLATED
+            info.external_attr = 0o644 << 16
+            archive.writestr(info, resource.read_bytes())
+    return buffer.getvalue()
 
 
 @app.get("/api/v1/dashboard")

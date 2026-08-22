@@ -1,12 +1,14 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { AlertTriangle, BookOpen, CheckCircle2, ChevronLeft, Circle, FileCode2, Save, ShieldCheck, Upload, X } from 'lucide-react';
+import { AlertTriangle, Bot, CheckCircle2, ChevronLeft, Circle, Copy, FileCode2, Save, ShieldCheck, Upload } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { PageHeader } from '../components/PageHeader';
-import { ApiError, api } from '../lib/api';
+import { API_BASE, ApiError, api } from '../lib/api';
 import type { BenchmarkRegistration, BenchmarkRegistrationDraft } from '../lib/types';
 
 const REGISTRATION_ID_KEY = 'looper.benchmark-registration-id.v1';
+const AGENT_SKILL_DOWNLOAD = `${API_BASE}/benchmark-skills/looper-benchmark-configure`;
+const AGENT_INSTALL_PROMPT = '请安装我附加的 looper-benchmark-configure.zip 为本机 Codex Skill，并验证 Skill 结构。安装完成后，使用 $looper-benchmark-configure 接入这个 Benchmark：<填写套件源码或目录、测试目标和约束>。只使用套件源码和权威文档作为依据，生成并校验配置；在我授权后，用浏览器打开 Looper 完成导入、约束修正、注册和可执行冒烟，不要绕过任何门禁。';
 
 const emptyDraft: BenchmarkRegistrationDraft = {
   name: '', benchmarkId: '', version: '0.1.0', sourceUrl: '', sourceRevision: '', license: '',
@@ -30,8 +32,8 @@ export function BenchmarkRegistrationPage() {
   const [draft, setDraft] = useState<BenchmarkRegistrationDraft>(emptyDraft);
   const [manifestText, setManifestText] = useState('');
   const [parseError, setParseError] = useState('');
+  const [promptCopied, setPromptCopied] = useState(false);
   const [record, setRecord] = useState<BenchmarkRegistration>();
-  const [showContract, setShowContract] = useState(false);
   const existing = useQuery({
     queryKey: ['benchmark-registration', resumeId],
     queryFn: () => api.benchmarkRegistration(resumeId),
@@ -45,15 +47,6 @@ export function BenchmarkRegistrationPage() {
     setDraft(existing.data.draft);
     setManifestText(existing.data.draft.manifest ? JSON.stringify(existing.data.draft.manifest, null, 2) : '');
   }, [existing.data]);
-
-  useEffect(() => {
-    if (!showContract) return;
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setShowContract(false);
-    };
-    window.addEventListener('keydown', closeOnEscape);
-    return () => window.removeEventListener('keydown', closeOnEscape);
-  }, [showContract]);
 
   const acceptRecord = (next: BenchmarkRegistration) => {
     setRecord(next);
@@ -115,12 +108,19 @@ export function BenchmarkRegistrationPage() {
     ? (mutationError.body.constraints as BenchmarkRegistration['constraints']) : undefined;
   const visibleConstraints = failedConstraints || constraints;
   const passed = visibleConstraints.filter(item => item.status === 'pass').length;
+  const copyAgentPrompt = async () => {
+    try {
+      await navigator.clipboard.writeText(AGENT_INSTALL_PROMPT);
+      setPromptCopied(true);
+    } catch {
+      setPromptCopied(false);
+    }
+  };
 
   return <div className="page benchmark-registration-page">
     <Link className="back-link" to="/benchmarks"><ChevronLeft size={16}/>返回场景目录</Link>
     <PageHeader title="注册 Benchmark" description="服务端保存可追溯合同并计算约束；登记成功仍不等于正式审计准入。" actions={<><button className="button secondary" onClick={reset}>清空 / 新建</button>{locked&&draft.executionStatus==='executable'&&<button className="button primary" disabled={smokeMutation.isPending} onClick={()=>smokeMutation.mutate()}><ShieldCheck size={16}/>在本机冒烟测试</button>}<button className="button primary" disabled={locked || saveMutation.isPending} onClick={()=>saveMutation.mutate()}><Save size={16}/>{record?'更新服务端草稿':'保存服务端草稿'}</button></>}/>
-    <div className="benchmark-import panel"><div className="benchmark-import-summary"><Upload size={19}/><span><strong>从配置文件开始</strong><small>导入 UTF-8 YAML 或 JSON；身份、运行合同和指标直接取自文件，页面只补充审计描述。</small></span></div><div className="benchmark-import-tools"><div><button type="button" className="button secondary compact" onClick={()=>setShowContract(true)}><BookOpen size={14}/>查看合同与配置流程</button><label className="button secondary"><Upload size={15}/>选择 Benchmark 配置<input type="file" accept=".yaml,.yml,.json,application/json,text/yaml" disabled={importMutation.isPending||Boolean(record)} onChange={event=>{const file=event.target.files?.[0];if(file)importMutation.mutate(file);event.target.value='';}}/></label></div><small className="codex-registration-hint">把 Benchmark 要求说完，Codex 会帮你用浏览器完成配置并注册。</small></div></div>
-    {showContract&&<div className="benchmark-contract-overlay" role="presentation" onMouseDown={()=>setShowContract(false)}><section className="benchmark-contract-dialog" role="dialog" aria-modal="true" aria-labelledby="benchmark-contract-title" onMouseDown={event=>event.stopPropagation()}><header><div><span>BENCHMARK PACKAGE</span><h2 id="benchmark-contract-title">合同与配置流程</h2></div><button type="button" className="icon-button" aria-label="关闭合同说明" onClick={()=>setShowContract(false)}><X size={18}/></button></header><div className="benchmark-contract-body"><div className="benchmark-contract-rules"><strong>程序员需要负责的合同</strong><ul><li>固定 Benchmark 身份、版本、许可证和不可变源码 revision。</li><li>声明参数、workload、主指标、必过检查和命名输入。</li><li>由 Adapter 运行原始套件，并在 normalize 阶段生成标准指标与结果。</li><li>生产执行使用固定 digest 容器；原始证据和审计声明必须可追溯。</li></ul></div><ol className="benchmark-config-steps"><li><span>1</span><div><strong>准备配置包</strong><p>编写 benchmark.yaml，并准备套件启动器与 normalizer。</p></div></li><li><span>2</span><div><strong>导入 Looper</strong><p>由服务端校验 Schema，并从文件回填不可变合同事实。</p></div></li><li><span>3</span><div><strong>补充审计说明</strong><p>填写决策问题、正确性门禁、Base/Reference 与跨环境声明。</p></div></li><li><span>4</span><div><strong>保存、登记、冒烟</strong><p>逐项处理页面约束；可执行配置登记后先运行冒烟测试。</p></div></li></ol></div><footer><p>登记成功不等于正式审计准入。</p><button type="button" className="button primary" onClick={()=>setShowContract(false)}>知道了</button></footer></section></div>}
+    <div className="benchmark-import panel"><div className="benchmark-import-summary"><Upload size={19}/><span><strong>从配置文件开始</strong><small>导入 UTF-8 YAML 或 JSON；身份、运行合同和指标直接取自文件，页面只补充审计描述。</small></span></div><div className="benchmark-import-tools"><div><a className="button agent-skill-button compact" href={AGENT_SKILL_DOWNLOAD} download="looper-benchmark-configure.zip"><Bot size={14}/>下载 Codex 配置 Skill</a><button type="button" className="button secondary compact" onClick={copyAgentPrompt}><Copy size={14}/>{promptCopied?'已复制安装提示词':'复制安装提示词'}</button><label className="button secondary"><Upload size={15}/>选择 Benchmark 配置<input type="file" accept=".yaml,.yml,.json,application/json,text/yaml" disabled={importMutation.isPending||Boolean(record)} onChange={event=>{const file=event.target.files?.[0];if(file)importMutation.mutate(file);event.target.value='';}}/></label></div><small className="codex-registration-hint">下载 ZIP 并附给你电脑上的 Codex，再复制安装提示词；Looper 本身不依赖 AI，也不会控制本地 Codex。</small></div><details className="agent-prompt"><summary>查看给本机 Codex 的完整提示词</summary><textarea aria-label="给本机 Codex 的安装提示词" readOnly rows={5} value={AGENT_INSTALL_PROMPT}/></details></div>
     <div className="notice warning"><AlertTriangle size={18}/><div><strong>当前实现边界</strong><p>Stage 0 配置只进入目录且不可执行；可执行配置必须使用固定 digest 容器、通用 Adapter 和 normalize 阶段。登记不代表通过正式审计。</p></div></div>
     {existing.isError&&<div className="notice error"><AlertTriangle size={18}/><div><strong>服务端草稿无法恢复</strong><p>{errorMessage(existing.error)}。可清空当前指针后新建。</p></div></div>}
     {(parseError||mutationError)&&<div className="notice error"><AlertTriangle size={18}/><div><strong>操作未完成</strong><p>{parseError||errorMessage(mutationError)}</p></div></div>}

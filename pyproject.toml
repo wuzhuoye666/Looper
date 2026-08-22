@@ -49,6 +49,9 @@ looper-dcperf-mediawiki-normalize = "looper_benchmark_sdk.scenario:dcperf_main"
 where = ["services/api", "services/worker", "packages/core", "packages/benchmark-sdk"]
 include = ["looper_api*", "looper_worker*", "looper_core*", "looper_benchmark_sdk*"]
 
+[tool.setuptools.package-data]
+looper_api = ["assets/skills/**/*.md", "assets/skills/**/*.yaml"]
+
 [tool.pytest.ini_options]
 addopts = "-q --strict-markers"
 testpaths = ["tests"]

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Looper Benchmark 配置"
+  short_description: "检查套件、生成合同并在 Looper 中完成注册"
+  default_prompt: "Use $looper-benchmark-configure to inspect this benchmark suite, build its package, and register it in Looper."
