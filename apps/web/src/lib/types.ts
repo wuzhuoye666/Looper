@@ -73,10 +73,45 @@ export interface Target {
 }
 export interface AnalysisData {
   mode?: 'optimization' | 'selection'; targets?: SelectionTargetResult[]; comparisons?: SelectionComparison[];
-  pareto?: Array<{ id?: string; candidate: string; score: number; cost: number; latency?: number }>;
+  pareto?: Array<{ id?: string; candidate: string; score: number; cost: number; latency?: number; rank?: number | null; feasible?: boolean; objectives?: Record<string, number> }>;
   evidence?: Array<{ id: string; title: string; kind?: string; summary?: string; createdAt?: string; artifacts?: Artifact[] }>;
 }
 export interface ListResponse<T> { items: T[]; total?: number }
+
+export type VariabilityStatus = 'stable' | 'warning' | 'unstable' | 'insufficient_evidence';
+export interface VariabilityDistribution {
+  count: number; mean: number; median: number; standardDeviation: number; coefficientOfVariation?: number | null;
+  minimum: number; maximum: number; p05?: number | null; p95?: number | null; p99?: number | null;
+  iqr?: number | null; mad?: number | null; tailMean?: number | null; skewness?: number | null;
+}
+export interface VariabilityGroupReport {
+  groupLabel: string; metric: string; unit: string; direction: string; status: VariabilityStatus;
+  distribution: VariabilityDistribution;
+  stability: { verdict: VariabilityStatus; cv?: number | null; slow_run_share?: number; skewed?: boolean; suspected_multimodal?: boolean; reasons: string[] };
+  modes?: { cutoff: number; fastMode: { count: number; center: number }; slowMode: { count: number; center: number } } | null;
+  runs: Array<{ runId: string; value: number; label: string; slow: boolean }>;
+  outliers: { slow: string[]; fast: string[] };
+  associationClues: Array<{ metric: string; correlation: number; lift?: number | null; direction: string; slowMean?: number | null; normalMean?: number | null; likelyConsequence: boolean; note: string }>;
+  attribution: Array<{ dimension: string; etaSquared?: number | null; groupCount: number; dominant: boolean; groupMeans?: Record<string, number> }>;
+  recommendations: Array<{ action: string; rationale: string; priority: 'high' | 'medium' | 'low'; kind: string }>;
+  selectionImpact: { summary: string; confidence: string; details?: string[] };
+  evidence: { sampleCount: number; hostCount?: number; distinctDates?: number; systemMetricCount?: number };
+}
+export interface VariabilityComparison {
+  metric: string; unit: string; direction: string; baselineLabel: string; candidateLabel: string;
+  baseline: VariabilityDistribution; candidate: VariabilityDistribution;
+  meanImprovement?: number | null; medianImprovement?: number | null; tailImprovement?: number | null; cvRatio?: number | null;
+  slowRunProbability: { baseline?: number | null; candidate?: number | null };
+  worstHost: { baseline?: { host: string; median: number } | null; candidate?: { host: string; median: number } | null };
+  sloExceedance?: { threshold: number; baseline_exceedance: number; candidate_exceedance: number };
+  tailWorsened: boolean; verdict: string; summary: string; recommendation: string;
+}
+export interface VariabilityData {
+  experiment_id: string; mode?: string; metric: string; unit: string; direction: string;
+  status: string; group_statuses?: string[]; groups: VariabilityGroupReport[]; comparisons: VariabilityComparison[];
+  policy?: Record<string, unknown>; input_digest?: string; policy_digest?: string;
+  evidence?: { attempt_count?: number; run_group_count?: number; system_metric_names?: string[] };
+}
 
 export type CloudProviderId = 'tencent' | 'alibaba' | 'volcengine' | 'baidu';
 export interface CloudReadinessCheck { code: string; label: string; ready: boolean; detail: string }

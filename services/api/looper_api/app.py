@@ -125,6 +125,7 @@ from looper_api.serialization import (
     experiment_view,
     target_view,
 )
+from looper_api.variability_service import build_variability_report
 from looper_api.worker_protocol import (
     ArtifactMetadata,
     AttemptCompletion,
@@ -979,6 +980,18 @@ def get_analysis(experiment_id: str, session: SessionDependency) -> dict[str, An
     result = build_analysis_snapshot(session, experiment_id, persist=True)
     session.commit()
     return analysis_view(result)
+
+
+@app.get("/api/v1/experiments/{experiment_id}/variability")
+def get_variability(experiment_id: str, session: SessionDependency) -> dict[str, Any]:
+    if session.get(ExperimentRecord, experiment_id) is None:
+        raise HTTPException(status_code=404, detail="experiment not found")
+    try:
+        result = build_variability_report(session, experiment_id, persist=True)
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    session.commit()
+    return result
 
 
 def _experiment_action(session: Session, experiment_id: str, action: str) -> dict[str, Any]:

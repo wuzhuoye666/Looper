@@ -81,3 +81,7 @@ Stage 0 和本次 CPU 试点设计没有创建、启动或购买任何云资源�
 - TencentBench 当前是 `unresolved-internal-baseline`，公开检索缺失不等于内部能力缺失。
 
 架构和契约详见 `docs/architecture.md`、`docs/benchmark-contract.md`、`docs/experiment-contract.md`、`docs/operations.md` 和 `docs/upstreams.md`。
+
+阶段 1 已落地统一实验与 Trace 数据底座：CCL-style、BenchBase、DCPerf 三种原始输出经各自 Adapter 归一为同一 Evidence Contract，Trace 离线重算无需重新运行 Benchmark。设计、数据分层、新 Adapter 编写指南与当前边界见 `docs/unified-evidence-contract.md`。
+
+VGO 变异导向波动分析器（Variability Analyzer）已作为公共组件上线：与 BenchTrust 平行挂在统一实验数据之上，输出分布统计、稳定性结论、快/慢模式识别、慢运行关联线索、方差来源归因、控制变量 A/B 建议与分布级配置比较（"均值改善但尾部恶化"会显式标出）。所有 Benchmark 共用，无需各自实现。设计、指标契约与边界见 `docs/variability-analyzer.md`，前端入口为实验详情页"波动分析"标签。

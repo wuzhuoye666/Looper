@@ -18,9 +18,17 @@ from looper_core.analysis import (
     task_leverage,
 )
 from looper_core.canonical import canonical_digest, new_id, utc_now
-from looper_core.contracts import Aggregation, ExperimentMode, ExperimentSpec, GateKind
+from looper_core.contracts import (
+    Aggregation,
+    Direction,
+    ExperimentMode,
+    ExperimentSpec,
+    GateKind,
+    StabilityMetric,
+)
 from looper_core.selection import compare_frontier_intervals
 from looper_core.state import AttemptStatus
+from looper_core.variability import evaluate_stability_objective
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -36,7 +44,7 @@ from looper_api.models import (
     SelectionLoadPointRecord,
 )
 
-ANALYSIS_CODE_VERSION = "0.3.0"
+ANALYSIS_CODE_VERSION = "0.4.0"
 
 
 def _observation_value(record: ObservationRecord) -> float | bool | None:
@@ -713,6 +721,9 @@ def build_analysis_snapshot(
     policy = {
         "mode": spec.mode,
         "objectives": [item.model_dump(mode="json") for item in spec.objectives],
+        "stability_objectives": [
+            item.model_dump(mode="json") for item in spec.stability_objectives
+        ],
         "gates": [item.model_dump(mode="json") for item in spec.gates],
         "design": spec.design.model_dump(mode="json"),
         "scenario": spec.scenario.model_dump(mode="json") if spec.scenario else None,
@@ -789,10 +800,31 @@ def build_analysis_snapshot(
                 )
             )
         gates = _candidate_gate_results(spec, observations, checks, objective_results)
+        stability_results: list[dict[str, Any]] = []
+        for stability_objective in spec.stability_objectives:
+            target = next(
+                item for item in spec.objectives if item.metric == stability_objective.target_metric
+            )
+            stability_results.append(
+                evaluate_stability_objective(
+                    _metric_values(observations, target.metric, target.unit),
+                    _metric_values(baseline_observations, target.metric, target.unit),
+                    stability_objective,
+                    target.direction,
+                )
+            )
         failed_gates = [item for item in gates if item["hard"] and not item["passed"]]
+        failed_stability = [
+            item for item in stability_results if item["hard"] and item["status"] != "satisfied"
+        ]
         objective_missing = any(item["status"] != "available" for item in objective_results)
         has_successful_attempts = bool(attempts)
-        feasible = has_successful_attempts and not failed_gates and not objective_missing
+        feasible = (
+            has_successful_attempts
+            and not failed_gates
+            and not failed_stability
+            and not objective_missing
+        )
         if not has_successful_attempts:
             status = "inconclusive"
             reason = "no successful attempts"
@@ -802,6 +834,11 @@ def build_analysis_snapshot(
         elif failed_gates:
             status = "infeasible"
             reason = "; ".join(str(item["id"]) for item in failed_gates)
+        elif failed_stability:
+            status = "infeasible"
+            reason = "; ".join(
+                f"stability:{item['id']}({item['status']})" for item in failed_stability
+            )
         else:
             status = "feasible"
             reason = None
@@ -817,28 +854,58 @@ def build_analysis_snapshot(
                 "feasible": feasible,
                 "attempt_count": len(attempts),
                 "objectives": objective_results,
+                "stability": stability_results,
                 "gates": gates,
                 "pareto_rank": None,
             }
         )
 
+    def _pareto_dimensions(candidate: dict[str, Any]) -> dict[str, float]:
+        """Performance objective raw values plus soft stability dimensions.
+
+        Hard stability objectives never reach this mapping: violations already
+        made the candidate infeasible, and constraints must not double as
+        ranking dimensions. Soft dimensions with insufficient evidence are
+        omitted, which blocks dominance on that axis (fail closed).
+        """
+
+        dimensions = {
+            objective["metric"]: objective["raw"]
+            for objective in candidate["objectives"]
+            if objective["raw"] is not None
+        }
+        for item in candidate.get("stability", []):
+            if not item["hard"] and item["pareto_value"] is not None:
+                dimensions[f"stability:{item['id']}"] = item["pareto_value"]
+        return dimensions
+
     points = [
         {
             "id": candidate["id"],
             "feasible": candidate["feasible"],
-            "objectives": {
-                objective["metric"]: objective["raw"]
-                for objective in candidate["objectives"]
-                if objective["raw"] is not None
-            },
+            "objectives": _pareto_dimensions(candidate),
         }
         for candidate in rendered_candidates
     ]
-    ranks = pareto_ranks(
-        points,
-        {objective.metric: objective.direction for objective in spec.objectives},
-        {objective.metric: objective.epsilon for objective in spec.objectives},
-    )
+    objective_directions = {
+        objective.metric: objective.direction for objective in spec.objectives
+    }
+    objective_epsilons = {objective.metric: objective.epsilon for objective in spec.objectives}
+    for stability_objective in spec.stability_objectives:
+        if stability_objective.hard:
+            continue
+        key = f"stability:{stability_objective.id}"
+        if stability_objective.metric == StabilityMetric.CV:
+            # CV is dimensionless and always smaller-better, independent of the
+            # target metric's direction.
+            objective_directions[key] = Direction.MINIMIZE
+        else:
+            target = next(
+                item for item in spec.objectives if item.metric == stability_objective.target_metric
+            )
+            objective_directions[key] = target.direction
+        objective_epsilons[key] = 0.0
+    ranks = pareto_ranks(points, objective_directions, objective_epsilons)
     for candidate in rendered_candidates:
         candidate["pareto_rank"] = ranks.get(candidate["id"])
 
@@ -907,11 +974,7 @@ def build_analysis_snapshot(
                 "candidate_id": candidate["id"],
                 "rank": candidate["pareto_rank"],
                 "feasible": candidate["feasible"],
-                "objectives": {
-                    item["metric"]: item["raw"]
-                    for item in candidate["objectives"]
-                    if item["raw"] is not None
-                },
+                "objectives": _pareto_dimensions(candidate),
             }
             for candidate in rendered_candidates
         ],

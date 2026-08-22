@@ -1,0 +1,329 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://looper.dev/schemas/v1alpha1/evidence-manifest.schema.json",
+  "title": "Looper Unified Evidence Manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "benchmarkId", "environmentDigest", "adapter"],
+  "properties": {
+    "schemaVersion": { "const": "v1alpha1" },
+    "evidenceId": { "type": ["string", "null"], "pattern": "^evidence_[0-9a-f]{16}$" },
+    "experimentId": { "type": ["string", "null"] },
+    "candidateId": { "type": ["string", "null"] },
+    "evaluationId": { "type": ["string", "null"] },
+    "attemptId": { "type": ["string", "null"] },
+    "benchmarkId": { "type": "string", "minLength": 1, "maxLength": 120 },
+    "benchmarkVersion": { "type": ["string", "null"], "maxLength": 80 },
+    "benchmarkManifestDigest": { "type": ["string", "null"], "pattern": "^sha256:[0-9a-f]{64}$" },
+    "workloadId": { "type": ["string", "null"], "maxLength": 160 },
+    "candidateConfigDigest": { "type": ["string", "null"], "pattern": "^sha256:[0-9a-f]{64}$" },
+    "environmentDigest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "environment": {
+      "anyOf": [
+        { "$ref": "#/definitions/environmentSnapshot" },
+        { "type": "null" }
+      ]
+    },
+    "rawArtifacts": { "type": "array", "items": { "$ref": "#/definitions/evidenceArtifact" } },
+    "normalizedArtifacts": { "type": "array", "items": { "$ref": "#/definitions/evidenceArtifact" } },
+    "traceSets": { "type": "array", "items": { "$ref": "#/definitions/traceSetManifest" } },
+    "normalizedObservations": { "type": "array", "items": { "$ref": "#/definitions/metricObservation" } },
+    "derivedMetrics": { "type": "array", "items": { "$ref": "#/definitions/derivedMetric" } },
+    "result": { "$ref": "#/definitions/attemptResult" },
+    "adapter": { "$ref": "#/definitions/adapterIdentity" },
+    "createdAt": { "type": ["string", "null"] }
+  },
+  "definitions": {
+    "evidenceArtifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["digest", "size", "role", "mediaType", "producer", "name", "provenance"],
+      "properties": {
+        "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+        "size": { "type": "integer", "minimum": 0 },
+        "role": {
+          "enum": [
+            "log", "trace", "result", "profile", "dataset", "histogram", "workload-card",
+            "environment-snapshot", "evidence-manifest", "trace-set-manifest",
+            "derived-metric", "metrics", "other"
+          ]
+        },
+        "mediaType": { "type": "string", "minLength": 3, "maxLength": 160 },
+        "producer": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "name": { "type": "string", "minLength": 1, "maxLength": 255 },
+        "required": { "type": "boolean", "default": true },
+        "provenance": {
+          "enum": [
+            "upstream-output", "synthetic-fixture", "adapter-generated", "trace-collector",
+            "environment-collector", "analysis-tool"
+          ]
+        }
+      }
+    },
+    "environmentSnapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "environmentId"],
+      "properties": {
+        "schemaVersion": { "const": "v1alpha1" },
+        "environmentId": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "synthetic": { "type": "boolean", "default": false },
+        "systemFingerprintDigest": { "type": ["string", "null"], "pattern": "^sha256:[0-9a-f]{64}$" },
+        "hostname": { "type": ["string", "null"], "maxLength": 255 },
+        "platform": { "type": ["string", "null"], "maxLength": 255 },
+        "cpuModel": { "type": ["string", "null"], "maxLength": 255 },
+        "logicalCpuCount": { "type": ["integer", "null"], "minimum": 0 },
+        "numaNodeCount": { "type": ["integer", "null"], "minimum": 0 },
+        "memoryTotalBytes": { "type": ["integer", "null"], "minimum": 0 },
+        "disks": { "type": "array", "items": { "$ref": "#/definitions/diskSnapshot" } },
+        "nics": { "type": "array", "items": { "$ref": "#/definitions/nicSnapshot" } },
+        "accelerators": { "type": "array", "items": { "$ref": "#/definitions/acceleratorSnapshot" } },
+        "acceleratorCount": { "type": ["integer", "null"], "minimum": 0 },
+        "interconnect": { "type": ["object", "null"] },
+        "driverVersion": { "type": ["string", "null"], "maxLength": 80 },
+        "cudaVersion": { "type": ["string", "null"], "maxLength": 80 },
+        "rocmVersion": { "type": ["string", "null"], "maxLength": 80 },
+        "communicationLibrary": {
+          "anyOf": [
+            { "$ref": "#/definitions/softwareComponent" },
+            { "type": "null" }
+          ]
+        },
+        "frameworks": { "type": "array", "items": { "$ref": "#/definitions/softwareComponent" } },
+        "compiler": {
+          "anyOf": [
+            { "$ref": "#/definitions/softwareComponent" },
+            { "type": "null" }
+          ]
+        },
+        "containerImageDigest": { "type": ["string", "null"], "pattern": "^sha256:[0-9a-f]{64}$" },
+        "performanceEnvVars": { "type": "object", "additionalProperties": { "type": "string" } },
+        "extensions": { "type": "object" },
+        "collectedAt": { "type": ["string", "null"] }
+      }
+    },
+    "acceleratorSnapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["index"],
+      "properties": {
+        "index": { "type": "integer", "minimum": 0 },
+        "model": { "type": ["string", "null"] },
+        "uuid": { "type": ["string", "null"], "maxLength": 120 },
+        "memoryTotalMiB": { "type": ["integer", "null"], "minimum": 0 },
+        "pcieLink": { "type": ["string", "null"], "maxLength": 80 },
+        "nvlinkPeers": { "type": ["array", "null"], "items": { "type": "integer", "minimum": 0 } }
+      }
+    },
+    "diskSnapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "kind": { "type": ["string", "null"], "maxLength": 80 },
+        "sizeGiB": { "type": ["integer", "null"], "minimum": 0 }
+      }
+    },
+    "nicSnapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "linkSpeed": { "type": ["string", "null"], "maxLength": 80 }
+      }
+    },
+    "softwareComponent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "version": { "type": ["string", "null"], "maxLength": 80 },
+        "digest": { "type": ["string", "null"], "pattern": "^sha256:[0-9a-f]{64}$" }
+      }
+    },
+    "traceSetManifest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion", "traceSetId", "format", "timeUnit", "clockDomain", "collector",
+        "measurement", "stepBoundaryRule", "expectedRanks", "files", "complete", "missingRanks"
+      ],
+      "properties": {
+        "schemaVersion": { "const": "v1alpha1" },
+        "traceSetId": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "attemptId": { "type": ["string", "null"] },
+        "benchmarkId": { "type": ["string", "null"] },
+        "workloadId": { "type": ["string", "null"] },
+        "format": { "enum": ["pytorch-kineto", "xprof", "nsys", "looper-synthetic-json"] },
+        "timeUnit": { "enum": ["nanosecond", "microsecond", "millisecond", "second"] },
+        "clockDomain": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "collector": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "version"],
+          "properties": {
+            "name": { "type": "string", "minLength": 1, "maxLength": 120 },
+            "version": { "type": "string", "minLength": 1, "maxLength": 80 },
+            "configDigest": { "type": ["string", "null"], "pattern": "^sha256:[0-9a-f]{64}$" }
+          }
+        },
+        "warmup": {
+          "anyOf": [
+            { "$ref": "#/definitions/tracePhaseRange" },
+            { "type": "null" }
+          ]
+        },
+        "measurement": { "$ref": "#/definitions/tracePhaseRange" },
+        "stepBoundaryRule": { "type": "string", "minLength": 1, "maxLength": 500 },
+        "expectedRanks": { "type": "integer", "minimum": 1 },
+        "files": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["rank", "artifactDigest", "artifactName", "size"],
+            "properties": {
+              "rank": { "type": "integer", "minimum": 0 },
+              "device": { "type": ["integer", "null"], "minimum": 0 },
+              "artifactDigest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+              "artifactName": { "type": "string", "minLength": 1, "maxLength": 255 },
+              "size": { "type": "integer", "minimum": 0 }
+            }
+          }
+        },
+        "complete": { "type": "boolean" },
+        "missingRanks": { "type": "array", "items": { "type": "integer", "minimum": 0 } },
+        "captureOverheadRatio": { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
+        "extensions": { "type": "object" }
+      }
+    },
+    "tracePhaseRange": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["startStep", "endStep"],
+      "properties": {
+        "startStep": { "type": "integer", "minimum": 0 },
+        "endStep": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "metricObservation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "metric", "value", "unit", "phase"],
+      "properties": {
+        "schemaVersion": { "const": "v1alpha1" },
+        "metric": { "type": "string", "pattern": "^[a-zA-Z][a-zA-Z0-9_.-]*$" },
+        "value": { "type": ["number", "boolean"] },
+        "unit": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "phase": { "enum": ["warmup", "measurement", "validation", "cleanup"] },
+        "workload": { "type": ["string", "null"] },
+        "sampleIndex": { "type": ["integer", "null"], "minimum": 0 },
+        "sampleCount": { "type": ["integer", "null"], "minimum": 1 },
+        "statistic": {
+          "enum": [
+            "sample", "mean", "median", "p50", "p95", "p99", "p99.9", "maximum", "rate",
+            "cvar99", "count", "boolean"
+          ],
+          "default": "sample"
+        },
+        "timestamp": { "type": ["string", "null"] },
+        "attributes": { "type": "object" }
+      }
+    },
+    "derivedMetric": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion", "metric", "value", "unit", "statistic", "analysisToolId",
+        "analysisToolVersion", "analysisToolDigest", "analysisInputDigest",
+        "parametersDigest", "generatedAt"
+      ],
+      "properties": {
+        "schemaVersion": { "const": "v1alpha1" },
+        "metric": { "type": "string", "pattern": "^[a-zA-Z][a-zA-Z0-9_.-]*$" },
+        "value": { "type": "number" },
+        "unit": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "statistic": {
+          "enum": [
+            "sample", "mean", "median", "p50", "p95", "p99", "p99.9", "maximum", "rate",
+            "cvar99", "count", "boolean"
+          ]
+        },
+        "analysisToolId": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "analysisToolVersion": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "analysisToolDigest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+        "analysisInputDigest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+        "inputArtifactDigests": { "type": "array", "items": { "type": "string" } },
+        "traceSetDigest": { "type": ["string", "null"], "pattern": "^sha256:[0-9a-f]{64}$" },
+        "attemptId": { "type": ["string", "null"] },
+        "parameters": { "type": "object" },
+        "parametersDigest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+        "generatedAt": { "type": "string", "minLength": 1, "maxLength": 48 }
+      }
+    },
+    "resultCheck": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "passed"],
+      "properties": {
+        "id": { "type": "string" },
+        "passed": { "type": "boolean" },
+        "scope": {
+          "enum": [
+            "attempt", "evaluation", "candidate", "block", "target", "placement_pair", "study"
+          ]
+        },
+        "kind": {
+          "enum": ["execution", "correctness", "safety", "slo", "resource", "statistical"]
+        },
+        "message": { "type": ["string", "null"] },
+        "details": { "type": "object" }
+      }
+    },
+    "resultArtifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "role", "mediaType"],
+      "properties": {
+        "path": { "type": "string" },
+        "role": {
+          "enum": ["log", "trace", "result", "profile", "dataset", "histogram", "other"]
+        },
+        "mediaType": { "type": "string" },
+        "description": { "type": ["string", "null"] }
+      }
+    },
+    "attemptResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "status"],
+      "properties": {
+        "schemaVersion": { "const": "v1alpha1" },
+        "status": { "enum": ["succeeded", "failed", "timed_out", "cancelled"] },
+        "message": { "type": ["string", "null"] },
+        "checks": { "type": "array", "items": { "$ref": "#/definitions/resultCheck" } },
+        "artifacts": { "type": "array", "items": { "$ref": "#/definitions/resultArtifact" } },
+        "extensions": { "type": "object" }
+      }
+    },
+    "adapterIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["adapterId", "adapterVersion", "implementationDigest", "sourceFormat"],
+      "properties": {
+        "adapterId": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "adapterVersion": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "implementationDigest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+        "upstreamId": { "type": ["string", "null"], "maxLength": 120 },
+        "sourceFormat": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "synthetic": { "type": "boolean", "default": false },
+        "compatibilityStatus": { "enum": ["native", "compatible", "reference-only"] },
+        "upstreamLicense": { "type": ["string", "null"], "enum": ["unresolved", "verified", null] }
+      }
+    }
+  }
+}
