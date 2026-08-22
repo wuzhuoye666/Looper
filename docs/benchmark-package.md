@@ -74,4 +74,4 @@ SPEC 类集成包选择 `batch-suite`。workload 对应 task 或 task group，�
 6. 可执行配置必须使用固定 digest 容器、`looper-adapter/v1` 和 `normalize` 阶段；
 7. 先运行 fixture/冒烟，再进入兼容性矩阵和正式审计。
 
-仓库中的 `benchmarks/config-driven-fixture` 是合同测试样例，不是性能 Benchmark，也不能作为选型证据。它证明 suite-owned producer 与 normalizer 可以仅通过配置被通用 Worker 执行。
+仓库中的 `benchmarks/config-driven-fixture` 是合同测试样例，不是性能 Benchmark，也不能作为选型证据。它证明 suite-owned producer 与 normalizer 可以仅通过配置被通用 Worker 执行。该 fixture 故意使用本地进程且不声明生产源码 revision，因此从注册页导入时会显示生产门禁失败；程序员应以页面逐项约束为清单，把正式包改为固定 digest 容器并补齐不可变来源。
