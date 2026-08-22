@@ -63,6 +63,7 @@ from looper_api.benchmark_registration import (
 from looper_api.benchmark_runs import BenchmarkSmokeRunRequest, create_benchmark_smoke_run
 from looper_api.cloud_contracts import (
     CatalogFilters,
+    InstanceTypeInfo,
     OrderConfirmRequest,
     OrderPrepareRequest,
     OrderResolveRequest,
@@ -118,6 +119,7 @@ from looper_api.scheduler import (
     start_experiment,
 )
 from looper_api.seed import seed_system
+from looper_api.selection_advisor import SelectionAdvisorRequest, advise_instance_types
 from looper_api.serialization import (
     analysis_view,
     benchmark_view,
@@ -436,6 +438,34 @@ def cloud_catalog(
     )
     session.commit()
     return result.model_dump(mode="json", by_alias=True)
+
+
+@app.post("/api/v1/cloud/selection-advisor/search")
+def cloud_selection_advisor(
+    request: SelectionAdvisorRequest,
+    session: SessionDependency,
+    app_settings: SettingsDependency,
+    registry: ProviderRegistryDependency,
+) -> dict[str, Any]:
+    catalog = catalog_search(
+        session,
+        app_settings,
+        registry,
+        ProviderId.ALIBABA,
+        "instance-type",
+        CatalogFilters(region=request.region, zone=request.zone, limit=500),
+    )
+    response = advise_instance_types(
+        request,
+        [InstanceTypeInfo.model_validate(item) for item in catalog.items],
+        source=catalog.source,
+        fetched_at=catalog.fetched_at.isoformat(),
+        expires_at=catalog.expires_at.isoformat(),
+        stale=catalog.stale,
+        warning=catalog.warning,
+    )
+    session.commit()
+    return response.model_dump(mode="json", by_alias=True)
 
 
 @app.post("/api/v1/cloud/network/{provider}/managed-security-group", status_code=201)

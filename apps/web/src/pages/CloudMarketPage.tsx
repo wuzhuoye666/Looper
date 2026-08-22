@@ -16,12 +16,14 @@ import {
   Settings2,
   ShieldCheck,
   ShoppingCart,
+  Sparkles,
   Terminal,
   XCircle,
 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { PageHeader } from '../components/PageHeader';
+import { AlibabaSelectionAdvisor } from '../components/AlibabaSelectionAdvisor';
 import { EmptyState, ErrorState, LoadingState } from '../components/States';
 import { api } from '../lib/api';
 import type {
@@ -109,7 +111,7 @@ export function CloudMarketPage() {
   const zones = useQuery({
     queryKey: ['cloud-zones', provider, region],
     queryFn: () => api.zones(provider, region),
-    enabled: !!region && !!providerInfo?.credentialsConfigured,
+    enabled: !!region && !!providerInfo?.credentialsConfigured && !(provider === 'alibaba' && kind === 'instance-type'),
     staleTime: 300_000,
   });
   const catalog = useQuery({
@@ -339,10 +341,11 @@ export function CloudMarketPage() {
         <div className="field compact"><label htmlFor="market-region">地域</label><select id="market-region" value={region} onChange={event => setRegion(event.target.value)}><option value="">选择地域</option>{regions.data?.items.map(item => <option key={item.id} value={item.id}>{item.name} · {item.id}</option>)}</select></div>
         <div className="field compact"><label htmlFor="market-zone">可用区</label><select id="market-zone" value={zone} onChange={event => setZone(event.target.value)} disabled={!region}><option value="">选择可用区</option>{zones.data?.items.map(item => <option key={item.id} value={item.id}>{item.name} · {item.id}</option>)}</select></div>
         <div className="segmented" role="tablist" aria-label="资源类型"><button className={kind === 'instance-type' ? 'active' : ''} onClick={() => setKind('instance-type')}><Cpu size={15} />机型</button><button className={kind === 'image' ? 'active' : ''} onClick={() => setKind('image')}><ImageIcon size={15} />镜像</button></div>
-        {kind === 'instance-type' && <><div className="field compact numeric-filter"><label htmlFor="min-cpu">最低 vCPU</label><input id="min-cpu" type="number" min={0} value={minCpu} onChange={event => setMinCpu(Number(event.target.value))} /></div><div className="field compact numeric-filter"><label htmlFor="min-memory">最低内存 GiB</label><input id="min-memory" type="number" min={0} step={0.5} value={minMemory} onChange={event => setMinMemory(Number(event.target.value))} /></div></>}
-        <label className="search-field market-search"><Search size={16} /><span className="sr-only">搜索云资源</span><input value={search} onChange={event => setSearch(event.target.value)} placeholder={`搜索${kindLabels[kind]}名称或 ID`} /></label>
+        {kind === 'instance-type' && provider !== 'alibaba' && <><div className="field compact numeric-filter"><label htmlFor="min-cpu">最低 vCPU</label><input id="min-cpu" type="number" min={0} value={minCpu} onChange={event => setMinCpu(Number(event.target.value))} /></div><div className="field compact numeric-filter"><label htmlFor="min-memory">最低内存 GiB</label><input id="min-memory" type="number" min={0} step={0.5} value={minMemory} onChange={event => setMinMemory(Number(event.target.value))} /></div></>}
+        {provider === 'alibaba' && kind === 'instance-type' ? <span className="advisor-toolbar-note"><Sparkles size={14} />使用下方助手逐步筛选</span> : <label className="search-field market-search"><Search size={16} /><span className="sr-only">搜索云资源</span><input value={search} onChange={event => setSearch(event.target.value)} placeholder={`搜索${kindLabels[kind]}名称或 ID`} /></label>}
       </section>
-      {catalog.isLoading ? <LoadingState /> : catalog.isError ? <ErrorState error={catalog.error} onRetry={() => catalog.refetch()} /> : items.length ? <section className="panel cloud-results"><div className="panel-heading"><div><h2>{providerLabels[provider]} · {kindLabels[kind]}</h2><p>{catalog.data?.source === 'stale-cache' ? catalog.data.warning : `${items.length} 个结果`}</p></div><span className="cache-state">{catalog.data?.source === 'live' ? '实时' : '缓存'}</span></div>{kind === 'instance-type' ? <InstanceTypeTable items={items as CloudInstanceType[]} selected={selectedType} onSelect={value => setSelectedType(value)} /> : <ImageTable items={items as CloudImage[]} selected={selectedImage} onSelect={value => setSelectedImage(value)} />}</section> : <EmptyState title="没有匹配的云资源" />}
+      {provider === 'alibaba' && <div hidden={kind !== 'instance-type'}><AlibabaSelectionAdvisor regions={regions.data?.items || []} zones={zones.data?.items || []} region={region} zone={zone} onRegionChange={setRegion} onZoneChange={setZone} selected={selectedType} onSelect={setSelectedType} /></div>}
+      {!(provider === 'alibaba' && kind === 'instance-type') && (catalog.isLoading ? <LoadingState /> : catalog.isError ? <ErrorState error={catalog.error} onRetry={() => catalog.refetch()} /> : items.length ? <section className="panel cloud-results"><div className="panel-heading"><div><h2>{providerLabels[provider]} · {kindLabels[kind]}</h2><p>{catalog.data?.source === 'stale-cache' ? catalog.data.warning : `${items.length} 个结果`}</p></div><span className="cache-state">{catalog.data?.source === 'live' ? '实时' : '缓存'}</span></div>{kind === 'instance-type' ? <InstanceTypeTable items={items as CloudInstanceType[]} selected={selectedType} onSelect={value => setSelectedType(value)} /> : <ImageTable items={items as CloudImage[]} selected={selectedImage} onSelect={value => setSelectedImage(value)} />}</section> : <EmptyState title="没有匹配的云资源" />)}
     </>}
 
     <section className="panel launch-panel">

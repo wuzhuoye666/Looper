@@ -217,13 +217,30 @@ class AlibabaEcsProvider(CloudProvider):
                 family=attr(item, "instance_type_family"),
                 cpu=int(attr(item, "cpu_core_count", default=0) or 0),
                 memoryGib=float(attr(item, "memory_size", default=0) or 0),
-                gpu=int(attr(item, "gpu_amount", default=0) or 0),
+                gpu=int(attr(item, "gpuamount", "gpu_amount", default=0) or 0),
+                gpuModel=attr(item, "gpuspec", "gpu_spec"),
+                gpuMemoryGib=attr(item, "gpumemory_size", "gpu_memory_size"),
                 architecture=attr(item, "cpu_architecture"),
+                networkBandwidthRxGbps=(
+                    float(attr(item, "instance_bandwidth_rx")) / 1_000_000
+                    if attr(item, "instance_bandwidth_rx") is not None
+                    else None
+                ),
+                networkBandwidthTxGbps=(
+                    float(attr(item, "instance_bandwidth_tx")) / 1_000_000
+                    if attr(item, "instance_bandwidth_tx") is not None
+                    else None
+                ),
+                networkPpsRx=attr(item, "instance_pps_rx"),
+                networkPpsTx=attr(item, "instance_pps_tx"),
+                localStorageCount=attr(item, "local_storage_amount"),
+                localStorageCapacityGib=attr(item, "local_storage_capacity"),
+                localStorageCategory=attr(item, "local_storage_category"),
                 zones=[filters.zone] if filters.zone else [],
                 available=available.get(str(attr(item, "instance_type_id"))),
                 attributes={
                     "networkEniQuantity": attr(item, "eni_quantity"),
-                    "localStorageCategory": attr(item, "local_storage_category"),
+                    "physicalProcessorModel": attr(item, "physical_processor_model"),
                 },
             )
             for item in rows

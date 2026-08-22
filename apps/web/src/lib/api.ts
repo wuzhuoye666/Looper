@@ -2,7 +2,7 @@ import type {
   AnalysisData, Benchmark, BenchmarkRegistration, BenchmarkRegistrationDraft, CloudCatalogResponse, CloudImage, CloudInstanceType, CloudOrder,
   CloudOrderEvent, CloudOrderEvidence, CloudProviderId, CloudProviderInfo, CloudPurchaseReadiness, CloudPurchaseSpec,
   CloudKeyPair, CloudQuote, CloudReconciliationContext, CloudRegion, CloudSecurityGroup, CloudSubnet, CloudVpc, CloudZone,
-  DashboardData, Experiment, GlobalSearchResult, ListResponse, Target, VariabilityData,
+  DashboardData, Experiment, GlobalSearchResult, ListResponse, SelectionAdvisorRequest, SelectionAdvisorResponse, Target, VariabilityData,
 } from './types';
 
 export const API_BASE = (import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000/api/v1').replace(/\/$/, '');
@@ -118,6 +118,9 @@ export const api = {
     api.catalog<CloudInstanceType>(provider, 'instance-type', params),
   images: (provider: CloudProviderId, params: Record<string, string | number | undefined>) =>
     api.catalog<CloudImage>(provider, 'image', params),
+  selectionAdvisor: (payload: SelectionAdvisorRequest) => request<SelectionAdvisorResponse>(
+    '/cloud/selection-advisor/search', { method: 'POST', body: JSON.stringify(payload) },
+  ),
   vpcs: (provider: CloudProviderId, region: string) => api.catalog<CloudVpc>(provider, 'vpc', { region }),
   subnets: (provider: CloudProviderId, region: string, zone: string, vpcId: string) =>
     api.catalog<CloudSubnet>(provider, 'subnet', { region, zone, vpc_id: vpcId }),

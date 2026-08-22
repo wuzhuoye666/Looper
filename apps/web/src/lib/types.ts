@@ -146,7 +146,32 @@ export interface CloudKeyPair {
 }
 export interface CloudInstanceType {
   provider: CloudProviderId; region: string; id: string; family?: string; cpu: number; memoryGib: number;
-  gpu?: number; architecture?: string; zones: string[]; available?: boolean; attributes?: Record<string, unknown>;
+  gpu?: number; gpuModel?: string; gpuMemoryGib?: number; architecture?: string;
+  networkBandwidthRxGbps?: number; networkBandwidthTxGbps?: number; networkPpsRx?: number; networkPpsTx?: number;
+  localStorageCount?: number; localStorageCapacityGib?: number; localStorageCategory?: string;
+  zones: string[]; available?: boolean; attributes?: Record<string, unknown>;
+}
+export type SelectionScenario = 'web-api' | 'microservices-rpc' | 'database' | 'cache' | 'search-logs' |
+  'big-data-messaging' | 'game' | 'video' | 'ai' | 'development-test' | 'other';
+export interface SelectionAdvisorRequest {
+  provider: 'alibaba'; region: string; zone?: string; primaryScenario: SelectionScenario;
+  coLocatedComponents: SelectionScenario[]; sizingMode: 'exact' | 'unknown'; exactCpu?: number;
+  exactMemoryGib?: number; workloadScale?: string; minimumGpuCount: number;
+  localStorage: 'required' | 'not-required' | 'unknown'; minimumNetworkBandwidthGbps?: number;
+  minimumNetworkPps?: number; codeAvailability: 'available' | 'unavailable' | 'unknown';
+  architecture: 'x86' | 'arm' | 'unknown'; offset: number; limit: number;
+}
+export interface SelectionExclusionStage {
+  code: string; label: string; before: number; after: number; removed: number;
+}
+export interface AdvisedCloudInstanceType extends CloudInstanceType {
+  matchTier: 'preferred' | 'suitable' | 'other'; reasons: string[]; warnings: string[];
+}
+export interface SelectionAdvisorResponse {
+  provider: 'alibaba'; region: string; zone?: string; items: AdvisedCloudInstanceType[]; total: number;
+  offset: number; limit: number; nextOffset?: number; exclusionStages: SelectionExclusionStage[];
+  mostRestrictiveStage?: SelectionExclusionStage; source: 'live' | 'cache' | 'stale-cache';
+  fetchedAt: string; expiresAt: string; stale: boolean; warning?: string;
 }
 export interface CloudImage {
   provider: CloudProviderId; region: string; id: string; name: string; platform?: string; architecture?: string;
