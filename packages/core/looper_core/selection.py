@@ -186,9 +186,11 @@ def analyze_slo_frontier(
     upper = min(upper_candidates) if upper_candidates else None
     next_load: float | None = None
     width_ratio: float | None = None
+    termination_reason: str | None = None
 
     if monotonic_violations:
         status = "non_monotonic"
+        termination_reason = "non_monotonic_frontier"
     elif lower is None:
         status = "needs_lower_bracket"
         next_load = min(offered_loads) / protocol.expansion_factor
@@ -208,6 +210,7 @@ def analyze_slo_frontier(
     ):
         status = "frontier_unresolved"
         next_load = None
+        termination_reason = "maximum_adaptive_points_exhausted"
 
     return {
         "status": status,
@@ -216,6 +219,7 @@ def analyze_slo_frontier(
         "width_ratio": width_ratio,
         "next_offered_load": next_load,
         "adaptive_points_used": adaptive_points_used,
+        "termination_reason": termination_reason,
         "decisions": decisions,
         "monotonic_violations": monotonic_violations,
     }

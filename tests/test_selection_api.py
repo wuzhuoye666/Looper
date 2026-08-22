@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import timedelta
+
 import pytest
 from looper_api.analysis_service import build_analysis_snapshot
 from looper_api.app import _normalize_create_request
@@ -193,10 +195,12 @@ def test_selection_analysis_pairs_time_blocks_by_target_variant(db_session: obje
     assert comparison["conclusion_strength"] == "single-placement-provisional"
 
 
-def test_selection_frontier_persists_and_appends_one_paired_load_batch(
-    db_session: object,
-) -> None:
-    session = db_session
+def _create_frontier_fixture(
+    session: object,
+    *,
+    max_attempts: int = 100,
+    wall_time_seconds: int = 86400,
+) -> tuple[object, list[SelectionLoadPointRecord], list[AttemptRecord]]:
     capabilities = ["linux", "x86_64", "container", "benchbase", "postgresql"]
     for target_id in ["frontier-a", "frontier-b"]:
         snapshot = {
@@ -247,10 +251,16 @@ def test_selection_frontier_persists_and_appends_one_paired_load_batch(
                     "label": "SKU B",
                 },
             ],
-            "config": {"repeats": 5, "referenceOfferedLoad": 100, "seed": 31},
+            "config": {
+                "repeats": 5,
+                "referenceOfferedLoad": 100,
+                "seed": 31,
+                "timeout": wall_time_seconds,
+            },
         },
         session,
     )
+    request.spec.budget.max_attempts = max_attempts
     experiment = create_experiment(session, request)
     start_experiment(session, experiment)
     initial_points = list(
@@ -263,12 +273,18 @@ def test_selection_frontier_persists_and_appends_one_paired_load_batch(
     assert [float(point.offered_load) for point in initial_points] == [50, 75, 100]
     assert all(point.origin == "initial" for point in initial_points)
     initial_attempts = list(
-        session.scalars(
-            select(AttemptRecord).where(AttemptRecord.experiment_id == experiment.id)
-        )
+        session.scalars(select(AttemptRecord).where(AttemptRecord.experiment_id == experiment.id))
     )
     assert len(initial_attempts) == 30
-    point_by_id = {point.id: point for point in initial_points}
+    return experiment, initial_points, initial_attempts
+
+
+def _complete_frontier_attempts(
+    session: object,
+    points: list[SelectionLoadPointRecord],
+    attempts: list[AttemptRecord],
+) -> None:
+    point_by_id = {point.id: point for point in points}
     metrics = {
         "committed_tps": ("transactions/second", "rate", None),
         "latency_p99_ms": ("ms", "p99", 120000),
@@ -279,7 +295,7 @@ def test_selection_frontier_persists_and_appends_one_paired_load_batch(
         "rate_limiter_lag_ratio": ("ratio", "rate", None),
         "client_headroom_ratio": ("ratio", "rate", None),
     }
-    for attempt in initial_attempts:
+    for attempt in attempts:
         point = point_by_id[attempt.selection_load_point_id]
         offered_load = float(point.offered_load)
         values = {
@@ -330,6 +346,14 @@ def test_selection_frontier_persists_and_appends_one_paired_load_batch(
             )
     session.flush()
 
+
+def test_selection_frontier_persists_and_appends_one_paired_load_batch(
+    db_session: object,
+) -> None:
+    session = db_session
+    experiment, initial_points, initial_attempts = _create_frontier_fixture(session)
+    _complete_frontier_attempts(session, initial_points, initial_attempts)
+
     advance_experiment(session, experiment.id)
     points = list(
         session.scalars(
@@ -361,12 +385,94 @@ def test_selection_frontier_persists_and_appends_one_paired_load_batch(
         assert evaluations == {"frontier-a", "frontier-b"}
 
     advance_experiment(session, experiment.id)
-    assert len(
-        list(
-            session.scalars(
-                select(SelectionLoadPointRecord).where(
-                    SelectionLoadPointRecord.experiment_id == experiment.id
+    assert (
+        len(
+            list(
+                session.scalars(
+                    select(SelectionLoadPointRecord).where(
+                        SelectionLoadPointRecord.experiment_id == experiment.id
+                    )
                 )
             )
         )
-    ) == 4
+        == 4
+    )
+
+
+@pytest.mark.parametrize(
+    ("expected_reason", "max_attempts", "wall_time_seconds"),
+    [
+        ("attempt_budget_exhausted", 30, 86400),
+        ("wall_time_budget_exhausted", 100, 1),
+    ],
+)
+def test_selection_frontier_finishes_unresolved_when_budget_cannot_fit_next_batch(
+    db_session: object,
+    expected_reason: str,
+    max_attempts: int,
+    wall_time_seconds: int,
+) -> None:
+    session = db_session
+    experiment, initial_points, initial_attempts = _create_frontier_fixture(
+        session,
+        max_attempts=max_attempts,
+        wall_time_seconds=wall_time_seconds,
+    )
+    _complete_frontier_attempts(session, initial_points, initial_attempts)
+    if expected_reason == "wall_time_budget_exhausted":
+        experiment.started_at = utc_now() - timedelta(seconds=wall_time_seconds + 1)
+
+    advance_experiment(session, experiment.id)
+
+    points = list(
+        session.scalars(
+            select(SelectionLoadPointRecord)
+            .where(SelectionLoadPointRecord.experiment_id == experiment.id)
+            .order_by(SelectionLoadPointRecord.sequence)
+        )
+    )
+    assert len(points) == 3
+    assert points[-1].analysis_json["frontier_status"] == "frontier_unresolved"
+    assert points[-1].analysis_json["termination_reason"] == expected_reason
+    snapshot = build_analysis_snapshot(session, experiment.id, persist=False)
+    assert snapshot["frontier"]["status"] == "frontier_unresolved"
+    assert snapshot["frontier"]["termination_reason"] == expected_reason
+    assert len(snapshot["frontier"]["trajectory"]) == 3
+    assert sum(len(point["attempts"]) for point in snapshot["frontier"]["trajectory"]) == 30
+
+
+def test_selection_frontier_preserves_failed_attempt_trajectory(db_session: object) -> None:
+    session = db_session
+    experiment, initial_points, initial_attempts = _create_frontier_fixture(session)
+    spec = dict(experiment.spec_json)
+    spec["design"] = {**spec["design"], "max_retries": 0}
+    experiment.spec_json = spec
+    _complete_frontier_attempts(session, initial_points, initial_attempts)
+    failed_attempt = initial_attempts[0]
+    failed_attempt.status = AttemptStatus.FAILED
+    failed_attempt.error_message = "fixture load generator failed"
+
+    advance_experiment(session, experiment.id)
+
+    failed_point = session.get(SelectionLoadPointRecord, failed_attempt.selection_load_point_id)
+    assert failed_point is not None
+    assert failed_point.analysis_json["reason"] == "repeat_failures_exhausted"
+    assert failed_point.analysis_json["frontier_status"] == "frontier_unresolved"
+    snapshot = build_analysis_snapshot(session, experiment.id, persist=False)
+    failed_facts = [
+        attempt
+        for point in snapshot["frontier"]["trajectory"]
+        for attempt in point["attempts"]
+        if attempt["attempt_id"] == failed_attempt.id
+    ]
+    assert failed_facts == [
+        {
+            "attempt_id": failed_attempt.id,
+            "target_id": session.get(EvaluationRecord, failed_attempt.evaluation_id).target_id,
+            "repeat_index": failed_attempt.repeat_index,
+            "retry_index": failed_attempt.retry_index,
+            "queue_sequence": failed_attempt.queue_sequence,
+            "status": AttemptStatus.FAILED,
+            "error_message": "fixture load generator failed",
+        }
+    ]
