@@ -30,6 +30,17 @@ export interface Experiment {
   objective?: string; decisionQuestion?: string; scenario?: ScenarioContract; comparison?: SelectionComparison;
   config?: Record<string, unknown>; evaluations?: Evaluation[]; artifacts?: Artifact[];
 }
+export interface PostOptimizationAction {
+  id: string; label: string; description?: string; risk: 'low' | 'medium' | 'high'; applyMode: 'benchmark-parameter';
+  parameter: string; value: unknown; before?: unknown; after?: unknown; minimumImprovementRatio: number;
+  guardMetric?: string; maximumGuardRegressionRatio?: number;
+}
+export interface PostOptimizationStatus {
+  eligible: boolean;
+  status: 'ready' | 'retesting' | 'accepted' | 'rolled_back' | 'inconclusive' | 'unavailable' | 'failed';
+  reason: string; action?: PostOptimizationAction; baselineParameters?: Record<string, unknown>;
+  candidateParameters?: Record<string, unknown>; followUpExperiment?: Experiment;
+}
 export interface DashboardData { counts?: Partial<Record<ExperimentStatus, number>>; activeExperiments?: Experiment[]; recentExperiments?: Experiment[]; trend?: Array<{ time: string; score: number; baseline?: number }>; successRate?: number; totalExperiments?: number; computeHours?: number }
 export interface Benchmark {
   id: string; key?: string; name: string; description?: string; category?: string; version?: string; metrics?: string[];

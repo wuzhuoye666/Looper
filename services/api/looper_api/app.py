@@ -105,6 +105,7 @@ from looper_api.models import (
     ExperimentRecord,
     TargetRecord,
 )
+from looper_api.post_optimization import post_optimization_view, start_post_optimization
 from looper_api.providers.base import CloudProviderError
 from looper_api.providers.registry import CloudProviderRegistry, get_provider_registry
 from looper_api.providers.tencent_cvm import TencentInventoryError, sync_cvm_inventory
@@ -992,6 +993,28 @@ def get_analysis(experiment_id: str, session: SessionDependency) -> dict[str, An
     result = build_analysis_snapshot(session, experiment_id, persist=True)
     session.commit()
     return analysis_view(result)
+
+
+@app.get("/api/v1/experiments/{experiment_id}/post-optimization")
+def get_post_optimization(
+    experiment_id: str, session: SessionDependency
+) -> dict[str, Any]:
+    experiment = session.get(ExperimentRecord, experiment_id)
+    if experiment is None:
+        raise HTTPException(status_code=404, detail="experiment not found")
+    return post_optimization_view(session, experiment)
+
+
+@app.post("/api/v1/experiments/{experiment_id}/post-optimization", status_code=201)
+def create_post_optimization(
+    experiment_id: str, session: SessionDependency
+) -> dict[str, Any]:
+    experiment = session.get(ExperimentRecord, experiment_id)
+    if experiment is None:
+        raise HTTPException(status_code=404, detail="experiment not found")
+    result = start_post_optimization(session, experiment)
+    session.commit()
+    return result
 
 
 @app.get("/api/v1/experiments/{experiment_id}/variability")
