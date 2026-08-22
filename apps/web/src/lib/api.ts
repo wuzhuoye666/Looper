@@ -2,7 +2,7 @@ import type {
   AnalysisData, Benchmark, CloudCatalogResponse, CloudImage, CloudInstanceType, CloudOrder,
   CloudOrderEvent, CloudOrderEvidence, CloudProviderId, CloudProviderInfo, CloudPurchaseReadiness, CloudPurchaseSpec,
   CloudKeyPair, CloudQuote, CloudReconciliationContext, CloudRegion, CloudSecurityGroup, CloudSubnet, CloudVpc, CloudZone,
-  DashboardData, Experiment, GlobalSearchResult, ListResponse, Target,
+  DashboardData, Experiment, GlobalSearchResult, ListResponse, Target, VariabilityData,
 } from './types';
 
 export const API_BASE = (import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000/api/v1').replace(/\/$/, '');
@@ -62,6 +62,7 @@ export const api = {
   experiments: async (query = '') => list(await request<Experiment[] | ListResponse<Experiment> | { data?: Experiment[] }>(`/experiments${query}`)),
   experiment: (id: string) => request<Experiment>(`/experiments/${encodeURIComponent(id)}`),
   analysis: (id: string) => request<AnalysisData>(`/experiments/${encodeURIComponent(id)}/analysis`),
+  variability: (id: string) => request<VariabilityData>(`/experiments/${encodeURIComponent(id)}/variability`),
   benchmarks: async () => list(await request<Benchmark[] | ListResponse<Benchmark> | { data?: Benchmark[] }>('/benchmarks')),
   targets: async () => list(await request<Target[] | ListResponse<Target> | { data?: Target[] }>('/targets')),
   createExperiment: (payload: Record<string, unknown>) => request<Experiment>('/experiments', { method: 'POST', body: JSON.stringify(payload) }),

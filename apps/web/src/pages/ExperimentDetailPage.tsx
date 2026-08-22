@@ -6,12 +6,13 @@ import { ExperimentActions, type ExperimentAction } from '../components/ActionBu
 import { BackLink } from '../components/Layout';
 import { StatusBadge } from '../components/StatusBadge';
 import { EmptyState, ErrorState, LoadingState } from '../components/States';
+import { VariabilityPanel } from '../components/VariabilityPanel';
 import { API_BASE, api } from '../lib/api';
 import { formatDate, formatNumber, scoreDelta } from '../lib/format';
 import type { AnalysisData, Evaluation, Experiment, SelectionComparison, SelectionTargetResult } from '../lib/types';
 
-const selectionTabs = [['overview', '概览'], ['targets', '目标结果'], ['comparison', '对比结论'], ['evidence', '证据'], ['config', '配置']];
-const optimizationTabs = [['overview', '概览'], ['evaluations', '评估记录'], ['pareto', 'Pareto 前沿'], ['evidence', '证据'], ['config', '配置']];
+const selectionTabs = [['overview', '概览'], ['targets', '目标结果'], ['comparison', '对比结论'], ['variability', '波动分析'], ['evidence', '证据'], ['config', '配置']];
+const optimizationTabs = [['overview', '概览'], ['evaluations', '评估记录'], ['pareto', 'Pareto 前沿'], ['variability', '波动分析'], ['evidence', '证据'], ['config', '配置']];
 
 export function ExperimentDetailPage() {
   const { id = '' } = useParams();
@@ -28,6 +29,11 @@ export function ExperimentDetailPage() {
     queryKey: ['analysis', id],
     queryFn: () => api.analysis(id),
     enabled: Boolean(id) && ['targets', 'comparison', 'pareto', 'evidence'].includes(tab),
+  });
+  const variability = useQuery({
+    queryKey: ['variability', id],
+    queryFn: () => api.variability(id),
+    enabled: Boolean(id) && tab === 'variability',
   });
   const action = useMutation({
     mutationFn: (value: ExperimentAction) => api.experimentAction(id, value),
@@ -57,6 +63,7 @@ export function ExperimentDetailPage() {
     {tab === 'targets' && <AsyncPanel query={analysis}><TargetResults items={analysis.data?.targets || []} /></AsyncPanel>}
     {tab === 'comparison' && <AsyncPanel query={analysis}><Comparisons items={analysis.data?.comparisons || []} /></AsyncPanel>}
     {tab === 'pareto' && <AsyncPanel query={analysis}><Pareto data={analysis.data?.pareto || []} /></AsyncPanel>}
+    {tab === 'variability' && <AsyncPanel query={variability}>{variability.data ? <VariabilityPanel data={variability.data} /> : null}</AsyncPanel>}
     {tab === 'evidence' && <AsyncPanel query={analysis}><Evidence items={analysis.data?.evidence || []} /></AsyncPanel>}
     {tab === 'config' && <Config value={experiment.config || {}} />}
   </div>;
