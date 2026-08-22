@@ -155,6 +155,50 @@ def expire_stale_leases(session: Session) -> list[str]:
     return sorted(experiment_ids)
 
 
+def expire_stale_workers(session: Session, settings: Settings) -> list[str]:
+    """Mark silent Workers and their exclusively bound external targets offline."""
+
+    cutoff = utc_now() - timedelta(seconds=settings.worker_stale_seconds)
+    stale = list(
+        session.scalars(
+            select(WorkerRecord).where(
+                WorkerRecord.status == "online",
+                WorkerRecord.last_heartbeat_at < cutoff,
+            )
+        )
+    )
+    affected_targets: set[str] = set()
+    for worker in stale:
+        worker.status = "offline"
+        affected_targets.update(
+            capability.removeprefix("target.")
+            for capability in worker.capabilities_json
+            if capability.startswith("target.")
+        )
+
+    live_workers = list(
+        session.scalars(
+            select(WorkerRecord).where(
+                WorkerRecord.status == "online",
+                WorkerRecord.last_heartbeat_at >= cutoff,
+            )
+        )
+    )
+    live_targets = {
+        capability.removeprefix("target.")
+        for worker in live_workers
+        for capability in worker.capabilities_json
+        if capability.startswith("target.")
+    }
+    for target_id in affected_targets - live_targets:
+        target = session.get(TargetRecord, target_id)
+        if target is not None and target.provider == "external":
+            target.runnable = False
+            target.status = "inventory-only"
+            target.updated_at = utc_now()
+    return sorted(affected_targets - live_targets)
+
+
 def _claim_envelope(
     session: Session,
     attempt: AttemptRecord,
@@ -353,7 +397,7 @@ def claim_attempt(
         "manifest": benchmark.manifest_json,
         "benchmarkRoot": str(Path(benchmark.manifest_path or ".").resolve().parent),
         "benchmarkRelativeRoot": (
-            str(Path("benchmarks") / Path(benchmark.manifest_path).resolve().parent.name)
+            (Path("benchmarks") / Path(benchmark.manifest_path).resolve().parent.name).as_posix()
             if benchmark.manifest_path
             else None
         ),

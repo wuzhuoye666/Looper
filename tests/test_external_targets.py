@@ -188,6 +188,11 @@ def test_connection_request_requires_credential_for_selected_method() -> None:
         _connection(auth_method="private-key", password=None)
 
 
+def test_connection_request_normalizes_host_key_without_prefix() -> None:
+    request = _connection(expected_host_key_sha256="A" * 43)
+    assert request.expected_host_key_sha256 == "SHA256:" + "A" * 43
+
+
 def test_connect_discovers_inventory_without_persisting_credentials(
     external_db_session,
 ) -> None:

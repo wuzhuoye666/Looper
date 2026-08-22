@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import io
+import select
 import shlex
 import socket
 import threading
@@ -72,31 +73,45 @@ def _run(client: Any, command: str, *, timeout: int = 300) -> str:
     return output
 
 
+def _launch_background(client: Any, command: str) -> int:
+    """Read the detached process id without waiting for its SSH channel to linger."""
+
+    _stdin, stdout, stderr = client.exec_command(command, timeout=15)
+    try:
+        pid_line = stdout.readline().strip()
+        if not pid_line:
+            detail = " ".join(stderr.read(8192).decode("utf-8", errors="replace").split())
+            raise ExternalTargetError(
+                f"remote Worker did not return a process id: {detail or 'no output'}"
+            )
+        return int(pid_line)
+    except ValueError as error:
+        raise ExternalTargetError("remote Worker returned an invalid process id") from error
+    finally:
+        # The Worker is detached with all stdio redirected. Closing only this
+        # command channel must not close the separate SSH transport/tunnel.
+        stdout.channel.close()
+
+
 def _relay(channel: Any, local_host: str, local_port: int) -> None:
     try:
         with socket.create_connection((local_host, local_port), timeout=10) as local:
-            channel.settimeout(1)
-            local.settimeout(1)
-            while True:
-                moved = False
-                try:
+            # Forward whichever side is ready. Alternating blocking reads adds
+            # a one-second delay per response chunk and can make a larger claim
+            # response hit the Worker's 30-second HTTP timeout after the API has
+            # already committed the lease.
+            while not channel.closed:
+                readable, _, _ = select.select([channel, local], [], [], 1)
+                if channel in readable:
                     data = channel.recv(65536)
                     if not data:
                         break
                     local.sendall(data)
-                    moved = True
-                except TimeoutError:
-                    pass
-                try:
+                if local in readable:
                     data = local.recv(65536)
                     if not data:
                         break
                     channel.sendall(data)
-                    moved = True
-                except TimeoutError:
-                    pass
-                if not moved and channel.closed:
-                    break
     except OSError:
         pass
     finally:
@@ -190,6 +205,16 @@ def deploy_remote_worker(
                     "--disable-pip-version-check -q 'httpx>=0.28,<1' 'psutil>=7,<8' "
                     "'pydantic>=2.11,<3' 'PyYAML>=6,<7' 'jsonschema>=4.24,<5'"
                 ),
+                (
+                    "if ! command -v sysbench >/dev/null 2>&1; then "
+                    "if ! command -v apt-get >/dev/null 2>&1; then "
+                    "echo 'sysbench is unavailable and this host has no apt-get' >&2; exit 42; "
+                    "elif test \"$(id -u)\" = 0; then "
+                    "apt-get update -qq && env DEBIAN_FRONTEND=noninteractive "
+                    "apt-get install -y -qq sysbench; else "
+                    "sudo -n apt-get update -qq && sudo -n env DEBIAN_FRONTEND=noninteractive "
+                    "apt-get install -y -qq sysbench; fi; fi"
+                ),
                 f"rm -rf {remote_root}/source",
                 f"mkdir -p {remote_root}/source",
                 (
@@ -197,6 +222,9 @@ def deploy_remote_worker(
                     f"{remote_root}/source.zip {remote_root}/source"
                 ),
                 (
+                    "for pid in $(pgrep -f "
+                    f"{shlex.quote('[l]ooper_worker.main.*--worker-id ' + worker_id)} "
+                    "2>/dev/null || true); do kill \"$pid\" 2>/dev/null || true; done; "
                     f"if test -f {remote_root}/worker.pid; then "
                     f"kill \"$(cat {remote_root}/worker.pid)\" 2>/dev/null || true; fi"
                 ),
@@ -208,23 +236,24 @@ def deploy_remote_worker(
             str(remote_root / "source" / path)
             for path in ("services/worker", "packages/core", "packages/benchmark-sdk")
         )
-        launch = (
-            f"cd {remote_root}/source && "
-            f"nohup env PYTHONPATH={shlex.quote(python_path)} "
+        worker_command = (
+            f"env PYTHONPATH={shlex.quote(python_path)} "
             f"LOOPER_REPOSITORY_ROOT={remote_root}/source "
             f"LOOPER_LOCAL_WORKER_TOKEN=\"$(cat {remote_root}/worker.token)\" "
             f"{remote_root}/venv/bin/python -m looper_worker.main "
             f"--api-url http://127.0.0.1:{remote_port} "
             f"--worker-id {shlex.quote(worker_id)} "
             f"--target-id {shlex.quote(target.id)} "
-            f"--work-dir {remote_root}/work "
-            f">{remote_root}/worker.log 2>&1 </dev/null & echo $! | tee {remote_root}/worker.pid"
+            f"--work-dir {remote_root}/work"
         )
-        pid_text = _run(client, launch, timeout=30).strip()
-        try:
-            remote_pid = int(pid_text.splitlines()[-1])
-        except (ValueError, IndexError) as error:
-            raise ExternalTargetError("remote Worker did not return a process id") from error
+        detached = (
+            f"cd {remote_root}/source && nohup {worker_command} "
+            f">{remote_root}/worker.log 2>&1 </dev/null & "
+            f"pid=$!; printf '%s\\n' \"$pid\" >{remote_root}/worker.pid; "
+            "printf '%s\\n' \"$pid\""
+        )
+        launch = f"sh -c {shlex.quote(detached)}"
+        remote_pid = _launch_background(client, launch)
 
         with _deployments_lock:
             previous = _deployments.pop(target.id, None)

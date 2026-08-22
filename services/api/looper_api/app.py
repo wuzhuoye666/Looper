@@ -149,6 +149,7 @@ from looper_api.worker_service import (
     claim_attempt,
     complete_attempt,
     expire_stale_leases,
+    expire_stale_workers,
     heartbeat_attempt,
     register_worker,
     start_attempt,
@@ -204,6 +205,7 @@ async def _lease_sweeper() -> None:
         with SessionLocal() as session:
             try:
                 expire_stale_leases(session)
+                expire_stale_workers(session, get_settings())
                 session.commit()
             except Exception:
                 session.rollback()
@@ -734,8 +736,10 @@ def finalize_benchmark_registration(
 @app.get("/api/v1/targets")
 def list_targets(
     session: SessionDependency,
+    app_settings: SettingsDependency,
     include_inactive: bool = Query(default=True),
 ) -> dict[str, Any]:
+    expire_stale_workers(session, app_settings)
     statement = select(TargetRecord).where(TargetRecord.provider != "local")
     if not include_inactive:
         statement = statement.where(TargetRecord.lifecycle_status == "active")

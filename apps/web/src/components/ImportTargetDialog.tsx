@@ -27,7 +27,9 @@ export function ImportTargetDialog({ open, onClose }: { open: boolean; onClose: 
   };
 
   const connect = useMutation({
-    mutationFn: () => api.connectExternalTarget({
+    mutationFn: () => {
+      const fingerprint = draft.expectedHostKey.trim();
+      return api.connectExternalTarget({
       endpoint: draft.endpoint.trim(),
       port: Number(draft.port),
       username: draft.username.trim(),
@@ -35,8 +37,9 @@ export function ImportTargetDialog({ open, onClose }: { open: boolean; onClose: 
       password: draft.authMethod === 'password' ? draft.password : undefined,
       private_key: draft.authMethod === 'private-key' ? draft.privateKey : undefined,
       passphrase: draft.authMethod === 'private-key' && draft.passphrase ? draft.passphrase : undefined,
-      expected_host_key_sha256: draft.expectedHostKey.trim() || undefined,
-    }),
+      expected_host_key_sha256: fingerprint ? (fingerprint.startsWith('SHA256:') ? fingerprint : `SHA256:${fingerprint}`) : undefined,
+    });
+    },
     onSuccess: target => {
       setConnected(target);
       setError('');

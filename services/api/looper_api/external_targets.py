@@ -20,7 +20,7 @@ from collections.abc import Callable
 from typing import Any, Literal
 
 from looper_core.canonical import canonical_digest, utc_now
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -81,11 +81,23 @@ class ConnectExternalTargetRequest(BaseModel):
     password: SecretStr | None = None
     private_key: SecretStr | None = None
     passphrase: SecretStr | None = None
-    expected_host_key_sha256: str | None = Field(
-        default=None, pattern=r"^SHA256:[A-Za-z0-9+/]{43}$"
-    )
+    expected_host_key_sha256: str | None = None
     timeout_seconds: int = Field(default=10, ge=3, le=30)
     deploy_worker: bool = True
+
+    @field_validator("expected_host_key_sha256", mode="before")
+    @classmethod
+    def normalize_host_key_fingerprint(cls, value: object) -> object:
+        if value is None:
+            return None
+        normalized = str(value).strip()
+        if not normalized:
+            return None
+        if not normalized.startswith("SHA256:"):
+            normalized = f"SHA256:{normalized}"
+        if re.fullmatch(r"SHA256:[A-Za-z0-9+/]{43}", normalized) is None:
+            raise ValueError("host key fingerprint must be SHA256 followed by 43 base64 characters")
+        return normalized
 
     @model_validator(mode="after")
     def validate_authentication(self) -> ConnectExternalTargetRequest:

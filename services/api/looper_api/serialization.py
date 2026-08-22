@@ -196,6 +196,19 @@ def experiment_view(
             AttemptStatus.LOST,
         }
     )
+    budget_terminal_attempts = sum(
+        1
+        for attempt in attempts
+        if attempt.retry_index == 0
+        and AttemptStatus(attempt.status)
+        in {
+            AttemptStatus.SUCCEEDED,
+            AttemptStatus.FAILED,
+            AttemptStatus.TIMED_OUT,
+            AttemptStatus.CANCELLED,
+            AttemptStatus.LOST,
+        }
+    )
     terminal_candidates = sum(
         1
         for candidate in candidates
@@ -250,7 +263,7 @@ def experiment_view(
         "progress": round(
             100
             * (
-                terminal_attempts / spec.budget.max_attempts
+                budget_terminal_attempts / spec.budget.max_attempts
                 if is_selection
                 else terminal_candidates / spec.budget.max_candidates
             ),
@@ -264,7 +277,8 @@ def experiment_view(
         else None,
         "createdAt": _iso(record.created_at),
         "updatedAt": _iso(record.updated_at),
-        "attempts": terminal_attempts,
+        "attempts": budget_terminal_attempts,
+        "actualAttempts": terminal_attempts,
         "maxAttempts": spec.budget.max_attempts,
         "objective": spec.objectives[0].metric,
         "decisionQuestion": spec.scenario.decision_question if spec.scenario else None,
