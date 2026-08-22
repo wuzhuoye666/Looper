@@ -58,6 +58,7 @@ from looper_api.benchmark_registration import (
     get_registration,
     register_benchmark,
     registration_view,
+    selection_scenario_document,
     update_registration,
 )
 from looper_api.benchmark_runs import BenchmarkSmokeRunRequest, create_benchmark_smoke_run
@@ -885,9 +886,15 @@ def _selection_create_request(payload: dict[str, Any], session: Session) -> Expe
     benchmark = session.scalar(statement.order_by(BenchmarkRecord.installed_at.desc()).limit(1))
     if benchmark is None:
         raise SchedulerError("scenario benchmark version is not installed")
-    scenario_document = benchmark.manifest_json["spec"].get("scenario")
+    registration = session.scalar(
+        select(BenchmarkRegistrationRecord).where(
+            BenchmarkRegistrationRecord.benchmark_key == benchmark.key,
+            BenchmarkRegistrationRecord.status == "registered",
+        )
+    )
+    scenario_document = selection_scenario_document(benchmark, registration)
     if scenario_document is None:
-        raise SchedulerError("selected benchmark is not a scenario benchmark")
+        raise SchedulerError("selected benchmark is missing a selection scenario contract")
     scenario = ScenarioBenchmarkSpec.model_validate(scenario_document)
 
     raw_target_ids = payload.get("targetIds")

@@ -28,11 +28,12 @@ export function CreateExperimentPage() {
   });
   const benchmarks = useQuery({ queryKey: ['benchmarks'], queryFn: api.benchmarks });
   const targets = useQuery({ queryKey: ['targets', 'active'], queryFn: () => api.targets(false) });
-  const scenarios = useMemo(
-    () => (benchmarks.data?.items || []).filter(item => item.category === 'scenario'),
+  const benchmarkOptions = useMemo(
+    () => benchmarks.data?.items || [],
     [benchmarks.data],
   );
-  const selectedBenchmark = scenarios.find(item => (item.key || item.id) === form.benchmarkKey);
+  const selectionReady = (item: typeof benchmarkOptions[number]) => item.selectionReady ?? Boolean(item.scenario || item.category === 'scenario');
+  const selectedBenchmark = benchmarkOptions.find(item => (item.key || item.id) === form.benchmarkKey && selectionReady(item));
   const requiredCapabilities = new Set(selectedBenchmark?.tags || []);
   const targetReady = (target: { runnable?: boolean; tags?: string[] }) => target.runnable && [...requiredCapabilities].every(capability => target.tags?.includes(capability));
   const mutation = useMutation({
@@ -133,7 +134,7 @@ export function CreateExperimentPage() {
           <label className="full"><span>Benchmark 场景 *</span>
             <select required value={form.benchmarkKey} onChange={event => setForm(current => ({ ...current, benchmarkKey: event.target.value, inputBindings: {} }))}>
               <option value="">选择场景</option>
-              {scenarios.map(item => <option key={item.key || `${item.id}-${item.version}`} value={item.key || item.id}>{item.name}{item.version ? ` · ${item.version}` : ''}</option>)}
+              {benchmarkOptions.map(item => <option disabled={!selectionReady(item)} key={item.key || `${item.id}-${item.version}`} value={item.key || item.id}>{item.name}{item.version ? ` · ${item.version}` : ''}{selectionReady(item) ? '' : ' · 缺少选型合同'}</option>)}
             </select>
           </label>
           {selectedBenchmark?.scenario && <div className="scenario-facts full">

@@ -85,6 +85,65 @@ class RegistrationError(RuntimeError):
         self.constraints = constraints
 
 
+def selection_scenario_document(
+    benchmark: BenchmarkRecord,
+    registration: BenchmarkRegistrationRecord | None,
+) -> dict[str, Any] | None:
+    """Return an explicit or registration-derived selection contract.
+
+    Generic Adapter benchmarks historically registered successfully without a
+    ``spec.scenario`` section. Their audited registration still contains the
+    decision question, primary metric and workload class needed by the
+    selection workflow, so expose a conservative single-target contract rather
+    than silently hiding them from the experiment form.
+    """
+
+    declared = benchmark.manifest_json["spec"].get("scenario")
+    if isinstance(declared, dict):
+        return declared
+    if registration is None or registration.status != "registered":
+        return None
+    draft = BenchmarkRegistrationDraft.model_validate(registration.draft_json)
+    spec = benchmark.manifest_json["spec"]
+    adapter = spec.get("adapter") or {}
+    primary_metric = draft.primary_metric or adapter.get("primaryMetric")
+    if not (
+        draft.decision_question
+        and primary_metric
+        and primary_metric in (spec.get("metrics") or {})
+        and spec.get("workloads")
+    ):
+        return None
+    topology = (
+        "multi-node"
+        if draft.execution_model == "distributed"
+        else "client-server"
+        if draft.execution_model in {"service-stack", "database", "network"}
+        else "single-node"
+    )
+    workload_class = (
+        draft.category if draft.category != "unclassified" else draft.execution_model
+    )
+    return {
+        "id": benchmark.benchmark_id,
+        "name": benchmark.name,
+        "decision_question": draft.decision_question,
+        "user_value": draft.decision_question,
+        "workload_class": workload_class,
+        "topology": topology,
+        "roles": [
+            {
+                "id": "target",
+                "kind": "target",
+                "included_in_score": True,
+                "description": "Candidate target executing the registered Benchmark Adapter",
+            }
+        ],
+        "primary_metric": primary_metric,
+        "slo_gates": [],
+    }
+
+
 def _constraint(
     code: str,
     group: str,

@@ -259,6 +259,7 @@ def test_generic_container_adapter_can_register_without_backend_plugin(db_sessio
         "inputs": [],
         "canonicalOutputs": {"metrics": "metrics.jsonl", "result": "result.json"},
     }
+    draft.manifest["spec"].pop("scenario", None)
     draft.manifest["spec"]["x-extensions"]["executionStatus"] = "executable"
     record = create_registration(db_session, draft)
 
@@ -271,7 +272,11 @@ def test_generic_container_adapter_can_register_without_backend_plugin(db_sessio
     )
     benchmark = db_session.get(BenchmarkRecord, record.benchmark_key)
     assert benchmark is not None
-    assert benchmark_view(benchmark, record)["runnable"] is True
+    view = benchmark_view(benchmark, record)
+    assert view["runnable"] is True
+    assert view["selectionReady"] is True
+    assert view["scenario"]["decision_question"] == draft.decision_question
+    assert view["scenario"]["primary_metric"] == draft.primary_metric
     events = list(
         db_session.scalars(
             select(EventRecord)

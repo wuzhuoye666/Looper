@@ -10,6 +10,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from looper_api.analysis_service import build_analysis_snapshot
+from looper_api.benchmark_registration import selection_scenario_document
 from looper_api.models import (
     ArtifactLinkRecord,
     AttemptRecord,
@@ -33,7 +34,7 @@ def benchmark_view(
     manifest = record.manifest_json
     metadata = manifest["metadata"]
     spec = manifest["spec"]
-    scenario = spec.get("scenario")
+    scenario = selection_scenario_document(record, registration)
     adapter = spec.get("adapter") or {}
     extensions = spec.get("x-extensions", {})
     execution_status = extensions.get("executionStatus", "executable")
@@ -45,6 +46,7 @@ def benchmark_view(
         "name": record.name,
         "description": record.description,
         "category": explicit_category or ("scenario" if scenario else "unclassified"),
+        "selectionReady": scenario is not None,
         "executionModel": adapter.get("executionModel", "custom"),
         "inputs": adapter.get("inputs", []),
         "executionPolicy": spec.get("runtime", {}).get("executionPolicy"),
