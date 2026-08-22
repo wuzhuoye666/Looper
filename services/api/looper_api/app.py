@@ -94,6 +94,7 @@ from looper_api.cloud_service import (
 from looper_api.config import Settings, get_settings
 from looper_api.database import SessionLocal, get_session, init_database
 from looper_api.evidence import build_evidence_bundle, verify_evidence_bundle
+from looper_api.external_targets import ImportExternalTargetRequest, import_external_target
 from looper_api.models import (
     ArtifactLinkRecord,
     ArtifactRecord,
@@ -743,6 +744,17 @@ def sync_tencent_targets(
     records = sync_cvm_inventory(session, region, instance_ids=instance_id)
     session.commit()
     return {"items": [target_view(item) for item in records], "total": len(records)}
+
+
+@app.post("/api/v1/targets/import", status_code=201)
+def import_target(
+    payload: ImportExternalTargetRequest,
+    session: SessionDependency,
+    _operator: OperatorDependency,
+) -> dict[str, Any]:
+    record = import_external_target(session, payload)
+    session.commit()
+    return target_view(record)
 
 
 @app.get("/api/v1/experiments")
