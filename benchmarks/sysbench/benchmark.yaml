@@ -43,6 +43,54 @@ spec:
       metadata:
         test: mutex
         extraArgs: ["--mutex-num=4096", "--mutex-locks=100000"]
+  scenario:
+    id: microbenchmark.sysbench.suite
+    name: Sysbench microbenchmark suite
+    decision_question: Which target SKU delivers better CPU throughput, memory bandwidth, thread scheduling, and mutex contention performance under controlled microbenchmark conditions?
+    user_value: Characterize raw system performance across CPU, memory, threading, and synchronization primitives without application-layer overhead.
+    workload_class: microbenchmark
+    topology: single-node
+    roles:
+      - id: target
+        kind: target
+        included_in_score: true
+        description: Target machine under benchmark
+      - id: benchmark-runner
+        kind: load-generator
+        co_located_with: target
+        included_in_score: true
+        description: Local sysbench binary co-located with target
+    primary_metric: events_per_sec
+    slo_gates:
+      - id: sysbench-execution
+        kind: correctness
+        scope: block
+        metric: sysbench_run_ok
+        operator: eq
+        threshold: 1
+        hard: true
+      - id: minimum-events
+        kind: slo
+        scope: block
+        metric: events_per_sec
+        operator: gt
+        threshold: 0
+        hard: true
+    goodput:
+      metric: events_per_sec
+      unit: events/second
+      committed_outcome: successful
+      excluded_outcomes: [error, timeout]
+      maximum_error_ratio: 0
+      maximum_abort_ratio: 0
+      maximum_timeout_ratio: 0
+    tail_evidence:
+      metric: latency_p95_ms
+      unit: ms
+      minimum_samples: 100
+      required_statistics: [p95, maximum]
+      histogram_format: upstream-summary
+      timeout_accounting: separate
   adapter:
     protocol: looper-adapter/v1
     executionModel: batch-suite
@@ -88,6 +136,11 @@ spec:
       minimumSamples: 1
     throughput_mib_s:
       unit: MiB/s
+      direction: maximize
+      kind: aggregate
+      minimumSamples: 1
+    sysbench_run_ok:
+      unit: flag
       direction: maximize
       kind: aggregate
       minimumSamples: 1
