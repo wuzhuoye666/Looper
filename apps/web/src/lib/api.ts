@@ -87,7 +87,7 @@ export const api = {
     },
   ),
   createBenchmarkSmokeRun: (
-    benchmarkId: string, version: string, payload: { targetId?: string; workloadId?: string; parameters?: Record<string, unknown> } = {},
+    benchmarkId: string, version: string, payload: { targetId?: string; workloadId?: string; parameters?: Record<string, unknown>; inputBindings?: Record<string, unknown> } = {},
   ) => request<Experiment>(
     `/benchmarks/${encodeURIComponent(benchmarkId)}/versions/${encodeURIComponent(version)}/smoke-runs`,
     { method: 'POST', body: JSON.stringify(payload) },

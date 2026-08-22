@@ -34,10 +34,16 @@ export interface DashboardData { counts?: Partial<Record<ExperimentStatus, numbe
 export interface Benchmark {
   id: string; key?: string; name: string; description?: string; category?: string; version?: string; metrics?: string[];
   executionModel?: BenchmarkExecutionModel;
+  inputs?: BenchmarkInputDeclaration[];
+  executionPolicy?: Record<string, unknown>;
   cases?: number; updatedAt?: string; tags?: string[]; license?: string; runnable?: boolean; executionStatus?: string;
   decisionQuestion?: string; primaryMetric?: string; scenario?: ScenarioContract;
   registrationId?: string; registrationStatus?: string;
   auditStatus?: 'legacy-unreviewed' | 'registered-not-admitted';
+}
+export interface BenchmarkInputDeclaration {
+  id: string; kind: 'dataset' | 'artifact' | 'config' | 'endpoint' | 'secret' | 'device' | 'topology';
+  required: boolean; mediaType?: string; mountPath?: string; digestRequired?: boolean; description?: string;
 }
 export type BenchmarkRuntimeType = 'container' | 'local-process' | 'benchexec';
 export type BenchmarkExecutionStatus = 'stage0-adapter-only' | 'executable';

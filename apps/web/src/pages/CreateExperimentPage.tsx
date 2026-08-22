@@ -21,6 +21,7 @@ export function CreateExperimentPage() {
     benchmarkKey: '',
     targetIds: [] as string[],
     targetBindings: {} as Record<string, { variantId: string; label: string; placementPairId: string }>,
+    inputBindings: {} as Record<string, { reference: string; digest: string }>,
     repeats: 5,
     timeout: 86400,
     seed: 20260821,
@@ -44,6 +45,15 @@ export function CreateExperimentPage() {
         targetId,
         ...form.targetBindings[targetId],
       })),
+      inputBindings: Object.fromEntries(
+        (selectedBenchmark?.inputs || [])
+          .filter(input => form.inputBindings[input.id]?.reference)
+          .map(input => [input.id, {
+            kind: input.kind,
+            reference: form.inputBindings[input.id].reference,
+            digest: form.inputBindings[input.id].digest || undefined,
+          }]),
+      ),
       config: {
         repeats: Number(form.repeats),
         timeout: Number(form.timeout),
@@ -83,6 +93,12 @@ export function CreateExperimentPage() {
       },
     }));
   };
+  const updateInputBinding = (inputId: string, key: 'reference' | 'digest', value: string) => {
+    setForm(current => {
+      const binding = current.inputBindings[inputId] || { reference: '', digest: '' };
+      return { ...current, inputBindings: { ...current.inputBindings, [inputId]: { ...binding, [key]: value } } };
+    });
+  };
   const next = (event: FormEvent) => {
     event.preventDefault();
     if (step === 1 && (!selectedBenchmark || form.targetIds.length === 0)) return;
@@ -113,7 +129,7 @@ export function CreateExperimentPage() {
         <legend>场景与候选资源</legend>
         <div className="form-grid form-section-gap">
           <label className="full"><span>Benchmark 场景 *</span>
-            <select required value={form.benchmarkKey} onChange={event => update('benchmarkKey', event.target.value)}>
+            <select required value={form.benchmarkKey} onChange={event => setForm(current => ({ ...current, benchmarkKey: event.target.value, inputBindings: {} }))}>
               <option value="">选择场景</option>
               {scenarios.map(item => <option key={item.key || `${item.id}-${item.version}`} value={item.key || item.id}>{item.name}{item.version ? ` · ${item.version}` : ''}</option>)}
             </select>
@@ -150,6 +166,10 @@ export function CreateExperimentPage() {
       {step === 2 && <fieldset>
         <legend>证据协议</legend>
         <div className="form-grid form-section-gap">
+          {(selectedBenchmark?.inputs || []).map(input => <div className="full input-binding-field" key={input.id}>
+            <label><span>{input.id} · {input.kind}{input.required ? ' *' : ''}</span><input required={input.required} type={input.kind === 'secret' ? 'password' : 'text'} value={form.inputBindings[input.id]?.reference || ''} onChange={event => updateInputBinding(input.id, 'reference', event.target.value)} placeholder={input.kind === 'secret' ? 'secret://受管密钥名称' : '资源引用 URI / 目标设备引用'} /><small>{input.description || '运行前由调度器校验绑定类型；只传引用，不在合同中保存内容。'}</small></label>
+            {input.digestRequired && <label><span>SHA-256 digest *</span><input required value={form.inputBindings[input.id]?.digest || ''} onChange={event => updateInputBinding(input.id, 'digest', event.target.value)} placeholder="sha256:…" pattern="sha256:[0-9a-f]{64}" /></label>}
+          </div>)}
           <label><span>每个目标重复数</span><input type="number" min="3" max="50" value={form.repeats} onChange={event => update('repeats', Number(event.target.value))} /></label>
           <label><span>研究硬超时（秒）</span><input type="number" min="300" max="31536000" value={form.timeout} onChange={event => update('timeout', Number(event.target.value))} /></label>
           <label><span>随机顺序种子</span><input type="number" min="0" value={form.seed} onChange={event => update('seed', Number(event.target.value))} /></label>

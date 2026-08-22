@@ -328,6 +328,19 @@ class SelectionDesign(StrictModel):
         return self
 
 
+class BenchmarkInputBinding(StrictModel):
+    kind: Literal["dataset", "artifact", "config", "endpoint", "secret", "device", "topology"]
+    reference: str = Field(min_length=1, max_length=2000)
+    digest: str | None = Field(default=None, pattern=r"^sha256:[0-9a-f]{64}$")
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def reject_inline_secrets(self) -> BenchmarkInputBinding:
+        if self.kind == "secret" and not self.reference.startswith("secret://"):
+            raise ValueError("secret input bindings must use a secret:// reference")
+        return self
+
+
 class FrontierBlockEvidence(StrictModel):
     block_id: str = Field(min_length=1, max_length=160)
     time_block_id: str = Field(min_length=1, max_length=160)
@@ -362,6 +375,7 @@ class ExperimentSpec(StrictModel):
     benchmark_version: str = Field(min_length=1)
     target_ids: list[str] = Field(default_factory=lambda: ["local"])
     workload_ids: list[str] = Field(default_factory=list)
+    input_bindings: dict[str, BenchmarkInputBinding] = Field(default_factory=dict)
     baseline_parameters: dict[str, Any] = Field(default_factory=dict)
     search_space: dict[str, SearchParameter] = Field(default_factory=dict)
     objectives: list[ObjectiveSpec] = Field(default_factory=list)

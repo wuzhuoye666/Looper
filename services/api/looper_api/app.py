@@ -28,6 +28,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from looper_core.cas import FileSystemCAS
 from looper_core.contracts import (
     Aggregation,
+    BenchmarkInputBinding,
     BudgetSpec,
     Comparison,
     Direction,
@@ -877,6 +878,15 @@ def _selection_create_request(payload: dict[str, Any], session: Session) -> Expe
     repeats = int(config.get("repeats", payload.get("repeats", 5)))
     seed = int(config.get("seed", payload.get("seed", 20260301)))
     wall_time_seconds = int(config.get("timeout", payload.get("timeout", 86400)))
+    raw_input_bindings = payload.get("inputBindings")
+    input_bindings = (
+        {
+            str(input_id): BenchmarkInputBinding.model_validate(binding)
+            for input_id, binding in raw_input_bindings.items()
+        }
+        if isinstance(raw_input_bindings, dict)
+        else {}
+    )
     workload_ids = [str(item["id"]) for item in benchmark.manifest_json["spec"]["workloads"]]
     if scenario.load_search is not None:
         load_point_budget = (
@@ -900,6 +910,7 @@ def _selection_create_request(payload: dict[str, Any], session: Session) -> Expe
         benchmark_version=benchmark.version,
         target_ids=target_ids,
         workload_ids=workload_ids,
+        input_bindings=input_bindings,
         objectives=[
             ObjectiveSpec(
                 metric=scenario.primary_metric,

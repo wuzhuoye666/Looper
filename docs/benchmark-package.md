@@ -12,7 +12,7 @@ Looper 通过配置驱动的 Benchmark Package 接入新套件。新增普通套
 | `spec.parameters` | 候选参数类型、范围、默认值和条件 |
 | `spec.workloads` | task/workload 身份、权重及套件原生元数据 |
 | `spec.adapter` | Adapter 协议、执行模型、主指标、必过检查、命名输入、标准输出 |
-| `spec.runtime` | 隔离方式、固定镜像、生命周期命令、超时和允许退出码 |
+| `spec.runtime` | 隔离方式、固定镜像、依赖锁、执行策略、生命周期命令、超时和允许退出码 |
 | `spec.metrics` | 指标名称、单位、方向、类型和最低样本量 |
 | `spec.outputs` | 证据上限以及必须保留的原始 artifact；套件原生结构化输出使用 `raw-result` |
 | `spec.scenario` | 采购问题、角色拓扑、主指标、正确性/SLO 门禁和负载策略 |
@@ -31,6 +31,8 @@ Looper 通过配置驱动的 Benchmark Package 接入新套件。新增普通套
 非场景型套件用 `primaryMetric` 指向 `spec.metrics` 中有方向的主指标，并用 `requiredChecks` 列出 `result.json` 中必须通过的检查 ID。场景型套件还可以用 `spec.scenario.slo_gates` 声明正确性、安全和 SLO 硬门禁。这样 SPEC 类批处理套件不需要伪造服务拓扑，DCPerf 类服务套件仍可表达完整场景约束。
 
 `inputs` 声明套件需要的命名资源。支持 dataset、artifact、config、endpoint、secret、device 和 topology。需要文件挂载时使用 `/looper/input/...` 下的绝对路径；需要可追溯内容时启用 `digestRequired`。配置只声明 secret，不保存 secret 明文。
+
+创建实验时使用 `input_bindings`/`inputBindings` 为这些声明绑定资源引用。调度器拒绝缺失、未知、类型不一致或缺少必需 SHA-256 的绑定；secret 必须使用 `secret://` 引用。绑定会进入 Run Envelope 的 `inputs`，但明文密钥不会进入信封。
 
 所有 Adapter 最终必须生成：
 
@@ -57,6 +59,16 @@ Worker 按以下顺序执行存在的阶段：
 
 生产容器默认无网络、只读根文件系统、移除 capabilities、禁止提权，并且镜像必须固定到 `@sha256`。远程导入不能获得本地进程信任。
 
+Executable 新注册还必须声明：
+
+- `dependencyLockDigest` 以及运行时额外依赖的来源、SHA-256 和许可证；
+- `executionPolicy.placement`：隔离容器或目标机 Agent，以及 CPU/NUMA 约束；
+- `executionPolicy.network`：无网络或受限出口、允许主机和最大传输字节数；
+- `executionPolicy.storage`：仅 workspace 或绑定的 required device 输入，并明确是否允许破坏性 I/O；
+- `executionPolicy.environmentEvidence`：系统指纹版本和运行前必须可取得的字段。
+
+策略不是描述性标签。Worker 只有在能力集合覆盖策略时才能 claim；当前本地 Worker 实际执行并声明的生产能力只有 `isolated-container + network.none + storage.workspace`。受限出口和目标设备必须等待具备策略执行能力的 Worker，不能退化为普通 Docker bridge 或随意宿主机路径。每次运行都会重新采集系统指纹并写入 Run Envelope；必需字段缺失时在启动套件前失败。
+
 ## DCPerf 与 SPEC 类套件如何配置
 
 DCPerf 集成包选择 `service-stack`。workload metadata 保存角色和服务配置，Adapter 在容器内部完成部署、readiness、负载发生与原生结果收集，再输出 goodput、尾延迟、错误率和资源证据。
@@ -72,7 +84,7 @@ SPEC 类集成包选择 `batch-suite`。workload 对应 task 或 task group，�
 3. 维护者补充正确性说明、Base/Reference 和跨环境审计声明；
 4. 保存后查看每条服务端约束和依据；
 5. Stage 0 配置只能进入目录，不能运行；
-6. 可执行配置必须使用固定 digest 容器、`looper-adapter/v1` 和 `normalize` 阶段；
+6. 可执行配置必须使用固定 digest 容器、依赖锁、生产执行策略、`looper-adapter/v1` 和 `normalize` 阶段；
 7. 先运行 fixture/冒烟，再进入兼容性矩阵和正式审计。
 
 仓库中的 `benchmarks/config-driven-fixture` 是合同测试样例，不是性能 Benchmark，也不能作为选型证据。它证明 suite-owned producer 与 normalizer 可以仅通过配置被通用 Worker 执行。该 fixture 故意使用本地进程且不声明生产源码 revision，因此从注册页导入时会显示生产门禁失败；程序员应以页面逐项约束为清单，把正式包改为固定 digest 容器并补齐不可变来源。

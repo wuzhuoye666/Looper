@@ -25,10 +25,13 @@ Use `looper-adapter/v1`. Select the execution model from observed suite behavior
 - typed parameters and workload/task identities;
 - the directed primary metric and every required correctness/SLO check ID;
 - named datasets, artifacts, endpoints, secrets, devices, or topology inputs;
+- immutable dependency locks and a machine-enforced placement, network, storage, and environment-evidence policy;
 - lifecycle commands, timeouts, and allowed exit codes;
 - required native evidence with the `raw-result` role, plus canonical `metrics.jsonl` and `result.json` outputs.
 
 Use a fixed digest container for a remotely imported executable package. Local-process execution is only for a repository-owned trusted development fixture and cannot acquire trust through registration. Never put secret values in the manifest.
+
+For every executable package, populate `runtime.dependencyLockDigest`, `runtime.dependencies`, and `runtime.executionPolicy` from evidence. Use `network.mode=none` unless the suite demonstrably requires egress. Restricted egress must include an allowlist and byte budget. Device benchmarks must declare a required `device` input and bind it through the experiment; do not encode an operator's host path in the manifest. Require the system-fingerprint fields needed to interpret results. Do not claim that the current Worker supports a policy capability it does not advertise.
 
 If the native suite does not emit Looper observations, add a suite-owned normalizer. Preserve its native output as evidence and make normalization deterministic. A check named in `adapter.requiredChecks` must be emitted in `result.json`; the primary metric must be emitted in `metrics.jsonl` with the declared unit and direction.
 
@@ -44,7 +47,8 @@ Use the browser on `/benchmarks/register` to:
 4. save the draft and inspect every server constraint with its detail;
 5. fix the package or supplied metadata rather than bypassing a failed gate;
 6. register only when all blocking constraints pass;
-7. run the local smoke action only for a registered executable package.
+7. bind every required input by reference and digest where required;
+8. run the local smoke action only for a registered executable package whose policy is supported by an online Worker.
 
 Browser registration and smoke execution mutate local Looper state and are within scope only when the user asks to configure and register. Ask immediately before any new external upload, untrusted local execution, paid cloud action, or other effect outside local Looper.
 

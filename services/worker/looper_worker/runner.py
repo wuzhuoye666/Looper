@@ -22,6 +22,7 @@ from looper_benchmark_sdk.scenario import (
     normalize_dcperf_mediawiki,
 )
 from looper_core.contracts import AttemptResult, MetricObservation
+from looper_core.fingerprint import system_fingerprint
 from looper_core.scenario_adapters import ScenarioAdapterError
 
 from looper_worker.client import ControlPlaneClient
@@ -29,6 +30,37 @@ from looper_worker.client import ControlPlaneClient
 
 class RunnerError(RuntimeError):
     pass
+
+
+def _fingerprint_value(fingerprint: dict[str, Any], dotted_path: str) -> Any:
+    value: Any = fingerprint
+    for part in dotted_path.split("."):
+        if not isinstance(value, dict) or part not in value:
+            return None
+        value = value[part]
+    return value
+
+
+def validate_execution_policy(runtime: dict[str, Any], fingerprint: dict[str, Any]) -> None:
+    policy = runtime.get("executionPolicy")
+    if not policy:
+        return
+    placement = policy["placement"]["mode"]
+    if placement != "isolated-container" or runtime.get("type") != "container":
+        raise RunnerError("this worker only enforces isolated-container execution policies")
+    network = policy["network"]["mode"]
+    if network != "none" or runtime.get("networkMode", "none") != "none":
+        raise RunnerError("restricted egress requires a policy-enforcing network runner")
+    storage = policy["storage"]["mode"]
+    if storage != "workspace":
+        raise RunnerError("bound storage inputs require a policy-enforcing host runner")
+    missing = []
+    for required_field in policy["environmentEvidence"]["requiredFields"]:
+        value = _fingerprint_value(fingerprint, required_field)
+        if value is None or value == "" or value == []:
+            missing.append(required_field)
+    if missing:
+        raise RunnerError(f"required environment evidence is unavailable: {missing}")
 
 
 @dataclass(slots=True)
@@ -294,6 +326,8 @@ class LocalAttemptRunner:
             validate_container_image(runtime.get("image"))
             if not container_runtime_available(str(runtime.get("engine", "docker"))):
                 raise RunnerError("Docker daemon is unavailable for container benchmark execution")
+        fingerprint = system_fingerprint()
+        validate_execution_policy(runtime, fingerprint)
 
         workspace = self.work_root / attempt_id
         if workspace.exists():
@@ -305,6 +339,10 @@ class LocalAttemptRunner:
         output_dir.mkdir(parents=True)
         logs_dir.mkdir(parents=True)
         envelope = dict(claim["envelope"])
+        envelope["executionEvidence"] = {
+            "profile": "looper.system-fingerprint/v1alpha1",
+            "fingerprint": fingerprint,
+        }
         benchmark_root = Path(claim["benchmarkRoot"]).resolve()
         if runtime_type == "container":
             envelope["paths"] = {

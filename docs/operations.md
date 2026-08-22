@@ -15,6 +15,8 @@ Looper binds to `127.0.0.1` and accepts only the configured origins and local Ho
 
 The local-process runner executes arbitrary benchmark code. Install only trusted manifests locally. It passes a minimal environment, bounds logs and artifacts, rejects path traversal and symlinks, applies per-stage timeouts, terminates process trees, and records cleanup failures. Tencent, Alibaba, Volcengine, and Baidu credentials are never included in run envelopes or inherited by benchmark subprocesses.
 
+Start a Worker with one or more `--target-id` arguments to bind its claim authority. The default is `local`; repeat the flag for an intentionally multi-target Worker. Do not run a wildcard legacy Worker in production. Workers advertise only the execution-policy capabilities they can actually enforce. The bundled Docker runner supports isolated containers with no network and workspace-only storage; restricted egress and bound devices require a dedicated policy-enforcing Worker.
+
 ## SQLite
 
 Local mode supports one API process and a local disk. Do not put the database on SMB, NFS, or a synchronized folder. The API configures WAL, foreign keys, full synchronous writes, and a 15-second busy timeout. Back up the SQLite file together with the artifact CAS after a WAL checkpoint.

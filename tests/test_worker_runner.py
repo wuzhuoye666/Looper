@@ -13,6 +13,7 @@ from looper_worker.runner import (
     RunnerError,
     build_container_command,
     validate_container_image,
+    validate_execution_policy,
 )
 
 
@@ -162,6 +163,43 @@ def test_container_command_is_digest_pinned_and_least_privilege(tmp_path: Path) 
         "--output",
         "/looper/output",
     ]
+
+
+def test_worker_enforces_declared_execution_policy() -> None:
+    runtime = {
+        "type": "container",
+        "networkMode": "none",
+        "executionPolicy": {
+            "placement": {"mode": "isolated-container"},
+            "network": {"mode": "none"},
+            "storage": {"mode": "workspace"},
+            "environmentEvidence": {
+                "requiredFields": ["cpu.model_name", "kernel_version"]
+            },
+        },
+    }
+    validate_execution_policy(
+        runtime,
+        {"cpu": {"model_name": "test cpu"}, "kernel_version": "test kernel"},
+    )
+    runtime["executionPolicy"]["network"]["mode"] = "restricted-egress"
+    with pytest.raises(RunnerError, match="policy-enforcing network runner"):
+        validate_execution_policy(runtime, {"cpu": {"model_name": "test"}})
+
+
+def test_worker_rejects_missing_required_environment_evidence() -> None:
+    runtime = {
+        "type": "container",
+        "networkMode": "none",
+        "executionPolicy": {
+            "placement": {"mode": "isolated-container"},
+            "network": {"mode": "none"},
+            "storage": {"mode": "workspace"},
+            "environmentEvidence": {"requiredFields": ["cpu.microcode"]},
+        },
+    }
+    with pytest.raises(RunnerError, match="cpu.microcode"):
+        validate_execution_policy(runtime, {"cpu": {"microcode": None}})
 
 
 @pytest.mark.parametrize(

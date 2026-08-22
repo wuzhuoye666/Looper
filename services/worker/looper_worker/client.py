@@ -26,6 +26,7 @@ class ControlPlaneClient:
         name: str,
         capabilities: list[str],
         fingerprint: dict[str, Any],
+        target_ids: list[str] | None = None,
         max_concurrency: int = 1,
     ) -> dict[str, Any]:
         response = self.client.post(
@@ -35,6 +36,7 @@ class ControlPlaneClient:
                 "name": name,
                 "token": self.token,
                 "capabilities": capabilities,
+                "targetIds": target_ids or [],
                 "fingerprint": fingerprint,
                 "maxConcurrency": max_concurrency,
             },

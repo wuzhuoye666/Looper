@@ -20,5 +20,13 @@ def worker_capabilities() -> list[str]:
     from looper_worker.runner import container_runtime_available
 
     if container_runtime_available():
-        capabilities.add("container")
+        capabilities.update(
+            {
+                "container",
+                "placement.isolated-container",
+                "network.none",
+                "storage.workspace",
+                "evidence.looper.system-fingerprint/v1alpha1",
+            }
+        )
     return sorted(capabilities)

@@ -46,6 +46,8 @@ def benchmark_view(
         "description": record.description,
         "category": explicit_category or ("scenario" if scenario else "unclassified"),
         "executionModel": adapter.get("executionModel", "custom"),
+        "inputs": adapter.get("inputs", []),
+        "executionPolicy": spec.get("runtime", {}).get("executionPolicy"),
         "version": record.version,
         "license": record.license,
         "manifestDigest": record.manifest_digest,

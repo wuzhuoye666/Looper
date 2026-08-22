@@ -19,6 +19,7 @@ def run_worker(
     token: str,
     worker_id: str,
     work_dir: Path,
+    target_ids: list[str] | None = None,
     once: bool = False,
     secret_dir: Path | None = None,
 ) -> int:
@@ -32,6 +33,7 @@ def run_worker(
                     name=f"{socket.gethostname()} local worker",
                     capabilities=worker_capabilities(),
                     fingerprint=worker_fingerprint(),
+                    target_ids=target_ids or ["local"],
                 )
                 break
             except httpx.HTTPError as error:
@@ -74,6 +76,12 @@ def cli() -> None:
     )
     parser.add_argument("--work-dir", type=Path, default=Path(".looper/worker"))
     parser.add_argument(
+        "--target-id",
+        dest="target_ids",
+        action="append",
+        help="Target ID this worker is allowed to execute; repeat for multiple targets.",
+    )
+    parser.add_argument(
         "--secret-dir",
         type=Path,
         default=(
@@ -90,6 +98,7 @@ def cli() -> None:
             arguments.token,
             arguments.worker_id,
             arguments.work_dir,
+            arguments.target_ids,
             arguments.once,
             arguments.secret_dir,
         )

@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from looper_core.contracts import (
+    BenchmarkInputBinding,
     BudgetSpec,
     Direction,
     ExperimentalDesign,
@@ -26,6 +27,9 @@ class BenchmarkSmokeRunRequest(BaseModel):
     target_id: str = Field(default="local", alias="targetId", min_length=1, max_length=100)
     workload_id: str | None = Field(default=None, alias="workloadId", max_length=120)
     parameters: dict[str, Any] = Field(default_factory=dict)
+    input_bindings: dict[str, BenchmarkInputBinding] = Field(
+        default_factory=dict, alias="inputBindings"
+    )
 
 
 def create_benchmark_smoke_run(
@@ -93,6 +97,7 @@ def create_benchmark_smoke_run(
                 benchmark_version=benchmark.version,
                 target_ids=[request.target_id],
                 workload_ids=[workload_id],
+                input_bindings=request.input_bindings,
                 baseline_parameters=baseline,
                 search_space=search_space,
                 objectives=[

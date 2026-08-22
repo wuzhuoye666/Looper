@@ -240,6 +240,59 @@ def evaluate_registration_constraints(
         "Stage 0 可直接登记；可执行配置只允许 digest 固定的容器和通用 Adapter。",
     ))
 
+    policy = runtime.get("executionPolicy") or {}
+    network_policy = policy.get("network") or {}
+    storage_policy = policy.get("storage") or {}
+    placement_policy = policy.get("placement") or {}
+    evidence_policy = policy.get("environmentEvidence") or {}
+    declared_inputs = {item.get("id"): item for item in adapter.get("inputs", [])}
+    storage_input_id = storage_policy.get("inputId")
+    storage_input = declared_inputs.get(storage_input_id)
+    network_consistent = (
+        runtime.get("networkMode", "none") == "none"
+        and network_policy.get("mode") == "none"
+        and not network_policy.get("allowedHosts")
+        and network_policy.get("maxTransferBytes") is None
+    ) or (
+        runtime.get("networkMode") == "bridge"
+        and network_policy.get("mode") == "restricted-egress"
+        and bool(network_policy.get("allowedHosts"))
+        and isinstance(network_policy.get("maxTransferBytes"), int)
+    )
+    storage_consistent = (
+        storage_policy.get("mode") == "workspace"
+        and storage_input_id is None
+        and not storage_policy.get("destructive")
+    ) or (
+        storage_policy.get("mode") == "bound-input"
+        and bool(storage_input)
+        and storage_input.get("kind") == "device"
+        and storage_input.get("required") is True
+    )
+    policy_ready = bool(
+        policy
+        and runtime.get("dependencyLockDigest")
+        and placement_policy.get("mode") == "isolated-container"
+        and runtime.get("type") == "container"
+        and network_consistent
+        and storage_consistent
+        and evidence_policy.get("profile") == "looper.system-fingerprint/v1alpha1"
+        and evidence_policy.get("requiredFields")
+    )
+    constraints.append(_constraint(
+        "execution.production-policy", "执行", "生产执行策略完整且可机读",
+        draft.execution_status == "stage0-adapter-only" or policy_ready,
+        "Executable 必须固定 dependency lock，并声明一致的容器放置、网络预算、"
+        "存储边界和必需环境指纹字段。",
+    ))
+    input_ids = [item.get("id") for item in adapter.get("inputs", [])]
+    input_contract_ok = len(input_ids) == len(set(input_ids)) and all(input_ids)
+    constraints.append(_constraint(
+        "execution.input-contract", "执行", "命名输入没有歧义且可在运行前绑定",
+        draft.execution_status == "stage0-adapter-only" or bool(input_contract_ok),
+        "Adapter input ID 必须唯一；设备存储必须引用 required device 输入，secret 只传引用。",
+    ))
+
     required_artifacts = [
         item for item in (spec.get("outputs") or {}).get("artifacts", []) if item.get("required")
     ]

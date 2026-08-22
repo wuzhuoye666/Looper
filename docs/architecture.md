@@ -58,6 +58,8 @@ Required metric declarations include `minimumSamples`. Attempt completion verifi
 
 Workers register capabilities and claim attempts over HTTP. Every lease has a monotonically increasing fencing token. Every heartbeat, artifact upload, and completion carries that token; stale workers cannot overwrite a retried attempt. Benchmark commands receive a minimal environment and isolated input/output/work directories.
 
+Workers also register explicit target affinity. A worker that declares target IDs cannot claim attempts for any other target. Production execution policies are capability matched at claim time; Run Envelopes carry immutable dependency-lock digests, validated named input bindings, the declared execution policy, and a fresh execution-time system fingerprint. Unsupported network or storage policies remain queued or fail before suite code starts rather than silently degrading isolation.
+
 The shared `looper.system-fingerprint/v1alpha1` collector records CPU identity, flags, microcode, topology, cache and NUMA, SMT, governor/EPP, THP, tuning daemons, cgroups, boot command line, swap, NICs, disks, and runtime versions. Fields unavailable to the guest are `null`; they are not inferred.
 
 ## Cloud provider boundary

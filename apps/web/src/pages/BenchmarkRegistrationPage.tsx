@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { PageHeader } from '../components/PageHeader';
 import { API_BASE, ApiError, api } from '../lib/api';
-import type { BenchmarkRegistration, BenchmarkRegistrationDraft } from '../lib/types';
+import type { BenchmarkInputDeclaration, BenchmarkRegistration, BenchmarkRegistrationDraft } from '../lib/types';
 
 const REGISTRATION_ID_KEY = 'looper.benchmark-registration-id.v1';
 const AGENT_SKILL_DOWNLOAD = `${API_BASE}/benchmark-skills/looper-benchmark-configure`;
@@ -26,6 +26,15 @@ function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : '请求失败';
 }
 
+function manifestInputs(manifest?: Record<string, unknown>): BenchmarkInputDeclaration[] {
+  const spec = manifest?.spec;
+  if (!spec || typeof spec !== 'object') return [];
+  const adapter = (spec as Record<string, unknown>).adapter;
+  if (!adapter || typeof adapter !== 'object') return [];
+  const inputs = (adapter as Record<string, unknown>).inputs;
+  return Array.isArray(inputs) ? inputs as BenchmarkInputDeclaration[] : [];
+}
+
 export function BenchmarkRegistrationPage() {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
@@ -37,6 +46,7 @@ export function BenchmarkRegistrationPage() {
   const [parseError, setParseError] = useState('');
   const [promptCopied, setPromptCopied] = useState(false);
   const [configurationName, setConfigurationName] = useState('');
+  const [smokeBindings, setSmokeBindings] = useState<Record<string, { reference: string; digest: string }>>({});
   const [record, setRecord] = useState<BenchmarkRegistration>();
   const existing = useQuery({
     queryKey: ['benchmark-registration', resumeId],
@@ -68,6 +78,12 @@ export function BenchmarkRegistrationPage() {
   };
   const update = <K extends keyof BenchmarkRegistrationDraft>(key: K, value: BenchmarkRegistrationDraft[K]) => {
     setDraft(current => ({ ...current, [key]: value }));
+  };
+  const updateSmokeBinding = (inputId: string, key: 'reference' | 'digest', value: string) => {
+    setSmokeBindings(current => {
+      const binding = current[inputId] || { reference: '', digest: '' };
+      return { ...current, [inputId]: { ...binding, [key]: value } };
+    });
   };
   const payload = () => {
     setParseError('');
@@ -106,15 +122,23 @@ export function BenchmarkRegistrationPage() {
     },
   });
   const smokeMutation = useMutation({
-    mutationFn: () => api.createBenchmarkSmokeRun(draft.benchmarkId, draft.version),
+    mutationFn: () => api.createBenchmarkSmokeRun(draft.benchmarkId, draft.version, {
+      inputBindings: Object.fromEntries(manifestInputs(draft.manifest).filter(input => smokeBindings[input.id]?.reference).map(input => [input.id, {
+        kind: input.kind,
+        reference: smokeBindings[input.id].reference,
+        digest: smokeBindings[input.id].digest || undefined,
+      }])),
+    }),
     onSuccess: experiment => navigate(`/experiments/${experiment.id}`),
   });
   const reset = () => {
     try { window.localStorage.removeItem(REGISTRATION_ID_KEY); } catch { /* Ignore storage failures. */ }
-    setRecord(undefined); setDraft(emptyDraft); setManifestText(''); setParseError(''); setConfigurationName('');
+    setRecord(undefined); setDraft(emptyDraft); setManifestText(''); setParseError(''); setConfigurationName(''); setSmokeBindings({});
     navigate('/benchmarks/register', { replace: true });
   };
   const locked = record?.status === 'registered';
+  const smokeInputs = manifestInputs(draft.manifest);
+  const smokeBindingsReady = smokeInputs.every(input => !input.required || (Boolean(smokeBindings[input.id]?.reference) && (!input.digestRequired || /^sha256:[0-9a-f]{64}$/.test(smokeBindings[input.id]?.digest || ''))));
   const constraints = record?.constraints || [];
   const mutationError = importMutation.error || saveMutation.error || registerMutation.error || smokeMutation.error;
   const failedConstraints = mutationError instanceof ApiError && mutationError.body && typeof mutationError.body === 'object' && 'constraints' in mutationError.body
@@ -132,7 +156,8 @@ export function BenchmarkRegistrationPage() {
 
   return <div className="page benchmark-registration-page">
     <Link className="back-link" to="/benchmarks"><ChevronLeft size={16}/>返回场景目录</Link>
-    <PageHeader title="注册 Benchmark" description="服务端保存可追溯合同并计算约束；登记成功仍不等于正式审计准入。" actions={<><button className="button secondary" onClick={reset}>清空 / 新建</button>{locked&&draft.executionStatus==='executable'&&<button className="button primary" disabled={smokeMutation.isPending} onClick={()=>smokeMutation.mutate()}><ShieldCheck size={16}/>在本机冒烟测试</button>}<button className="button primary" disabled={locked || saveMutation.isPending} onClick={()=>saveMutation.mutate()}><Save size={16}/>{record?'更新服务端草稿':'保存服务端草稿'}</button></>}/>
+    <PageHeader title="注册 Benchmark" description="服务端保存可追溯合同并计算约束；登记成功仍不等于正式审计准入。" actions={<><button className="button secondary" onClick={reset}>清空 / 新建</button>{locked&&draft.executionStatus==='executable'&&<button className="button primary" disabled={smokeMutation.isPending||!smokeBindingsReady} onClick={()=>smokeMutation.mutate()}><ShieldCheck size={16}/>在本机冒烟测试</button>}<button className="button primary" disabled={locked || saveMutation.isPending} onClick={()=>saveMutation.mutate()}><Save size={16}/>{record?'更新服务端草稿':'保存服务端草稿'}</button></>}/>
+    {locked&&draft.executionStatus==='executable'&&smokeInputs.length>0&&<section className="panel registration-section"><div className="panel-heading"><div><h2>运行前输入绑定</h2><p>这里只保存资源引用；调度器会再次校验类型和摘要，secret 明文不会进入运行信封。</p></div></div><div className="form-grid registration-fields">{smokeInputs.map(input=><div className="full input-binding-field" key={input.id}><label><span>{input.id} · {input.kind}{input.required?' *':''}</span><input type={input.kind==='secret'?'password':'text'} value={smokeBindings[input.id]?.reference||''} onChange={event=>updateSmokeBinding(input.id,'reference',event.target.value)} placeholder={input.kind==='secret'?'secret://受管密钥名称':'资源引用 URI / 目标设备引用'}/><small>{input.description||'运行前必须绑定的协议输入。'}</small></label>{input.digestRequired&&<label><span>SHA-256 digest *</span><input value={smokeBindings[input.id]?.digest||''} onChange={event=>updateSmokeBinding(input.id,'digest',event.target.value)} placeholder="sha256:…"/></label>}</div>)}</div></section>}
     <div className="benchmark-import panel"><div className="benchmark-import-summary"><Upload size={19}/><span><strong>从配置文件开始</strong><small>导入 UTF-8 YAML 或 JSON；身份、运行合同和指标直接取自文件，页面只补充审计描述。</small></span></div><div className="benchmark-import-tools"><div><a className="button agent-skill-button compact" href={AGENT_SKILL_DOWNLOAD} download="looper-benchmark-configure.zip"><Bot size={14}/>下载 Codex 配置 Skill</a><button type="button" className="button secondary compact" onClick={copyAgentPrompt}><Copy size={14}/>{promptCopied?'已复制安装提示词':'复制安装提示词'}</button><button type="button" className="button secondary" disabled={importMutation.isPending||Boolean(record)} onClick={()=>fileInput.current?.click()}><Upload size={15}/>{importMutation.isPending?'正在校验配置…':'选择 Benchmark 配置'}</button><input ref={fileInput} className="benchmark-file-input" aria-label="Benchmark 配置文件" type="file" accept=".yaml,.yml,.json,application/json,text/yaml" disabled={importMutation.isPending||Boolean(record)} onChange={event=>{const file=event.target.files?.[0];if(file){setConfigurationName(file.name);importMutation.mutate(file);}event.target.value='';}}/></div><small className="codex-registration-hint">{configurationName?`已选择 ${configurationName}${importMutation.isSuccess?' · 服务端校验完成':''}`:'下载 ZIP 并附给你电脑上的 Codex，再复制安装提示词；Looper 本身不依赖 AI，也不会控制本地 Codex。'}</small></div><details className="agent-prompt"><summary>查看给本机 Codex 的完整提示词</summary><textarea aria-label="给本机 Codex 的安装提示词" readOnly rows={5} value={AGENT_INSTALL_PROMPT}/></details></div>
     <div className="notice warning"><AlertTriangle size={18}/><div><strong>当前实现边界</strong><p>Stage 0 配置只进入目录且不可执行；可执行配置必须使用固定 digest 容器、通用 Adapter 和 normalize 阶段。登记不代表通过正式审计。</p></div></div>
     {existing.isError&&<div className="notice error"><AlertTriangle size={18}/><div><strong>服务端草稿无法恢复</strong><p>{errorMessage(existing.error)}。可清空当前指针后新建。</p></div></div>}

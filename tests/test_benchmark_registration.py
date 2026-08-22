@@ -192,6 +192,7 @@ def test_remote_registration_cannot_install_executable_bundle(db_session) -> Non
     draft.execution_status = "executable"
     draft.image = "registry.example/bench@sha256:" + "a" * 64
     draft.manifest["spec"]["runtime"]["image"] = draft.image
+    draft.manifest["spec"]["runtime"]["networkMode"] = "none"
     draft.manifest["spec"]["x-extensions"]["executionStatus"] = "executable"
     record = create_registration(db_session, draft)
 
@@ -218,10 +219,38 @@ def test_generic_container_adapter_can_register_without_backend_plugin(db_sessio
     draft.execution_status = "executable"
     draft.image = "registry.example/bench@sha256:" + "b" * 64
     draft.manifest["spec"]["runtime"]["image"] = draft.image
+    draft.manifest["spec"]["runtime"]["networkMode"] = "none"
     draft.manifest["spec"]["runtime"]["commands"]["normalize"] = {
         "argv": ["benchmark-normalize", "--output", "{output}"],
         "timeoutSeconds": 30,
     }
+    draft.manifest["spec"]["runtime"].update(
+        {
+            "dependencyLockDigest": "sha256:" + "c" * 64,
+            "dependencies": [],
+            "executionPolicy": {
+                "placement": {
+                    "mode": "isolated-container",
+                    "cpuAffinity": "any",
+                    "numaPolicy": "any",
+                },
+                "network": {
+                    "mode": "none",
+                    "allowedHosts": [],
+                    "maxTransferBytes": None,
+                },
+                "storage": {
+                    "mode": "workspace",
+                    "inputId": None,
+                    "destructive": False,
+                },
+                "environmentEvidence": {
+                    "profile": "looper.system-fingerprint/v1alpha1",
+                    "requiredFields": ["cpu.model_name", "kernel_version"],
+                },
+            },
+        }
+    )
     draft.manifest["spec"]["adapter"] = {
         "protocol": "looper-adapter/v1",
         "executionModel": "database",

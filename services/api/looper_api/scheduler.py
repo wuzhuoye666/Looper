@@ -148,6 +148,24 @@ def _validate_experiment_spec(
         raise SchedulerError("benchmark version is not installed")
     manifest = benchmark.manifest_json
     manifest_parameters = manifest["spec"]["parameters"]
+    adapter = manifest["spec"].get("adapter") or {}
+    declared_inputs = {item["id"]: item for item in adapter.get("inputs", [])}
+    unknown_inputs = sorted(set(spec.input_bindings) - set(declared_inputs))
+    if unknown_inputs:
+        raise SchedulerError(f"unknown benchmark input bindings: {unknown_inputs}")
+    missing_inputs = sorted(
+        input_id
+        for input_id, declaration in declared_inputs.items()
+        if declaration.get("required") and input_id not in spec.input_bindings
+    )
+    if missing_inputs:
+        raise SchedulerError(f"required benchmark inputs are not bound: {missing_inputs}")
+    for input_id, binding in spec.input_bindings.items():
+        declaration = declared_inputs[input_id]
+        if binding.kind != declaration["kind"]:
+            raise SchedulerError(f"benchmark input {input_id!r} has a kind mismatch")
+        if declaration.get("digestRequired") and binding.digest is None:
+            raise SchedulerError(f"benchmark input {input_id!r} requires a sha256 digest")
     if spec.mode == ExperimentMode.OPTIMIZATION:
         unknown_parameters = set(spec.search_space) - set(manifest_parameters)
         if unknown_parameters:

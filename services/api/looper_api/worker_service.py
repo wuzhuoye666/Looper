@@ -63,10 +63,12 @@ def register_worker(session: Session, settings: Settings, request: WorkerRegiste
         raise WorkerError("worker token is invalid")
     now = utc_now()
     worker = session.get(WorkerRecord, request.worker_id)
+    capabilities = set(request.capabilities)
+    capabilities.update(f"target.{target_id}" for target_id in request.target_ids)
     values = {
         "name": request.name,
         "token_hash": _token_hash(request.token),
-        "capabilities_json": sorted(set(request.capabilities)),
+        "capabilities_json": sorted(capabilities),
         "fingerprint_json": request.fingerprint,
         "status": "online",
         "max_concurrency": request.max_concurrency,
@@ -148,6 +150,7 @@ def _claim_envelope(
         if item["id"] == evaluation.workload_id
     )
     source = benchmark.manifest_json["metadata"].get("source", {})
+    runtime = benchmark.manifest_json["spec"]["runtime"]
     load_point = (
         session.get(SelectionLoadPointRecord, attempt.selection_load_point_id)
         if attempt.selection_load_point_id is not None
@@ -175,7 +178,7 @@ def _claim_envelope(
             "manifestDigest": benchmark.manifest_digest,
             "sourceCommit": source.get("commit"),
             "sourceDigest": source.get("digest"),
-            "dependencyLockDigest": None,
+            "dependencyLockDigest": runtime.get("dependencyLockDigest"),
         },
         "candidate": {
             "digest": candidate.config_digest,
@@ -184,6 +187,10 @@ def _claim_envelope(
         },
         "workload": {"id": workload["id"], "metadata": workload.get("metadata", {})},
         "target": evaluation.target_snapshot_json,
+        "inputs": {
+            input_id: binding.model_dump(mode="json")
+            for input_id, binding in spec.input_bindings.items()
+        },
         "paths": {"input": "", "output": "", "workspace": ""},
         "seed": spec.design.random_seed
         + candidate.sequence * 1009
@@ -192,6 +199,7 @@ def _claim_envelope(
         + attempt.retry_index,
         "cacheMode": spec.design.cache_mode,
         "createdAt": utc_now().isoformat(),
+        "executionPolicy": runtime.get("executionPolicy"),
         "extensions": {
             "repeatIndex": attempt.repeat_index,
             "retryIndex": attempt.retry_index,
@@ -255,6 +263,11 @@ def claim_attempt(
         )
     )
     worker_capabilities = set(worker.capabilities_json)
+    worker_targets = {
+        capability.removeprefix("target.")
+        for capability in worker_capabilities
+        if capability.startswith("target.")
+    }
     selected: (
         tuple[AttemptRecord, ExperimentRecord, EvaluationRecord, CandidateRecord, BenchmarkRecord]
         | None
@@ -269,8 +282,21 @@ def claim_attempt(
         benchmark = get_benchmark(session, spec.benchmark_id, spec.benchmark_version)
         if candidate is None or benchmark is None:
             continue
+        if worker_targets and evaluation.target_id not in worker_targets:
+            continue
         required = set(benchmark.manifest_json["spec"].get("capabilities", []))
-        required.add(str(benchmark.manifest_json["spec"]["runtime"]["type"]))
+        runtime = benchmark.manifest_json["spec"]["runtime"]
+        required.add(str(runtime["type"]))
+        policy = runtime.get("executionPolicy") or {}
+        if policy:
+            required.update(
+                {
+                    f"placement.{policy['placement']['mode']}",
+                    f"network.{policy['network']['mode']}",
+                    f"storage.{policy['storage']['mode']}",
+                    f"evidence.{policy['environmentEvidence']['profile']}",
+                }
+            )
         if required <= worker_capabilities:
             selected = attempt, experiment, evaluation, candidate, benchmark
             break

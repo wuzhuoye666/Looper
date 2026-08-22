@@ -6,7 +6,7 @@
   "additionalProperties": false,
   "required": [
     "schemaVersion", "experimentId", "candidateId", "evaluationId", "attemptId",
-    "leaseToken", "benchmark", "candidate", "workload", "target", "paths", "seed"
+    "leaseToken", "benchmark", "candidate", "workload", "target", "inputs", "paths", "seed"
   ],
   "properties": {
     "schemaVersion": { "const": "v1alpha1" },
@@ -59,6 +59,10 @@
         "inventory": { "type": "object" }
       }
     },
+    "inputs": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/inputBinding" }
+    },
     "paths": {
       "type": "object",
       "additionalProperties": false,
@@ -72,6 +76,29 @@
     "seed": { "type": "integer", "minimum": 0 },
     "cacheMode": { "enum": ["cold", "warm", "declared"], "default": "declared" },
     "createdAt": { "type": "string" },
+    "executionPolicy": { "type": ["object", "null"] },
+    "executionEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["profile", "fingerprint"],
+      "properties": {
+        "profile": { "const": "looper.system-fingerprint/v1alpha1" },
+        "fingerprint": { "type": "object" }
+      }
+    },
     "extensions": { "type": "object" }
+  },
+  "$defs": {
+    "inputBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "reference"],
+      "properties": {
+        "kind": { "enum": ["dataset", "artifact", "config", "endpoint", "secret", "device", "topology"] },
+        "reference": { "type": "string", "minLength": 1, "maxLength": 2000 },
+        "digest": { "type": ["string", "null"], "pattern": "^sha256:[0-9a-f]{64}$" },
+        "metadata": { "type": "object" }
+      }
+    }
   }
 }

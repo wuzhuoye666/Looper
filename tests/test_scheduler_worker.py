@@ -5,7 +5,12 @@ from pathlib import Path
 import pytest
 from looper_api.config import Settings
 from looper_api.models import AttemptRecord, BenchmarkRecord
-from looper_api.scheduler import create_demo_request, create_experiment, start_experiment
+from looper_api.scheduler import (
+    SchedulerError,
+    create_demo_request,
+    create_experiment,
+    start_experiment,
+)
 from looper_api.worker_protocol import (
     AttemptCompletion,
     AttemptHeartbeat,
@@ -20,7 +25,7 @@ from looper_api.worker_service import (
     register_worker,
     start_attempt,
 )
-from looper_core.contracts import MetricObservation
+from looper_core.contracts import BenchmarkInputBinding, MetricObservation
 from looper_core.state import AttemptStatus, ExperimentStatus
 
 
@@ -193,7 +198,110 @@ def test_worker_claim_requires_implicit_runtime_capability(
             name="container worker",
             token="secret",
             capabilities=["python", "container"],
+            targetIds=["local"],
             fingerprint={},
         ),
     )
     assert claim_attempt(session, settings, container_worker) is not None
+
+
+def test_worker_claim_respects_declared_target_affinity(
+    db_session: object, tmp_path: Path
+) -> None:
+    session = db_session
+    settings = Settings(
+        data_dir=tmp_path,
+        database_url="sqlite://",
+        local_worker_token="secret",
+        lease_seconds=30,
+    )
+    experiment = create_experiment(session, create_demo_request())
+    start_experiment(session, experiment)
+    wrong_worker = register_worker(
+        session,
+        settings,
+        WorkerRegister(
+            workerId="worker-wrong-target",
+            name="wrong target worker",
+            token="secret",
+            capabilities=["python", "local-process"],
+            targetIds=["other-target"],
+            fingerprint={},
+        ),
+    )
+    assert claim_attempt(session, settings, wrong_worker) is None
+    matching_worker = register_worker(
+        session,
+        settings,
+        WorkerRegister(
+            workerId="worker-local-target",
+            name="local target worker",
+            token="secret",
+            capabilities=["python", "local-process"],
+            targetIds=["local"],
+            fingerprint={},
+        ),
+    )
+    assert claim_attempt(session, settings, matching_worker) is not None
+
+
+def test_required_benchmark_inputs_are_bound_and_propagated(
+    db_session: object, tmp_path: Path
+) -> None:
+    session = db_session
+    benchmark = session.query(BenchmarkRecord).filter_by(
+        benchmark_id="looper.demo.compression"
+    ).one()
+    benchmark.manifest_json["spec"]["adapter"] = {
+        "protocol": "looper-adapter/v1",
+        "executionModel": "batch-suite",
+        "primaryMetric": "throughput_mib_s",
+        "requiredChecks": ["roundtrip-ok"],
+        "inputs": [
+            {
+                "id": "dataset",
+                "kind": "dataset",
+                "required": True,
+                "digestRequired": True,
+            }
+        ],
+        "canonicalOutputs": {"metrics": "metrics.jsonl", "result": "result.json"},
+    }
+    benchmark.manifest_json["spec"]["runtime"]["dependencyLockDigest"] = (
+        "sha256:" + "e" * 64
+    )
+    request = create_demo_request()
+    with pytest.raises(SchedulerError, match="required benchmark inputs"):
+        create_experiment(session, request)
+
+    request.spec.input_bindings = {
+        "dataset": BenchmarkInputBinding(
+            kind="dataset",
+            reference="cas://dataset-fixture",
+            digest="sha256:" + "d" * 64,
+        )
+    }
+    experiment = create_experiment(session, request)
+    assert experiment.spec_json["input_bindings"]["dataset"]["reference"] == "cas://dataset-fixture"
+    start_experiment(session, experiment)
+    settings = Settings(
+        data_dir=tmp_path,
+        database_url="sqlite://",
+        local_worker_token="secret",
+        lease_seconds=30,
+    )
+    worker = register_worker(
+        session,
+        settings,
+        WorkerRegister(
+            workerId="worker-inputs",
+            name="input binding worker",
+            token="secret",
+            capabilities=["python", "local-process"],
+            fingerprint={},
+        ),
+    )
+    claim = claim_attempt(session, settings, worker)
+    assert claim is not None
+    assert claim["envelope"]["inputs"]["dataset"]["digest"] == "sha256:" + "d" * 64
+    assert claim["envelope"]["benchmark"]["dependencyLockDigest"] == "sha256:" + "e" * 64
