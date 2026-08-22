@@ -1,0 +1,38 @@
+# Python
+.venv/
+.tools/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+pytest-cache-files-*/
+.ruff_cache/
+.coverage
+htmlcov/
+*.egg-info/
+
+# Node
+node_modules/
+.pnpm-store/
+.npm-cache/
+dist/
+coverage/
+playwright-report/
+test-results/
+*.tsbuildinfo
+
+# Looper runtime
+.looper/
+.env
+*.db
+*.db-shm
+*.db-wal
+
+# Editors and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+debug.log
+
+# Downloaded upstream sources
+third_party/cache/

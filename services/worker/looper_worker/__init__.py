@@ -1,0 +1,1 @@
+"""Looper benchmark worker."""

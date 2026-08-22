@@ -1,0 +1,41 @@
+schema_version: looper.runtime-images/v1alpha1
+registry:
+  image: ghcr.io/project-zot/zot@sha256:cd2aea942f428630bcb4190542be6abd35e14177aab84fc7ccad0dca8ecb363d
+  local_endpoint: 127.0.0.1:5000
+images:
+  benchbase-smallbank:
+    status: definition-ready
+    platform: linux/amd64
+    source:
+      id: benchbase
+      commit: 33c00473807ebd49304d114a6d769d2d2b2bbb34
+      archive: .looper/upstreams/benchbase/33c00473807ebd49304d114a6d769d2d2b2bbb34.tar.gz
+      sha256: sha256:d640d02bd20c72896fce7dd616824d874e60606d3b16f46587450db076a37843
+      bytes: 43099345
+    bases:
+      java: ghcr.io/graalvm/jdk-community@sha256:4ae63cc6caa75d0f5d144c20ed4a17760994fd12c8ceb8b7dc6e405f1593ac65
+      go: mcr.microsoft.com/oss/go/microsoft/golang@sha256:97e44f3c610d5fd44e0d2bd86bd533b48151488d18cdd53032af0c65a4f7af24
+    local_tag: 127.0.0.1:5000/looper/benchbase-smallbank:2026.08-pilot1
+    image: null
+    image_id: null
+    sbom_path: null
+    sbom_sha256: null
+    built_at: null
+  dcperf-mediawiki:
+    status: appliance-definition-ready
+    platform: linux/amd64
+    source:
+      id: dcperf
+      commit: 9308c3e3c404e0466f0a2929f15ddcf62b2215f6
+      archive: .looper/upstreams/dcperf/9308c3e3c404e0466f0a2929f15ddcf62b2215f6.tar.gz
+      sha256: sha256:acdc2ad0b0f03adf44bf6803abe9e7880be7c61847c7caa51c41d55a96a62371
+      bytes: 452649
+    bases:
+      appliance: mcr.microsoft.com/devcontainers/base@sha256:81380e4c9c14e8a629ff39029639e4b7893e67400246fa7782a0fe7dc193a02a
+    local_tag: 127.0.0.1:5000/looper/dcperf-mediawiki:2026.08-pilot1
+    image: null
+    image_id: null
+    sbom_path: null
+    sbom_sha256: null
+    built_at: null
+    execution_blocker: requires a target-host appliance with systemd and audited install state

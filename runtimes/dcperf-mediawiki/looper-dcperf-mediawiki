@@ -1,0 +1,36 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+SOURCE_REVISION = "9308c3e3c404e0466f0a2929f15ddcf62b2215f6"
+SOURCE_ROOT = Path("/opt/dcperf")
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--envelope", type=Path)
+    parser.add_argument("--output", type=Path)
+    parser.add_argument("--self-check", action="store_true")
+    arguments = parser.parse_args()
+    if arguments.self_check:
+        subprocess.run(
+            [sys.executable, "-m", "compileall", "-q", str(SOURCE_ROOT / "benchpress")],
+            check=True,
+        )
+        print(json.dumps({"source_revision": SOURCE_REVISION, "appliance_bundle": "ready"}))
+        return 0
+    if arguments.envelope is None or arguments.output is None:
+        parser.error("--envelope and --output are required")
+    raise SystemExit(
+        "DCPerf MediaWiki requires an audited target-host appliance with systemd; "
+        "the source bundle image is not an executable benchmark container"
+    )
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

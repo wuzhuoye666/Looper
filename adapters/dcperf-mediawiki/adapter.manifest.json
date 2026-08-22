@@ -1,0 +1,16 @@
+{
+  "manifest_version": 1,
+  "adapter_id": "dcperf-mediawiki-closed-loop",
+  "adapter_kind": "scenario-result",
+  "upstream_id": "dcperf",
+  "source_revision": "9308c3e3c404e0466f0a2929f15ddcf62b2215f6",
+  "source_license": "MIT",
+  "input": "fixture/benchpress-result.json",
+  "normalizer": "looper_core.scenario_adapters:load_dcperf_mediawiki_fixture",
+  "runtime_normalizer": {
+    "entrypoint": "looper-dcperf-mediawiki-normalize",
+    "mode": "normalization-only",
+    "outputs": ["metrics.jsonl", "result.json", "normalized-result.json"]
+  },
+  "synthetic_fixture": true
+}

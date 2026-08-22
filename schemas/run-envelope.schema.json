@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://looper.dev/schemas/v1alpha1/run-envelope.schema.json",
+  "title": "Looper Run Envelope",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion", "experimentId", "candidateId", "evaluationId", "attemptId",
+    "leaseToken", "benchmark", "candidate", "workload", "target", "paths", "seed"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "v1alpha1" },
+    "experimentId": { "type": "string", "minLength": 1 },
+    "candidateId": { "type": "string", "minLength": 1 },
+    "evaluationId": { "type": "string", "minLength": 1 },
+    "attemptId": { "type": "string", "minLength": 1 },
+    "leaseToken": { "type": "integer", "minimum": 1 },
+    "benchmark": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version", "manifestDigest"],
+      "properties": {
+        "id": { "type": "string" },
+        "version": { "type": "string" },
+        "manifestDigest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+        "sourceCommit": { "type": ["string", "null"] },
+        "sourceDigest": { "type": ["string", "null"] },
+        "dependencyLockDigest": { "type": ["string", "null"] }
+      }
+    },
+    "candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["digest", "parameters", "role"],
+      "properties": {
+        "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+        "parameters": { "type": "object" },
+        "role": { "enum": ["baseline", "candidate", "scenario"] }
+      }
+    },
+    "workload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "metadata"],
+      "properties": {
+        "id": { "type": "string" },
+        "metadata": { "type": "object" }
+      }
+    },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["snapshotDigest", "provider", "capabilities", "fingerprint"],
+      "properties": {
+        "snapshotDigest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+        "provider": { "type": "string" },
+        "capabilities": { "type": "array", "items": { "type": "string" } },
+        "fingerprint": { "type": "object" },
+        "inventory": { "type": "object" }
+      }
+    },
+    "paths": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["input", "output", "workspace"],
+      "properties": {
+        "input": { "type": "string" },
+        "output": { "type": "string" },
+        "workspace": { "type": "string" }
+      }
+    },
+    "seed": { "type": "integer", "minimum": 0 },
+    "cacheMode": { "enum": ["cold", "warm", "declared"], "default": "declared" },
+    "createdAt": { "type": "string" },
+    "extensions": { "type": "object" }
+  }
+}

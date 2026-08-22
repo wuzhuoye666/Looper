@@ -1,0 +1,27 @@
+{
+  "fixture_notice": "Synthetic fixture shaped from pinned BenchBase ResultWriter; not a published run.",
+  "Start timestamp (milliseconds)": 1787300000000,
+  "Current Timestamp (milliseconds)": 1787300060000,
+  "Elapsed Time (nanoseconds)": 60000000000,
+  "DBMS Type": "POSTGRES",
+  "DBMS Version": "16.4",
+  "Benchmark Type": "smallbank",
+  "Final State": "DONE",
+  "Measured Requests": 120000,
+  "isolation": "TRANSACTION_SERIALIZABLE",
+  "scalefactor": "10",
+  "terminals": "256",
+  "Latency Distribution": {
+    "Minimum Latency (microseconds)": 3100,
+    "25th Percentile Latency (microseconds)": 4900,
+    "Median Latency (microseconds)": 6700,
+    "Average Latency (microseconds)": 7200,
+    "75th Percentile Latency (microseconds)": 8900,
+    "90th Percentile Latency (microseconds)": 11600,
+    "95th Percentile Latency (microseconds)": 14200,
+    "99th Percentile Latency (microseconds)": 22800,
+    "Maximum Latency (microseconds)": 41600
+  },
+  "Throughput (requests/second)": 2000.0,
+  "Goodput (requests/second)": 1950.0
+}

@@ -1,0 +1,11 @@
+{
+  "schemaVersion": "v1alpha1",
+  "plannedOfferedTps": 2000.0,
+  "measurementSeconds": 60.0,
+  "offeredRequests": 120000,
+  "startedRequests": 120000,
+  "completedRequests": 120000,
+  "timeoutRequests": 0,
+  "rateLimiterLagRatio": 0.0,
+  "clientHeadroomRatio": 0.25
+}

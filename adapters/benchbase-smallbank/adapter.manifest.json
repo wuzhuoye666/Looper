@@ -1,0 +1,21 @@
+{
+  "manifest_version": 1,
+  "adapter_id": "benchbase-smallbank-postgres",
+  "adapter_kind": "scenario-result",
+  "upstream_id": "benchbase",
+  "source_revision": "33c00473807ebd49304d114a6d769d2d2b2bbb34",
+  "source_license": "Apache-2.0",
+  "inputs": {
+    "summary": "fixture/summary.json",
+    "outcomes": "fixture/transaction-histograms.json",
+    "latencies": "fixture/latency.raw.csv",
+    "client_accounting": "fixture/client-load-accounting.json"
+  },
+  "normalizer": "looper_core.scenario_adapters:load_benchbase_smallbank_fixture",
+  "runtime_normalizer": {
+    "entrypoint": "looper-benchbase-smallbank-normalize",
+    "mode": "normalization-only",
+    "outputs": ["metrics.jsonl", "result.json", "normalized-result.json"]
+  },
+  "synthetic_fixture": true
+}

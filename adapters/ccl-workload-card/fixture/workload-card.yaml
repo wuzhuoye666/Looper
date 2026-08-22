@@ -1,0 +1,22 @@
+fixture_notice: Synthetic adapter fixture; not upstream CCL content.
+card_version: 1
+workload:
+  id: synthetic-allreduce-small
+  title: Synthetic Small All-Reduce
+  operation: all-reduce
+  data_type: float32
+  message_size_bytes: 1048576
+  participants: 8
+execution:
+  warmup_iterations: 5
+  measured_iterations: 40
+metrics:
+  - name: completion_time
+    unit: microsecond
+    direction: lower-is-better
+  - name: effective_bandwidth
+    unit: gigabyte/second
+    direction: higher-is-better
+requirements:
+  fabric: synthetic-interconnect
+  accelerator_count: 8

@@ -1,0 +1,20 @@
+{
+  "fixture_notice": "Synthetic adapter fixture; not an upstream evaluation result.",
+  "task": "synthetic_vector_filter",
+  "evaluation": {
+    "success": true,
+    "score": 0.842,
+    "elapsed_seconds": 18.25,
+    "checks": {
+      "correctness": 0.98,
+      "stability": 0.91
+    }
+  },
+  "candidate": {
+    "id": "fixture-candidate-01",
+    "parameters": {
+      "batch_size": 64,
+      "workers": 4
+    }
+  }
+}

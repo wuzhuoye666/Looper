@@ -1,0 +1,35 @@
+{
+  "manifest_version": 1,
+  "adapter_id": "dcperf-benchpress-example",
+  "upstream_id": "dcperf",
+  "input_format": "benchpress-like-json",
+  "fixture": "fixture/benchpress-result.json",
+  "synthetic": true,
+  "result_mapping": {
+    "benchmark_name": "$.benchmark",
+    "run_status": "$.status",
+    "started_at": "$.timestamp",
+    "configuration": "$.parameters",
+    "environment": "$.system"
+  },
+  "metric_mappings": [
+    {
+      "source": "$.metrics.requests_per_second",
+      "target": "throughput",
+      "unit": "requests/second",
+      "direction": "higher-is-better"
+    },
+    {
+      "source": "$.metrics.latency_p99_ms",
+      "target": "latency_p99",
+      "unit": "millisecond",
+      "direction": "lower-is-better"
+    },
+    {
+      "source": "$.metrics.error_rate",
+      "target": "error_rate",
+      "unit": "ratio",
+      "direction": "lower-is-better"
+    }
+  ]
+}

@@ -1,0 +1,20 @@
+{
+  "fixture_notice": "Synthetic adapter fixture; not an upstream result.",
+  "benchmark": "synthetic_cache_service",
+  "status": "pass",
+  "timestamp": "2026-01-15T12:00:00Z",
+  "parameters": {
+    "clients": 8,
+    "duration_seconds": 30
+  },
+  "metrics": {
+    "requests_per_second": 12500.0,
+    "latency_p50_ms": 1.8,
+    "latency_p99_ms": 7.4,
+    "error_rate": 0.0008
+  },
+  "system": {
+    "hostname": "fixture-host",
+    "cpu_model": "Synthetic 8-Core CPU"
+  }
+}

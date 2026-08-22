@@ -1,0 +1,64 @@
+[build-system]
+requires = ["setuptools>=80", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "looper-platform"
+version = "0.1.0"
+description = "Auditable scenario benchmark suite for server procurement and selection"
+readme = "README.md"
+requires-python = ">=3.12,<3.15"
+dependencies = [
+  "alembic>=1.16,<2",
+  "alibabacloud_ecs20140526>=7.9.6,<8",
+  "bce-python-sdk>=0.9.76,<1",
+  "fastapi>=0.116,<1",
+  "httpx>=0.28,<1",
+  "jsonschema>=4.24,<5",
+  "optuna>=4.4,<5",
+  "psutil>=7.0,<8",
+  "pydantic>=2.11,<3",
+  "pydantic-settings>=2.10,<3",
+  "python-dotenv>=1.1,<2",
+  "python-multipart>=0.0.20,<1",
+  "PyYAML>=6.0,<7",
+  "sqlalchemy>=2.0,<3",
+  "tencentcloud-sdk-python-cvm>=3.1.158,<4",
+  "tencentcloud-sdk-python-vpc==3.1.155",
+  "typer>=0.16,<1",
+  "uvicorn[standard]>=0.35,<1",
+  "volcengine-python-sdk==5.0.45"
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.4,<9",
+  "pytest-asyncio>=1.1,<2",
+  "pytest-cov>=6.2,<7",
+  "ruff>=0.12,<1",
+  "uv>=0.8,<1"
+]
+
+[project.scripts]
+looper = "looper_api.cli:app"
+looper-worker = "looper_worker.main:cli"
+looper-benchbase-smallbank-normalize = "looper_benchmark_sdk.scenario:benchbase_main"
+looper-dcperf-mediawiki-normalize = "looper_benchmark_sdk.scenario:dcperf_main"
+
+[tool.setuptools.packages.find]
+where = ["services/api", "services/worker", "packages/core", "packages/benchmark-sdk"]
+include = ["looper_api*", "looper_worker*", "looper_core*", "looper_benchmark_sdk*"]
+
+[tool.pytest.ini_options]
+addopts = "-q --strict-markers"
+testpaths = ["tests"]
+pythonpath = ["services/api", "services/worker", "packages/core", "packages/benchmark-sdk"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+extend-exclude = ["apps/web", "third_party/cache"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+ignore = ["B008"]

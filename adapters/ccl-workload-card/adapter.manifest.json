@@ -1,0 +1,32 @@
+{
+  "manifest_version": 1,
+  "adapter_id": "ccl-workload-card-example",
+  "upstream_id": "ccl-bench",
+  "input_format": "workload-card-yaml",
+  "fixture": "fixture/workload-card.yaml",
+  "synthetic": true,
+  "result_mapping": {
+    "benchmark_name": "$.workload.id",
+    "display_name": "$.workload.title",
+    "operation": "$.workload.operation",
+    "configuration": "$.execution",
+    "requirements": "$.requirements"
+  },
+  "parameter_mappings": [
+    {
+      "source": "$.workload.data_type",
+      "target": "data_type"
+    },
+    {
+      "source": "$.workload.message_size_bytes",
+      "target": "message_size",
+      "unit": "byte"
+    },
+    {
+      "source": "$.workload.participants",
+      "target": "participant_count",
+      "unit": "count"
+    }
+  ],
+  "metric_catalog": "$.metrics"
+}

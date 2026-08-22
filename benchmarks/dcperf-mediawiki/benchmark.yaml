@@ -1,0 +1,192 @@
+apiVersion: looper.dev/v1alpha1
+kind: Benchmark
+metadata:
+  id: dcperf.mediawiki.closed-loop
+  name: DCPerf MediaWiki Closed-Loop
+  version: 2026.08-pilot1
+  description: Single-VM closed-loop full-stack capacity for concrete server SKU comparison.
+  license: MIT
+  source:
+    url: https://github.com/facebookresearch/DCPerf
+    commit: 9308c3e3c404e0466f0a2929f15ddcf62b2215f6
+    digest: null
+spec:
+  trust: untrusted
+  capabilities:
+    - linux
+    - x86_64
+    - container
+    - dcperf
+    - systemd
+  parameters: {}
+  workloads:
+    - id: oss_performance_mediawiki_mlp
+      name: MediaWiki MLP with wrk
+      weight: 1
+      metadata:
+        load_generator: wrk
+        duration: 10m
+        scale_out: 1
+        client_threads_formula: 2x-logical-cpus
+  scenario:
+    id: web.mediawiki.closed-loop
+    name: MediaWiki single-VM closed-loop capacity
+    decision_question: How many successful full-stack MediaWiki requests can each concrete target SKU complete when every workload component shares one VM?
+    user_value: Check whether a target remains competitive under a production-inspired Web stack while disclosing that client work is included.
+    workload_class: web-full-stack
+    topology: closed-loop
+    roles:
+      - id: target
+        kind: target
+        included_in_score: true
+      - id: load-generator
+        kind: load-generator
+        co_located_with: target
+        included_in_score: true
+      - id: web-service
+        kind: service
+        co_located_with: target
+        included_in_score: true
+      - id: database
+        kind: database
+        co_located_with: target
+        included_in_score: true
+    primary_metric: closed_loop_successful_rps
+    slo_gates:
+      - id: request-accounting
+        kind: correctness
+        scope: block
+        metric: failed_request_ratio
+        operator: lt
+        threshold: 0.01
+        hard: true
+      - id: cpu-saturation
+        kind: resource
+        scope: block
+        metric: cpu_utilization_p95
+        operator: gte
+        threshold: 90
+        hard: true
+    goodput:
+      metric: closed_loop_successful_rps
+      unit: requests/second
+      committed_outcome: successful
+      excluded_outcomes: [timeout, error, retry]
+      maximum_error_ratio: 0.01
+      maximum_abort_ratio: 0
+      maximum_timeout_ratio: 0.001
+    tail_evidence:
+      metric: nginx_request_latency
+      unit: ms
+      minimum_samples: 100000
+      required_statistics: [p50, p95, p99, timeout]
+      histogram_format: upstream-summary
+      timeout_accounting: separate
+  runtime:
+    type: container
+    image: null
+    engine: docker
+    networkMode: none
+    workingDirectory: .
+    commands:
+      run:
+        argv:
+          - looper-dcperf-mediawiki
+          - --envelope
+          - "{envelope}"
+          - --output
+          - "{output}"
+        timeoutSeconds: 86400
+        allowedExitCodes: [0]
+  metrics:
+    closed_loop_successful_rps:
+      unit: requests/second
+      direction: maximize
+      kind: aggregate
+      required: true
+      minimumSamples: 1
+    wrk_rps:
+      unit: requests/second
+      direction: none
+      kind: aggregate
+      required: true
+      minimumSamples: 1
+    successful_requests:
+      unit: requests
+      direction: maximize
+      kind: counter
+      required: true
+      minimumSamples: 1
+    failed_request_ratio:
+      unit: ratio
+      direction: minimize
+      kind: aggregate
+      required: true
+      minimumSamples: 1
+    error_ratio:
+      unit: ratio
+      direction: minimize
+      kind: aggregate
+      required: true
+      minimumSamples: 1
+    timeout_count:
+      unit: requests
+      direction: minimize
+      kind: counter
+      required: true
+      minimumSamples: 1
+    timeout_ratio:
+      unit: ratio
+      direction: minimize
+      kind: aggregate
+      required: true
+      minimumSamples: 1
+    latency_p50_ms:
+      unit: ms
+      direction: minimize
+      kind: aggregate
+      required: true
+      minimumSamples: 100000
+    latency_p95_ms:
+      unit: ms
+      direction: minimize
+      kind: aggregate
+      required: true
+      minimumSamples: 100000
+    latency_p99_ms:
+      unit: ms
+      direction: minimize
+      kind: aggregate
+      required: true
+      minimumSamples: 100000
+    cpu_utilization_p95:
+      unit: percent
+      direction: none
+      kind: aggregate
+      required: true
+      minimumSamples: 1
+  outputs:
+    maxBytes: 5368709120
+    maxMetricLines: 1000000
+    artifacts:
+      - path: normalized-result.json
+        role: result
+        mediaType: application/json
+        required: true
+      - path: benchpress-result.json
+        role: result
+        mediaType: application/json
+        required: true
+      - path: benchmark.log
+        role: log
+        mediaType: text/plain
+        required: true
+  x-extensions:
+    executionStatus: stage0-adapter-only
+    adapterPath: adapters/dcperf-mediawiki
+    includesClientWork: true
+    runtimeNormalizer:
+      type: built-in
+      id: dcperf-mediawiki-v1
+    runtimeImageLock: runtimes/images.lock.yaml
+    executionBlocker: target-host appliance with systemd and audited install state required

@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://looper.dev/schemas/v1alpha1/client-load-accounting.schema.json",
+  "title": "Looper Client Load Accounting",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "plannedOfferedTps",
+    "measurementSeconds",
+    "offeredRequests",
+    "startedRequests",
+    "completedRequests",
+    "timeoutRequests",
+    "rateLimiterLagRatio",
+    "clientHeadroomRatio"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "v1alpha1" },
+    "plannedOfferedTps": { "type": "number", "exclusiveMinimum": 0 },
+    "measurementSeconds": { "type": "number", "exclusiveMinimum": 0 },
+    "offeredRequests": { "type": "integer", "minimum": 1 },
+    "startedRequests": { "type": "integer", "minimum": 1 },
+    "completedRequests": { "type": "integer", "minimum": 0 },
+    "timeoutRequests": { "type": "integer", "minimum": 0 },
+    "rateLimiterLagRatio": { "type": "number", "minimum": 0, "maximum": 1 },
+    "clientHeadroomRatio": { "type": "number", "minimum": 0, "maximum": 1 }
+  }
+}

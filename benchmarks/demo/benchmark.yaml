@@ -1,0 +1,102 @@
+apiVersion: looper.dev/v1alpha1
+kind: Benchmark
+metadata:
+  id: looper.demo.compression
+  name: Deterministic compression loop
+  version: 1.0.0
+  description: Searches zlib level and chunk size with a round-trip correctness gate.
+  license: INTERNAL
+spec:
+  trust: trusted
+  capabilities:
+    - python
+    - local-process
+  parameters:
+    compression_level:
+      type: integer
+      minimum: 1
+      maximum: 9
+      step: 1
+      default: 6
+      description: zlib compression level
+    chunk_size:
+      type: categorical
+      choices: [4096, 16384, 65536]
+      default: 16384
+      description: bytes supplied to the compressor per update
+  workloads:
+    - id: small
+      name: 128 KiB payload
+      weight: 1
+      metadata:
+        size_kib: 128
+        samples: 24
+    - id: medium
+      name: 512 KiB payload
+      weight: 2
+      metadata:
+        size_kib: 512
+        samples: 24
+    - id: large
+      name: 2 MiB payload
+      weight: 1
+      metadata:
+        size_kib: 2048
+        samples: 16
+  runtime:
+    type: local-process
+    workingDirectory: .
+    commands:
+      run:
+        argv:
+          - "{python}"
+          - "{benchmarkRoot}/compression_benchmark.py"
+          - --envelope
+          - "{envelope}"
+          - --output
+          - "{output}"
+        timeoutSeconds: 120
+        allowedExitCodes: [0]
+  metrics:
+    throughput_mib_s:
+      unit: MiB/s
+      direction: maximize
+      kind: sample
+      required: true
+      minimumSamples: 3
+    latency_ms:
+      unit: ms
+      direction: minimize
+      kind: sample
+      required: true
+      minimumSamples: 3
+    compression_ratio:
+      unit: ratio
+      direction: minimize
+      kind: aggregate
+      required: true
+      minimumSamples: 1
+    roundtrip_ok:
+      unit: bool
+      direction: none
+      kind: boolean
+      required: true
+      minimumSamples: 1
+    output_bytes:
+      unit: bytes
+      direction: minimize
+      kind: counter
+      required: false
+      minimumSamples: 1
+  outputs:
+    maxBytes: 16777216
+    maxMetricLines: 1000
+    artifacts:
+      - path: result.json
+        role: result
+        mediaType: application/json
+        required: true
+      - path: benchmark.log
+        role: log
+        mediaType: text/plain
+        required: true

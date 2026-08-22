@@ -1,0 +1,270 @@
+apiVersion: looper.dev/v1alpha1
+kind: Benchmark
+metadata:
+  id: benchbase.smallbank.postgres
+  name: BenchBase SmallBank on PostgreSQL
+  version: 2026.08-pilot1
+  description: Committed transaction SLO frontier for server SKU selection.
+  license: Apache-2.0
+  source:
+    url: https://github.com/cmu-db/benchbase
+    commit: 33c00473807ebd49304d114a6d769d2d2b2bbb34
+    digest: null
+spec:
+  trust: untrusted
+  capabilities:
+    - linux
+    - x86_64
+    - container
+    - benchbase
+    - postgresql
+  parameters: {}
+  workloads:
+    - id: smallbank-postgres-serializable
+      name: SmallBank PostgreSQL serializable
+      weight: 1
+      metadata:
+        scale_factor: 10
+        accounts: 10000000
+        isolation: TRANSACTION_SERIALIZABLE
+        transaction_weights: [15, 15, 15, 25, 15, 15]
+  scenario:
+    id: database.smallbank.slo-frontier
+    name: SmallBank committed transaction capacity
+    decision_question: Which target SKU provides more committed banking transactions within the p99 SLO at lower hourly cost?
+    user_value: Compare purchasable server capacity without counting aborts, retries, timeouts, or failed transactions as useful work.
+    workload_class: transactional-database
+    topology: client-server
+    roles:
+      - id: target
+        kind: target
+        included_in_score: true
+        description: PostgreSQL server under comparison
+      - id: database
+        kind: database
+        co_located_with: target
+        included_in_score: true
+      - id: load-generator
+        kind: load-generator
+        included_in_score: false
+        description: Fixed external BenchBase client
+    primary_metric: committed_tps
+    slo_gates:
+      - id: p99-latency
+        kind: slo
+        scope: block
+        metric: latency_p99_ms
+        operator: lte
+        threshold: 50
+        hard: true
+      - id: unexpected-error-rate
+        kind: correctness
+        scope: block
+        metric: error_ratio
+        operator: lt
+        threshold: 0.001
+        hard: true
+      - id: abort-rate
+        kind: correctness
+        scope: block
+        metric: abort_ratio
+        operator: lt
+        threshold: 0.01
+        hard: true
+    goodput:
+      metric: committed_tps
+      unit: transactions/second
+      committed_outcome: committed
+      excluded_outcomes: [abort, deadlock, rollback, retry, timeout, error]
+      maximum_error_ratio: 0.001
+      maximum_abort_ratio: 0.01
+      maximum_timeout_ratio: 0.001
+    tail_evidence:
+      metric: transaction_latency
+      unit: ms
+      minimum_samples: 100000
+      required_statistics: [p50, p95, p99, p99.9, maximum, timeout]
+      histogram_format: raw
+      timeout_accounting: separate
+    load_search:
+      type: bracketed-binary
+      offered_load_metric: offered_tps
+      unit: transactions/second
+      calibration_repeats: 3
+      common_load_fractions: [0.5, 0.75, 1.0]
+      initial_repeats: 3
+      boundary_repeats: 5
+      required_passes: 4
+      resolution_ratio: 0.025
+      minimum_effect_ratio: 0.05
+      maximum_adaptive_points: 5
+      expansion_factor: 1.25
+  runtime:
+    type: container
+    image: null
+    engine: docker
+    networkMode: bridge
+    workingDirectory: .
+    commands:
+      run:
+        argv:
+          - looper-benchbase-smallbank
+          - --envelope
+          - "{envelope}"
+          - --output
+          - "{output}"
+        timeoutSeconds: 86400
+        allowedExitCodes: [0]
+  metrics:
+    offered_tps:
+      unit: transactions/second
+      direction: none
+      kind: aggregate
+      required: true
+      minimumSamples: 1
+    attempted_tps:
+      unit: transactions/second
+      direction: none
+      kind: aggregate
+      required: true
+      minimumSamples: 1
+    offered_requests:
+      unit: transactions
+      direction: none
+      kind: counter
+      required: true
+      minimumSamples: 1
+    started_requests:
+      unit: transactions
+      direction: none
+      kind: counter
+      required: true
+      minimumSamples: 1
+    completed_requests:
+      unit: transactions
+      direction: none
+      kind: counter
+      required: true
+      minimumSamples: 1
+    offered_load_achieved_ratio:
+      unit: ratio
+      direction: none
+      kind: aggregate
+      required: true
+      minimumSamples: 1
+    rate_limiter_lag_ratio:
+      unit: ratio
+      direction: minimize
+      kind: aggregate
+      required: true
+      minimumSamples: 1
+    client_headroom_ratio:
+      unit: ratio
+      direction: maximize
+      kind: aggregate
+      required: true
+      minimumSamples: 1
+    committed_tps:
+      unit: transactions/second
+      direction: maximize
+      kind: aggregate
+      required: true
+      minimumSamples: 1
+    committed_transactions:
+      unit: transactions
+      direction: maximize
+      kind: counter
+      required: true
+      minimumSamples: 1
+    timeout_count:
+      unit: transactions
+      direction: minimize
+      kind: counter
+      required: true
+      minimumSamples: 1
+    timeout_ratio:
+      unit: ratio
+      direction: minimize
+      kind: aggregate
+      required: true
+      minimumSamples: 1
+    latency_p50_ms:
+      unit: ms
+      direction: minimize
+      kind: aggregate
+      required: true
+      minimumSamples: 100000
+    latency_p95_ms:
+      unit: ms
+      direction: minimize
+      kind: aggregate
+      required: true
+      minimumSamples: 100000
+    latency_p99_ms:
+      unit: ms
+      direction: minimize
+      kind: aggregate
+      required: true
+      minimumSamples: 100000
+    latency_p999_ms:
+      unit: ms
+      direction: minimize
+      kind: aggregate
+      required: true
+      minimumSamples: 100000
+    latency_max_ms:
+      unit: ms
+      direction: minimize
+      kind: aggregate
+      required: true
+      minimumSamples: 100000
+    abort_ratio:
+      unit: ratio
+      direction: minimize
+      kind: aggregate
+      required: true
+      minimumSamples: 1
+    retry_ratio:
+      unit: ratio
+      direction: minimize
+      kind: aggregate
+      required: true
+      minimumSamples: 1
+    error_ratio:
+      unit: ratio
+      direction: minimize
+      kind: aggregate
+      required: true
+      minimumSamples: 1
+  outputs:
+    maxBytes: 5368709120
+    maxMetricLines: 1000000
+    artifacts:
+      - path: normalized-result.json
+        role: result
+        mediaType: application/json
+        required: true
+      - path: latency.raw.csv
+        role: histogram
+        mediaType: text/csv
+        required: true
+      - path: transaction-histograms.json
+        role: result
+        mediaType: application/json
+        required: true
+      - path: client-load-accounting.json
+        role: result
+        mediaType: application/json
+        required: true
+      - path: benchmark.log
+        role: log
+        mediaType: text/plain
+        required: true
+  x-extensions:
+    executionStatus: stage0-adapter-only
+    adapterPath: adapters/benchbase-smallbank
+    databaseVersion: "16"
+    runtimeNormalizer:
+      type: built-in
+      id: benchbase-smallbank-v1
+    runtimeImageLock: runtimes/images.lock.yaml

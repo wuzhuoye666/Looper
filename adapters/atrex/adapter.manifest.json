@@ -1,0 +1,40 @@
+{
+  "manifest_version": 1,
+  "adapter_id": "atrex-eval-result-example",
+  "upstream_id": "atrex-bench",
+  "input_format": "eval_result.json-like",
+  "fixture": "fixture/eval_result.json",
+  "synthetic": true,
+  "result_mapping": {
+    "benchmark_name": "$.task",
+    "run_status": "$.evaluation.success",
+    "candidate_id": "$.candidate.id",
+    "configuration": "$.candidate.parameters"
+  },
+  "metric_mappings": [
+    {
+      "source": "$.evaluation.score",
+      "target": "objective_score",
+      "unit": "score",
+      "direction": "higher-is-better"
+    },
+    {
+      "source": "$.evaluation.elapsed_seconds",
+      "target": "elapsed_time",
+      "unit": "second",
+      "direction": "lower-is-better"
+    },
+    {
+      "source": "$.evaluation.checks.correctness",
+      "target": "correctness",
+      "unit": "ratio",
+      "direction": "higher-is-better"
+    },
+    {
+      "source": "$.evaluation.checks.stability",
+      "target": "stability",
+      "unit": "ratio",
+      "direction": "higher-is-better"
+    }
+  ]
+}

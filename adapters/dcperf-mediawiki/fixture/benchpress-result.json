@@ -1,0 +1,55 @@
+{
+  "fixture_notice": "Synthetic fixture shaped from the pinned DCPerf MediaWiki README; not a published run.",
+  "benchmark_args": [
+    "-L wrk",
+    "-R1",
+    "-c16",
+    "--client-duration=10m"
+  ],
+  "benchmark_desc": "Synthetic Stage 0 MediaWiki closed-loop fixture",
+  "benchmark_hooks": ["perf: None"],
+  "benchmark_name": "oss_performance_mediawiki_mlp",
+  "machines": [
+    {
+      "cpu_architecture": "x86_64",
+      "cpu_model": "Synthetic 8-vCPU target",
+      "hostname": "fixture-target",
+      "kernel_version": "5.15.0-fixture",
+      "mem_total_kib": "33554432 KiB",
+      "num_logical_cpus": "8",
+      "os_distro": "ubuntu",
+      "os_release_name": "Ubuntu 22.04"
+    }
+  ],
+  "metadata": {
+    "L1d cache": "synthetic",
+    "L2 cache": "synthetic",
+    "L3 cache": "synthetic"
+  },
+  "metrics": {
+    "Combined": {
+      "Nginx 200": 1152100,
+      "Nginx 404": 4700,
+      "Nginx 499": 0,
+      "Nginx P50 time": 0.021,
+      "Nginx P90 time": 0.041,
+      "Nginx P95 time": 0.052,
+      "Nginx P99 time": 0.084,
+      "Nginx avg bytes": 146220.0,
+      "Nginx avg time": 0.025,
+      "Nginx hits": 1156800,
+      "Wrk RPS": 1928.0,
+      "Wrk failed requests": 4800,
+      "Wrk requests": 1156800,
+      "Wrk successful requests": 1152000,
+      "Wrk wall sec": 600.0,
+      "canonical": 0
+    }
+  },
+  "looper_monitor": {
+    "cpu_utilization_p95": 94.2,
+    "timeouts": 0
+  },
+  "run_id": "fixture01",
+  "timestamp": 1787300000
+}

@@ -1,0 +1,36 @@
+{
+  "completed": {
+    "HISTOGRAM": {
+      "Amalgamate": 17550,
+      "Balance": 17550,
+      "DepositChecking": 17550,
+      "SendPayment": 29250,
+      "TransactSavings": 17550,
+      "WriteCheck": 17550
+    },
+    "NUM_SAMPLES": 117000,
+    "VALUE_TYPE": "com.oltpbenchmark.api.TransactionType"
+  },
+  "aborted": {
+    "HISTOGRAM": {
+      "SendPayment": 1200,
+      "WriteCheck": 800
+    },
+    "NUM_SAMPLES": 2000,
+    "VALUE_TYPE": "com.oltpbenchmark.api.TransactionType"
+  },
+  "rejected": {
+    "HISTOGRAM": {
+      "SendPayment": 500
+    },
+    "NUM_SAMPLES": 500,
+    "VALUE_TYPE": "com.oltpbenchmark.api.TransactionType"
+  },
+  "unexpected": {
+    "HISTOGRAM": {
+      "Balance": 500
+    },
+    "NUM_SAMPLES": 500,
+    "VALUE_TYPE": "com.oltpbenchmark.api.TransactionType"
+  }
+}

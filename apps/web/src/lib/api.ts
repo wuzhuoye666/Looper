@@ -1,0 +1,110 @@
+import type {
+  AnalysisData, Benchmark, CloudCatalogResponse, CloudImage, CloudInstanceType, CloudOrder,
+  CloudOrderEvent, CloudOrderEvidence, CloudProviderId, CloudProviderInfo, CloudPurchaseReadiness, CloudPurchaseSpec,
+  CloudKeyPair, CloudQuote, CloudReconciliationContext, CloudRegion, CloudSecurityGroup, CloudSubnet, CloudVpc, CloudZone,
+  DashboardData, Experiment, GlobalSearchResult, ListResponse, Target,
+} from './types';
+
+export const API_BASE = (import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000/api/v1').replace(/\/$/, '');
+
+const OPERATOR_TOKEN_KEY = 'looper.operator-token';
+
+export function getOperatorToken() {
+  try { return window.sessionStorage.getItem(OPERATOR_TOKEN_KEY) || ''; } catch { return ''; }
+}
+
+export function setOperatorToken(value: string) {
+  try {
+    if (value) window.sessionStorage.setItem(OPERATOR_TOKEN_KEY, value);
+    else window.sessionStorage.removeItem(OPERATOR_TOKEN_KEY);
+  } catch { /* Session storage can be unavailable in hardened browsers. */ }
+}
+
+export class ApiError extends Error {
+  constructor(message: string, public status: number, public body?: unknown) { super(message); }
+}
+
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const operatorToken = getOperatorToken();
+  const response = await fetch(`${API_BASE}${path}`, {
+    ...init,
+    headers: {
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+      ...(operatorToken ? { Authorization: `Bearer ${operatorToken}` } : {}),
+      ...init?.headers,
+    },
+  });
+  const body = response.status === 204 ? undefined : await response.json().catch(() => undefined);
+  if (!response.ok) {
+    const message = body && typeof body === 'object' && 'message' in body ? String(body.message) : `请求失败 (${response.status})`;
+    throw new ApiError(message, response.status, body);
+  }
+  return body as T;
+}
+
+function list<T>(value: T[] | ListResponse<T> | { data?: T[] }): ListResponse<T> {
+  if (Array.isArray(value)) return { items: value, total: value.length };
+  if ('items' in value && Array.isArray(value.items)) return value;
+  const items = 'data' in value && Array.isArray(value.data) ? value.data : [];
+  return { items, total: items.length };
+}
+
+function query(values: Record<string, string | number | undefined>) {
+  const params = new URLSearchParams();
+  Object.entries(values).forEach(([key, value]) => { if (value !== undefined && value !== '') params.set(key, String(value)); });
+  const encoded = params.toString();
+  return encoded ? `?${encoded}` : '';
+}
+
+export const api = {
+  dashboard: () => request<DashboardData>('/dashboard'),
+  experiments: async (query = '') => list(await request<Experiment[] | ListResponse<Experiment> | { data?: Experiment[] }>(`/experiments${query}`)),
+  experiment: (id: string) => request<Experiment>(`/experiments/${encodeURIComponent(id)}`),
+  analysis: (id: string) => request<AnalysisData>(`/experiments/${encodeURIComponent(id)}/analysis`),
+  benchmarks: async () => list(await request<Benchmark[] | ListResponse<Benchmark> | { data?: Benchmark[] }>('/benchmarks')),
+  targets: async () => list(await request<Target[] | ListResponse<Target> | { data?: Target[] }>('/targets')),
+  createExperiment: (payload: Record<string, unknown>) => request<Experiment>('/experiments', { method: 'POST', body: JSON.stringify(payload) }),
+  experimentAction: (id: string, action: 'start' | 'pause' | 'resume' | 'cancel') => request<Experiment>(`/experiments/${encodeURIComponent(id)}/${action}`, { method: 'POST' }),
+  retryAttempt: (id: string) => request<unknown>(`/attempts/${encodeURIComponent(id)}/retry`, { method: 'POST' }),
+  cloudAuthStatus: () => request<{ required: boolean; configured: boolean; authenticated: boolean; operatorGateReady: boolean }>('/cloud/auth/status'),
+  purchaseReadiness: () => request<CloudPurchaseReadiness>('/cloud/purchase-readiness'),
+  providers: async () => list(await request<CloudProviderInfo[] | ListResponse<CloudProviderInfo>>('/cloud/providers')),
+  catalog: <T>(provider: CloudProviderId, kind: string, params: Record<string, string | number | undefined> = {}) =>
+    request<CloudCatalogResponse<T>>(`/cloud/catalog/${provider}/${kind}${query(params)}`),
+  regions: (provider: CloudProviderId) => api.catalog<CloudRegion>(provider, 'region'),
+  zones: (provider: CloudProviderId, region: string) => api.catalog<CloudZone>(provider, 'zone', { region }),
+  instanceTypes: (provider: CloudProviderId, params: Record<string, string | number | undefined>) =>
+    api.catalog<CloudInstanceType>(provider, 'instance-type', params),
+  images: (provider: CloudProviderId, params: Record<string, string | number | undefined>) =>
+    api.catalog<CloudImage>(provider, 'image', params),
+  vpcs: (provider: CloudProviderId, region: string) => api.catalog<CloudVpc>(provider, 'vpc', { region }),
+  subnets: (provider: CloudProviderId, region: string, zone: string, vpcId: string) =>
+    api.catalog<CloudSubnet>(provider, 'subnet', { region, zone, vpc_id: vpcId }),
+  securityGroups: (provider: CloudProviderId, region: string) =>
+    api.catalog<CloudSecurityGroup>(provider, 'security-group', { region }),
+  keyPairs: (provider: CloudProviderId, region: string) => api.catalog<CloudKeyPair>(provider, 'key-pair', { region }),
+  ensureManagedSecurityGroup: (provider: CloudProviderId, region: string) =>
+    request<CloudSecurityGroup>(`/cloud/network/${provider}/managed-security-group${query({ region })}`, { method: 'POST' }),
+  quoteById: (id: string) => request<CloudQuote>(`/cloud/quotes/${encodeURIComponent(id)}`),
+  quote: (spec: CloudPurchaseSpec, key: string) => request<CloudQuote>('/cloud/quotes', {
+    method: 'POST', headers: { 'Idempotency-Key': key }, body: JSON.stringify({ spec }),
+  }),
+  prepareOrder: (quoteId: string, key: string) => request<CloudOrder>('/cloud/orders/prepare', {
+    method: 'POST', headers: { 'Idempotency-Key': key }, body: JSON.stringify({ quoteId }),
+  }),
+  renewOrderConfirmation: (id: string) => request<CloudOrder>(
+    `/cloud/orders/${encodeURIComponent(id)}/renew-confirmation`,
+    { method: 'POST' },
+  ),
+  orders: async (status = '') => list(await request<CloudOrder[] | ListResponse<CloudOrder>>(`/cloud/orders${status ? `?status=${encodeURIComponent(status)}` : ''}`)),
+  order: (id: string) => request<CloudOrder>(`/cloud/orders/${encodeURIComponent(id)}`),
+  orderEvents: async (id: string) => list(await request<CloudOrderEvent[] | ListResponse<CloudOrderEvent>>(`/cloud/orders/${encodeURIComponent(id)}/events`)),
+  orderReconciliationContext: (id: string) => request<CloudReconciliationContext>(`/cloud/orders/${encodeURIComponent(id)}/reconciliation-context`),
+  orderEvidence: (id: string) => request<CloudOrderEvidence>(`/cloud/orders/${encodeURIComponent(id)}/evidence`),
+  confirmOrder: (id: string, payload: { confirmationToken: string; acknowledgement: string; expectedHourlyAmount: string }) =>
+    request<CloudOrder>(`/cloud/orders/${encodeURIComponent(id)}/confirm`, { method: 'POST', body: JSON.stringify(payload) }),
+  resolveOrder: (id: string, payload: { resolution: 'submitted' | 'not_created'; instanceIds: string[]; providerOrderId?: string; note: string }) =>
+    request<CloudOrder>(`/cloud/orders/${encodeURIComponent(id)}/resolve`, { method: 'POST', body: JSON.stringify(payload) }),
+  searchAll: (value: string) => request<{ items: GlobalSearchResult[]; total: number; query: string }>(`/search?q=${encodeURIComponent(value)}`),
+};
