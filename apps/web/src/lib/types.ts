@@ -35,6 +35,25 @@ export interface Benchmark {
   id: string; key?: string; name: string; description?: string; category?: string; version?: string; metrics?: string[];
   cases?: number; updatedAt?: string; tags?: string[]; license?: string; runnable?: boolean; executionStatus?: string;
   decisionQuestion?: string; primaryMetric?: string; scenario?: ScenarioContract;
+  registrationId?: string; registrationStatus?: string;
+  auditStatus?: 'legacy-unreviewed' | 'registered-not-admitted';
+}
+export type BenchmarkRuntimeType = 'container' | 'local-process' | 'benchexec';
+export type BenchmarkExecutionStatus = 'stage0-adapter-only' | 'executable';
+export interface BenchmarkRegistrationDraft {
+  name: string; benchmarkId: string; version: string; sourceUrl: string; sourceRevision: string;
+  license: string; category: string; decisionQuestion: string; primaryMetric: string; primaryUnit: string;
+  correctnessContract: string; runtimeType: BenchmarkRuntimeType; executionStatus: BenchmarkExecutionStatus;
+  image: string; minimumSamples: number; repeats: number; hasReference: boolean;
+  retainsRawEvidence: boolean; crossEnvironmentAudit: boolean; manifest?: Record<string, unknown>;
+}
+export interface BenchmarkRegistrationConstraint {
+  code: string; group: string; label: string; status: 'pass' | 'fail'; blocking: boolean; detail: string;
+}
+export interface BenchmarkRegistration {
+  id: string; status: 'draft' | 'registered'; revision: number; draft: BenchmarkRegistrationDraft;
+  constraints: BenchmarkRegistrationConstraint[]; readyToRegister: boolean; manifestDigest?: string;
+  benchmarkKey?: string; createdAt: string; updatedAt: string; registeredAt?: string;
 }
 export interface Target { id: string; name: string; type?: string; endpoint?: string; status?: 'online' | 'offline' | 'degraded' | 'unknown' | 'inventory'; framework?: string; version?: string; hardware?: string; lastSeenAt?: string; tags?: string[]; runnable?: boolean }
 export interface AnalysisData {

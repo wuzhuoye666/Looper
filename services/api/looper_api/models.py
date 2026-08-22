@@ -52,6 +52,26 @@ class BenchmarkRecord(Base):
     installed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class BenchmarkRegistrationRecord(Base):
+    __tablename__ = "benchmark_registrations"
+    __table_args__ = (
+        Index("ix_benchmark_registration_status_updated", "status", "updated_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    draft_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    constraints_json: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=False)
+    manifest_digest: Mapped[str | None] = mapped_column(String(71))
+    benchmark_key: Mapped[str | None] = mapped_column(
+        ForeignKey("benchmarks.key"), unique=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    registered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class TargetRecord(Base):
     __tablename__ = "targets"
 

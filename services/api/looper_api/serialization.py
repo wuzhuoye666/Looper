@@ -14,6 +14,7 @@ from looper_api.models import (
     ArtifactLinkRecord,
     AttemptRecord,
     BenchmarkRecord,
+    BenchmarkRegistrationRecord,
     CandidateRecord,
     EvaluationRecord,
     ExperimentRecord,
@@ -25,7 +26,10 @@ def _iso(value: datetime | None) -> str | None:
     return value.isoformat() if value else None
 
 
-def benchmark_view(record: BenchmarkRecord) -> dict[str, Any]:
+def benchmark_view(
+    record: BenchmarkRecord,
+    registration: BenchmarkRegistrationRecord | None = None,
+) -> dict[str, Any]:
     manifest = record.manifest_json
     scenario = manifest["spec"].get("scenario")
     extensions = manifest["spec"].get("x-extensions", {})
@@ -46,6 +50,9 @@ def benchmark_view(record: BenchmarkRecord) -> dict[str, Any]:
         "trusted": record.trusted,
         "executionStatus": execution_status,
         "runnable": execution_status == "executable",
+        "registrationId": registration.id if registration else None,
+        "registrationStatus": registration.status if registration else None,
+        "auditStatus": "registered-not-admitted" if registration else "legacy-unreviewed",
         "scenario": scenario,
         "decisionQuestion": scenario.get("decision_question") if scenario else None,
         "primaryMetric": scenario.get("primary_metric") if scenario else None,

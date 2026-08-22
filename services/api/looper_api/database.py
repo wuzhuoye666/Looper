@@ -19,6 +19,8 @@ logger = logging.getLogger(__name__)
 _LEGACY_REVISION = "9c42392dedd5"
 _CLOUD_SCHEMA_REVISION = "d8f2c1b7a4e6"
 _CLOUD_TABLES = {"cloud_catalog_cache", "cloud_quotes", "cloud_orders"}
+_PRE_REGISTRATION_REVISION = "c3f2a81d9e47"
+_REGISTRATION_TABLES = {"benchmark_registrations"}
 
 if settings.database_uri.startswith("sqlite:///"):
     database_path = Path(settings.database_uri.removeprefix("sqlite:///"))
@@ -67,8 +69,11 @@ def _adopt_unversioned_schema(config: Config) -> None:
 
         current_tables = set(Base.metadata.tables)
         legacy_tables = current_tables - _CLOUD_TABLES
-        if application_tables == legacy_tables:
+        pre_registration_tables = current_tables - _REGISTRATION_TABLES
+        if application_tables == legacy_tables - _REGISTRATION_TABLES:
             target = _LEGACY_REVISION
+        elif application_tables == pre_registration_tables:
+            target = _PRE_REGISTRATION_REVISION
         elif application_tables == current_tables:
             quote_constraints = inspector.get_unique_constraints("cloud_orders")
             has_unique_quote = any(

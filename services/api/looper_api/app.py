@@ -44,6 +44,17 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from looper_api.analysis_service import build_analysis_snapshot
+from looper_api.benchmark_registration import (
+    BenchmarkRegistrationDraft,
+    BenchmarkRegistrationRegister,
+    BenchmarkRegistrationUpdate,
+    RegistrationError,
+    create_registration,
+    get_registration,
+    register_benchmark,
+    registration_view,
+    update_registration,
+)
 from looper_api.cloud_contracts import (
     CatalogFilters,
     OrderConfirmRequest,
@@ -82,6 +93,7 @@ from looper_api.models import (
     ArtifactRecord,
     AttemptRecord,
     BenchmarkRecord,
+    BenchmarkRegistrationRecord,
     EventRecord,
     ExperimentRecord,
     TargetRecord,
@@ -237,10 +249,15 @@ async def origin_guard(request: Request, call_next: Any) -> Any:
 @app.exception_handler(TencentInventoryError)
 @app.exception_handler(CloudProviderError)
 @app.exception_handler(CloudWorkflowError)
+@app.exception_handler(RegistrationError)
 async def domain_error(_request: Request, error: Exception) -> JSONResponse:
     status_code = getattr(error, "status_code", 409)
     code = getattr(error, "code", error.__class__.__name__)
-    return JSONResponse(status_code=status_code, content={"message": str(error), "code": code})
+    content: dict[str, Any] = {"message": str(error), "code": code}
+    constraints = getattr(error, "constraints", None)
+    if constraints is not None:
+        content["constraints"] = constraints
+    return JSONResponse(status_code=status_code, content=content)
 
 
 @app.exception_handler(ValidationError)
@@ -504,7 +521,109 @@ def cloud_order_confirm(
 @app.get("/api/v1/benchmarks")
 def list_benchmarks(session: SessionDependency) -> dict[str, Any]:
     records = list(session.scalars(select(BenchmarkRecord).order_by(BenchmarkRecord.name)))
-    return {"items": [benchmark_view(item) for item in records], "total": len(records)}
+    registrations = {
+        item.benchmark_key: item
+        for item in session.scalars(
+            select(BenchmarkRegistrationRecord).where(
+                BenchmarkRegistrationRecord.benchmark_key.is_not(None)
+            )
+        )
+    }
+    return {
+        "items": [benchmark_view(item, registrations.get(item.key)) for item in records],
+        "total": len(records),
+    }
+
+
+@app.get("/api/v1/benchmark-registrations")
+def list_benchmark_registrations(
+    session: SessionDependency,
+    _operator: OperatorDependency,
+    status: str | None = Query(default=None, pattern="^(draft|registered)$"),
+    limit: int = Query(default=100, ge=1, le=500),
+) -> dict[str, Any]:
+    statement = select(BenchmarkRegistrationRecord).order_by(
+        BenchmarkRegistrationRecord.updated_at.desc()
+    )
+    if status:
+        statement = statement.where(BenchmarkRegistrationRecord.status == status)
+    records = list(session.scalars(statement.limit(limit)))
+    return {"items": [registration_view(item) for item in records], "total": len(records)}
+
+
+@app.post("/api/v1/benchmark-registrations", status_code=201)
+def create_benchmark_registration(
+    request: BenchmarkRegistrationDraft,
+    session: SessionDependency,
+    _operator: OperatorDependency,
+) -> dict[str, Any]:
+    record = create_registration(session, request)
+    session.commit()
+    return registration_view(record)
+
+
+@app.get("/api/v1/benchmark-registrations/{registration_id}")
+def get_benchmark_registration(
+    registration_id: str,
+    session: SessionDependency,
+    _operator: OperatorDependency,
+) -> dict[str, Any]:
+    return registration_view(get_registration(session, registration_id))
+
+
+@app.get("/api/v1/benchmark-registrations/{registration_id}/events")
+def get_benchmark_registration_events(
+    registration_id: str,
+    session: SessionDependency,
+    _operator: OperatorDependency,
+) -> dict[str, Any]:
+    get_registration(session, registration_id)
+    records = list(
+        session.scalars(
+            select(EventRecord)
+            .where(
+                EventRecord.entity_type == "benchmark_registration",
+                EventRecord.entity_id == registration_id,
+            )
+            .order_by(EventRecord.created_at, EventRecord.sequence)
+        )
+    )
+    return {
+        "items": [
+            {
+                "id": item.id,
+                "eventType": item.event_type,
+                "payload": item.payload_json,
+                "createdAt": item.created_at.isoformat(),
+            }
+            for item in records
+        ],
+        "total": len(records),
+    }
+
+
+@app.put("/api/v1/benchmark-registrations/{registration_id}")
+def update_benchmark_registration(
+    registration_id: str,
+    request: BenchmarkRegistrationUpdate,
+    session: SessionDependency,
+    _operator: OperatorDependency,
+) -> dict[str, Any]:
+    record = update_registration(session, registration_id, request)
+    session.commit()
+    return registration_view(record)
+
+
+@app.post("/api/v1/benchmark-registrations/{registration_id}/register")
+def finalize_benchmark_registration(
+    registration_id: str,
+    request: BenchmarkRegistrationRegister,
+    session: SessionDependency,
+    _operator: OperatorDependency,
+) -> dict[str, Any]:
+    record = register_benchmark(session, registration_id, request)
+    session.commit()
+    return registration_view(record)
 
 
 @app.get("/api/v1/targets")

@@ -1,5 +1,5 @@
 import type {
-  AnalysisData, Benchmark, CloudCatalogResponse, CloudImage, CloudInstanceType, CloudOrder,
+  AnalysisData, Benchmark, BenchmarkRegistration, BenchmarkRegistrationDraft, CloudCatalogResponse, CloudImage, CloudInstanceType, CloudOrder,
   CloudOrderEvent, CloudOrderEvidence, CloudProviderId, CloudProviderInfo, CloudPurchaseReadiness, CloudPurchaseSpec,
   CloudKeyPair, CloudQuote, CloudReconciliationContext, CloudRegion, CloudSecurityGroup, CloudSubnet, CloudVpc, CloudZone,
   DashboardData, Experiment, GlobalSearchResult, ListResponse, Target,
@@ -63,6 +63,19 @@ export const api = {
   experiment: (id: string) => request<Experiment>(`/experiments/${encodeURIComponent(id)}`),
   analysis: (id: string) => request<AnalysisData>(`/experiments/${encodeURIComponent(id)}/analysis`),
   benchmarks: async () => list(await request<Benchmark[] | ListResponse<Benchmark> | { data?: Benchmark[] }>('/benchmarks')),
+  benchmarkRegistration: (id: string) => request<BenchmarkRegistration>(`/benchmark-registrations/${encodeURIComponent(id)}`),
+  createBenchmarkRegistration: (draft: BenchmarkRegistrationDraft) => request<BenchmarkRegistration>(
+    '/benchmark-registrations', { method: 'POST', body: JSON.stringify(draft) },
+  ),
+  updateBenchmarkRegistration: (id: string, expectedRevision: number, draft: BenchmarkRegistrationDraft) =>
+    request<BenchmarkRegistration>(`/benchmark-registrations/${encodeURIComponent(id)}`, {
+      method: 'PUT', body: JSON.stringify({ expectedRevision, draft }),
+    }),
+  registerBenchmark: (id: string, expectedRevision: number) => request<BenchmarkRegistration>(
+    `/benchmark-registrations/${encodeURIComponent(id)}/register`, {
+      method: 'POST', body: JSON.stringify({ expectedRevision }),
+    },
+  ),
   targets: async () => list(await request<Target[] | ListResponse<Target> | { data?: Target[] }>('/targets')),
   createExperiment: (payload: Record<string, unknown>) => request<Experiment>('/experiments', { method: 'POST', body: JSON.stringify(payload) }),
   experimentAction: (id: string, action: 'start' | 'pause' | 'resume' | 'cancel') => request<Experiment>(`/experiments/${encodeURIComponent(id)}/${action}`, { method: 'POST' }),
