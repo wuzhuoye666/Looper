@@ -27,7 +27,7 @@ export function CreateExperimentPage() {
     seed: 20260821,
   });
   const benchmarks = useQuery({ queryKey: ['benchmarks'], queryFn: api.benchmarks });
-  const targets = useQuery({ queryKey: ['targets'], queryFn: api.targets });
+  const targets = useQuery({ queryKey: ['targets', 'active'], queryFn: () => api.targets(false) });
   const scenarios = useMemo(
     () => (benchmarks.data?.items || []).filter(item => item.category === 'scenario'),
     [benchmarks.data],

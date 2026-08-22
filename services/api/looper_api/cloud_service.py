@@ -805,6 +805,12 @@ def _upsert_provisioned_target(session: Session, order: CloudOrderRecord, instan
         "fingerprint_json": fingerprint,
         "snapshot_digest": canonical_digest({"fingerprint": fingerprint, "inventory": inventory}),
         "runnable": False,
+        "lifecycle_status": "active",
+        "last_inventory_seen_at": now,
+        "inventory_missing_since": None,
+        "inventory_miss_count": 0,
+        "archived_at": None,
+        "archive_reason": None,
         "updated_at": now,
     }
     if record is None:

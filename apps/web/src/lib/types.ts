@@ -63,7 +63,14 @@ export interface BenchmarkRegistration {
   constraints: BenchmarkRegistrationConstraint[]; readyToRegister: boolean; manifestDigest?: string;
   benchmarkKey?: string; createdAt: string; updatedAt: string; registeredAt?: string;
 }
-export interface Target { id: string; name: string; type?: string; endpoint?: string; status?: 'online' | 'offline' | 'degraded' | 'unknown' | 'inventory'; framework?: string; version?: string; hardware?: string; lastSeenAt?: string; tags?: string[]; runnable?: boolean }
+export interface Target {
+  id: string; name: string; type?: string; endpoint?: string;
+  status?: 'online' | 'offline' | 'degraded' | 'unknown' | 'inventory';
+  lifecycleStatus?: 'active' | 'missing' | 'archived'; framework?: string; version?: string;
+  hardware?: string; lastSeenAt?: string; lastInventorySeenAt?: string; missingSince?: string;
+  inventoryMissCount?: number; archivedAt?: string; archiveReason?: string;
+  tags?: string[]; runnable?: boolean;
+}
 export interface AnalysisData {
   mode?: 'optimization' | 'selection'; targets?: SelectionTargetResult[]; comparisons?: SelectionComparison[];
   pareto?: Array<{ id?: string; candidate: string; score: number; cost: number; latency?: number }>;

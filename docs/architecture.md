@@ -68,6 +68,8 @@ The cloud service depends on a typed Provider contract rather than SDK response 
 
 Real purchase is independent from selection-study creation and is guarded by operator authentication, a global switch, provider allowlist/readiness, HMAC confirmation, quote TTL, manual phrase entry, amount echo, and spend cap. Explicit failures require a new quote; ambiguous results enter `unknown` and are never retried automatically. Credentials remain process-environment inputs and are not persisted or inherited by benchmark commands.
 
+Cloud target identity is retained independently from current inventory visibility. Successful full inventory syncs record the last confirmed observation; absent instances transition through `missing` to `archived` after repeated authoritative misses, while historical experiment references remain valid. Inventory absence is not inferred to mean provider-side destruction.
+
 ## Storage and supported topology
 
 Artifacts are streamed into a bounded same-volume temporary file, hashed, flushed, atomically renamed into a SHA-256 CAS, and verified on read. Metadata and blobs are separated behind replaceable interfaces.

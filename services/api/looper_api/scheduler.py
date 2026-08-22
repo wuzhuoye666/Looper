@@ -190,6 +190,10 @@ def _validate_experiment_spec(
         target = session.get(TargetRecord, target_id)
         if target is None:
             raise SchedulerError(f"target {target_id!r} does not exist")
+        if target.lifecycle_status != "active":
+            raise SchedulerError(
+                f"target {target_id!r} is {target.lifecycle_status} and cannot be selected"
+            )
         if spec.mode == ExperimentMode.OPTIMIZATION and not target.runnable:
             raise SchedulerError(f"target {target_id!r} is inventory-only")
     metric_specs = manifest["spec"]["metrics"]

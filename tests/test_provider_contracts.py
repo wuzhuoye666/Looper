@@ -240,6 +240,53 @@ def test_tencent_targeted_inventory_sync_only_requests_selected_instances(
     assert '"Offset": null' in payload
 
 
+def test_tencent_full_inventory_sync_hides_then_archives_absent_instances(
+    monkeypatch, db_session
+) -> None:
+    instance = SimpleNamespace(
+        InstanceId="ins-lifecycle",
+        InstanceName="lifecycle-instance",
+        InstanceState="RUNNING",
+        InstanceType="SA9.MEDIUM2",
+        CPU=2,
+        Memory=2,
+        ImageId="img-test",
+        OsName="Ubuntu Server 24.04 LTS",
+        PrivateIpAddresses=["10.0.0.10"],
+        PublicIpAddresses=[],
+        Placement=SimpleNamespace(Zone="ap-test-1"),
+        VirtualPrivateCloud=SimpleNamespace(VpcId="vpc-test", SubnetId="subnet-test"),
+    )
+    responses: list[list[object]] = [[instance], [], [], [], [instance]]
+
+    def call(_provider, method: str, _region: str, _request: object):
+        assert method == "DescribeInstances"
+        return SimpleNamespace(InstanceSet=responses.pop(0))
+
+    monkeypatch.setattr(TencentCvmProvider, "_call", call)
+    record = sync_cvm_inventory(db_session, "ap-test")[0]
+    first_seen = record.last_inventory_seen_at
+
+    sync_cvm_inventory(db_session, "ap-test")
+    assert record.lifecycle_status == "missing"
+    assert record.inventory_miss_count == 1
+    assert record.archived_at is None
+    assert record.last_inventory_seen_at == first_seen
+
+    sync_cvm_inventory(db_session, "ap-test")
+    sync_cvm_inventory(db_session, "ap-test")
+    assert record.lifecycle_status == "archived"
+    assert record.inventory_miss_count == 3
+    assert record.archive_reason == "absent-after-authoritative-inventory-syncs"
+
+    restored = sync_cvm_inventory(db_session, "ap-test")[0]
+    assert restored.lifecycle_status == "active"
+    assert restored.inventory_miss_count == 0
+    assert restored.inventory_missing_since is None
+    assert restored.archived_at is None
+    assert restored.archive_reason is None
+
+
 def test_alibaba_quote_and_run_use_postpaid_network_disk_and_token(monkeypatch) -> None:
     provider = AlibabaEcsProvider()
     spec = purchase_spec("alibaba")

@@ -15,6 +15,7 @@ from looper_api.models import (
 from looper_api.scheduler import (
     SchedulerError,
     advance_experiment,
+    create_demo_request,
     create_experiment,
     start_experiment,
 )
@@ -39,6 +40,14 @@ def test_scenario_catalog_exposes_execution_boundary(db_session: object) -> None
     assert benchbase["executionStatus"] == "stage0-adapter-only"
     assert benchbase["runnable"] is False
     assert benchbase["primaryMetric"] == "committed_tps"
+
+
+def test_inactive_target_cannot_be_selected_for_a_new_experiment(db_session: object) -> None:
+    target = db_session.get(TargetRecord, "local")
+    target.lifecycle_status = "archived"
+
+    with pytest.raises(SchedulerError, match="archived and cannot be selected"):
+        create_experiment(db_session, create_demo_request("inactive target"))
 
 
 def test_selection_study_can_be_saved_but_stage0_adapter_cannot_start(

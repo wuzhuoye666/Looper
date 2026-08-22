@@ -101,6 +101,12 @@ def adopt_cloud_target(
             }
         ),
         "runnable": False,
+        "lifecycle_status": "active",
+        "last_inventory_seen_at": now,
+        "inventory_missing_since": None,
+        "inventory_miss_count": 0,
+        "archived_at": None,
+        "archive_reason": None,
         "updated_at": now,
     }
     if record is None:

@@ -80,8 +80,10 @@ def target_view(record: TargetRecord) -> dict[str, Any]:
     inventory = record.inventory_json
     provider_state = str(inventory.get("instance_state") or inventory.get("status") or "").upper()
     status = status_map.get(record.status, "unknown")
+    if record.lifecycle_status in {"missing", "archived"}:
+        status = "offline"
     if record.status == "inventory-only" and provider_state == "RUNNING":
-        status = "inventory"
+        status = "inventory" if record.lifecycle_status == "active" else "offline"
     elif record.status == "inventory-only" and provider_state in {"STOPPED", "TERMINATED"}:
         status = "offline"
     fingerprint = record.fingerprint_json
@@ -101,9 +103,15 @@ def target_view(record: TargetRecord) -> dict[str, Any]:
         "framework": fingerprint.get("system"),
         "version": fingerprint.get("release"),
         "hardware": " · ".join(str(item) for item in hardware_parts if item),
-        "lastSeenAt": _iso(record.updated_at),
+        "lastSeenAt": _iso(record.last_inventory_seen_at or record.updated_at),
         "tags": record.capabilities_json,
-        "runnable": record.runnable,
+        "runnable": record.runnable and record.lifecycle_status == "active",
+        "lifecycleStatus": record.lifecycle_status,
+        "lastInventorySeenAt": _iso(record.last_inventory_seen_at),
+        "missingSince": _iso(record.inventory_missing_since),
+        "inventoryMissCount": record.inventory_miss_count,
+        "archivedAt": _iso(record.archived_at),
+        "archiveReason": record.archive_reason,
         "snapshotDigest": record.snapshot_digest,
         "fingerprint": fingerprint,
     }

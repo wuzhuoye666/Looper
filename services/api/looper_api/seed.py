@@ -62,6 +62,7 @@ def seed_system(session: Session) -> None:
                 fingerprint_json=fingerprint,
                 snapshot_digest=snapshot_digest,
                 runnable=True,
+                lifecycle_status="active",
                 created_at=now,
                 updated_at=now,
             )
@@ -72,6 +73,11 @@ def seed_system(session: Session) -> None:
         target.inventory_json = {"source": "local", "pid": os.getpid()}
         target.fingerprint_json = fingerprint
         target.snapshot_digest = snapshot_digest
+        target.lifecycle_status = "active"
+        target.inventory_missing_since = None
+        target.inventory_miss_count = 0
+        target.archived_at = None
+        target.archive_reason = None
         target.updated_at = now
 
     manifest_paths = sorted((repository_root() / "benchmarks").glob("*/benchmark.yaml"))

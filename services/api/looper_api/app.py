@@ -721,8 +721,14 @@ def finalize_benchmark_registration(
 
 
 @app.get("/api/v1/targets")
-def list_targets(session: SessionDependency) -> dict[str, Any]:
-    records = list(session.scalars(select(TargetRecord).order_by(TargetRecord.name)))
+def list_targets(
+    session: SessionDependency,
+    include_inactive: bool = Query(default=True),
+) -> dict[str, Any]:
+    statement = select(TargetRecord)
+    if not include_inactive:
+        statement = statement.where(TargetRecord.lifecycle_status == "active")
+    records = list(session.scalars(statement.order_by(TargetRecord.name)))
     return {"items": [target_view(item) for item in records], "total": len(records)}
 
 

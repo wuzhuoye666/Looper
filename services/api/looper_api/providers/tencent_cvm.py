@@ -5,6 +5,7 @@ from decimal import Decimal
 from typing import Any
 
 from looper_core.canonical import canonical_digest, canonical_json, utc_now
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from looper_api.cloud_contracts import (
@@ -621,7 +622,43 @@ def sync_cvm_inventory(
         if len(instances) < page_size:
             break
         offset += page_size
+    _reconcile_missing_inventory(session, region, {record.id for record in imported})
     return imported
+
+
+_ARCHIVE_AFTER_AUTHORITATIVE_MISSES = 3
+
+
+def _reconcile_missing_inventory(
+    session: Session, region: str, seen_target_ids: set[str]
+) -> None:
+    """Retain historical targets while removing absent instances from the active pool.
+
+    This is called only after a complete, successful regional inventory traversal. A
+    missing row is evidence that the instance was not visible to this credential and
+    region, not proof that it was destroyed.
+    """
+    now = utc_now()
+    records = list(
+        session.scalars(select(TargetRecord).where(TargetRecord.provider == "tencent"))
+    )
+    for record in records:
+        inventory = record.inventory_json or {}
+        if inventory.get("region") != region or record.id in seen_target_ids:
+            continue
+        misses = record.inventory_miss_count + 1
+        record.lifecycle_status = (
+            "archived"
+            if misses >= _ARCHIVE_AFTER_AUTHORITATIVE_MISSES
+            else "missing"
+        )
+        record.inventory_missing_since = record.inventory_missing_since or now
+        record.inventory_miss_count = misses
+        record.runnable = False
+        record.updated_at = now
+        if record.lifecycle_status == "archived":
+            record.archived_at = record.archived_at or now
+            record.archive_reason = "absent-after-authoritative-inventory-syncs"
 
 
 def _upsert_instance(session: Session, region: str, instance: Any) -> TargetRecord:
@@ -675,6 +712,12 @@ def _upsert_instance(session: Session, region: str, instance: Any) -> TargetReco
         "fingerprint_json": fingerprint,
         "snapshot_digest": canonical_digest(snapshot),
         "runnable": False,
+        "lifecycle_status": "active",
+        "last_inventory_seen_at": now,
+        "inventory_missing_since": None,
+        "inventory_miss_count": 0,
+        "archived_at": None,
+        "archive_reason": None,
         "updated_at": now,
     }
     if record is None:

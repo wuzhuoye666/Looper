@@ -74,6 +74,9 @@ class BenchmarkRegistrationRecord(Base):
 
 class TargetRecord(Base):
     __tablename__ = "targets"
+    __table_args__ = (
+        Index("ix_target_lifecycle_provider", "lifecycle_status", "provider", "updated_at"),
+    )
 
     id: Mapped[str] = mapped_column(String(100), primary_key=True)
     name: Mapped[str] = mapped_column(String(160), nullable=False)
@@ -84,6 +87,14 @@ class TargetRecord(Base):
     fingerprint_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
     snapshot_digest: Mapped[str] = mapped_column(String(71), nullable=False)
     runnable: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    lifecycle_status: Mapped[str] = mapped_column(
+        String(24), default="active", nullable=False
+    )
+    last_inventory_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    inventory_missing_since: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    inventory_miss_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    archive_reason: Mapped[str | None] = mapped_column(String(160))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
@@ -205,12 +216,13 @@ class SelectionLoadPointRecord(Base):
             "experiment_id", "workload_id", "offered_load_key", name="uq_selection_load_point"
         ),
         UniqueConstraint("experiment_id", "sequence", name="uq_selection_load_point_sequence"),
+        Index("ix_selection_load_point_experiment_id", "experiment_id"),
         Index("ix_selection_load_point_status", "experiment_id", "status", "sequence"),
     )
 
     id: Mapped[str] = mapped_column(String(80), primary_key=True)
     experiment_id: Mapped[str] = mapped_column(
-        ForeignKey("experiments.id", ondelete="CASCADE"), nullable=False, index=True
+        ForeignKey("experiments.id", ondelete="CASCADE"), nullable=False
     )
     workload_id: Mapped[str] = mapped_column(String(120), nullable=False)
     sequence: Mapped[int] = mapped_column(Integer, nullable=False)

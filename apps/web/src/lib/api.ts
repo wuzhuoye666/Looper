@@ -92,7 +92,16 @@ export const api = {
     `/benchmarks/${encodeURIComponent(benchmarkId)}/versions/${encodeURIComponent(version)}/smoke-runs`,
     { method: 'POST', body: JSON.stringify(payload) },
   ),
-  targets: async () => list(await request<Target[] | ListResponse<Target> | { data?: Target[] }>('/targets')),
+  targets: async (includeInactive = true) => {
+    const response = list(await request<Target[] | ListResponse<Target> | { data?: Target[] }>('/targets'));
+    return includeInactive ? response : {
+      ...response,
+      items: response.items.filter(item => item.lifecycleStatus !== 'missing' && item.lifecycleStatus !== 'archived'),
+    };
+  },
+  syncTencentTargets: (region = 'ap-guangzhou') => request<ListResponse<Target>>(
+    `/targets/tencent-cvm/sync?region=${encodeURIComponent(region)}`, { method: 'POST' },
+  ),
   createExperiment: (payload: Record<string, unknown>) => request<Experiment>('/experiments', { method: 'POST', body: JSON.stringify(payload) }),
   experimentAction: (id: string, action: 'start' | 'pause' | 'resume' | 'cancel') => request<Experiment>(`/experiments/${encodeURIComponent(id)}/${action}`, { method: 'POST' }),
   retryAttempt: (id: string) => request<unknown>(`/attempts/${encodeURIComponent(id)}/retry`, { method: 'POST' }),
