@@ -95,6 +95,7 @@ from looper_api.cloud_service import (
 from looper_api.config import Settings, get_settings
 from looper_api.database import SessionLocal, get_session, init_database
 from looper_api.evidence import build_evidence_bundle, verify_evidence_bundle
+from looper_api.external_targets import ImportExternalTargetRequest, import_external_target
 from looper_api.models import (
     ArtifactLinkRecord,
     ArtifactRecord,
@@ -105,6 +106,7 @@ from looper_api.models import (
     ExperimentRecord,
     TargetRecord,
 )
+from looper_api.post_optimization import post_optimization_view, start_post_optimization
 from looper_api.providers.base import CloudProviderError
 from looper_api.providers.registry import CloudProviderRegistry, get_provider_registry
 from looper_api.providers.tencent_cvm import TencentInventoryError, sync_cvm_inventory
@@ -775,6 +777,17 @@ def sync_tencent_targets(
     return {"items": [target_view(item) for item in records], "total": len(records)}
 
 
+@app.post("/api/v1/targets/import", status_code=201)
+def import_target(
+    payload: ImportExternalTargetRequest,
+    session: SessionDependency,
+    _operator: OperatorDependency,
+) -> dict[str, Any]:
+    record = import_external_target(session, payload)
+    session.commit()
+    return target_view(record)
+
+
 @app.get("/api/v1/experiments")
 def list_experiments(
     session: SessionDependency,
@@ -1010,6 +1023,28 @@ def get_analysis(experiment_id: str, session: SessionDependency) -> dict[str, An
     result = build_analysis_snapshot(session, experiment_id, persist=True)
     session.commit()
     return analysis_view(result)
+
+
+@app.get("/api/v1/experiments/{experiment_id}/post-optimization")
+def get_post_optimization(
+    experiment_id: str, session: SessionDependency
+) -> dict[str, Any]:
+    experiment = session.get(ExperimentRecord, experiment_id)
+    if experiment is None:
+        raise HTTPException(status_code=404, detail="experiment not found")
+    return post_optimization_view(session, experiment)
+
+
+@app.post("/api/v1/experiments/{experiment_id}/post-optimization", status_code=201)
+def create_post_optimization(
+    experiment_id: str, session: SessionDependency
+) -> dict[str, Any]:
+    experiment = session.get(ExperimentRecord, experiment_id)
+    if experiment is None:
+        raise HTTPException(status_code=404, detail="experiment not found")
+    result = start_post_optimization(session, experiment)
+    session.commit()
+    return result
 
 
 @app.get("/api/v1/experiments/{experiment_id}/variability")

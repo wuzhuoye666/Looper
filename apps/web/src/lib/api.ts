@@ -2,7 +2,8 @@ import type {
   AnalysisData, Benchmark, BenchmarkRegistration, BenchmarkRegistrationDraft, CloudCatalogResponse, CloudImage, CloudInstanceType, CloudOrder,
   CloudOrderEvent, CloudOrderEvidence, CloudProviderId, CloudProviderInfo, CloudPurchaseReadiness, CloudPurchaseSpec,
   CloudKeyPair, CloudQuote, CloudReconciliationContext, CloudRegion, CloudSecurityGroup, CloudSubnet, CloudVpc, CloudZone,
-  DashboardData, Experiment, GlobalSearchResult, ListResponse, SelectionAdvisorRequest, SelectionAdvisorResponse, Target, VariabilityData,
+  DashboardData, Experiment, GlobalSearchResult, ListResponse, PostOptimizationStatus, SelectionAdvisorRequest,
+  SelectionAdvisorResponse, Target, VariabilityData,
 } from './types';
 
 export const API_BASE = (import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000/api/v1').replace(/\/$/, '');
@@ -68,6 +69,8 @@ export const api = {
   experiments: async (query = '') => list(await request<Experiment[] | ListResponse<Experiment> | { data?: Experiment[] }>(`/experiments${query}`)),
   experiment: (id: string) => request<Experiment>(`/experiments/${encodeURIComponent(id)}`),
   analysis: (id: string) => request<AnalysisData>(`/experiments/${encodeURIComponent(id)}/analysis`),
+  postOptimization: (id: string) => request<PostOptimizationStatus>(`/experiments/${encodeURIComponent(id)}/post-optimization`),
+  startPostOptimization: (id: string) => request<PostOptimizationStatus>(`/experiments/${encodeURIComponent(id)}/post-optimization`, { method: 'POST' }),
   variability: (id: string) => request<VariabilityData>(`/experiments/${encodeURIComponent(id)}/variability`),
   benchmarks: async () => list(await request<Benchmark[] | ListResponse<Benchmark> | { data?: Benchmark[] }>('/benchmarks')),
   benchmarkRegistration: (id: string) => request<BenchmarkRegistration>(`/benchmark-registrations/${encodeURIComponent(id)}`),
@@ -102,6 +105,9 @@ export const api = {
   },
   syncTencentTargets: (region = 'ap-guangzhou') => request<ListResponse<Target>>(
     `/targets/tencent-cvm/sync?region=${encodeURIComponent(region)}`, { method: 'POST' },
+  ),
+  importExternalTarget: (payload: Record<string, unknown>) => request<Target>(
+    '/targets/import', { method: 'POST', body: JSON.stringify(payload) },
   ),
   createExperiment: (payload: Record<string, unknown>) => request<Experiment>('/experiments', { method: 'POST', body: JSON.stringify(payload) }),
   experimentAction: (id: string, action: 'start' | 'pause' | 'resume' | 'cancel') => request<Experiment>(`/experiments/${encodeURIComponent(id)}/${action}`, { method: 'POST' }),

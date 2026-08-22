@@ -49,6 +49,16 @@ Web 的“新建选型研究”按以下对象建立不可变 spec：
 .venv\Scripts\looper.exe evidence verify path\to\bundle.zip
 ```
 
+本地还提供第一个“测试—修改—复测—保留/恢复”纵向切片：
+
+```powershell
+.venv\Scripts\looper.exe demo verified-loop
+```
+
+该命令真实运行压缩 Benchmark，持久化修改受控的 active config，使用相同 seed 做基线与候选配对复测，并输出 `accepted`、`rolled_back` 或 `inconclusive`。只有收益置信下界、正确性和压缩率退化门槛同时通过时才保留候选；其他情况恢复基线并读回核验。证据默认写入 `.looper/verified-action`。这是验证 Action/Verification 合同的本地切片，不代表 BenchBase、CVM、OS 或生产应用已具备自动优化能力，完整边界见 `docs/verified-action-loop.md`。
+
+完成一个 `optimization` 实验后，实验详情页会读取 Benchmark manifest 中的 `postBenchmarkActions` 低风险白名单并显示“优化并重新测试”。点击后，Looper 以原实验最佳可行配置为基线，只修改一个声明参数，创建关联的复测实验；复测完成后显示建议保留、保留原配置或证据不足。原实验和原始证据不会被覆盖。当前 Web 流程只支持 `benchmark-parameter` 动作并输出配置决策，不会把配置自动部署到生产目标。
+
 ## 多云目录与受保护购买
 
 云资源市场通过腾讯云 CVM、阿里云 ECS、火山引擎 ECS 和百度智能云 BCC 官方 SDK 提供目录检索和报价能力。凭证只存在于 API 进程环境，不写入数据库、API 响应或浏览器。
