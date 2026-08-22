@@ -39,7 +39,7 @@ export interface Benchmark {
 export interface Target { id: string; name: string; type?: string; endpoint?: string; status?: 'online' | 'offline' | 'degraded' | 'unknown' | 'inventory'; framework?: string; version?: string; hardware?: string; lastSeenAt?: string; tags?: string[]; runnable?: boolean }
 export interface AnalysisData {
   mode?: 'optimization' | 'selection'; targets?: SelectionTargetResult[]; comparisons?: SelectionComparison[];
-  pareto?: Array<{ id?: string; candidate: string; score: number; cost: number; latency?: number }>;
+  pareto?: Array<{ id?: string; candidate: string; score: number; cost: number; latency?: number; rank?: number | null; feasible?: boolean; objectives?: Record<string, number> }>;
   evidence?: Array<{ id: string; title: string; kind?: string; summary?: string; createdAt?: string; artifacts?: Artifact[] }>;
 }
 export interface ListResponse<T> { items: T[]; total?: number }

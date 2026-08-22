@@ -25,10 +25,10 @@ from typing import Any, Literal
 from pydantic import Field
 
 from looper_core.analysis import cvar, quantile
-from looper_core.contracts import Direction, StrictModel
+from looper_core.contracts import Direction, StabilityMetric, StabilityObjectiveSpec, StrictModel
 
 VARIABILITY_ANALYZER_ID = "looper.variability-analyzer"
-VARIABILITY_CODE_VERSION = "1.0.1"
+VARIABILITY_CODE_VERSION = "1.1.0"
 
 #: System metrics the analyzer knows how to interpret. Benchmarks and adapters
 #: emit them as ordinary observations using these canonical names.
@@ -281,6 +281,155 @@ def _distribution_stats(values: Sequence[float], direction: Direction) -> Distri
         tail_mean=original(tail),
         skewness=original(_skewness(ordered)),
     )
+
+
+def stability_statistic(
+    values: Sequence[float], metric: StabilityMetric, direction: Direction
+) -> float | None:
+    """Original-scale distribution statistic used by stability objectives.
+
+    p95/p99/tail_mean keep the badness-scale semantics of ``_distribution_stats``
+    ("95%/99% of runs are at least this good" / mean of the worst runs), so for
+    a MAXIMIZE metric they are lower bounds on the original scale and for a
+    MINIMIZE metric they are upper bounds. CV is dimensionless.
+    """
+
+    if not values:
+        return None
+    stats = _distribution_stats(values, direction)
+    if metric == StabilityMetric.CV:
+        return stats.coefficient_of_variation
+    if metric == StabilityMetric.P95:
+        return stats.p95
+    if metric == StabilityMetric.P99:
+        return stats.p99
+    return stats.tail_mean
+
+
+def _limit_satisfied(
+    value: float, limit: float, metric: StabilityMetric, direction: Direction
+) -> bool:
+    """Direction-aware absolute bound: CV is always a cap; p95/p99/tail_mean
+    are caps for MINIMIZE metrics and floors for MAXIMIZE metrics."""
+
+    if metric == StabilityMetric.CV:
+        return value <= limit
+    if direction == Direction.MAXIMIZE:
+        return value >= limit
+    return value <= limit
+
+
+def _tolerance_satisfied(
+    value: float,
+    baseline_value: float,
+    tolerance: float,
+    metric: StabilityMetric,
+    direction: Direction,
+) -> bool:
+    """Candidate must not degrade more than ``tolerance`` relative to the
+    baseline's same statistic (0.0 = strictly not worse)."""
+
+    if metric == StabilityMetric.CV or direction == Direction.MINIMIZE:
+        return value <= baseline_value * (1.0 + tolerance)
+    return value >= baseline_value * (1.0 - tolerance)
+
+
+def evaluate_stability_objective(
+    values: Sequence[float],
+    baseline_values: Sequence[float],
+    objective: StabilityObjectiveSpec,
+    direction: Direction,
+) -> dict[str, Any]:
+    """Evaluate one stability objective for one candidate.
+
+    Fail closed: too few samples, an uncomputable statistic, or missing
+    baseline evidence for a baseline-relative constraint all yield
+    ``status="insufficient_evidence"`` / ``passed=False`` -- never a silent
+    pass. Callers treat hard failures as infeasibility; soft objectives with
+    ``pareto_value=None`` are excluded from Pareto dominance.
+    """
+
+    result: dict[str, Any] = {
+        "id": objective.id,
+        "metric": objective.metric.value,
+        "target_metric": objective.target_metric,
+        "hard": objective.hard,
+        "sample_count": len(values),
+        "minimum_samples": objective.minimum_samples,
+        "value": None,
+        "baseline_value": None,
+        "limit": objective.limit,
+        "baseline_tolerance": objective.baseline_tolerance,
+        "pareto_value": None,
+        "status": "insufficient_evidence",
+        "passed": False,
+        "reason": None,
+    }
+    if len(values) < objective.minimum_samples:
+        result["reason"] = (
+            f"样本数 {len(values)} 低于稳定性目标 '{objective.id}' 要求的 "
+            f"{objective.minimum_samples}（fail closed）"
+        )
+        return result
+    value = stability_statistic(values, objective.metric, direction)
+    if value is None:
+        result["reason"] = f"稳定性指标 {objective.metric.value} 无法计算（fail closed）"
+        return result
+    result["value"] = value
+    result["pareto_value"] = value
+
+    checks: list[tuple[bool, str]] = []
+    if objective.limit is not None:
+        satisfied = _limit_satisfied(value, objective.limit, objective.metric, direction)
+        checks.append(
+            (
+                satisfied,
+                f"{objective.metric.value}={value:.6g} "
+                f"{'未超过' if satisfied else '超过'}绝对界线 {objective.limit:.6g}",
+            )
+        )
+    if objective.baseline_tolerance is not None:
+        if len(baseline_values) < objective.minimum_samples:
+            result["reason"] = (
+                f"基线样本数 {len(baseline_values)} 不足，无法验证 '{objective.id}' 的"
+                f"不劣于基线约束（fail closed）"
+            )
+            return result
+        baseline_value = stability_statistic(
+            baseline_values, objective.metric, direction
+        )
+        if baseline_value is None:
+            result["reason"] = (
+                f"基线的 {objective.metric.value} 无法计算，"
+                f"无法验证 '{objective.id}'（fail closed）"
+            )
+            return result
+        result["baseline_value"] = baseline_value
+        satisfied = _tolerance_satisfied(
+            value, baseline_value, objective.baseline_tolerance, objective.metric, direction
+        )
+        checks.append(
+            (
+                satisfied,
+                f"{objective.metric.value}={value:.6g} 相对基线 {baseline_value:.6g} "
+                f"{'未劣化超过' if satisfied else '劣化超过'} "
+                f"{objective.baseline_tolerance:.0%}",
+            )
+        )
+
+    if not checks:
+        # Soft objective: no limits to enforce, it only feeds the Pareto ranking.
+        result["status"] = "satisfied"
+        result["passed"] = True
+        return result
+    failed = [reason for satisfied, reason in checks if not satisfied]
+    if failed:
+        result["status"] = "violated"
+        result["reason"] = "; ".join(failed)
+    else:
+        result["status"] = "satisfied"
+        result["passed"] = True
+    return result
 
 
 def _detect_modes(

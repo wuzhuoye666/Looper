@@ -11,6 +11,7 @@ from looper_api.variability_service import build_variability_report
 from looper_core.contracts import Direction
 from looper_core.state import AttemptStatus
 from looper_core.variability import (
+    VARIABILITY_CODE_VERSION,
     RunSample,
     VariabilityPolicy,
     analyze_variability,
@@ -490,7 +491,7 @@ def test_service_builds_variability_report_from_experiment(db_session) -> None:
         .all()
     )
     assert len(snapshots) == 1
-    assert snapshots[0].code_version == "1.0.1"
+    assert snapshots[0].code_version == VARIABILITY_CODE_VERSION
 
 
 def test_service_variability_snapshot_is_cached(db_session) -> None:

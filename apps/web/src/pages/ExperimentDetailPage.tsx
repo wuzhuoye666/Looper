@@ -124,7 +124,9 @@ function Evaluations({ items, retrying, onRetry }: { items: Evaluation[]; retryi
 
 function Pareto({ data }: { data: AnalysisData['pareto'] }) {
   if (!data?.length) return <EmptyState title="暂无 Pareto 数据" />;
-  return <section className="panel table-panel"><div className="table-wrap"><table><thead><tr><th>候选</th><th>得分</th><th>成本</th><th>延迟</th></tr></thead><tbody>{data.map((item, index) => <tr key={item.id || index}><td>{item.candidate}</td><td>{formatNumber(item.score)}</td><td>{formatNumber(item.cost)}</td><td>{formatNumber(item.latency)}</td></tr>)}</tbody></table></div></section>;
+  const stabilityKeys = Array.from(new Set(data.flatMap(item => Object.keys(item.objectives || {}).filter(key => key.startsWith('stability:')))));
+  const stabilityLabel = (key: string) => `稳定性 ${key.slice('stability:'.length)}`;
+  return <section className="panel table-panel"><div className="table-wrap"><table><thead><tr><th>候选</th><th>Pareto 排名</th><th>得分</th><th>成本</th><th>延迟</th>{stabilityKeys.map(key => <th key={key}>{stabilityLabel(key)}</th>)}</tr></thead><tbody>{data.map((item, index) => <tr key={item.id || index}><td>{item.candidate}</td><td>{item.rank ?? '—'}</td><td>{formatNumber(item.score)}</td><td>{formatNumber(item.cost)}</td><td>{formatNumber(item.latency)}</td>{stabilityKeys.map(key => <td key={key} className="metric-cell">{item.objectives?.[key] == null ? '—' : formatNumber(item.objectives[key], 4)}</td>)}</tr>)}</tbody></table></div></section>;
 }
 
 function Evidence({ items }: { items: NonNullable<AnalysisData['evidence']> }) {

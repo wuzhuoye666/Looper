@@ -106,6 +106,48 @@ class ObjectiveSpec(StrictModel):
     minimum_samples: int = Field(default=3, ge=1)
 
 
+class StabilityMetric(StrEnum):
+    CV = "cv"
+    P95 = "p95"
+    P99 = "p99"
+    TAIL_MEAN = "tail_mean"
+
+
+class StabilityObjectiveSpec(StrictModel):
+    """VGO-style stability objective: constrain or optimize the *distribution*
+    of a declared performance objective, not just its mean.
+
+    Hard objectives (default) are feasibility constraints evaluated per
+    candidate: an absolute ``limit`` or a ``baseline_tolerance`` (max allowed
+    relative degradation vs the baseline's same statistic; 0.0 = must not be
+    worse). Violations -- including insufficient evidence -- make the
+    candidate infeasible (fail closed).
+
+    Soft objectives (``hard=False``) carry no limits and instead join the
+    Pareto ranking as an extra dimension next to the performance objectives,
+    turning Looper into a distribution optimizer: a candidate that trades a
+    worse tail for a better mean no longer dominates automatically.
+    """
+
+    id: str = Field(min_length=1, max_length=100)
+    metric: StabilityMetric
+    target_metric: str = Field(min_length=1)
+    hard: bool = True
+    limit: float | None = None
+    baseline_tolerance: float | None = Field(default=None, ge=0)
+    minimum_samples: int = Field(default=5, ge=2)
+
+    @model_validator(mode="after")
+    def validate_limits(self) -> StabilityObjectiveSpec:
+        if self.hard and self.limit is None and self.baseline_tolerance is None:
+            raise ValueError("hard stability objectives require a limit or baseline_tolerance")
+        if not self.hard and (self.limit is not None or self.baseline_tolerance is not None):
+            raise ValueError(
+                "soft stability objectives join the Pareto ranking and cannot declare limits"
+            )
+        return self
+
+
 class GateSpec(StrictModel):
     id: str = Field(min_length=1, max_length=100)
     kind: GateKind
@@ -365,6 +407,7 @@ class ExperimentSpec(StrictModel):
     baseline_parameters: dict[str, Any] = Field(default_factory=dict)
     search_space: dict[str, SearchParameter] = Field(default_factory=dict)
     objectives: list[ObjectiveSpec] = Field(default_factory=list)
+    stability_objectives: list[StabilityObjectiveSpec] = Field(default_factory=list)
     gates: list[GateSpec] = Field(default_factory=list)
     design: ExperimentalDesign = Field(default_factory=ExperimentalDesign)
     budget: BudgetSpec = Field(default_factory=BudgetSpec)
@@ -385,10 +428,27 @@ class ExperimentSpec(StrictModel):
             raise ValueError("an experiment requires at least one target")
         if not self.objectives:
             raise ValueError("an experiment requires at least one objective")
+        objective_metrics = {objective.metric: objective for objective in self.objectives}
+        stability_ids = {item.id for item in self.stability_objectives}
+        if len(stability_ids) != len(self.stability_objectives):
+            raise ValueError("stability objective ids must be unique")
+        for item in self.stability_objectives:
+            target = objective_metrics.get(item.target_metric)
+            if target is None:
+                raise ValueError(
+                    f"stability objective '{item.id}' targets undeclared metric "
+                    f"'{item.target_metric}'"
+                )
+            if target.direction == Direction.NONE:
+                raise ValueError(
+                    f"stability objective '{item.id}' requires a minimize/maximize target"
+                )
         if self.mode == ExperimentMode.OPTIMIZATION:
             if self.scenario is not None or self.selection is not None:
                 raise ValueError("optimization experiments cannot declare selection fields")
             return self
+        if self.stability_objectives:
+            raise ValueError("stability objectives are only supported in optimization mode")
         if self.scenario is None or self.selection is None:
             raise ValueError("selection studies require scenario and selection contracts")
         if self.search_space:

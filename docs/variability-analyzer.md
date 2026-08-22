@@ -96,6 +96,27 @@ VGO 只提供它们都能复用的通用波动分析能力。它读取 Looper �
 
 结论明确区分五种情形：`dominant`（分布整体占优）、`dominated`、`mean_better_tail_worse`（均值改善但尾部恶化）、`mean_worse_tail_better`、`inconclusive`。对于权衡情形，报告显式输出"不要仅凭均值选择 X；若业务重视尾延迟/SLO 应优先 Y"，把决定权交给用户的稳定性偏好，绝不自动选边。
 
+## 3.5 稳定性目标（把分布写进 spec，P1）
+
+`ExperimentSpec.stability_objectives` 让稳定性从"旁路分析面板"进入选型回路。每个稳定性目标引用一个已声明的性能目标（`target_metric`），对其**分布**施加约束或优化：
+
+```json
+[
+  {"id": "cv-cap", "metric": "cv", "target_metric": "throughput_mib_s",
+   "hard": true, "limit": 0.15},
+  {"id": "p99-floor", "metric": "p99", "target_metric": "latency_ms",
+   "hard": true, "baseline_tolerance": 0.0},
+  {"id": "cv-rank", "metric": "cv", "target_metric": "throughput_mib_s",
+   "hard": false}
+]
+```
+
+- **硬目标（`hard: true`，默认）**是可行性约束：`limit` 是绝对界线（CV 恒为上限；p95/p99/tail_mean 对 MINIMIZE 指标是上限、对 MAXIMIZE 指标是下限），`baseline_tolerance` 是允许相对基线劣化的最大比例（0.0 = 严格不劣于基线）。违反即判 infeasible，不再参与 Pareto 排名。
+- **软目标（`hard: false`）**不设限值，作为附加维度进入 Pareto 多目标排名：一个"均值更好但 CV 更差"的候选不再自动支配稳定候选——Looper 由均值优化器升级为分布优化器。
+- **方向语义**：p95/p99/tail_mean 沿用 badness 尺度约定——对延迟类指标是"95%/99% 的运行不超过该值"，对吞吐类指标是"95%/99% 的运行至少达到该值"。
+- **fail closed**：样本数低于 `minimum_samples`（默认 5）、统计量不可计算、或基线相对约束缺乏基线证据时，一律判 `insufficient_evidence`；硬目标下候选直接 infeasible，软目标的该维度退出 Pareto 支配判定（绝不静默通过）。
+- 稳定性目标属于分析策略的一部分，参与 policy digest——修改声明必然生成新的分析快照，旧结论可追溯。
+
 ## 4. 系统指标契约
 
 Benchmark / Adapter 用标准观测名输出系统指标（普通 ObservationRecord 即可，无需新表）：
