@@ -321,3 +321,29 @@ class TestOptimizations:
         )
         assert result.stop_reason is EngineStopReason.ALL_CACHED
         assert result.rounds == []
+
+
+class TestPreScreenWiring:
+    def test_tolerance_enabled_loop_runs_and_records_incumbent(self):
+        manifest = build_demo_manifest()
+        initial = {item.id: item.default for item in manifest.items}
+        backend = SimulatedBackend(initial, target_id="prescreen-test")
+        optimizers, manifest = _optimizers(["cpu"], backend)
+        result = run_engine_loop(
+            optimizers,
+            baseline_parameters=_baseline_parameters(manifest),
+            measures={"cpu": SyntheticMeasurementAdapter(backend, mode=OptimizationMode.GENERAL)},
+            negative_cache=NegativeCache(),
+            config=EngineLoopConfig(
+                environment_digest=ENV,
+                formula_versions=FORMULAS,
+                pressure_protocol_digests={"cpu": FIXED_PROTOCOL},
+                max_rounds=3,
+                max_pool_size=64,
+                pre_screen_tolerance=0.0,
+            ),
+            fencing_token=3,
+        )
+        assert result.stop_reason is EngineStopReason.COMPLETED
+        record = result.rounds[0]
+        assert record.incumbent_utility_after is not None

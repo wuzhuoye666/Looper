@@ -29,6 +29,7 @@ from pydantic import Field
 from looper_core.canonical import canonical_digest
 from looper_core.contracts import StrictModel
 from looper_core.system_opt.component import CandidateSuggestion, ComponentOptimizer
+from looper_core.system_opt.engine.incumbent import IncumbentTracker, ScreenVerdict
 from looper_core.system_opt.engine.judge import CandidateVerdict, evaluate_candidate
 from looper_core.system_opt.engine.scheduler import (
     SchedulerDecision,
@@ -63,6 +64,7 @@ class EngineLoopConfig(StrictModel):
     pressure_protocol_digests: dict[str, str] = Field(min_length=1)
     max_rounds: int = Field(ge=1)
     max_pool_size: int = Field(ge=1)
+    pre_screen_tolerance: float | None = Field(default=None, ge=0)
 
 
 class EngineRoundRecord(StrictModel):
@@ -74,6 +76,8 @@ class EngineRoundRecord(StrictModel):
     verdicts: list[CandidateVerdict]
     cache_entry_digests: list[str] = Field(default_factory=list)
     cached_exclusion_count: int = Field(default=0, ge=0)
+    early_screened_candidate_ids: list[str] = Field(default_factory=list)
+    incumbent_utility_after: float | None = None
     note: str | None = Field(default=None, min_length=1, max_length=500)
 
 
@@ -170,6 +174,11 @@ def run_engine_loop(
             raise ValueError(f"missing pressure protocol digest for: {component}")
 
     started_at = datetime.now(UTC)
+    tracker = (
+        IncumbentTracker(tolerance=config.pre_screen_tolerance)
+        if config.pre_screen_tolerance is not None
+        else None
+    )
     scores = list(component_scores) if component_scores is not None else _neutral_scores(components)
     by_component = {optimizer.component: optimizer for optimizer in component_optimizers}
     completed: set[str] = set()
@@ -262,8 +271,23 @@ def run_engine_loop(
                 "the engine loop cannot judge an empty report"
             )
         cache_entry_digests: list[str] = []
+        early_screened: list[str] = []
         recorded_at = datetime.now(UTC)
         for candidate, verdict in zip(report.candidates, verdicts, strict=True):
+            improvement = candidate.improvements.get(primary.id)
+            if tracker is not None and improvement is not None:
+                screen_decision = tracker.screen(
+                    improvement.estimate, candidate_id=candidate.candidate_id
+                )
+                if screen_decision.verdict is ScreenVerdict.EARLY_SCREENED_OUT:
+                    early_screened.append(candidate.candidate_id)
+                    continue
+                tracker.observe(
+                    round_index=round_index,
+                    candidate_id=candidate.candidate_id,
+                    utility=improvement.estimate,
+                    evidence_digest=report.run_digest or report.digest,
+                )
             if verdict.accepted:
                 continue
             negative_verdict = (
@@ -294,6 +318,10 @@ def run_engine_loop(
                 verdicts=verdicts,
                 cache_entry_digests=cache_entry_digests,
                 cached_exclusion_count=len(exclusions),
+                early_screened_candidate_ids=early_screened,
+                incumbent_utility_after=(
+                    tracker.best.utility if tracker is not None and tracker.best else None
+                ),
             )
         )
         if any(
