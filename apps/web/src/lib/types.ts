@@ -49,6 +49,7 @@ export interface Benchmark {
   executionPolicy?: Record<string, unknown>;
   cases?: number; updatedAt?: string; tags?: string[]; license?: string; runnable?: boolean; executionStatus?: string;
   decisionQuestion?: string; primaryMetric?: string; scenario?: ScenarioContract;
+  selectionReady?: boolean;
   registrationId?: string; registrationStatus?: string;
   auditStatus?: 'legacy-unreviewed' | 'registered-not-admitted';
 }
@@ -81,6 +82,11 @@ export interface Target {
   hardware?: string; lastSeenAt?: string; lastInventorySeenAt?: string; missingSince?: string;
   inventoryMissCount?: number; archivedAt?: string; archiveReason?: string;
   tags?: string[]; runnable?: boolean;
+  deployment?: { status: string; workerId: string; remotePid: number; deployedAt: string };
+  fingerprint?: {
+    processor?: string; logical_cpu_count?: number; memory_gib?: number; instance_type?: string;
+    system?: string; release?: string; architecture?: string; host_key_sha256?: string; host_key_type?: string;
+  };
 }
 export interface AnalysisData {
   mode?: 'optimization' | 'selection'; targets?: SelectionTargetResult[]; comparisons?: SelectionComparison[];

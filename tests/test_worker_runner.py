@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import sys
 from pathlib import Path
 
@@ -8,6 +9,7 @@ import httpx
 import psutil
 import pytest
 from looper_core.manifest import load_and_validate_manifest
+from looper_worker.fingerprint import worker_capabilities
 from looper_worker.runner import (
     LocalAttemptRunner,
     RunnerError,
@@ -15,6 +17,16 @@ from looper_worker.runner import (
     validate_container_image,
     validate_execution_policy,
 )
+
+
+def test_worker_advertises_sysbench_only_when_installed(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        shutil, "which", lambda name: "/usr/bin/sysbench" if name == "sysbench" else None
+    )
+    assert "sysbench" in worker_capabilities()
+
+    monkeypatch.setattr(shutil, "which", lambda _name: None)
+    assert "sysbench" not in worker_capabilities()
 
 
 class FailingHeartbeatClient:

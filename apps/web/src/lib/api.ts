@@ -40,7 +40,11 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   });
   const body = response.status === 204 ? undefined : await response.json().catch(() => undefined);
   if (!response.ok) {
-    const message = body && typeof body === 'object' && 'message' in body ? String(body.message) : `请求失败 (${response.status})`;
+    const message = body && typeof body === 'object' && 'message' in body
+      ? String(body.message)
+      : body && typeof body === 'object' && 'detail' in body
+        ? (typeof body.detail === 'string' ? body.detail : JSON.stringify(body.detail))
+        : `请求失败 (${response.status})`;
     if (response.status === 401 && operatorToken) {
       setOperatorToken('');
       window.dispatchEvent(new CustomEvent(OPERATOR_AUTH_INVALID_EVENT, { detail: { message } }));
@@ -68,6 +72,7 @@ export const api = {
   dashboard: () => request<DashboardData>('/dashboard'),
   experiments: async (query = '') => list(await request<Experiment[] | ListResponse<Experiment> | { data?: Experiment[] }>(`/experiments${query}`)),
   experiment: (id: string) => request<Experiment>(`/experiments/${encodeURIComponent(id)}`),
+  deleteExperiment: (id: string) => request<void>(`/experiments/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   analysis: (id: string) => request<AnalysisData>(`/experiments/${encodeURIComponent(id)}/analysis`),
   postOptimization: (id: string) => request<PostOptimizationStatus>(`/experiments/${encodeURIComponent(id)}/post-optimization`),
   startPostOptimization: (id: string) => request<PostOptimizationStatus>(`/experiments/${encodeURIComponent(id)}/post-optimization`, { method: 'POST' }),
@@ -108,6 +113,9 @@ export const api = {
   ),
   importExternalTarget: (payload: Record<string, unknown>) => request<Target>(
     '/targets/import', { method: 'POST', body: JSON.stringify(payload) },
+  ),
+  connectExternalTarget: (payload: Record<string, unknown>) => request<Target>(
+    '/targets/connect', { method: 'POST', body: JSON.stringify(payload) },
   ),
   createExperiment: (payload: Record<string, unknown>) => request<Experiment>('/experiments', { method: 'POST', body: JSON.stringify(payload) }),
   experimentAction: (id: string, action: 'start' | 'pause' | 'resume' | 'cancel') => request<Experiment>(`/experiments/${encodeURIComponent(id)}/${action}`, { method: 'POST' }),

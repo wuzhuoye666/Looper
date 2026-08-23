@@ -104,6 +104,15 @@ def test_manifest_validates_against_schema() -> None:
         "thread",
         "mutex",
     }
+    # Scenario section is required for UI dropdown visibility
+    scenario = document["spec"]["scenario"]
+    assert scenario["id"] == "microbenchmark.sysbench.suite"
+    assert scenario["workload_class"] == "microbenchmark"
+    assert scenario["topology"] == "single-node"
+    assert scenario["primary_metric"] == "events_per_sec"
+    assert any(role["id"] == "target" for role in scenario["roles"])
+    assert len(scenario["slo_gates"]) >= 1
+    assert "sysbench_run_ok" in document["spec"]["metrics"]
     assert digest.startswith("sha256:")
 
 
@@ -169,7 +178,21 @@ def test_producer_and_normalizer_full_chain(monkeypatch, tmp_path) -> None:
     assert normalizer.main(["--envelope", str(envelope), "--output", str(output)]) == 0
     metric_lines = (output / "metrics.jsonl").read_text(encoding="utf-8").splitlines()
     emitted = {json.loads(line)["metric"] for line in metric_lines}
-    assert emitted == {"events_per_sec", "latency_avg_ms", "latency_p95_ms", "latency_max_ms"}
+    assert emitted == {
+        "sysbench_run_ok",
+        "events_per_sec",
+        "latency_avg_ms",
+        "latency_p95_ms",
+        "latency_max_ms",
+    }
+    # Verify sysbench_run_ok = 1.0 on success
+    run_ok_lines = [
+        json.loads(line)
+        for line in metric_lines
+        if json.loads(line)["metric"] == "sysbench_run_ok"
+    ]
+    assert len(run_ok_lines) == 1
+    assert run_ok_lines[0]["value"] == 1.0
     result = json.loads((output / "result.json").read_text(encoding="utf-8"))
     assert result["status"] == "succeeded"
     assert result["checks"][0] == {
@@ -210,5 +233,11 @@ def test_normalizer_fails_closed_on_nonzero_exit(monkeypatch, tmp_path) -> None:
     result = json.loads((output / "result.json").read_text(encoding="utf-8"))
     assert result["status"] == "failed"
     assert result["checks"][0]["passed"] is False
-    # A failed run must not fabricate a metric.
-    assert not (output / "metrics.jsonl").exists()
+    # A failed run must still emit sysbench_run_ok=0 for SLO evaluation,
+    # but must not fabricate any performance metrics (events/s, latency, etc.).
+    metric_lines = (output / "metrics.jsonl").read_text(encoding="utf-8").splitlines()
+    emitted = [json.loads(line) for line in metric_lines]
+    emitted_metrics = {m["metric"] for m in emitted}
+    assert emitted_metrics == {"sysbench_run_ok"}
+    run_ok = next(m for m in emitted if m["metric"] == "sysbench_run_ok")
+    assert run_ok["value"] == 0.0

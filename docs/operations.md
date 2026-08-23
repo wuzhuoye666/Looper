@@ -17,6 +17,12 @@ The local-process runner executes arbitrary benchmark code. Install only trusted
 
 Start a Worker with one or more `--target-id` arguments to bind its claim authority. The default is `local`; repeat the flag for an intentionally multi-target Worker. Do not run a wildcard legacy Worker in production. Workers advertise only the execution-policy capabilities they can actually enforce. The bundled Docker runner supports isolated containers with no network and workspace-only storage; restricted egress and bound devices require a dedicated policy-enforcing Worker.
 
+## External machine discovery
+
+The candidate-resources page can connect to a Linux machine over SSH with a password, an in-memory private key, or the API process SSH agent. `POST /api/v1/targets/connect` runs one fixed, read-only inventory command, records the verified machine facts, uploads the Worker sources, creates an isolated virtual environment, and binds the Worker to that target. Passwords, private keys, and passphrases exist only in the request and are never persisted.
+
+An optional expected `SHA256:` host-key fingerprint pins first contact. Looper verifies the same fingerprint again for deployment. The API keeps the SSH connection open as a reverse tunnel from the remote Worker to the loopback-only control plane; no public API bind is required. A target becomes runnable only after the deployed Worker registers and advertises its actual Benchmark capabilities. Restarting the API closes ephemeral tunnels, so reconnect the target to redeploy after an API restart.
+
 ## SQLite
 
 Local mode supports one API process and a local disk. Do not put the database on SMB, NFS, or a synchronized folder. The API configures WAL, foreign keys, full synchronous writes, and a 15-second busy timeout. Back up the SQLite file together with the artifact CAS after a WAL checkpoint.
