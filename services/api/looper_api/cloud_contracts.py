@@ -76,6 +76,8 @@ class SubnetInfo(ApiModel):
     cidr_block: str | None = None
     available_ip_count: int | None = None
     is_default: bool = False
+    tags: dict[str, str] = Field(default_factory=dict)
+    managed: bool = False
 
 
 class SecurityGroupInfo(ApiModel):
@@ -171,8 +173,30 @@ class CatalogFilters(ApiModel):
     max_memory_gib: float | None = Field(default=None, ge=0.25, le=65536)
     image_type: str | None = Field(default=None, max_length=60)
     platform: str | None = Field(default=None, max_length=80)
+    instance_type: str | None = Field(default=None, max_length=120)
     offset: int = Field(default=0, ge=0)
     limit: int = Field(default=100, ge=1, le=500)
+
+
+class InstanceNetworkResolveRequest(ApiModel):
+    region: str = Field(min_length=2, max_length=64)
+    instance_type: str = Field(min_length=1, max_length=120)
+    zone: str | None = Field(default=None, max_length=64)
+    vpc_id: str | None = Field(default=None, max_length=120)
+    subnet_id: str | None = Field(default=None, max_length=120)
+
+
+class InstanceNetworkResolution(ApiModel):
+    provider: ProviderId
+    region: str
+    instance_type: str
+    zone: str
+    eligible_zones: list[str]
+    vpc: VpcInfo
+    subnet: SubnetInfo
+    zone_automatically_selected: bool = False
+    subnet_action: Literal["reused", "created"]
+    warnings: list[str] = Field(default_factory=list)
 
 
 class CloudPurchaseSpec(ApiModel):

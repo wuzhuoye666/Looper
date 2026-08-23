@@ -71,6 +71,26 @@ class CloudProvider(ABC):
     def list_subnets(self, region: str, zone: str, vpc_id: str) -> list[SubnetInfo]:
         raise CloudProviderError("subnet catalog is not supported", code="unsupported_catalog")
 
+    def list_vpc_subnets(self, region: str, vpc_id: str) -> list[SubnetInfo]:
+        items: list[SubnetInfo] = []
+        for zone in self.list_zones(region):
+            items.extend(self.list_subnets(region, zone.id, vpc_id))
+        return items
+
+    def create_managed_subnet(
+        self,
+        *,
+        region: str,
+        zone: str,
+        vpc_id: str,
+        cidr_block: str,
+        name: str,
+        client_token: str,
+    ) -> SubnetInfo:
+        raise CloudProviderError(
+            "managed subnet creation is not supported", code="unsupported_operation"
+        )
+
     def list_security_groups(self, region: str) -> list[SecurityGroupInfo]:
         raise CloudProviderError(
             "security group catalog is not supported", code="unsupported_catalog"

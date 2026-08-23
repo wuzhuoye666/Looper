@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import ipaddress
 import json
 import re
 import secrets
@@ -22,14 +23,18 @@ from looper_api.cloud_contracts import (
     CloudPurchaseSpec,
     DestroyedResource,
     ImageInfo,
+    InstanceNetworkResolution,
+    InstanceNetworkResolveRequest,
     InstanceTypeInfo,
     OrderConfirmRequest,
     OrderResolveRequest,
     ProviderId,
     ProvisionedInstance,
     SearchResult,
+    SubnetInfo,
     TargetDestroyPreview,
     TargetDestroyRequest,
+    VpcInfo,
 )
 from looper_api.config import Settings
 from looper_api.events import append_event
@@ -225,7 +230,7 @@ def ensure_managed_security_group(
     return group.model_dump(mode="json", by_alias=True)
 
 
-_FULL_CATALOG_CACHE_VERSION = 3
+_FULL_CATALOG_CACHE_VERSION = 4
 _PAGED_CATALOG_KINDS = {"instance-type", "image"}
 
 
@@ -243,7 +248,11 @@ def _snapshot_filters(kind: CatalogKind, filters: CatalogFilters) -> CatalogFilt
     if kind == "instance-type":
         return CatalogFilters(region=filters.region, zone=filters.zone)
     if kind == "image":
-        return CatalogFilters(region=filters.region, imageType=filters.image_type)
+        return CatalogFilters(
+            region=filters.region,
+            imageType=filters.image_type,
+            instanceType=filters.instance_type,
+        )
     return CatalogFilters(region=filters.region, zone=filters.zone, vpcId=filters.vpc_id)
 
 
@@ -436,6 +445,15 @@ def _inventory_sort_rank(available: bool | None) -> int:
     return 2
 
 
+def _architecture_group(value: str | None) -> str | None:
+    normalized = (value or "").casefold().replace("-", "_")
+    if "arm" in normalized or "aarch" in normalized:
+        return "arm"
+    if any(token in normalized for token in ("x86", "amd64", "i386", "i686")):
+        return "x86"
+    return None
+
+
 def catalog_search(
     session: Session,
     settings: Settings,
@@ -463,6 +481,34 @@ def catalog_search(
         items = [item.model_dump(mode="json", by_alias=True) for item in models]
     elif kind == "image":
         models = filter_images([ImageInfo.model_validate(item) for item in items], filters)
+        if filters.instance_type:
+            instance_snapshot = _catalog_snapshot(
+                session,
+                settings,
+                registry,
+                provider_id,
+                "instance-type",
+                CatalogFilters(region=filters.region),
+            )
+            instance = next(
+                (
+                    InstanceTypeInfo.model_validate(item)
+                    for item in instance_snapshot.items
+                    if str(item.get("id", "")).casefold()
+                    == filters.instance_type.casefold()
+                ),
+                None,
+            )
+            if instance is None:
+                models = []
+            else:
+                architecture = _architecture_group(instance.architecture)
+                if architecture:
+                    models = [
+                        image
+                        for image in models
+                        if _architecture_group(image.architecture) in {None, architecture}
+                    ]
         items = [item.model_dump(mode="json", by_alias=True) for item in models]
 
     total = len(items)
@@ -489,6 +535,217 @@ def catalog_search(
     )
 
 
+def _eligible_instance_zones(item: InstanceTypeInfo) -> list[str]:
+    capabilities = item.attributes.get("zoneCapabilities")
+    if isinstance(capabilities, list):
+        zones = {
+            str(capability.get("zone"))
+            for capability in capabilities
+            if isinstance(capability, dict)
+            and capability.get("zone")
+            and capability.get("available") is True
+        }
+        if zones:
+            return sorted(zones)
+    return sorted(set(item.zones)) if item.available is True else []
+
+
+def _usable_subnet(item: SubnetInfo) -> bool:
+    return item.available_ip_count is None or item.available_ip_count > 0
+
+
+def _subnet_rank(item: SubnetInfo, preferred_id: str | None) -> tuple[int, str]:
+    if preferred_id and item.id == preferred_id:
+        return (0, item.id)
+    if item.managed or item.tags.get("managedBy", "").casefold() == "looper":
+        return (1, item.id)
+    if item.is_default:
+        return (2, item.id)
+    return (3, item.id)
+
+
+def _free_subnet_cidr(vpc: VpcInfo, subnets: list[SubnetInfo]) -> str:
+    if not vpc.cidr_block:
+        raise CloudWorkflowError(
+            "所选 VPC 未返回 IPv4 CIDR，无法安全生成子网",
+            status_code=422,
+            code="vpc_cidr_missing",
+        )
+    try:
+        network = ipaddress.ip_network(vpc.cidr_block, strict=False)
+    except ValueError as error:
+        raise CloudWorkflowError(
+            "所选 VPC 的 IPv4 CIDR 无效",
+            status_code=422,
+            code="vpc_cidr_invalid",
+        ) from error
+    if network.version != 4 or network.prefixlen > 28:
+        raise CloudWorkflowError(
+            "所选 VPC 没有可用于自动创建子网的 IPv4 地址空间",
+            status_code=409,
+            code="subnet_cidr_unavailable",
+        )
+    occupied: list[ipaddress.IPv4Network] = []
+    for subnet in subnets:
+        if not subnet.cidr_block:
+            continue
+        try:
+            candidate = ipaddress.ip_network(subnet.cidr_block, strict=False)
+        except ValueError:
+            continue
+        if isinstance(candidate, ipaddress.IPv4Network):
+            occupied.append(candidate)
+    prefix = max(24, network.prefixlen)
+    for candidate in network.subnets(new_prefix=prefix):
+        if not any(candidate.overlaps(item) for item in occupied):
+            return str(candidate)
+    raise CloudWorkflowError(
+        "所选 VPC 没有不重叠的可用子网网段",
+        status_code=409,
+        code="subnet_cidr_exhausted",
+    )
+
+
+def resolve_instance_network(
+    session: Session,
+    settings: Settings,
+    registry: CloudProviderRegistry,
+    provider_id: ProviderId,
+    request: InstanceNetworkResolveRequest,
+    *,
+    idempotency_key: str,
+) -> InstanceNetworkResolution:
+    if provider_id not in {ProviderId.TENCENT, ProviderId.ALIBABA}:
+        raise CloudWorkflowError(
+            "当前云厂商尚不支持自动准备子网",
+            status_code=422,
+            code="managed_subnet_unsupported",
+        )
+    provider = registry.get(provider_id)
+    inventory = catalog_inventory(
+        session,
+        settings,
+        registry,
+        provider_id,
+        "instance-type",
+        CatalogFilters(region=request.region),
+    )
+    instance = next(
+        (
+            InstanceTypeInfo.model_validate(item)
+            for item in inventory.items
+            if str(item.get("id", "")).casefold() == request.instance_type.casefold()
+        ),
+        None,
+    )
+    if instance is None:
+        raise CloudWorkflowError(
+            "所选机型不在当前地域目录中",
+            status_code=409,
+            code="instance_type_unavailable",
+        )
+    eligible_zones = _eligible_instance_zones(instance)
+    if not eligible_zones:
+        raise CloudWorkflowError(
+            "所选机型在当前地域没有明确可售的可用区",
+            status_code=409,
+            code="instance_type_out_of_stock",
+        )
+    if request.zone and request.zone not in eligible_zones:
+        raise CloudWorkflowError(
+            "所选机型在指定可用区不可售",
+            status_code=409,
+            code="instance_type_zone_unavailable",
+        )
+
+    vpcs = sorted(provider.list_vpcs(request.region), key=lambda item: item.id)
+    if not vpcs:
+        raise CloudWorkflowError(
+            "当前地域没有 VPC，请先在云厂商控制台创建 VPC",
+            status_code=409,
+            code="vpc_missing",
+        )
+    vpc = next((item for item in vpcs if item.id == request.vpc_id), None)
+    if vpc is None:
+        vpc = next((item for item in vpcs if item.is_default), vpcs[0])
+
+    all_subnets = provider.list_vpc_subnets(request.region, vpc.id)
+    by_zone = {
+        zone: sorted(
+            [item for item in all_subnets if item.zone == zone and _usable_subnet(item)],
+            key=lambda item: _subnet_rank(item, request.subnet_id),
+        )
+        for zone in eligible_zones
+    }
+    if request.zone:
+        chosen_zone = request.zone
+    else:
+        with_subnets = [zone for zone in eligible_zones if by_zone.get(zone)]
+        chosen_zone = (with_subnets or eligible_zones)[0]
+
+    warnings: list[str] = []
+    if not request.zone:
+        warnings.append(f"已稳定选择可售可用区 {chosen_zone}")
+    subnet_options = by_zone.get(chosen_zone, [])
+    if subnet_options:
+        subnet = subnet_options[0]
+        action: Literal["reused", "created"] = "reused"
+    else:
+        cidr_block = _free_subnet_cidr(vpc, all_subnets)
+        token_digest = hashlib.sha256(idempotency_key.encode("utf-8")).hexdigest()
+        subnet_name = f"looper-{chosen_zone[-24:]}-{token_digest[:8]}"[:60]
+        try:
+            subnet = provider.create_managed_subnet(
+                region=request.region,
+                zone=chosen_zone,
+                vpc_id=vpc.id,
+                cidr_block=cidr_block,
+                name=subnet_name,
+                client_token=idempotency_key,
+            )
+        except CloudProviderError:
+            refreshed = provider.list_vpc_subnets(request.region, vpc.id)
+            recovered = sorted(
+                [
+                    item
+                    for item in refreshed
+                    if item.zone == chosen_zone
+                    and _usable_subnet(item)
+                    and (
+                        item.managed
+                        or item.tags.get("managedBy", "").casefold() == "looper"
+                        or item.name == subnet_name
+                    )
+                ],
+                key=lambda item: item.id,
+            )
+            if not recovered:
+                raise
+            subnet = recovered[0]
+            warnings.append("创建响应不明确，已通过云端目录核对并复用 Looper 子网")
+        action = "created"
+        session.execute(
+            delete(CloudCatalogCacheRecord).where(
+                CloudCatalogCacheRecord.provider == provider_id.value,
+                CloudCatalogCacheRecord.resource_type == "subnet",
+                CloudCatalogCacheRecord.region == request.region,
+            )
+        )
+
+    return InstanceNetworkResolution(
+        provider=provider_id,
+        region=request.region,
+        instanceType=instance.id,
+        zone=chosen_zone,
+        eligibleZones=eligible_zones,
+        vpc=vpc,
+        subnet=subnet,
+        zoneAutomaticallySelected=not bool(request.zone),
+        subnetAction=action,
+        warnings=warnings,
+    )
+
+
 def _public_spec(spec_json: dict[str, Any]) -> dict[str, Any]:
     return CloudPurchaseSpec.model_validate(spec_json).model_dump(mode="json", by_alias=True)
 
@@ -511,6 +768,41 @@ def _quote_view(record: CloudQuoteRecord) -> dict[str, Any]:
     }
 
 
+def _validate_image_compatibility(provider: Any, spec: CloudPurchaseSpec) -> None:
+    instance_rows = provider.search_instance_types(
+        CatalogFilters(region=spec.region, zone=spec.zone, query=spec.instance_type)
+    )
+    instance = next(
+        (item for item in instance_rows if item.id.casefold() == spec.instance_type.casefold()),
+        None,
+    )
+    if instance is None or instance.available is False:
+        raise CloudWorkflowError(
+            "所选机型在当前地域或可用区不可用",
+            code="instance_type_unavailable",
+        )
+    images = provider.search_images(
+        CatalogFilters(region=spec.region, instanceType=spec.instance_type)
+    )
+    image = next((item for item in images if item.id == spec.image_id), None)
+    if image is None or image.available is False:
+        raise CloudWorkflowError(
+            "所选镜像不支持当前机型",
+            code="image_instance_incompatible",
+        )
+    instance_architecture = _architecture_group(instance.architecture)
+    image_architecture = _architecture_group(image.architecture)
+    if (
+        instance_architecture
+        and image_architecture
+        and instance_architecture != image_architecture
+    ):
+        raise CloudWorkflowError(
+            "所选镜像架构与机型不兼容",
+            code="image_architecture_incompatible",
+        )
+
+
 def create_quote(
     session: Session,
     settings: Settings,
@@ -530,6 +822,7 @@ def create_quote(
             )
         return _quote_view(existing)
     provider = registry.get(spec.provider)
+    _validate_image_compatibility(provider, spec)
     try:
         quote = provider.quote(spec)
     except CloudProviderError:

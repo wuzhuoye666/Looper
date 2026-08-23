@@ -259,7 +259,15 @@ export interface CloudVpc {
 }
 export interface CloudSubnet {
   provider: CloudProviderId; region: string; zone: string; vpcId: string; id: string; name: string;
-  cidrBlock?: string; availableIpCount?: number; isDefault: boolean;
+  cidrBlock?: string; availableIpCount?: number; isDefault: boolean; tags: Record<string, string>; managed: boolean;
+}
+export interface InstanceNetworkResolveRequest {
+  region: string; instanceType: string; zone?: string; vpcId?: string; subnetId?: string;
+}
+export interface InstanceNetworkResolution {
+  provider: CloudProviderId; region: string; instanceType: string; zone: string; eligibleZones: string[];
+  vpc: CloudVpc; subnet: CloudSubnet; zoneAutomaticallySelected: boolean;
+  subnetAction: 'reused' | 'created'; warnings: string[];
 }
 export interface CloudSecurityGroup {
   provider: CloudProviderId; region: string; id: string; name: string; description?: string;

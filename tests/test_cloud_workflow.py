@@ -358,7 +358,7 @@ def test_full_catalog_paginates_searches_and_naturally_sorts_from_one_snapshot(
                 CloudCatalogCacheRecord.resource_type == "instance-type",
             )
         )
-        if record.query_json.get("version") == 3
+        if record.query_json.get("version") == 4
     )
     full_record.expires_at = utc_now() - timedelta(seconds=1)
     db_session.commit()

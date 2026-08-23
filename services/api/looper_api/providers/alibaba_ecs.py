@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import time
 from datetime import timedelta
 from typing import Any
 
@@ -73,11 +74,13 @@ def _supports_vpc_launch(instance_type: str, eni_quantity: Any = None) -> bool:
 class AlibabaEcsProvider(CloudProvider):
     id = ProviderId.ALIBABA
     display_name = "阿里云 ECS"
-    sdk_package = "alibabacloud_ecs20140526"
+    sdk_package = "alibabacloud_ecs20140526 + alibabacloud_vpc20160428"
 
     def info(self, *, live_purchase_enabled: bool) -> ProviderInfo:
         _, missing = environment_credentials(_REQUIRED_ENV)
-        installed = sdk_installed("alibabacloud_ecs20140526")
+        installed = sdk_installed("alibabacloud_ecs20140526") and sdk_installed(
+            "alibabacloud_vpc20160428"
+        )
         return ProviderInfo(
             id=self.id,
             name=self.display_name,
@@ -93,6 +96,7 @@ class AlibabaEcsProvider(CloudProvider):
                 "stock-advisory",
                 "vpcs",
                 "subnets",
+                "managed-subnet",
                 "security-groups",
                 "key-pairs",
                 "hourly-quote",
@@ -138,6 +142,46 @@ class AlibabaEcsProvider(CloudProvider):
                 code=str(code),
                 retryable=str(code) in {"Throttling", "ServiceUnavailable", "InternalError"},
                 ambiguous=method == "run_instances"
+                and ambiguous_create_error(provider_code, error),
+                details={"requestId": request_id} if request_id else {},
+            ) from error
+
+    def _vpc_client(self, region: str):
+        try:
+            from alibabacloud_tea_openapi.models import Config
+            from alibabacloud_vpc20160428.client import Client
+        except ImportError as error:
+            raise CloudProviderError(
+                "install alibabacloud_vpc20160428", code="sdk_missing"
+            ) from error
+        values, missing = environment_credentials(_REQUIRED_ENV)
+        if missing:
+            raise CloudProviderError(
+                f"missing Alibaba Cloud credentials: {', '.join(missing)}",
+                code="credentials_missing",
+            )
+        config = Config(
+            access_key_id=values["ALIBABA_CLOUD_ACCESS_KEY_ID"],
+            access_key_secret=values["ALIBABA_CLOUD_ACCESS_KEY_SECRET"],
+            security_token=optional_environment("ALIBABA_CLOUD_SECURITY_TOKEN"),
+            region_id=region,
+        )
+        return Client(config)
+
+    def _vpc_call(self, method: str, region: str, request: Any) -> Any:
+        try:
+            return getattr(self._vpc_client(region), method)(request)
+        except Exception as error:
+            provider_code = attr(error, "code", default=None)
+            code = provider_code or error.__class__.__name__
+            message = attr(error, "message", default=str(error))
+            data = attr(error, "data", default={}) or {}
+            request_id = attr(data, "RequestId", "requestId", default=None)
+            raise CloudProviderError(
+                f"Alibaba Cloud VPC {method} failed: {message}",
+                code=str(code),
+                retryable=str(code) in {"Throttling", "ServiceUnavailable", "InternalError"},
+                ambiguous=method == "create_vswitch"
                 and ambiguous_create_error(provider_code, error),
                 details={"requestId": request_id} if request_id else {},
             ) from error
@@ -412,6 +456,7 @@ class AlibabaEcsProvider(CloudProvider):
                 page_size=page_size,
                 architecture=None,
                 ostype=filters.platform,
+                instance_type=filters.instance_type,
             )
             response = self._call("describe_images", filters.region, request)
             batch = as_list(nested(response, ("body",), ("images",), ("image",), default=[]))
@@ -480,6 +525,14 @@ class AlibabaEcsProvider(CloudProvider):
         return items
 
     def list_subnets(self, region: str, zone: str, vpc_id: str) -> list[SubnetInfo]:
+        return self._list_vswitches(region, vpc_id=vpc_id, zone=zone)
+
+    def list_vpc_subnets(self, region: str, vpc_id: str) -> list[SubnetInfo]:
+        return self._list_vswitches(region, vpc_id=vpc_id, zone=None)
+
+    def _list_vswitches(
+        self, region: str, *, vpc_id: str, zone: str | None
+    ) -> list[SubnetInfo]:
         from alibabacloud_ecs20140526 import models
 
         items: list[SubnetInfo] = []
@@ -496,8 +549,16 @@ class AlibabaEcsProvider(CloudProvider):
             rows = as_list(
                 nested(response, ("body",), ("v_switches",), ("v_switch",), default=[])
             )
-            items.extend(
-                SubnetInfo(
+            for item in rows:
+                if not attr(item, "v_switch_id"):
+                    continue
+                tag_rows = as_list(nested(item, ("tags",), ("tag",), default=[]))
+                tags = {
+                    str(attr(tag, "tag_key")): str(attr(tag, "tag_value", default=""))
+                    for tag in tag_rows
+                    if attr(tag, "tag_key")
+                }
+                items.append(SubnetInfo(
                     provider=self.id,
                     region=region,
                     zone=str(attr(item, "zone_id")),
@@ -510,15 +571,83 @@ class AlibabaEcsProvider(CloudProvider):
                     cidrBlock=attr(item, "cidr_block"),
                     availableIpCount=attr(item, "available_ip_address_count"),
                     isDefault=bool(attr(item, "is_default", default=False)),
-                )
-                for item in rows
-                if attr(item, "v_switch_id")
-            )
+                    tags=tags,
+                    managed=tags.get("managedBy", "").casefold() == "looper",
+                ))
             total = int(attr(nested(response, ("body",)), "total_count", default=0) or 0)
             if not rows or len(items) >= total:
                 break
             page_number += 1
         return items
+
+    def create_managed_subnet(
+        self,
+        *,
+        region: str,
+        zone: str,
+        vpc_id: str,
+        cidr_block: str,
+        name: str,
+        client_token: str,
+    ) -> SubnetInfo:
+        from alibabacloud_vpc20160428 import models
+
+        request = models.CreateVSwitchRequest(
+            region_id=region,
+            zone_id=zone,
+            vpc_id=vpc_id,
+            cidr_block=cidr_block,
+            v_switch_name=name,
+            client_token=client_token,
+            tag=[
+                models.CreateVSwitchRequestTag(key="managedBy", value="looper"),
+                models.CreateVSwitchRequestTag(key="purpose", value="cloud-purchase"),
+            ],
+        )
+        response = self._vpc_call("create_vswitch", region, request)
+        v_switch_id = attr(nested(response, ("body",)), "v_switch_id")
+        if not v_switch_id:
+            raise CloudProviderError(
+                "Alibaba Cloud created a vSwitch without returning its id",
+                code="ambiguous_response",
+                ambiguous=True,
+            )
+        deadline = time.monotonic() + 45
+        while time.monotonic() < deadline:
+            describe = models.DescribeVSwitchAttributesRequest(
+                region_id=region,
+                v_switch_id=str(v_switch_id),
+            )
+            item = nested(
+                self._vpc_call("describe_vswitch_attributes", region, describe),
+                ("body",),
+            )
+            status = str(attr(item, "status", default="") or "")
+            if status.casefold() == "available":
+                tags = {"managedBy": "looper", "purpose": "cloud-purchase"}
+                return SubnetInfo(
+                    provider=self.id,
+                    region=region,
+                    zone=str(attr(item, "zone_id", default=zone)),
+                    vpcId=str(attr(item, "vpc_id", default=vpc_id)),
+                    id=str(v_switch_id),
+                    name=str(attr(item, "v_switch_name", default=name) or name),
+                    cidrBlock=attr(item, "cidr_block", default=cidr_block),
+                    availableIpCount=attr(item, "available_ip_address_count"),
+                    tags=tags,
+                    managed=True,
+                )
+            if status and status.casefold() not in {"pending", "creating"}:
+                raise CloudProviderError(
+                    f"Alibaba Cloud vSwitch entered unexpected state {status}",
+                    code="subnet_create_failed",
+                )
+            time.sleep(1)
+        raise CloudProviderError(
+            "Alibaba Cloud vSwitch creation is still pending",
+            code="ambiguous_response",
+            ambiguous=True,
+        )
 
     def list_security_groups(self, region: str) -> list[SecurityGroupInfo]:
         from alibabacloud_ecs20140526 import models
@@ -904,3 +1033,62 @@ class AlibabaEcsProvider(CloudProvider):
             released_resources=released,
             details={"requestId": request_id},
         )
+
+    def cleanup_managed_network(
+        self,
+        *,
+        region: str,
+        vpc_id: str | None,
+        subnet_id: str | None,
+        security_group_ids: list[str],
+    ) -> list[DestroyedResource]:
+        del vpc_id, security_group_ids
+        if not subnet_id:
+            return []
+        from alibabacloud_vpc20160428 import models
+
+        try:
+            describe = models.DescribeVSwitchAttributesRequest(
+                region_id=region,
+                v_switch_id=subnet_id,
+            )
+            item = nested(
+                self._vpc_call("describe_vswitch_attributes", region, describe),
+                ("body",),
+            )
+            tag_rows = as_list(nested(item, ("tags",), ("tag",), default=[]))
+            tags = {
+                str(attr(tag, "key", "tag_key")): str(
+                    attr(tag, "value", "tag_value", default="")
+                )
+                for tag in tag_rows
+                if attr(tag, "key", "tag_key")
+            }
+            if tags.get("managedBy", "").casefold() != "looper":
+                return [
+                    DestroyedResource(
+                        kind="subnet",
+                        id=subnet_id,
+                        released=False,
+                        note="非 Looper 纳管 vSwitch，保留不动",
+                    )
+                ]
+            delete_request = models.DeleteVSwitchRequest(
+                region_id=region,
+                v_switch_id=subnet_id,
+            )
+            self._vpc_call("delete_vswitch", region, delete_request)
+            return [
+                DestroyedResource(
+                    kind="subnet", id=subnet_id, note="Looper 纳管 vSwitch 已删除"
+                )
+            ]
+        except CloudProviderError as error:
+            return [
+                DestroyedResource(
+                    kind="subnet",
+                    id=subnet_id,
+                    released=False,
+                    note=f"vSwitch 清理暂缓：{error}",
+                )
+            ]

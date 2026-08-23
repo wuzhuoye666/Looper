@@ -2,6 +2,7 @@ import type {
   AnalysisData, Benchmark, BenchmarkRegistration, BenchmarkRegistrationDraft, CloudCatalogResponse, CloudImage, CloudInstanceType, CloudOrder,
   CloudOrderEvent, CloudOrderEvidence, CloudProviderId, CloudProviderInfo, CloudPurchaseReadiness, CloudPurchaseSpec,
   CloudKeyPair, CloudQuote, CloudReconciliationContext, CloudRegion, CloudSecurityGroup, CloudSubnet, CloudVpc, CloudZone,
+  InstanceNetworkResolution, InstanceNetworkResolveRequest,
   DashboardData, Experiment, GlobalSearchResult, ListResponse, PostOptimizationStatus, SelectionAdvisorRequest,
   SelectionAdvisorResponse, Target, TargetDestroyPreview, TargetDestroyResult, VariabilityData,
 } from './types';
@@ -156,6 +157,10 @@ export const api = {
   keyPairs: (provider: CloudProviderId, region: string) => api.catalog<CloudKeyPair>(provider, 'key-pair', { region }),
   ensureManagedSecurityGroup: (provider: CloudProviderId, region: string) =>
     request<CloudSecurityGroup>(`/cloud/network/${provider}/managed-security-group${query({ region })}`, { method: 'POST' }),
+  resolveInstanceNetwork: (provider: CloudProviderId, payload: InstanceNetworkResolveRequest, key: string) =>
+    request<InstanceNetworkResolution>(`/cloud/network/${provider}/resolve-instance-network`, {
+      method: 'POST', headers: { 'Idempotency-Key': key }, body: JSON.stringify(payload),
+    }),
   quoteById: (id: string) => request<CloudQuote>(`/cloud/quotes/${encodeURIComponent(id)}`),
   quote: (spec: CloudPurchaseSpec, key: string) => request<CloudQuote>('/cloud/quotes', {
     method: 'POST', headers: { 'Idempotency-Key': key }, body: JSON.stringify({ spec }),
