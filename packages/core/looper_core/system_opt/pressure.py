@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import random
 from enum import StrEnum
 from statistics import mean, median, stdev
 from typing import Literal
@@ -81,6 +82,28 @@ class StabilityCalibrationContract(StrictModel):
         if self.enforcement == "report-only" and self.acceptance_limit is not None:
             raise ValueError("report-only stability cannot declare an acceptance_limit")
         return self
+
+
+class StabilityLimitCalibrationEvidence(StrictModel):
+    schema_version: Literal["looper.pressure-stability-calibration/v1alpha1"] = (
+        "looper.pressure-stability-calibration/v1alpha1"
+    )
+    metric_id: str = Field(min_length=1, max_length=160)
+    statistic: Literal["cv"]
+    formula_id: Literal["F-PROJECT-PRESSURE-CV-BOOTSTRAP-UPPER/v1alpha1"]
+    input_batch_digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    sample_count: int = Field(ge=3)
+    observed_value: float = Field(ge=0)
+    confidence_level: float = Field(gt=0.5, lt=1)
+    bootstrap_resamples: int = Field(ge=100, le=100000)
+    random_seed: int = Field(ge=0)
+    acceptance_limit: float = Field(gt=0)
+    target_scope: str = Field(min_length=1, max_length=1000)
+    portability: str = Field(min_length=1, max_length=1000)
+
+    @property
+    def digest(self) -> str:
+        return canonical_digest(self.model_dump(mode="json"))
 
 
 class StandardPressureProtocol(StrictModel):
@@ -214,6 +237,70 @@ def evaluate_measurement_stability(
     )
 
 
+def calibrate_cv_acceptance_limit(
+    batch: MeasurementBatch,
+    metric_id: str,
+    *,
+    confidence_level: float,
+    bootstrap_resamples: int,
+    random_seed: int,
+    target_scope: str,
+    portability: str,
+) -> StabilityLimitCalibrationEvidence:
+    """Derive a target-local CV limit from one frozen calibration batch.
+
+    Each bootstrap CV uses the mean and sample standard deviation from the
+    same resample. The returned limit is the requested one-sided empirical
+    upper quantile; no hidden rounding or safety multiplier is applied.
+    """
+
+    if not 0.5 < confidence_level < 1:
+        raise PressureProtocolError("calibration confidence_level must be in (0.5, 1)")
+    if not 100 <= bootstrap_resamples <= 100000:
+        raise PressureProtocolError("calibration bootstrap_resamples must be in [100, 100000]")
+    if random_seed < 0:
+        raise PressureProtocolError("calibration random_seed must be non-negative")
+    try:
+        values = batch.metrics[metric_id].values
+    except KeyError as error:
+        raise PressureProtocolError(f"calibration metric is missing: {metric_id}") from error
+    if len(values) < 3:
+        raise PressureProtocolError("CV calibration requires at least three samples")
+    center = mean(values)
+    if center == 0:
+        raise PressureProtocolError("CV calibration is undefined for a zero mean")
+    observed = stdev(values) / abs(center)
+    generator = random.Random(random_seed)
+    estimates: list[float] = []
+    for _ in range(bootstrap_resamples):
+        sample = [generator.choice(values) for _ in values]
+        sample_center = mean(sample)
+        if sample_center == 0:
+            raise PressureProtocolError(
+                "CV bootstrap produced a zero mean; choose a non-zero stability metric"
+            )
+        estimates.append(stdev(sample) / abs(sample_center))
+    acceptance_limit = quantile(estimates, confidence_level)
+    if acceptance_limit <= 0:
+        raise PressureProtocolError(
+            "CV bootstrap upper limit is zero; the calibration cannot form a positive gate"
+        )
+    return StabilityLimitCalibrationEvidence(
+        metric_id=metric_id,
+        statistic="cv",
+        formula_id="F-PROJECT-PRESSURE-CV-BOOTSTRAP-UPPER/v1alpha1",
+        input_batch_digest=batch.digest,
+        sample_count=len(values),
+        observed_value=observed,
+        confidence_level=confidence_level,
+        bootstrap_resamples=bootstrap_resamples,
+        random_seed=random_seed,
+        acceptance_limit=acceptance_limit,
+        target_scope=target_scope,
+        portability=portability,
+    )
+
+
 class PhasedPressureMeasurementAdapter:
     """Execute an explicit phase contract and fail closed on cleanup failure.
 
@@ -320,8 +407,10 @@ __all__ = [
     "PressurePhaseSpec",
     "PressureProtocolError",
     "STANDARD_PRESSURE_PROTOCOL_SCHEMA",
+    "StabilityLimitCalibrationEvidence",
     "StabilityCalibrationContract",
     "StandardPressureProtocol",
+    "calibrate_cv_acceptance_limit",
     "parse_standard_pressure_protocol_yaml",
     "evaluate_measurement_stability",
     "validate_pressure_policy",

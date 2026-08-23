@@ -64,6 +64,24 @@ Comparable(x)=\bigwedge_{i=1}^{N}IdentityMatch_i(x)
 
 `MDE_m` 可以来自业务最小收益、基线噪声校准或两者中更严格者，但任务必须记录选择依据和数值。没有合格基线或必需校准参数时停止，不自行填值。
 
+### S1.1：目标机 CV 稳定门禁派生
+
+来源类型：PROJECT-CONTRACT；formula id：
+`F-PROJECT-PRESSURE-CV-BOOTSTRAP-UPPER/v1alpha1`。
+
+给定冻结校准样本 `Y={y_1,...,y_n}`，每次有放回抽取同样本量得到 `Y_b`，并且必须从
+同一个 `Y_b` 同时计算均值与样本标准差：
+
+\[
+CV_b=\frac{s(Y_b)}{|\bar{Y_b}|},\qquad
+Limit_{CV}=Q_{confidence}(\{CV_b\}_{b=1}^{B})
+\]
+
+置信水平、重采样次数、随机种子、样本数、目标作用域和环境可迁移边界必须显式记录。
+`Limit_CV` 只用于相同目标环境和相同测量协议的后续批次；不得从阿里云、WSL 或 loopback
+外推到腾讯云 CVM/NIC。均值为零、样本少于 3、关键身份改变或派生上界为零时 fail-closed。
+该门禁只判断测量批次是否足够稳定，不等于候选收益 MDE，也不证明候选有效。
+
 ### S2：不可补偿门禁
 
 来源类型：PROJECT-CONTRACT，与 F-MENTOR-001 对齐。

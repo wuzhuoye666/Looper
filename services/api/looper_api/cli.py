@@ -51,6 +51,7 @@ from looper_core.system_opt.policy import (
 )
 from looper_core.system_opt.pressure import (
     PhasedPressureMeasurementAdapter,
+    calibrate_cv_acceptance_limit,
     parse_standard_pressure_protocol_yaml,
     validate_pressure_policy,
 )
@@ -874,6 +875,49 @@ def calibrate_linux_pressure(
                     if batch.stability_evidence is not None
                     else None
                 ),
+                "output": str(output.resolve()),
+            }
+        )
+    )
+
+
+@system_opt_app.command("derive-pressure-gate")
+def derive_pressure_gate(
+    measurement_batch_path: Path = typer.Option(
+        ..., "--measurement-batch", exists=True, dir_okay=False
+    ),
+    metric_id: str = typer.Option(..., "--metric-id"),
+    confidence_level: float = typer.Option(..., "--confidence-level", min=0.500001, max=0.999999),
+    bootstrap_resamples: int = typer.Option(
+        ..., "--bootstrap-resamples", min=100, max=100000
+    ),
+    random_seed: int = typer.Option(..., "--random-seed", min=0),
+    target_scope: str = typer.Option(..., "--target-scope"),
+    portability: str = typer.Option(..., "--portability"),
+    output: Path = typer.Option(..., "--output", dir_okay=False),
+) -> None:
+    """Derive an explicit target-local CV gate from a frozen calibration batch."""
+
+    batch = MeasurementBatch.model_validate(_read_json(measurement_batch_path))
+    try:
+        evidence = calibrate_cv_acceptance_limit(
+            batch,
+            metric_id,
+            confidence_level=confidence_level,
+            bootstrap_resamples=bootstrap_resamples,
+            random_seed=random_seed,
+            target_scope=target_scope,
+            portability=portability,
+        )
+    except ValueError as error:
+        raise typer.BadParameter(str(error)) from error
+    _write_json(output, evidence)
+    console.print_json(
+        json.dumps(
+            {
+                "metric_id": evidence.metric_id,
+                "acceptance_limit": evidence.acceptance_limit,
+                "calibration_digest": evidence.digest,
                 "output": str(output.resolve()),
             }
         )
