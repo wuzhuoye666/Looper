@@ -107,7 +107,16 @@ class InstanceTypeInfo(ApiModel):
     cpu: int
     memory_gib: float
     gpu: int | None = None
+    gpu_model: str | None = None
+    gpu_memory_gib: float | None = None
     architecture: str | None = None
+    network_bandwidth_rx_gbps: float | None = None
+    network_bandwidth_tx_gbps: float | None = None
+    network_pps_rx: int | None = None
+    network_pps_tx: int | None = None
+    local_storage_count: int | None = None
+    local_storage_capacity_gib: float | None = None
+    local_storage_category: str | None = None
     zones: list[str] = Field(default_factory=list)
     available: bool | None = None
     attributes: dict[str, Any] = Field(default_factory=dict)

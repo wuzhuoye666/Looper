@@ -44,7 +44,7 @@ from looper_api.models import (
     SelectionLoadPointRecord,
 )
 
-ANALYSIS_CODE_VERSION = "0.4.0"
+ANALYSIS_CODE_VERSION = "0.5.0"
 
 
 def _observation_value(record: ObservationRecord) -> float | bool | None:
@@ -87,6 +87,7 @@ def _input_facts(session: Session, experiment_id: str) -> list[dict[str, Any]]:
                 "retry_index": attempt.retry_index,
                 "queue_sequence": attempt.queue_sequence,
                 "status": attempt.status,
+                "error_message": attempt.error_message,
                 "fencing_token": attempt.fencing_token,
                 "envelope_digest": attempt.envelope_digest,
                 "observations": [
@@ -386,17 +387,50 @@ def _selection_analysis(
                 }
             )
 
-    analyzed_point = session.scalar(
-        select(SelectionLoadPointRecord)
-        .where(SelectionLoadPointRecord.experiment_id == experiment.id)
-        .order_by(SelectionLoadPointRecord.sequence.desc())
-        .limit(1)
+    load_points = list(
+        session.scalars(
+            select(SelectionLoadPointRecord)
+            .where(SelectionLoadPointRecord.experiment_id == experiment.id)
+            .order_by(SelectionLoadPointRecord.sequence)
+        )
     )
+    analyzed_point = load_points[-1] if load_points else None
+    frontier_summary = analyzed_point.analysis_json if analyzed_point is not None else {}
     persisted_frontiers = (
-        analyzed_point.analysis_json.get("target_frontiers", {})
-        if analyzed_point is not None
-        else {}
+        frontier_summary.get("target_frontiers", {}) if analyzed_point is not None else {}
     )
+    facts_by_point: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for fact in facts:
+        point_id = fact.get("selection_load_point_id")
+        if isinstance(point_id, str):
+            facts_by_point[point_id].append(fact)
+    search_trajectory = [
+        {
+            "load_point_id": point.id,
+            "sequence": point.sequence,
+            "workload_id": point.workload_id,
+            "offered_load": float(point.offered_load),
+            "origin": point.origin,
+            "status": point.status,
+            "required_repeats": point.required_repeats,
+            "reason": (point.analysis_json or {}).get("reason"),
+            "attempts": [
+                {
+                    "attempt_id": fact["attempt_id"],
+                    "target_id": fact["target_id"],
+                    "repeat_index": fact["repeat_index"],
+                    "retry_index": fact["retry_index"],
+                    "queue_sequence": fact["queue_sequence"],
+                    "status": fact["status"],
+                    "error_message": fact["error_message"],
+                }
+                for fact in sorted(
+                    facts_by_point.get(point.id, []), key=lambda item: item["queue_sequence"]
+                )
+            ],
+        }
+        for point in load_points
+    ]
     target_results: list[dict[str, Any]] = []
     for binding in spec.selection.target_bindings:
         target_blocks = [item for item in blocks if item["target_id"] == binding.target_id]
@@ -506,9 +540,7 @@ def _selection_analysis(
                     pair[baseline_variant],
                     minimum_effect_ratio=minimum_effect,
                 )
-                interval_comparisons.append(
-                    {"placement_pair_id": placement_pair_id, **comparison}
-                )
+                interval_comparisons.append({"placement_pair_id": placement_pair_id, **comparison})
             winners = {
                 item.get("winner")
                 for item in interval_comparisons
@@ -687,6 +719,14 @@ def _selection_analysis(
         "code_version": ANALYSIS_CODE_VERSION,
         "status": "available" if target_results else "insufficient_evidence",
         "scenario": spec.scenario.model_dump(mode="json"),
+        "frontier": {
+            "status": frontier_summary.get("frontier_status"),
+            "termination_reason": frontier_summary.get("termination_reason"),
+            "adaptive_points_used": sum(point.origin == "adaptive" for point in load_points),
+            "trajectory": search_trajectory,
+        }
+        if spec.scenario.load_search
+        else None,
         "targets": target_results,
         "comparisons": comparisons,
         "blocks": blocks,
@@ -887,9 +927,7 @@ def build_analysis_snapshot(
         }
         for candidate in rendered_candidates
     ]
-    objective_directions = {
-        objective.metric: objective.direction for objective in spec.objectives
-    }
+    objective_directions = {objective.metric: objective.direction for objective in spec.objectives}
     objective_epsilons = {objective.metric: objective.epsilon for objective in spec.objectives}
     for stability_objective in spec.stability_objectives:
         if stability_objective.hard:

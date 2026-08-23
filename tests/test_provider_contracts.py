@@ -482,6 +482,54 @@ def test_alibaba_catalog_search_scans_later_pages(monkeypatch) -> None:
     assert len([method for method, _ in calls if method == "describe_images"]) == 2
 
 
+def test_alibaba_instance_catalog_normalizes_selection_attributes(monkeypatch) -> None:
+    provider = AlibabaEcsProvider()
+    monkeypatch.setattr(provider, "_availability", lambda _filters: {"ecs.gn9i.xlarge": True})
+
+    def call(_method: str, _region: str, _request: object):
+        return SimpleNamespace(
+            body=SimpleNamespace(
+                next_token=None,
+                instance_types=SimpleNamespace(
+                    instance_type=[
+                        SimpleNamespace(
+                            instance_type_id="ecs.gn9i.xlarge",
+                            instance_type_family="ecs.gn9i",
+                            cpu_core_count=8,
+                            memory_size=32,
+                            gpuamount=1,
+                            gpuspec="NVIDIA Test",
+                            gpumemory_size=24,
+                            cpu_architecture="X86",
+                            instance_bandwidth_rx=25_000_000,
+                            instance_bandwidth_tx=20_000_000,
+                            instance_pps_rx=3_000_000,
+                            instance_pps_tx=2_500_000,
+                            local_storage_amount=2,
+                            local_storage_capacity=1900,
+                            local_storage_category="local_ssd_pro",
+                        )
+                    ]
+                ),
+            )
+        )
+
+    monkeypatch.setattr(provider, "_call", call)
+    item = provider.search_instance_types(
+        CatalogFilters(region="cn-test", zone="cn-test-a", limit=20)
+    )[0]
+
+    assert item.gpu == 1
+    assert item.gpu_model == "NVIDIA Test"
+    assert item.gpu_memory_gib == 24
+    assert item.network_bandwidth_rx_gbps == 25
+    assert item.network_bandwidth_tx_gbps == 20
+    assert item.network_pps_tx == 2_500_000
+    assert item.local_storage_count == 2
+    assert item.local_storage_capacity_gib == 1900
+    assert item.local_storage_category == "local_ssd_pro"
+
+
 def test_tencent_image_search_scans_later_pages(monkeypatch) -> None:
     provider = TencentCvmProvider()
     offsets: list[int] = []

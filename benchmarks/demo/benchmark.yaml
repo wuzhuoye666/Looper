@@ -100,3 +100,25 @@ spec:
         role: log
         mediaType: text/plain
         required: true
+  x-extensions:
+    postBenchmarkActions:
+      - id: larger-compression-chunks
+        label: 增大压缩分块并复测
+        description: 只调整一个低风险 Benchmark 参数，检查吞吐是否提升且压缩率不明显退化。
+        risk: low
+        applyMode: benchmark-parameter
+        parameter: chunk_size
+        value: 65536
+        minimumImprovementRatio: 0.05
+        guardMetric: compression_ratio
+        maximumGuardRegressionRatio: 0.02
+      - id: fast-compression-level
+        label: 降低压缩级别并复测
+        description: 以更宽松的压缩率换取吞吐，用保护指标限制质量退化。
+        risk: low
+        applyMode: benchmark-parameter
+        parameter: compression_level
+        value: 1
+        minimumImprovementRatio: 0.10
+        guardMetric: compression_ratio
+        maximumGuardRegressionRatio: 0.15

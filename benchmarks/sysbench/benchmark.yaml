@@ -1,0 +1,164 @@
+apiVersion: looper.dev/v1alpha1
+kind: Benchmark
+metadata:
+  id: looper.sysbench
+  name: Sysbench
+  version: 1.0.0
+  description: "Sysbench 1.0 通用系统性能套件：CPU 素数、内存带宽、线程调度与互斥锁竞争。由套件自带 producer 调用本地 sysbench 二进制，normalizer 将原生文本报告转换为标准观测。"
+  license: GPL-2.0
+  source:
+    url: https://github.com/akopytov/sysbench
+spec:
+  trust: trusted
+  capabilities: [python, local-process, sysbench]
+  parameters:
+    threads:
+      type: integer
+      minimum: 1
+      maximum: 256
+      default: 4
+    time:
+      type: integer
+      minimum: 5
+      maximum: 300
+      default: 10
+  workloads:
+    - id: cpu
+      name: CPU prime
+      metadata:
+        test: cpu
+        extraArgs: []
+    - id: memory
+      name: Memory throughput
+      metadata:
+        test: memory
+        extraArgs: ["--memory-block-size=1K", "--memory-total-size=100G"]
+    - id: thread
+      name: Thread scheduling
+      metadata:
+        test: thread
+        extraArgs: []
+    - id: mutex
+      name: Mutex contention
+      metadata:
+        test: mutex
+        extraArgs: ["--mutex-num=4096", "--mutex-locks=100000"]
+  scenario:
+    id: microbenchmark.sysbench.suite
+    name: Sysbench microbenchmark suite
+    decision_question: Which target SKU delivers better CPU throughput, memory bandwidth, thread scheduling, and mutex contention performance under controlled microbenchmark conditions?
+    user_value: Characterize raw system performance across CPU, memory, threading, and synchronization primitives without application-layer overhead.
+    workload_class: microbenchmark
+    topology: single-node
+    roles:
+      - id: target
+        kind: target
+        included_in_score: true
+        description: Target machine under benchmark
+      - id: benchmark-runner
+        kind: load-generator
+        co_located_with: target
+        included_in_score: true
+        description: Local sysbench binary co-located with target
+    primary_metric: events_per_sec
+    slo_gates:
+      - id: sysbench-execution
+        kind: correctness
+        scope: block
+        metric: sysbench_run_ok
+        operator: eq
+        threshold: 1
+        hard: true
+      - id: minimum-events
+        kind: slo
+        scope: block
+        metric: events_per_sec
+        operator: gt
+        threshold: 0
+        hard: true
+    goodput:
+      metric: events_per_sec
+      unit: events/second
+      committed_outcome: successful
+      excluded_outcomes: [error, timeout]
+      maximum_error_ratio: 0
+      maximum_abort_ratio: 0
+      maximum_timeout_ratio: 0
+    tail_evidence:
+      metric: latency_p95_ms
+      unit: ms
+      minimum_samples: 100
+      required_statistics: [p95, maximum]
+      histogram_format: upstream-summary
+      timeout_accounting: separate
+  adapter:
+    protocol: looper-adapter/v1
+    executionModel: batch-suite
+    primaryMetric: events_per_sec
+    requiredChecks: [sysbench-run-ok]
+    inputs: []
+    canonicalOutputs:
+      metrics: metrics.jsonl
+      result: result.json
+  runtime:
+    type: local-process
+    workingDirectory: .
+    commands:
+      run:
+        argv: ["{python}", "{benchmarkRoot}/producer.py", "--envelope", "{envelope}", "--output", "{output}"]
+        timeoutSeconds: 360
+        allowedExitCodes: [0]
+      normalize:
+        argv: ["{python}", "{benchmarkRoot}/normalizer.py", "--envelope", "{envelope}", "--output", "{output}"]
+        timeoutSeconds: 60
+        allowedExitCodes: [0]
+  metrics:
+    events_per_sec:
+      unit: events/s
+      direction: maximize
+      kind: aggregate
+      required: true
+      minimumSamples: 1
+    latency_avg_ms:
+      unit: ms
+      direction: minimize
+      kind: aggregate
+      minimumSamples: 1
+    latency_p95_ms:
+      unit: ms
+      direction: minimize
+      kind: aggregate
+      minimumSamples: 1
+    latency_max_ms:
+      unit: ms
+      direction: minimize
+      kind: aggregate
+      minimumSamples: 1
+    throughput_mib_s:
+      unit: MiB/s
+      direction: maximize
+      kind: aggregate
+      minimumSamples: 1
+    sysbench_run_ok:
+      unit: flag
+      direction: maximize
+      kind: aggregate
+      minimumSamples: 1
+  outputs:
+    maxBytes: 4194304
+    maxMetricLines: 20
+    artifacts:
+      - path: raw-result.json
+        role: raw-result
+        mediaType: application/json
+        required: true
+      - path: result.json
+        role: result
+        mediaType: application/json
+        required: true
+      - path: adapter.log
+        role: log
+        mediaType: text/plain
+        required: true
+  x-extensions:
+    executionStatus: executable

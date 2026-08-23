@@ -103,6 +103,29 @@ def test_frontier_reports_bracket_and_next_binary_load() -> None:
     assert resolved["confirmed_fail"] == 102
 
 
+def test_frontier_stops_after_maximum_adaptive_points() -> None:
+    result = analyze_slo_frontier(
+        [_point(100, passed=True), _point(110, passed=False)],
+        LoadSearchSpec(
+            offered_load_metric="offered_tps",
+            unit="transactions/second",
+            maximum_adaptive_points=2,
+        ),
+        latency_p99_threshold=50,
+        goodput=GoodputPolicy(metric="committed_tps", unit="transactions/second"),
+        tail=TailEvidenceSpec(
+            metric="transaction_latency",
+            unit="ms",
+            minimum_samples=100,
+            histogram_format="raw",
+        ),
+        adaptive_points_used=2,
+    )
+    assert result["status"] == "frontier_unresolved"
+    assert result["next_offered_load"] is None
+    assert result["termination_reason"] == "maximum_adaptive_points_exhausted"
+
+
 @pytest.mark.parametrize(
     ("field", "value"),
     [("timeout_ratio", 0.01), ("rate_limiter_lag_ratio", 0.01)],

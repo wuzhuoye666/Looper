@@ -2,7 +2,8 @@ import type {
   AnalysisData, Benchmark, BenchmarkRegistration, BenchmarkRegistrationDraft, CloudCatalogResponse, CloudImage, CloudInstanceType, CloudOrder,
   CloudOrderEvent, CloudOrderEvidence, CloudProviderId, CloudProviderInfo, CloudPurchaseReadiness, CloudPurchaseSpec,
   CloudKeyPair, CloudQuote, CloudReconciliationContext, CloudRegion, CloudSecurityGroup, CloudSubnet, CloudVpc, CloudZone,
-  DashboardData, Experiment, GlobalSearchResult, ListResponse, Target, VariabilityData,
+  DashboardData, Experiment, GlobalSearchResult, ListResponse, PostOptimizationStatus, SelectionAdvisorRequest,
+  SelectionAdvisorResponse, Target, VariabilityData,
 } from './types';
 
 export const API_BASE = (import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000/api/v1').replace(/\/$/, '');
@@ -39,7 +40,11 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   });
   const body = response.status === 204 ? undefined : await response.json().catch(() => undefined);
   if (!response.ok) {
-    const message = body && typeof body === 'object' && 'message' in body ? String(body.message) : `请求失败 (${response.status})`;
+    const message = body && typeof body === 'object' && 'message' in body
+      ? String(body.message)
+      : body && typeof body === 'object' && 'detail' in body
+        ? (typeof body.detail === 'string' ? body.detail : JSON.stringify(body.detail))
+        : `请求失败 (${response.status})`;
     const operatorAuthRequired = response.status === 401
       && body && typeof body === 'object' && 'code' in body
       && body.code === 'operator_auth_required';
@@ -70,7 +75,10 @@ export const api = {
   dashboard: () => request<DashboardData>('/dashboard'),
   experiments: async (query = '') => list(await request<Experiment[] | ListResponse<Experiment> | { data?: Experiment[] }>(`/experiments${query}`)),
   experiment: (id: string) => request<Experiment>(`/experiments/${encodeURIComponent(id)}`),
+  deleteExperiment: (id: string) => request<void>(`/experiments/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   analysis: (id: string) => request<AnalysisData>(`/experiments/${encodeURIComponent(id)}/analysis`),
+  postOptimization: (id: string) => request<PostOptimizationStatus>(`/experiments/${encodeURIComponent(id)}/post-optimization`),
+  startPostOptimization: (id: string) => request<PostOptimizationStatus>(`/experiments/${encodeURIComponent(id)}/post-optimization`, { method: 'POST' }),
   variability: (id: string) => request<VariabilityData>(`/experiments/${encodeURIComponent(id)}/variability`),
   benchmarks: async () => list(await request<Benchmark[] | ListResponse<Benchmark> | { data?: Benchmark[] }>('/benchmarks')),
   benchmarkRegistration: (id: string) => request<BenchmarkRegistration>(`/benchmark-registrations/${encodeURIComponent(id)}`),
@@ -106,6 +114,12 @@ export const api = {
   syncTencentTargets: (region = 'ap-guangzhou') => request<ListResponse<Target>>(
     `/targets/tencent-cvm/sync?region=${encodeURIComponent(region)}`, { method: 'POST' },
   ),
+  importExternalTarget: (payload: Record<string, unknown>) => request<Target>(
+    '/targets/import', { method: 'POST', body: JSON.stringify(payload) },
+  ),
+  connectExternalTarget: (payload: Record<string, unknown>) => request<Target>(
+    '/targets/connect', { method: 'POST', body: JSON.stringify(payload) },
+  ),
   createExperiment: (payload: Record<string, unknown>) => request<Experiment>('/experiments', { method: 'POST', body: JSON.stringify(payload) }),
   experimentAction: (id: string, action: 'start' | 'pause' | 'resume' | 'cancel') => request<Experiment>(`/experiments/${encodeURIComponent(id)}/${action}`, { method: 'POST' }),
   retryAttempt: (id: string) => request<unknown>(`/attempts/${encodeURIComponent(id)}/retry`, { method: 'POST' }),
@@ -121,6 +135,9 @@ export const api = {
     api.catalog<CloudInstanceType>(provider, 'instance-type', params),
   images: (provider: CloudProviderId, params: Record<string, string | number | undefined>) =>
     api.catalog<CloudImage>(provider, 'image', params),
+  selectionAdvisor: (payload: SelectionAdvisorRequest) => request<SelectionAdvisorResponse>(
+    '/cloud/selection-advisor/search', { method: 'POST', body: JSON.stringify(payload) },
+  ),
   vpcs: (provider: CloudProviderId, region: string) => api.catalog<CloudVpc>(provider, 'vpc', { region }),
   subnets: (provider: CloudProviderId, region: string, zone: string, vpcId: string) =>
     api.catalog<CloudSubnet>(provider, 'subnet', { region, zone, vpc_id: vpcId }),

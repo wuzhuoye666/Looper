@@ -10,6 +10,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from looper_api.analysis_service import build_analysis_snapshot
+from looper_api.benchmark_registration import selection_scenario_document
 from looper_api.models import (
     ArtifactLinkRecord,
     AttemptRecord,
@@ -33,7 +34,7 @@ def benchmark_view(
     manifest = record.manifest_json
     metadata = manifest["metadata"]
     spec = manifest["spec"]
-    scenario = spec.get("scenario")
+    scenario = selection_scenario_document(record, registration)
     adapter = spec.get("adapter") or {}
     extensions = spec.get("x-extensions", {})
     execution_status = extensions.get("executionStatus", "executable")
@@ -45,6 +46,7 @@ def benchmark_view(
         "name": record.name,
         "description": record.description,
         "category": explicit_category or ("scenario" if scenario else "unclassified"),
+        "selectionReady": scenario is not None,
         "executionModel": adapter.get("executionModel", "custom"),
         "inputs": adapter.get("inputs", []),
         "executionPolicy": spec.get("runtime", {}).get("executionPolicy"),
@@ -82,7 +84,16 @@ def target_view(record: TargetRecord) -> dict[str, Any]:
     status = status_map.get(record.status, "unknown")
     if record.lifecycle_status in {"missing", "archived"}:
         status = "offline"
-    if record.status == "inventory-only" and provider_state == "RUNNING":
+    if (
+        record.status == "inventory-only"
+        and inventory.get("source") == "ssh-discovery"
+        and record.lifecycle_status == "active"
+    ):
+        # SSH discovery is a persisted, verified inventory observation. A
+        # missing Worker means execution is not ready; it does not make the
+        # already-probed machine an unknown resource.
+        status = "inventory"
+    elif record.status == "inventory-only" and provider_state == "RUNNING":
         status = "inventory" if record.lifecycle_status == "active" else "offline"
     elif record.status == "inventory-only" and provider_state in {"STOPPED", "TERMINATED"}:
         status = "offline"
@@ -92,15 +103,18 @@ def target_view(record: TargetRecord) -> dict[str, Any]:
         f"{fingerprint.get('logical_cpu_count')} vCPU"
         if fingerprint.get("logical_cpu_count")
         else None,
+        f"{fingerprint.get('memory_gib'):g} GiB"
+        if fingerprint.get("memory_gib")
+        else None,
     ]
     return {
         "id": record.id,
         "name": record.name,
         "type": record.provider,
         "provider": record.provider,
-        "endpoint": inventory.get("private_ip") or "local",
+        "endpoint": inventory.get("endpoint") or inventory.get("private_ip") or "local",
         "status": status,
-        "framework": fingerprint.get("system"),
+        "framework": inventory.get("framework") or fingerprint.get("system"),
         "version": fingerprint.get("release"),
         "hardware": " · ".join(str(item) for item in hardware_parts if item),
         "lastSeenAt": _iso(record.last_inventory_seen_at or record.updated_at),
@@ -193,6 +207,19 @@ def experiment_view(
             AttemptStatus.LOST,
         }
     )
+    budget_terminal_attempts = sum(
+        1
+        for attempt in attempts
+        if attempt.retry_index == 0
+        and AttemptStatus(attempt.status)
+        in {
+            AttemptStatus.SUCCEEDED,
+            AttemptStatus.FAILED,
+            AttemptStatus.TIMED_OUT,
+            AttemptStatus.CANCELLED,
+            AttemptStatus.LOST,
+        }
+    )
     terminal_candidates = sum(
         1
         for candidate in candidates
@@ -247,7 +274,7 @@ def experiment_view(
         "progress": round(
             100
             * (
-                terminal_attempts / spec.budget.max_attempts
+                budget_terminal_attempts / spec.budget.max_attempts
                 if is_selection
                 else terminal_candidates / spec.budget.max_candidates
             ),
@@ -261,7 +288,8 @@ def experiment_view(
         else None,
         "createdAt": _iso(record.created_at),
         "updatedAt": _iso(record.updated_at),
-        "attempts": terminal_attempts,
+        "attempts": budget_terminal_attempts,
+        "actualAttempts": terminal_attempts,
         "maxAttempts": spec.budget.max_attempts,
         "objective": spec.objectives[0].metric,
         "decisionQuestion": spec.scenario.decision_question if spec.scenario else None,

@@ -252,6 +252,26 @@ def _attempt_count(session: Session, experiment_id: str) -> int:
     )
 
 
+def _frontier_budget_exhaustion_reason(
+    session: Session,
+    experiment: ExperimentRecord,
+    spec: ExperimentSpec,
+    *,
+    additional_attempts: int = 0,
+) -> str | None:
+    if _attempt_count(session, experiment.id) + additional_attempts > spec.budget.max_attempts:
+        return "attempt_budget_exhausted"
+    if experiment.started_at is None:
+        return None
+    now = utc_now()
+    started_at = experiment.started_at
+    if started_at.tzinfo is None and now.tzinfo is not None:
+        now = now.replace(tzinfo=None)
+    if (now - started_at).total_seconds() >= spec.budget.wall_time_seconds:
+        return "wall_time_budget_exhausted"
+    return None
+
+
 def _rotate(items: list[str], offset: int) -> list[str]:
     if not items:
         return []
@@ -650,10 +670,7 @@ def _require_start_readiness(
     image = runtime.get("image")
     if runtime.get("type") == "container" and (
         not isinstance(image, str)
-        or re.fullmatch(
-            r"[a-z0-9](?:[a-z0-9._/-]*[a-z0-9])?@sha256:[0-9a-f]{64}", image
-        )
-        is None
+        or re.fullmatch(r"[a-z0-9](?:[a-z0-9._/-]*[a-z0-9])?@sha256:[0-9a-f]{64}", image) is None
     ):
         raise SchedulerError("container benchmarks require an image pinned by sha256 digest")
     if (
@@ -895,8 +912,9 @@ def _reconcile_selection_point(
             )
         )
     )
-    ready = True
+    active = False
     exhausted: list[str] = []
+    retry_requests: list[tuple[EvaluationRecord, int, int]] = []
     for evaluation in evaluations:
         attempts = list(
             session.scalars(
@@ -913,27 +931,48 @@ def _reconcile_selection_point(
             if _successful_attempt_for_repeat(repeated, repeat_index) is not None:
                 continue
             if any(AttemptStatus(item.status) not in TERMINAL_ATTEMPTS for item in repeated):
-                ready = False
+                active = True
                 continue
             latest = repeated[-1] if repeated else None
             if latest is not None and latest.retry_index < spec.design.max_retries:
-                _create_attempt(
-                    session,
-                    experiment,
-                    evaluation,
-                    repeat_index,
-                    retry_index=latest.retry_index + 1,
-                    load_point=point,
-                )
-                ready = False
+                retry_requests.append((evaluation, repeat_index, latest.retry_index + 1))
             else:
                 exhausted.append(f"{evaluation.id}:{repeat_index}")
+    if active:
+        point.status = "running"
+        return False
     if exhausted:
         point.status = "unresolved"
         point.analysis_json = {"reason": "repeat_failures_exhausted", "blocks": exhausted}
         point.completed_at = utc_now()
         return True
-    if not ready:
+    if retry_requests:
+        budget_reason = _frontier_budget_exhaustion_reason(
+            session,
+            experiment,
+            spec,
+            additional_attempts=len(retry_requests),
+        )
+        if budget_reason is not None:
+            point.status = "unresolved"
+            point.analysis_json = {
+                "reason": budget_reason,
+                "blocks": [
+                    f"{evaluation.id}:{repeat_index}"
+                    for evaluation, repeat_index, _ in retry_requests
+                ],
+            }
+            point.completed_at = utc_now()
+            return True
+        for evaluation, repeat_index, retry_index in retry_requests:
+            _create_attempt(
+                session,
+                experiment,
+                evaluation,
+                repeat_index,
+                retry_index=retry_index,
+                load_point=point,
+            )
         point.status = "running"
         return False
     point.status = "complete"
@@ -990,13 +1029,24 @@ def _advance_selection_frontier(
             all_ready = _reconcile_selection_point(session, experiment, point, spec) and all_ready
     if not all_ready:
         return False
-    if any(point.status == "unresolved" for point in points):
+    termination_reason: str | None = None
+    unresolved_points = [point for point in points if point.status == "unresolved"]
+    if unresolved_points:
         terminal_status = "frontier_unresolved"
         target_frontiers: dict[str, dict[str, Any]] = {}
+        reasons = sorted(
+            {
+                str(point.analysis_json.get("reason"))
+                for point in unresolved_points
+                if point.analysis_json.get("reason")
+            }
+        )
+        termination_reason = reasons[0] if len(reasons) == 1 else "load_point_unresolved"
     else:
         target_frontiers = {}
         next_loads: list[float] = []
-        workload_terminal = True
+        search_pending = False
+        unresolved_reasons: set[str] = set()
         for workload_id in sorted({point.workload_id for point in points}):
             workload_points = [point for point in points if point.workload_id == workload_id]
             adaptive_points_used = sum(point.origin == "adaptive" for point in workload_points)
@@ -1030,7 +1080,11 @@ def _advance_selection_frontier(
                     "non_monotonic",
                     "frontier_unresolved",
                 }:
-                    workload_terminal = False
+                    search_pending = True
+                elif frontier["status"] != "resolved":
+                    unresolved_reasons.add(
+                        str(frontier.get("termination_reason") or frontier["status"])
+                    )
         existing_keys = {point.offered_load_key for point in points}
         next_candidates = [
             value
@@ -1038,26 +1092,49 @@ def _advance_selection_frontier(
             if _canonical_offered_load(value)[1] not in existing_keys
         ]
         if next_candidates:
-            for workload_id in sorted({point.workload_id for point in points}):
-                _create_selection_load_point(
-                    session,
-                    experiment,
-                    workload_id=workload_id,
-                    offered_load=next_candidates[0],
-                    origin="adaptive",
-                    required_repeats=protocol.boundary_repeats,
+            workload_ids = sorted({point.workload_id for point in points})
+            required_attempts = len(workload_ids) * len(spec.target_ids) * protocol.boundary_repeats
+            budget_reason = _frontier_budget_exhaustion_reason(
+                session,
+                experiment,
+                spec,
+                additional_attempts=required_attempts,
+            )
+            if budget_reason is None:
+                for workload_id in workload_ids:
+                    _create_selection_load_point(
+                        session,
+                        experiment,
+                        workload_id=workload_id,
+                        offered_load=next_candidates[0],
+                        origin="adaptive",
+                        required_repeats=protocol.boundary_repeats,
+                    )
+                experiment.status = ExperimentStatus.QUEUED
+                experiment.updated_at = utc_now()
+                return False
+            termination_reason = budget_reason
+        if termination_reason is not None or unresolved_reasons or search_pending:
+            terminal_status = "frontier_unresolved"
+            if termination_reason is None:
+                termination_reason = (
+                    next(iter(unresolved_reasons))
+                    if len(unresolved_reasons) == 1
+                    else "multiple_frontier_failures"
+                    if unresolved_reasons
+                    else "no_new_load_candidate"
                 )
-            experiment.status = ExperimentStatus.QUEUED
-            experiment.updated_at = utc_now()
-            return False
-        terminal_status = "resolved" if workload_terminal else "frontier_unresolved"
+        else:
+            terminal_status = "resolved"
 
-    digest = canonical_digest(target_frontiers)
+    analysis_payload = {
+        "frontier_status": terminal_status,
+        "termination_reason": termination_reason,
+        "target_frontiers": target_frontiers,
+    }
+    digest = canonical_digest(analysis_payload)
     for point in points:
-        point.analysis_json = {
-            "frontier_status": terminal_status,
-            "target_frontiers": target_frontiers,
-        }
+        point.analysis_json = {**(point.analysis_json or {}), **analysis_payload}
         append_event(
             session,
             experiment_id=experiment.id,
@@ -1065,7 +1142,11 @@ def _advance_selection_frontier(
             entity_type="selection_load_point",
             entity_id=point.id,
             idempotency_key=f"selection.load_point.analyzed:{point.id}:{digest}",
-            payload={"status": terminal_status, "analysis_digest": digest},
+            payload={
+                "status": terminal_status,
+                "termination_reason": termination_reason,
+                "analysis_digest": digest,
+            },
         )
     evaluations = list(
         session.scalars(

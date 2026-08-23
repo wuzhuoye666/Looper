@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { AlertTriangle, ExternalLink, FileCode2, FileText, RotateCcw } from 'lucide-react';
+import { AlertTriangle, CircleHelp, ExternalLink, FileCode2, FileText, LoaderCircle, RotateCcw, ShieldCheck, WandSparkles } from 'lucide-react';
 import { useMemo, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { Link, useParams } from 'react-router-dom';
 import { ExperimentActions, type ExperimentAction } from '../components/ActionButtons';
 import { BackLink } from '../components/Layout';
 import { StatusBadge } from '../components/StatusBadge';
@@ -9,7 +9,7 @@ import { EmptyState, ErrorState, LoadingState } from '../components/States';
 import { VariabilityPanel } from '../components/VariabilityPanel';
 import { API_BASE, api } from '../lib/api';
 import { formatDate, formatNumber, scoreDelta } from '../lib/format';
-import type { AnalysisData, Evaluation, Experiment, SelectionComparison, SelectionTargetResult } from '../lib/types';
+import type { AnalysisData, Evaluation, Experiment, PostOptimizationStatus, SelectionComparison, SelectionTargetResult } from '../lib/types';
 
 const selectionTabs = [['overview', '概览'], ['targets', '目标结果'], ['comparison', '对比结论'], ['variability', '波动分析'], ['evidence', '证据'], ['config', '配置']];
 const optimizationTabs = [['overview', '概览'], ['evaluations', '评估记录'], ['pareto', 'Pareto 前沿'], ['variability', '波动分析'], ['evidence', '证据'], ['config', '配置']];
@@ -35,6 +35,12 @@ export function ExperimentDetailPage() {
     queryFn: () => api.variability(id),
     enabled: Boolean(id) && tab === 'variability',
   });
+  const postOptimization = useQuery({
+    queryKey: ['post-optimization', id],
+    queryFn: () => api.postOptimization(id),
+    enabled: Boolean(id) && query.data?.status === 'completed' && query.data?.mode !== 'selection',
+    refetchInterval: current => current.state.data?.status === 'retesting' ? 5000 : false,
+  });
   const action = useMutation({
     mutationFn: (value: ExperimentAction) => api.experimentAction(id, value),
     onSuccess: data => queryClient.setQueryData(['experiment', id], data),
@@ -42,6 +48,10 @@ export function ExperimentDetailPage() {
   const retry = useMutation({
     mutationFn: (attemptId: string) => api.retryAttempt(attemptId),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['experiment', id] }),
+  });
+  const optimize = useMutation({
+    mutationFn: () => api.startPostOptimization(id),
+    onSuccess: data => queryClient.setQueryData(['post-optimization', id], data),
   });
   if (query.isLoading) return <div className="page"><LoadingState /></div>;
   if (query.isError || !query.data) return <div className="page"><BackLink to="/experiments">返回选型研究</BackLink><ErrorState error={query.error} onRetry={() => query.refetch()} /></div>;
@@ -57,6 +67,13 @@ export function ExperimentDetailPage() {
       <span className="id-label">ID: {experiment.id} · 更新于 {formatDate(experiment.updatedAt)}</span>
     </div><ExperimentActions status={experiment.status} busy={action.isPending} onAction={value => action.mutate(value)} /></header>
     {action.isError && <div className="inline-alert"><AlertTriangle size={16} />{action.error.message}</div>}
+    {experiment.status === 'completed' && !selectionMode && <PostOptimizationPanel
+      data={postOptimization.data}
+      loading={postOptimization.isLoading}
+      error={postOptimization.isError ? postOptimization.error : optimize.isError ? optimize.error : null}
+      busy={optimize.isPending}
+      onStart={() => optimize.mutate()}
+    />}
     <nav className="tabs" aria-label="研究详情">{tabs.map(([key, label]) => <button key={key} className={tab === key ? 'active' : ''} onClick={() => setTab(key)}>{label}</button>)}</nav>
     {tab === 'overview' && <Overview experiment={experiment} evaluations={experiment.evaluations || []} delta={delta} />}
     {tab === 'evaluations' && <Evaluations items={experiment.evaluations || []} retrying={retry.isPending} onRetry={attemptId => retry.mutate(attemptId)} />}
@@ -67,6 +84,49 @@ export function ExperimentDetailPage() {
     {tab === 'evidence' && <AsyncPanel query={analysis}><Evidence items={analysis.data?.evidence || []} /></AsyncPanel>}
     {tab === 'config' && <Config value={experiment.config || {}} />}
   </div>;
+}
+
+function PostOptimizationPanel({ data, loading, error, busy, onStart }: {
+  data?: PostOptimizationStatus; loading: boolean; error: unknown; busy: boolean; onStart: () => void;
+}) {
+  if (loading) return <section className="panel post-optimization-panel"><LoadingState /></section>;
+  if (error) return <section className="panel post-optimization-panel"><ErrorState error={error} /></section>;
+  if (!data) return null;
+  const statusLabels: Record<PostOptimizationStatus['status'], string> = {
+    ready: '可以优化', retesting: '正在复测', accepted: '建议保留', rolled_back: '保留原配置',
+    inconclusive: '证据不足', unavailable: '没有安全动作', failed: '流程失败',
+  };
+  const icon = data.status === 'accepted'
+    ? <ShieldCheck size={19} />
+    : data.status === 'retesting'
+      ? <LoaderCircle size={19} />
+      : data.status === 'rolled_back'
+        ? <RotateCcw size={19} />
+        : data.status === 'inconclusive'
+          ? <CircleHelp size={19} />
+          : <WandSparkles size={19} />;
+  const before = data.action?.before == null ? '—' : String(data.action.before);
+  const after = data.action?.after == null ? '—' : String(data.action.after);
+  return <section className={`panel post-optimization-panel ${data.status}`}>
+    <div className="post-optimization-icon">{icon}</div>
+    <div className="post-optimization-copy">
+      <div className="catalog-title"><h2>Benchmark 完成后的优化复测</h2><span className="tag">{statusLabels[data.status]}</span></div>
+      <p>{data.reason}</p>
+      {data.action && <div className="post-optimization-action">
+        <strong>{data.action.label}</strong>
+        <span>{data.action.parameter}: {before} → {after}</span>
+        <small>{data.action.description || '只执行 Benchmark 声明的低风险白名单动作。'}</small>
+      </div>}
+    </div>
+    <div className="post-optimization-buttons">
+      {data.status === 'ready' && <button className="button primary" disabled={busy} onClick={onStart}>
+        <WandSparkles size={15} />{busy ? '正在创建复测…' : '优化并重新测试'}
+      </button>}
+      {data.followUpExperiment && <Link className="button secondary" to={`/experiments/${data.followUpExperiment.id}`}>
+        查看复测实验
+      </Link>}
+    </div>
+  </section>;
 }
 
 function AsyncPanel({ query, children }: { query: { isLoading: boolean; isError: boolean; error: unknown; refetch: () => unknown }; children: React.ReactNode }) {

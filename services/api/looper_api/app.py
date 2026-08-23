@@ -4,6 +4,7 @@ import asyncio
 import hmac
 import io
 import json
+import logging
 import zipfile
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
@@ -58,11 +59,13 @@ from looper_api.benchmark_registration import (
     get_registration,
     register_benchmark,
     registration_view,
+    selection_scenario_document,
     update_registration,
 )
 from looper_api.benchmark_runs import BenchmarkSmokeRunRequest, create_benchmark_smoke_run
 from looper_api.cloud_contracts import (
     CatalogFilters,
+    InstanceTypeInfo,
     OrderConfirmRequest,
     OrderPrepareRequest,
     OrderResolveRequest,
@@ -94,6 +97,13 @@ from looper_api.cloud_service import (
 from looper_api.config import Settings, get_settings
 from looper_api.database import SessionLocal, get_session, init_database
 from looper_api.evidence import build_evidence_bundle, verify_evidence_bundle
+from looper_api.external_targets import (
+    ConnectExternalTargetRequest,
+    ExternalTargetError,
+    ImportExternalTargetRequest,
+    connect_external_target,
+    import_external_target,
+)
 from looper_api.models import (
     ArtifactLinkRecord,
     ArtifactRecord,
@@ -104,9 +114,13 @@ from looper_api.models import (
     ExperimentRecord,
     TargetRecord,
 )
+from looper_api.post_optimization import post_optimization_view, start_post_optimization
 from looper_api.providers.base import CloudProviderError
 from looper_api.providers.registry import CloudProviderRegistry, get_provider_registry
 from looper_api.providers.tencent_cvm import TencentInventoryError, sync_cvm_inventory
+from looper_api.remote_credentials import EncryptedSshCredentialStore
+from looper_api.remote_recovery import recover_remembered_target, remembered_target_ids
+from looper_api.remote_worker import deploy_remote_worker, deployment_status
 from looper_api.scheduler import (
     SchedulerError,
     cancel_experiment,
@@ -118,6 +132,7 @@ from looper_api.scheduler import (
     start_experiment,
 )
 from looper_api.seed import seed_system
+from looper_api.selection_advisor import SelectionAdvisorRequest, advise_instance_types
 from looper_api.serialization import (
     analysis_view,
     benchmark_view,
@@ -140,6 +155,7 @@ from looper_api.worker_service import (
     claim_attempt,
     complete_attempt,
     expire_stale_leases,
+    expire_stale_workers,
     heartbeat_attempt,
     register_worker,
     start_attempt,
@@ -187,6 +203,7 @@ def require_operator(
 
 
 OperatorDependency = Annotated[str, Depends(require_operator)]
+logger = logging.getLogger(__name__)
 
 
 async def _lease_sweeper() -> None:
@@ -195,9 +212,32 @@ async def _lease_sweeper() -> None:
         with SessionLocal() as session:
             try:
                 expire_stale_leases(session)
+                expire_stale_workers(session, get_settings())
                 session.commit()
             except Exception:
                 session.rollback()
+
+
+async def _remote_worker_recovery() -> None:
+    settings = get_settings()
+    try:
+        pending = set(await asyncio.to_thread(remembered_target_ids, settings))
+    except Exception:
+        logger.exception("Unable to read remembered remote Worker credentials")
+        return
+    while pending:
+        for target_id in sorted(pending):
+            try:
+                recovered = await asyncio.to_thread(
+                    recover_remembered_target, target_id, settings
+                )
+            except Exception:
+                logger.exception("Remote Worker recovery failed for %s", target_id)
+                continue
+            if recovered:
+                pending.discard(target_id)
+        if pending:
+            await asyncio.sleep(30)
 
 
 @asynccontextmanager
@@ -210,12 +250,16 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         seed_system(session)
         session.commit()
     sweeper = asyncio.create_task(_lease_sweeper())
+    remote_recovery = asyncio.create_task(_remote_worker_recovery())
     try:
         yield
     finally:
         sweeper.cancel()
+        remote_recovery.cancel()
         with suppress(asyncio.CancelledError):
             await sweeper
+        with suppress(asyncio.CancelledError):
+            await remote_recovery
 
 
 app = FastAPI(
@@ -238,7 +282,7 @@ app.add_middleware(
         "Idempotency-Key",
     ],
 )
-app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost", "testserver"])
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=settings.trusted_host_list)
 
 
 @app.middleware("http")
@@ -257,6 +301,7 @@ async def origin_guard(request: Request, call_next: Any) -> Any:
 @app.exception_handler(CloudProviderError)
 @app.exception_handler(CloudWorkflowError)
 @app.exception_handler(RegistrationError)
+@app.exception_handler(ExternalTargetError)
 async def domain_error(_request: Request, error: Exception) -> JSONResponse:
     status_code = getattr(error, "status_code", 409)
     code = getattr(error, "code", error.__class__.__name__)
@@ -436,6 +481,34 @@ def cloud_catalog(
     )
     session.commit()
     return result.model_dump(mode="json", by_alias=True)
+
+
+@app.post("/api/v1/cloud/selection-advisor/search")
+def cloud_selection_advisor(
+    request: SelectionAdvisorRequest,
+    session: SessionDependency,
+    app_settings: SettingsDependency,
+    registry: ProviderRegistryDependency,
+) -> dict[str, Any]:
+    catalog = catalog_search(
+        session,
+        app_settings,
+        registry,
+        ProviderId.ALIBABA,
+        "instance-type",
+        CatalogFilters(region=request.region, zone=request.zone, limit=500),
+    )
+    response = advise_instance_types(
+        request,
+        [InstanceTypeInfo.model_validate(item) for item in catalog.items],
+        source=catalog.source,
+        fetched_at=catalog.fetched_at.isoformat(),
+        expires_at=catalog.expires_at.isoformat(),
+        stale=catalog.stale,
+        warning=catalog.warning,
+    )
+    session.commit()
+    return response.model_dump(mode="json", by_alias=True)
 
 
 @app.post("/api/v1/cloud/network/{provider}/managed-security-group", status_code=201)
@@ -724,9 +797,11 @@ def finalize_benchmark_registration(
 @app.get("/api/v1/targets")
 def list_targets(
     session: SessionDependency,
+    app_settings: SettingsDependency,
     include_inactive: bool = Query(default=True),
 ) -> dict[str, Any]:
-    statement = select(TargetRecord)
+    expire_stale_workers(session, app_settings)
+    statement = select(TargetRecord).where(TargetRecord.provider != "local")
     if not include_inactive:
         statement = statement.where(TargetRecord.lifecycle_status == "active")
     records = list(session.scalars(statement.order_by(TargetRecord.name)))
@@ -743,6 +818,46 @@ def sync_tencent_targets(
     records = sync_cvm_inventory(session, region, instance_ids=instance_id)
     session.commit()
     return {"items": [target_view(item) for item in records], "total": len(records)}
+
+
+@app.post("/api/v1/targets/import", status_code=201)
+def import_target(
+    payload: ImportExternalTargetRequest,
+    session: SessionDependency,
+    _operator: OperatorDependency,
+) -> dict[str, Any]:
+    record = import_external_target(session, payload)
+    session.commit()
+    return target_view(record)
+
+
+@app.post("/api/v1/targets/connect", status_code=201)
+def connect_target(
+    payload: ConnectExternalTargetRequest,
+    session: SessionDependency,
+    app_settings: SettingsDependency,
+    _operator: OperatorDependency,
+) -> dict[str, Any]:
+    record = connect_external_target(session, payload)
+    session.commit()
+    result = target_view(record)
+    if payload.deploy_worker:
+        result["deployment"] = deploy_remote_worker(payload, record, app_settings)
+        host_key = str(record.fingerprint_json.get("host_key_sha256") or "")
+        result["credentialsRemembered"] = EncryptedSshCredentialStore(app_settings).save(
+            record.id,
+            payload,
+            host_key,
+        )
+    return result
+
+
+@app.get("/api/v1/targets/{target_id}/worker")
+def get_target_worker(target_id: str, session: SessionDependency) -> dict[str, Any]:
+    record = session.get(TargetRecord, target_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="target not found")
+    return deployment_status(target_id)
 
 
 @app.get("/api/v1/experiments")
@@ -790,6 +905,8 @@ def _normalize_create_request(payload: dict[str, Any], session: Session) -> Expe
     request.description = str(payload.get("description") or request.description)
     target_id = payload.get("targetId")
     if target_id:
+        if str(target_id) == "local":
+            raise SchedulerError("local execution is disabled; select an external server")
         request.spec.target_ids = [str(target_id)]
     benchmark_id = payload.get("benchmarkId")
     if benchmark_id and benchmark_id not in {
@@ -835,9 +952,15 @@ def _selection_create_request(payload: dict[str, Any], session: Session) -> Expe
     benchmark = session.scalar(statement.order_by(BenchmarkRecord.installed_at.desc()).limit(1))
     if benchmark is None:
         raise SchedulerError("scenario benchmark version is not installed")
-    scenario_document = benchmark.manifest_json["spec"].get("scenario")
+    registration = session.scalar(
+        select(BenchmarkRegistrationRecord).where(
+            BenchmarkRegistrationRecord.benchmark_key == benchmark.key,
+            BenchmarkRegistrationRecord.status == "registered",
+        )
+    )
+    scenario_document = selection_scenario_document(benchmark, registration)
     if scenario_document is None:
-        raise SchedulerError("selected benchmark is not a scenario benchmark")
+        raise SchedulerError("selected benchmark is missing a selection scenario contract")
     scenario = ScenarioBenchmarkSpec.model_validate(scenario_document)
 
     raw_target_ids = payload.get("targetIds")
@@ -973,6 +1096,24 @@ def get_experiment(experiment_id: str, session: SessionDependency) -> dict[str, 
     return experiment_view(session, record, detail=True)
 
 
+@app.delete("/api/v1/experiments/{experiment_id}", status_code=204)
+def delete_experiment(
+    experiment_id: str,
+    session: SessionDependency,
+    _operator: OperatorDependency,
+) -> None:
+    record = session.get(ExperimentRecord, experiment_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="experiment not found")
+    if record.status in {"queued", "running", "paused"}:
+        raise HTTPException(
+            status_code=409,
+            detail="cancel an active experiment before deleting it",
+        )
+    session.delete(record)
+    session.commit()
+
+
 @app.get("/api/v1/experiments/{experiment_id}/analysis")
 def get_analysis(experiment_id: str, session: SessionDependency) -> dict[str, Any]:
     if session.get(ExperimentRecord, experiment_id) is None:
@@ -980,6 +1121,28 @@ def get_analysis(experiment_id: str, session: SessionDependency) -> dict[str, An
     result = build_analysis_snapshot(session, experiment_id, persist=True)
     session.commit()
     return analysis_view(result)
+
+
+@app.get("/api/v1/experiments/{experiment_id}/post-optimization")
+def get_post_optimization(
+    experiment_id: str, session: SessionDependency
+) -> dict[str, Any]:
+    experiment = session.get(ExperimentRecord, experiment_id)
+    if experiment is None:
+        raise HTTPException(status_code=404, detail="experiment not found")
+    return post_optimization_view(session, experiment)
+
+
+@app.post("/api/v1/experiments/{experiment_id}/post-optimization", status_code=201)
+def create_post_optimization(
+    experiment_id: str, session: SessionDependency
+) -> dict[str, Any]:
+    experiment = session.get(ExperimentRecord, experiment_id)
+    if experiment is None:
+        raise HTTPException(status_code=404, detail="experiment not found")
+    result = start_post_optimization(session, experiment)
+    session.commit()
+    return result
 
 
 @app.get("/api/v1/experiments/{experiment_id}/variability")

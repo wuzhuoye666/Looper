@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import platform
+import shutil
 from typing import Any
 
 from looper_core.fingerprint import system_fingerprint
@@ -29,4 +30,6 @@ def worker_capabilities() -> list[str]:
                 "evidence.looper.system-fingerprint/v1alpha1",
             }
         )
+    if shutil.which("sysbench"):
+        capabilities.add("sysbench")
     return sorted(capabilities)

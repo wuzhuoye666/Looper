@@ -30,6 +30,17 @@ export interface Experiment {
   objective?: string; decisionQuestion?: string; scenario?: ScenarioContract; comparison?: SelectionComparison;
   config?: Record<string, unknown>; evaluations?: Evaluation[]; artifacts?: Artifact[];
 }
+export interface PostOptimizationAction {
+  id: string; label: string; description?: string; risk: 'low' | 'medium' | 'high'; applyMode: 'benchmark-parameter';
+  parameter: string; value: unknown; before?: unknown; after?: unknown; minimumImprovementRatio: number;
+  guardMetric?: string; maximumGuardRegressionRatio?: number;
+}
+export interface PostOptimizationStatus {
+  eligible: boolean;
+  status: 'ready' | 'retesting' | 'accepted' | 'rolled_back' | 'inconclusive' | 'unavailable' | 'failed';
+  reason: string; action?: PostOptimizationAction; baselineParameters?: Record<string, unknown>;
+  candidateParameters?: Record<string, unknown>; followUpExperiment?: Experiment;
+}
 export interface DashboardData { counts?: Partial<Record<ExperimentStatus, number>>; activeExperiments?: Experiment[]; recentExperiments?: Experiment[]; trend?: Array<{ time: string; score: number; baseline?: number }>; successRate?: number; totalExperiments?: number; computeHours?: number }
 export interface Benchmark {
   id: string; key?: string; name: string; description?: string; category?: string; version?: string; metrics?: string[];
@@ -38,6 +49,7 @@ export interface Benchmark {
   executionPolicy?: Record<string, unknown>;
   cases?: number; updatedAt?: string; tags?: string[]; license?: string; runnable?: boolean; executionStatus?: string;
   decisionQuestion?: string; primaryMetric?: string; scenario?: ScenarioContract;
+  selectionReady?: boolean;
   registrationId?: string; registrationStatus?: string;
   auditStatus?: 'legacy-unreviewed' | 'registered-not-admitted';
 }
@@ -70,6 +82,12 @@ export interface Target {
   hardware?: string; lastSeenAt?: string; lastInventorySeenAt?: string; missingSince?: string;
   inventoryMissCount?: number; archivedAt?: string; archiveReason?: string;
   tags?: string[]; runnable?: boolean;
+  credentialsRemembered?: boolean;
+  deployment?: { status: string; workerId: string; remotePid: number; transport?: string; restartSafe?: boolean; deployedAt: string };
+  fingerprint?: {
+    processor?: string; logical_cpu_count?: number; memory_gib?: number; instance_type?: string;
+    system?: string; release?: string; architecture?: string; host_key_sha256?: string; host_key_type?: string;
+  };
 }
 export interface AnalysisData {
   mode?: 'optimization' | 'selection'; targets?: SelectionTargetResult[]; comparisons?: SelectionComparison[];
@@ -146,7 +164,32 @@ export interface CloudKeyPair {
 }
 export interface CloudInstanceType {
   provider: CloudProviderId; region: string; id: string; family?: string; cpu: number; memoryGib: number;
-  gpu?: number; architecture?: string; zones: string[]; available?: boolean; attributes?: Record<string, unknown>;
+  gpu?: number; gpuModel?: string; gpuMemoryGib?: number; architecture?: string;
+  networkBandwidthRxGbps?: number; networkBandwidthTxGbps?: number; networkPpsRx?: number; networkPpsTx?: number;
+  localStorageCount?: number; localStorageCapacityGib?: number; localStorageCategory?: string;
+  zones: string[]; available?: boolean; attributes?: Record<string, unknown>;
+}
+export type SelectionScenario = 'web-api' | 'microservices-rpc' | 'database' | 'cache' | 'search-logs' |
+  'big-data-messaging' | 'game' | 'video' | 'ai' | 'development-test' | 'other';
+export interface SelectionAdvisorRequest {
+  provider: 'alibaba'; region: string; zone?: string; primaryScenario: SelectionScenario;
+  coLocatedComponents: SelectionScenario[]; sizingMode: 'exact' | 'unknown'; exactCpu?: number;
+  exactMemoryGib?: number; workloadScale?: string; minimumGpuCount: number;
+  localStorage: 'required' | 'not-required' | 'unknown'; minimumNetworkBandwidthGbps?: number;
+  minimumNetworkPps?: number; codeAvailability: 'available' | 'unavailable' | 'unknown';
+  architecture: 'x86' | 'arm' | 'unknown'; offset: number; limit: number;
+}
+export interface SelectionExclusionStage {
+  code: string; label: string; before: number; after: number; removed: number;
+}
+export interface AdvisedCloudInstanceType extends CloudInstanceType {
+  matchTier: 'preferred' | 'suitable' | 'other'; reasons: string[]; warnings: string[];
+}
+export interface SelectionAdvisorResponse {
+  provider: 'alibaba'; region: string; zone?: string; items: AdvisedCloudInstanceType[]; total: number;
+  offset: number; limit: number; nextOffset?: number; exclusionStages: SelectionExclusionStage[];
+  mostRestrictiveStage?: SelectionExclusionStage; source: 'live' | 'cache' | 'stale-cache';
+  fetchedAt: string; expiresAt: string; stale: boolean; warning?: string;
 }
 export interface CloudImage {
   provider: CloudProviderId; region: string; id: string; name: string; platform?: string; architecture?: string;

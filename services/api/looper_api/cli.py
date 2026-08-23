@@ -5,6 +5,7 @@ from decimal import Decimal
 from pathlib import Path
 
 import typer
+from looper_core.action_loop import VerificationPolicy
 from looper_core.adapters import load_and_apply_adapter
 from looper_core.manifest import load_and_validate_manifest
 from rich.console import Console
@@ -23,6 +24,7 @@ from looper_api.source_manager import (
     load_source_lock,
     resolve_source,
 )
+from looper_api.verified_demo import run_verified_compression_loop
 
 app = typer.Typer(help="Looper control-plane utilities")
 benchmark_app = typer.Typer(help="Benchmark contract tools")
@@ -219,6 +221,45 @@ def start_demo(experiment_id: str) -> None:
             raise typer.BadParameter("experiment does not exist")
         start_experiment(session, experiment)
         console.print(f"Queued {experiment.id}")
+
+
+@demo_app.command("verified-loop")
+def run_verified_demo(
+    compression_level: int = typer.Option(1, "--compression-level", min=1, max=9),
+    chunk_size: int = typer.Option(65536, "--chunk-size"),
+    repeats: int = typer.Option(3, "--repeats", min=2, max=100),
+    minimum_improvement: float = typer.Option(0.05, "--minimum-improvement", min=0),
+    maximum_ratio_regression: float = typer.Option(0.15, "--maximum-ratio-regression", min=0),
+    samples: int = typer.Option(12, "--samples", min=3, max=10000),
+    size_kib: int = typer.Option(512, "--size-kib", min=128, max=65536),
+    workspace: Path = typer.Option(Path(".looper/verified-action"), "--workspace", file_okay=False),
+) -> None:
+    """Run a real local test -> change -> retest -> keep/rollback loop."""
+
+    try:
+        result = run_verified_compression_loop(
+            workspace,
+            candidate={
+                "compression_level": compression_level,
+                "chunk_size": chunk_size,
+            },
+            policy=VerificationPolicy(
+                repeats=repeats,
+                minimum_improvement_ratio=minimum_improvement,
+                maximum_secondary_regression_ratio=maximum_ratio_regression,
+                confidence_level=0.95,
+                bootstrap_resamples=1000,
+                random_seed=20260822,
+            ),
+            samples=samples,
+            size_kib=size_kib,
+        )
+    except (OSError, RuntimeError, ValueError) as error:
+        error_console.print(f"[red]verified action loop failed:[/red] {error}")
+        raise typer.Exit(code=2) from error
+    console.print_json(json.dumps(result))
+    if result["decision"] == "failed":
+        raise typer.Exit(code=2)
 
 
 if __name__ == "__main__":

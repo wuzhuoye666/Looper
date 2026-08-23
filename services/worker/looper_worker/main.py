@@ -28,38 +28,47 @@ def run_worker(
     cleanup_orphan_processes(work_dir)
     try:
         while True:
-            try:
-                client.register(
-                    name=f"{socket.gethostname()} local worker",
-                    capabilities=worker_capabilities(),
-                    fingerprint=worker_fingerprint(),
-                    target_ids=target_ids or ["local"],
-                )
-                break
-            except httpx.HTTPError as error:
-                if once:
-                    raise
-                print(f"worker registration waiting: {error}", flush=True)
-                time.sleep(1)
+            while True:
+                try:
+                    client.register(
+                        name=f"{socket.gethostname()} local worker",
+                        capabilities=worker_capabilities(),
+                        fingerprint=worker_fingerprint(),
+                        target_ids=target_ids or ["local"],
+                    )
+                    break
+                except httpx.HTTPError as error:
+                    if once:
+                        raise
+                    print(f"worker registration waiting: {error}", flush=True)
+                    time.sleep(1)
 
-        while True:
-            try:
-                claim = client.claim()
-                if claim is None:
+            while True:
+                try:
+                    claim = client.claim()
+                    if claim is None:
+                        if once:
+                            return 0
+                        time.sleep(0.75)
+                        continue
+                    print(f"claimed {claim['attemptId']}", flush=True)
+                    response = runner.run_claim(claim)
+                    print(f"completed {claim['attemptId']} as {response['status']}", flush=True)
                     if once:
                         return 0
-                    time.sleep(0.75)
-                    continue
-                print(f"claimed {claim['attemptId']}", flush=True)
-                response = runner.run_claim(claim)
-                print(f"completed {claim['attemptId']} as {response['status']}", flush=True)
-                if once:
-                    return 0
-            except (httpx.HTTPError, RunnerError, OSError, ValueError) as error:
-                print(f"worker error: {error}", flush=True)
-                if once:
-                    return 1
-                time.sleep(1)
+                except httpx.HTTPError as error:
+                    print(f"worker connection lost: {error}", flush=True)
+                    if once:
+                        return 1
+                    time.sleep(1)
+                    # Registration restores both the Worker row and every
+                    # bound target's runnable projection after an API outage.
+                    break
+                except (RunnerError, OSError, ValueError) as error:
+                    print(f"worker error: {error}", flush=True)
+                    if once:
+                        return 1
+                    time.sleep(1)
     finally:
         client.close()
 
