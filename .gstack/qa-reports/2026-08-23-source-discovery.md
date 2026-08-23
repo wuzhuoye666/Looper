@@ -5,6 +5,7 @@
 - Provider / Model：DeepSeek / `deepseek-v4-flash`
 - 输出合同：`looper.dev/interface-contract/v1`
 - 最终截图：[`screenshots/source-discovery-live-five.png`](screenshots/source-discovery-live-five.png)
+- 后端 Key 配置截图：[`screenshots/deepseek-key-backend-config.png`](screenshots/deepseek-key-backend-config.png)
 - 安全边界：ZIP 经路径、符号链接、大小和敏感文件筛选后，只允许 Harness 使用 `list_files`、`search_code`、`read_file`；不执行上传代码，不访问源码声明的目标地址。
 
 ## 随机样本与结果
@@ -44,7 +45,15 @@
 - Python：完整测试套件通过，Ruff 通过。
 - Web：9 个测试文件、31 个测试通过，生产构建通过。
 - DeepSeek：5 个随机仓库均由真实 provider 调用完成，不是 MockTransport 或静态解析结果。
-- 密钥：仅注入服务进程环境；未写入 `.env`、报告、源码或 Git。
+- 密钥：未写入 `.env`、报告、源码或 Git；后续前端配置验证只写入被 Git 忽略的后端加密凭据文件。
+
+## 后端保存 Key 复验
+
+- 前端只在 React 内存中暂存输入，PUT 成功后立即清空；没有写入 localStorage/sessionStorage。
+- Key 由后端保存到独立 Fernet 密文文件；Windows Fernet Key 再由当前服务账户 DPAPI 保护，Linux 文件限制为 0600。
+- 配置 API 需要已配置且有效的操作员 Bearer token，只返回来源与后四位脱敏值。
+- 停止 API 后，在 `LOOPER_DEEPSEEK_API_KEY` 为空的进程中重启，状态仍为 `source=stored`、`encryptedAtRest=true`。
+- 重启后使用保存的 Key 对随机样本再次真实调用 DeepSeek：`discovery_e2990344198046e184a852427fe7ef2c` completed，16 个接口、4 次工具调用。
 
 ## 关联提交
 
