@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from pathlib import Path
+from subprocess import CompletedProcess
 
 import pytest
 from looper_core.canonical import canonical_digest
+from looper_core.system_opt import inventory as inventory_module
 from looper_core.system_opt.demo import build_demo_manifest
 from looper_core.system_opt.domain import (
     AuthorizedDomain,
@@ -47,6 +49,27 @@ def _domain_evidence(item: object, *, verified: bool = True) -> DomainEvidence:
         source="unit-test target capability probe",
         evidence_digest=canonical_digest({"item": item.id, "verified": verified}),
     )
+
+
+def test_environment_fingerprint_detects_kvm_with_systemd_detector(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(inventory_module.shutil, "which", lambda _: "/usr/bin/systemd-detect-virt")
+    monkeypatch.setattr(
+        inventory_module.subprocess,
+        "run",
+        lambda *args, **kwargs: CompletedProcess(args[0], 0, stdout="kvm\n", stderr=""),
+    )
+
+    assert inventory_module._detect_linux_virtualization("linux generic") == "kvm"
+
+
+def test_environment_fingerprint_preserves_wsl_and_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert inventory_module._detect_linux_virtualization("microsoft-standard-wsl2") == "wsl2"
+    monkeypatch.setattr(inventory_module.shutil, "which", lambda _: None)
+    assert inventory_module._detect_linux_virtualization("linux generic") == "unknown"
 
 
 def test_dynamic_domain_requires_verified_target_and_authorization() -> None:

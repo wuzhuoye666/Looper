@@ -4,7 +4,9 @@ import base64
 import hashlib
 import os
 import platform
+import re
 import shutil
+import subprocess
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
@@ -57,18 +59,41 @@ def _read_os_release(path: Path = Path("/etc/os-release")) -> dict[str, str]:
     return values
 
 
+def _detect_linux_virtualization(kernel_evidence: str) -> str:
+    if "microsoft-standard-wsl2" in kernel_evidence:
+        return "wsl2"
+    if "microsoft" in kernel_evidence:
+        return "wsl-unknown-version"
+    detector = shutil.which("systemd-detect-virt")
+    if detector is None:
+        return "unknown"
+    try:
+        result = subprocess.run(
+            [detector],
+            capture_output=True,
+            check=False,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return "unknown"
+    detected = result.stdout.strip().lower()
+    if result.returncode == 0 and re.fullmatch(r"[a-z0-9._-]{1,64}", detected):
+        return detected
+    if detected == "none":
+        return "none"
+    return "unknown"
+
+
 def capture_environment_fingerprint() -> EnvironmentFingerprint:
     os_name = platform.system().lower() or "unknown"
     kernel_release = platform.release() or "unknown"
     architecture = platform.machine() or "unknown"
     release = _read_os_release() if os_name == "linux" else {}
     kernel_evidence = f"{kernel_release} {platform.version()}".lower()
-    if "microsoft-standard-wsl2" in kernel_evidence:
-        virtualization = "wsl2"
-    elif "microsoft" in kernel_evidence:
-        virtualization = "wsl-unknown-version"
-    else:
-        virtualization = "unknown"
+    virtualization = (
+        _detect_linux_virtualization(kernel_evidence) if os_name == "linux" else "unknown"
+    )
 
     identifier_source = "platform.node"
     identifier = platform.node()
