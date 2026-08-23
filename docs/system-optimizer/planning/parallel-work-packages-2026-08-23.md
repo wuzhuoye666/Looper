@@ -132,9 +132,11 @@
   - M12：`scoring.py` assert 输入校验改显式 raise；
   - C6：改善量方向契约显式化（helper + 断言，消除 :219 硬编码全 MAXIMIZE 的隐性契约）；
   - C7：三套 Pareto 收敛到 `analysis.pareto_ranks` + 黄金值测试证明数值不变
-    （`scoring._priority_dominates` / `result_vector._dominates` 改薄封装）；
+    （`scoring._priority_dominates` / `result_vector._dominates` 改薄封装）
+    ——**未随 074ecc2 交付，仍待做**；
   - §4 杂项：`tuning._search_space` 的 related_components 漏项、
-    `scoring.py` `10**9` 哨兵改 `math.inf`。
+    `scoring.py` `10**9` 哨兵改 `math.inf`（✅ 已交付；related_components
+    漏项未随 074ecc2 交付，仍待做）。
 - 文件清单：`scoring.py`、`analysis.py`（根 packages/core/looper_core/）、
   `tuning.py`、`docs/system-optimizer/contracts/formula-provenance.md`、相关 tests。
 - 红线：**不得触碰** `collector.py`、`pressure/`、`examples/system-optimizer/*pressure*`
@@ -179,7 +181,7 @@
 | PKG-E | 🟡 大部分完成 2026-08-23 | 主 agent | 盲区双机实测✅ + tuned 恢复✅ + 网络会话资产就绪✅；真实 peer 闭环✅（用户点出改走 VPC 内网后完成：bbr/reno 均未达显著，全部回滚；公网路径不适合作吞吐通道）|
 | PKG-F | ✅ 完成 2026-08-23 | 主 agent（zcode） | engine-demo/cache-inspect 命令 + 4 测试；Windows 全流程 demo 一条命令可复现 |
 | PKG-G | ✅ 设计稿完成 2026-08-23 | 主 agent（zcode） | workload-tuning.md 扩写 D0-D6：**D0 负载供给边界（SO-D020：基础套件只作测试给的压力，引擎动态相位永不主动造载）**、O0-O3 观察分层、S3 多假设路由、S9 复验窗口生产者（M11 设计缺口闭合）、门禁参数化合同、重激活三案（A+B 已确认）；全部数值占位待校准，未写实现 |
-| PKG-H | 🟡 第一批进行中 2026-08-23 | DeepSeek agent | M7/M12/C6/C7/§4 杂项；治理见 PKG-H 节；第二批（M1-M8/M10 等）按分诊表逐步解锁 |
+| PKG-H | 🟡 第一批已合入 2026-08-23 | DeepSeek agent（主 agent 验收） | 第一批（074ecc2→merge 743c065）：M7 三条 formula_id 登记（与代码逐字一致，无新权重阈值）+ M12 assert→raise + C6 方向契约 helper + §4 哨兵 math.inf（该函数现无调用方，无序列化风险）；全量回归绿含 S6/S7 黄金数值特征测试（零数值漂移）。第二批（M1/M2-M3/M5/M8/M10）等用户拍板解锁 |
 
 ## 登记补充（2026-08-23 A 级审计）
 
