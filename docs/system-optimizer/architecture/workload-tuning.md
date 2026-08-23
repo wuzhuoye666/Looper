@@ -234,7 +234,8 @@ VerificationWindow（复验窗口）:
 | 假设路由 | ✅ M3-4 完成 2026-08-23：`hypothesis.py`（SymptomRecord/ComponentHypothesis/HypothesisLedger；三条 D2 硬规则代码化：≥2 竞争假设才许干预、O2 只推进到 probing、confirmed 唯一走 accepted 业务复测并自动 supersede 兄弟假设；(rank,id) 确定性 probe_queue，top_k 任务注入） | L7 桥接（refuted 假设入负缓存的第二条目类型）按 SO-D019 留 open；接入动态循环 |
 | S9 复验生产者 | ✅ M3-5 完成 2026-08-23：`verification.py`（VerificationWindow 绑定合同/观察窗/复测批次三层 digest + `verification_observation` 生产者：passed = 重测改善的 S7 裁决，**可为 false**——测试验证更差重测 → 失败观测 → evaluate_promotion fail-closed 分支首次被真实生产者触达（M11 闭合）；轮内单记录不足以满足 min_distinct_time_blocks，必须由复验窗补足）| 接入动态循环与 L6 候选级回退联动 |
 | 结束门禁合同 | ✅ M3-3 完成 2026-08-23：`phase_gate.py`（DynamicPhaseGateContract 五类停止全字段化 + PhaseGateState + `evaluate_phase_gate` 固定判定顺序：安全→身份→预算→目标→收敛；GateDecision 必须引用触发字段+证据 digest；防振荡字段 reactivation_holdout_windows/single_change_per_window）| 接入动态循环（M3-4/5）与 D5 重激活资格判定 |
-| 重激活 | ✅ M3-6 完成 2026-08-23：`reactivation.py`（A+B 案：身份漂移→迟滞后立即资格（注明新合同语义）、SLO 持续违反→迟滞阈值资格；判定顺序 预算→保持窗→漂移→SLO；资格≠自动重启；ReactivationDecision 模型级一致性校验；C 案列 M6+） | 无——M3 六个设计项全部代码化；剩余为动态循环整合（把 O0/O1、门禁、假设、复验、重激活串成运行时） |
+| 重激活 | ✅ M3-6 完成 2026-08-23：`reactivation.py`（A+B 案：身份漂移→迟滞后立即资格（注明新合同语义）、SLO 持续违反→迟滞阈值资格；判定顺序 预算→保持窗→漂移→SLO；资格≠自动重启；ReactivationDecision 模型级一致性校验；C 案列 M6+） | 相位间生命周期由外部在本运行之后判定（已成独立模块） |
+| 动态循环整合 | ✅ 2026-08-23：`dynamic_loop.py`（`run_dynamic_phase` 把六构件串成受门禁约束的有限循环：观察窗组装→SLO/症状→假设账本（D2 规则全程生效）→探测/干预（注入回调，L1 施加与测量在调用方侧）→复验观测→晋升判定→每窗门禁判定→显式停止；身份漂移立即停相位；DynamicPhaseRun 证据模型 + digest；重激活属相位间，循环外判定） | 真实后端接线（L1 施加/L6 回退/GPT 窗口化 O1 的适配器）、sysbench 解析器、convergence 计数器接 S6 轮数据、CLI 入口 |
 | workload 合同 | ✅ M3-1 完成 2026-08-23：`workload.py`（schema + YAML 解析器 + `load_argv_digest`/`same_load`）+ stress-ng 示例合同（argv digest 绑定自验证）+ 7 测试。SO-D020 代码化：`load_provider=external-test` 唯一枚举、argv 只存摘要、身份 digest 不含 prose | 剩余：O0 解析器（stress-ng/sysbench/fio/iperf3 输出产物 → O0 指标），引擎只解析不启动 |
 
 依赖顺序建议：workload 合同 → O0/O1 观察窗口 → 门禁合同 → 假设路由 →

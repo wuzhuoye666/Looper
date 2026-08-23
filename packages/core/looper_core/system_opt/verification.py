@@ -21,7 +21,16 @@ from looper_core.system_opt.result_vector import VerificationObservation
 from looper_core.system_opt.scoring import ImprovementEvidence
 
 VERIFICATION_WINDOW_SCHEMA = "looper.verification-window/v1alpha1"
+RETEST_OUTCOME_SCHEMA = "looper.retest-outcome/v1alpha1"
 _DIGEST = r"^sha256:[0-9a-f]{64}$"
+
+
+class RetestOutcome(StrictModel):
+    """What a re-verification window produces: the S6 improvement recomputed on
+    the retest batch plus the digest of that raw MeasurementBatch."""
+
+    improvement: ImprovementEvidence
+    measurement_batch_digest: str = Field(pattern=_DIGEST)
 
 
 class VerificationWindow(StrictModel):
@@ -71,6 +80,8 @@ def verification_observation(
 
 
 __all__ = [
+    "RETEST_OUTCOME_SCHEMA",
+    "RetestOutcome",
     "VERIFICATION_WINDOW_SCHEMA",
     "VerificationWindow",
     "verification_observation",
