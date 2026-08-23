@@ -51,6 +51,8 @@ from looper_core.system_opt.policy import (
 from looper_core.system_opt.scoring import MeasurementBatch, MetricEvidence
 from looper_core.system_opt.tuning import OptimizationRun, SystemOptimizationEngine
 
+SYNTHETIC_PRESSURE_PROTOCOL_DIGEST = "sha256:" + "d" * 64
+
 
 def _command(*argv: str) -> CommandTemplate:
     return CommandTemplate(argv=list(argv), timeout_seconds=5)
@@ -430,6 +432,7 @@ class SyntheticMeasurementAdapter:
                 for metric, values in metric_values.items()
             },
             gate_values={"gate.correctness": True},
+            pressure_protocol_digest=SYNTHETIC_PRESSURE_PROTOCOL_DIGEST,
         )
 
 
@@ -455,6 +458,7 @@ def build_workload_reference(policy: SystemOptimizationPolicy) -> MeasurementBat
             for metric, observations in values.items()
         },
         gate_values={},
+        pressure_protocol_digest=SYNTHETIC_PRESSURE_PROTOCOL_DIGEST,
     )
 
 

@@ -19,9 +19,13 @@ from looper_core.system_opt.policy import (
     SystemOptimizationPolicy,
 )
 from looper_core.system_opt.scoring import (
+    DiagnosticPriority,
+    MeasurementBatch,
+    MetricEvidence,
     adverse_change,
     bootstrap_improvement,
     comparable,
+    diagnostic_evidence_report,
     diagnostic_priorities,
     evaluate_hard_gates,
     improvement_value,
@@ -340,3 +344,157 @@ def test_loaded_diagnosis_rejects_metric_contract_from_another_phase() -> None:
 
     with pytest.raises(InsufficientEvidence, match="metric phase.*does not match"):
         diagnostic_priorities(current, reference, [wrong_phase_contract])
+
+def _workload_diagnostic_fixture():
+    manifest = build_demo_manifest()
+    backend = SimulatedBackend({item.id: item.default for item in manifest.items})
+    policy = build_demo_policy(OptimizationMode.WORKLOAD)
+    current = SyntheticMeasurementAdapter(backend, mode=OptimizationMode.WORKLOAD)(7)
+    reference = build_workload_reference(policy)
+    contracts = [
+        metric for metric in policy.metrics if metric.role.value == "component-diagnostic"
+    ]
+    return current, reference, contracts
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+def test_metric_evidence_rejects_non_finite_values(value: float) -> None:
+    with pytest.raises(ValidationError, match="must be finite"):
+        MetricEvidence(metric_id="cpu.utilization", values=[value])
+
+
+def test_measurement_batch_rejects_metric_dictionary_key_mismatch() -> None:
+    with pytest.raises(ValidationError, match="metric key/id mismatch"):
+        MeasurementBatch(
+            identity={},
+            metrics={"cpu.utilization": MetricEvidence(metric_id="wrong.metric", values=[0.5])},
+            gate_values={},
+        )
+
+
+@pytest.mark.parametrize("field", ["scale", "target", "pressure_reference"])
+def test_metric_contract_rejects_non_finite_formula_parameters(field: str) -> None:
+    contract = build_demo_policy(OptimizationMode.WORKLOAD).metric("cpu.utilization")
+    payload = contract.model_dump(mode="python")
+    payload[field] = float("inf")
+
+    with pytest.raises(ValidationError, match="must be finite"):
+        MetricContract.model_validate(payload)
+
+
+def test_diagnosis_fails_closed_and_reports_insufficient_samples() -> None:
+    current, reference, contracts = _workload_diagnostic_fixture()
+    payload = current.model_dump(mode="python")
+    metric_id = contracts[0].id
+    payload["metrics"][metric_id]["values"] = [payload["metrics"][metric_id]["values"][0]]
+    short_current = MeasurementBatch.model_validate(payload)
+
+    report = diagnostic_evidence_report(short_current, reference, contracts)
+    issue = next(item for item in report.issues if item.metric_id == metric_id)
+    assert issue.reason == "insufficient-samples"
+    assert issue.observed_samples == 1
+    assert issue.required_samples == contracts[0].minimum_samples
+    assert report.coverage < 1
+    with pytest.raises(InsufficientEvidence, match="insufficient-samples"):
+        diagnostic_priorities(short_current, reference, contracts)
+
+
+def test_diagnosis_fails_closed_on_missing_or_mismatched_pressure_protocol() -> None:
+    current, reference, contracts = _workload_diagnostic_fixture()
+    missing_payload = current.model_dump(mode="python")
+    missing_payload["pressure_protocol_digest"] = None
+    missing = MeasurementBatch.model_validate(missing_payload)
+    with pytest.raises(InsufficientEvidence, match="missing-pressure-protocol"):
+        diagnostic_priorities(missing, reference, contracts)
+
+    mismatch_payload = reference.model_dump(mode="python")
+    mismatch_payload["pressure_protocol_digest"] = "sha256:" + "a" * 64
+    mismatch = MeasurementBatch.model_validate(mismatch_payload)
+    with pytest.raises(InsufficientEvidence, match="pressure-protocol-mismatch"):
+        diagnostic_priorities(current, mismatch, contracts)
+
+
+def test_missing_metric_is_explicit_in_diagnostic_coverage() -> None:
+    current, reference, contracts = _workload_diagnostic_fixture()
+    payload = reference.model_dump(mode="python")
+    missing_metric = contracts[-1].id
+    del payload["metrics"][missing_metric]
+    incomplete = MeasurementBatch.model_validate(payload)
+
+    report = diagnostic_evidence_report(current, incomplete, contracts)
+    assert report.coverage == pytest.approx((len(contracts) - 1) / len(contracts))
+    assert any(
+        issue.metric_id == missing_metric
+        and issue.side == "reference"
+        and issue.reason == "missing-metric"
+        for issue in report.issues
+    )
+    with pytest.raises(InsufficientEvidence, match="missing-metric"):
+        diagnostic_priorities(current, incomplete, contracts)
+
+
+def test_diagnostic_priority_keeps_legacy_sample_adequacy_schema() -> None:
+    current, reference, contracts = _workload_diagnostic_fixture()
+    priorities = diagnostic_priorities(current, reference, contracts)
+
+    # M9 compatibility: serialized confidence still carries sample adequacy until
+    # the P/D/A/Q/T DiagnosticPriority schema migration lands as one versioned event.
+    assert all(priority.confidence == 1 for priority in priorities)
+    # One diagnostic metric per component in the fixture: no component can dominate another.
+    assert all(priority.pareto_rank == 1 for priority in priorities)
+
+
+def test_legacy_diagnostic_confidence_still_loads() -> None:
+    priority = DiagnosticPriority.model_validate(
+        {
+            "metric_id": "cpu.utilization",
+            "component": "cpu",
+            "pressure": 0.9,
+            "adverse_change": 0.1,
+            "persistence": 0.5,
+            "confidence": 0.5,
+        }
+    )
+
+    assert priority.confidence == 0.5
+    assert set(priority.model_dump(mode="json")) == {
+        "metric_id",
+        "component",
+        "pressure",
+        "adverse_change",
+        "persistence",
+        "confidence",
+        "pareto_rank",
+        "formula_id",
+        "current_batch_digest",
+        "reference_batch_digest",
+    }
+
+
+def test_pareto_ranks_are_independent_between_components() -> None:
+    current, reference, contracts = _workload_diagnostic_fixture()
+    cpu = contracts[0]
+    weaker_cpu = cpu.model_copy(update={"id": "cpu.utilization-secondary"})
+    storage = contracts[2]
+    current_payload = current.model_dump(mode="python")
+    reference_payload = reference.model_dump(mode="python")
+    current_payload["metrics"][weaker_cpu.id] = {
+        "metric_id": weaker_cpu.id,
+        "values": [0.7] * cpu.minimum_samples,
+    }
+    reference_payload["metrics"][weaker_cpu.id] = {
+        "metric_id": weaker_cpu.id,
+        "values": [0.55] * cpu.minimum_samples,
+    }
+
+    priorities = diagnostic_priorities(
+        MeasurementBatch.model_validate(current_payload),
+        MeasurementBatch.model_validate(reference_payload),
+        [cpu, weaker_cpu, storage],
+    )
+    by_metric = {priority.metric_id: priority for priority in priorities}
+
+    assert by_metric[cpu.id].pareto_rank == 1
+    assert by_metric[weaker_cpu.id].pareto_rank == 2
+    # Storage is not demoted by CPU coordinates: its rank starts at one in its own component.
+    assert by_metric[storage.id].pareto_rank == 1

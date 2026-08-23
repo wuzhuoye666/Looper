@@ -162,7 +162,7 @@ loop:
 | S1/S1.1 | 基线校准 + CV 门限派生 | L5 | ✅ `calibrate-pressure`/`derive-pressure-gate`，三组件真机 |
 | S2 | 不可补偿硬门禁 | L8 判断器 | ✅ `GateSpec`+`evaluate_hard_gates` |
 | S3 | 组件路由 | L8 调度器 | 🟡 workload 模式雏形，未真跑 |
-| S4 | 组件内二维优先级 | L8 打分器 / L5 | 🟡 `diagnostic_priorities` 一版；PressureTransform open（F-PROJECT-002） |
+| S4 | 组件内二维优先级 | L8 打分器 / L5 | 🟡 F-PROJECT-002 v1alpha1 已采用并实现；逐 metric scale 校准、P/D/A/Q/T schema 迁移仍 open |
 | S5 | 动态合法搜索域 | L5 | ✅ `resolve_domain` 真机用过（dependency/risk 交集待核） |
 | S6 | 方向感知改善量 | L8 打分器 / L5 | ✅ `bootstrap_improvement`（F-PROJECT-S6-S7/v1） |
 | S7 | 稳健接受条件 | L8 判断器 | ✅ LCB>MDE 真机用过 |
@@ -175,8 +175,8 @@ loop:
 
 1. **L8 引擎骨架**：调度器/判断器/打分器三件套，把 S0/S2/S5/S6/S7 的现有散落
    实现收编为引擎统一调用；组件优化器降格为"搜索+映射+上报"。
-2. **S4 补全**：确认 PressureTransform/AdverseChangeTransform（F-PROJECT-002 的
-   open decision），二维优先级成为调度器的正式输入。
+2. **S4 补全**：F-PROJECT-002 v1alpha1 已成为调度器输入；后续按提案制处理 E_m，
+   并将 P/D/A/Q/T 与 M9 存量证据迁移合并为一次 schema 版本事件。
 3. **L4 采集器**：每组件定义指标采集集，压/采解耦。
 4. **S8 + L6c**：结果向量（含 U_regression）→ 退化级回退闭环。
 5. **S9 组合复验**：任一组件出现已接受候选后启用。

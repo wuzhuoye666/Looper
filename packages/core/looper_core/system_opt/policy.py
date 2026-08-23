@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import math
 from enum import StrEnum
 from typing import Any, Literal
 
@@ -71,6 +72,20 @@ class MetricContract(StrictModel):
     pressure_method: PressureMethod
     pressure_reference: float | None = None
     source: str = Field(min_length=1, max_length=1000)
+
+    @field_validator(
+        "scale",
+        "minimum_effect",
+        "target",
+        "lower_bound",
+        "upper_bound",
+        "pressure_reference",
+    )
+    @classmethod
+    def require_finite_parameters(cls, value: float | None) -> float | None:
+        if value is not None and not math.isfinite(value):
+            raise ValueError("metric numeric parameters must be finite")
+        return value
 
     @model_validator(mode="after")
     def validate_semantics(self) -> MetricContract:
