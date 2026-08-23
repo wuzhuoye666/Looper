@@ -164,3 +164,27 @@ def test_negative_utilization_fails_closed() -> None:
     contract = build_demo_policy(OptimizationMode.WORKLOAD).metric("cpu.utilization")
     with pytest.raises(InsufficientEvidence, match="negative utilization"):
         pressure_value(-0.1, contract)
+
+
+@pytest.mark.parametrize(
+    "direction,bounds",
+    [
+        (MetricDirection.TARGET, {}),
+        (
+            MetricDirection.RANGE,
+            {"lower_bound": 90.0, "upper_bound": 110.0},
+        ),
+    ],
+)
+def test_target_range_adverse_change_is_negated_improvement(
+    direction: MetricDirection, bounds: dict[str, float]
+) -> None:
+    """SO-D023 M1: after scale normalization the S4 adverse change for
+    target/range metrics is exactly the negated S6 improvement — the identity
+    that keeps the two formulas one coordinate system, pinned as a property."""
+
+    contract = _metric_with(direction=direction, scale=2.0, target=100.0, **bounds)
+    for current, baseline in ((105.0, 100.0), (118.0, 95.0), (99.0, 130.0)):
+        assert adverse_change(current, baseline, contract) == pytest.approx(
+            -improvement_value(current, baseline, contract)
+        ), f"identity broken for current={current}, baseline={baseline}"

@@ -181,7 +181,7 @@
 | PKG-E | 🟡 大部分完成 2026-08-23 | 主 agent | 盲区双机实测✅ + tuned 恢复✅ + 网络会话资产就绪✅；真实 peer 闭环✅（用户点出改走 VPC 内网后完成：bbr/reno 均未达显著，全部回滚；公网路径不适合作吞吐通道）|
 | PKG-F | ✅ 完成 2026-08-23 | 主 agent（zcode） | engine-demo/cache-inspect 命令 + 4 测试；Windows 全流程 demo 一条命令可复现 |
 | PKG-G | ✅ 设计稿完成 2026-08-23 | 主 agent（zcode） | workload-tuning.md 扩写 D0-D6：**D0 负载供给边界（SO-D020：基础套件只作测试给的压力，引擎动态相位永不主动造载）**、O0-O3 观察分层、S3 多假设路由、S9 复验窗口生产者（M11 设计缺口闭合）、门禁参数化合同、重激活三案（A+B 已确认）；全部数值占位待校准，未写实现 |
-| PKG-H | 🟡 第一批已合入 2026-08-23 | DeepSeek agent（主 agent 验收） | 第一批（074ecc2→merge 743c065）：M7 三条 formula_id 登记（与代码逐字一致，无新权重阈值）+ M12 assert→raise + C6 方向契约 helper + §4 哨兵 math.inf（该函数现无调用方，无序列化风险）；全量回归绿含 S6/S7 黄金数值特征测试（零数值漂移）。第二批（M1/M2-M3/M5/M8/M10）等用户拍板解锁 |
+| PKG-H | ✅ 第二批已合入 2026-08-23 | DeepSeek agent（主 agent 验收） | 第二批三族（SO-D023）：A fail-closed（M1/M2/M3 隐式分母清零，函数级 raise + 3 负向测试）；B 公式 /v2（M5 统一 analysis.quantile 插值 + M8 resamples 参数化，登记表随升）；C 清理（STABILITY_REJECTED 删除 + M10 负利用率 raise）。主 agent 验收补齐 SO-D023 要求的恒等式属性测试（target/range 下 adverse_change ≡ −improvement，参数化 TARGET/RANGE×3 输入对）。S6/S7 黄金数值零漂移确认。**审查分诊表 20 项全部闭环**（C1 重构本体、C4 随 C1、M9/M13 缓办除外） |
 
 ## 登记补充（2026-08-23 A 级审计）
 
