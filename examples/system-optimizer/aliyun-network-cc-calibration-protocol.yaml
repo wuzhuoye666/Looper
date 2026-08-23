@@ -1,0 +1,55 @@
+schema_version: looper.standard-pressure-protocol/v1alpha1
+id: network-iperf3-peer-cc-calibration-20260823
+component: network
+target_scope: Alibaba ECS iZ7xvcxcry1ejfjcd1d7igZ as iperf3 client toward controlled peer 8.148.238.132 (iZ7xv1fc2pmggfdftlu37jZ), fixed two-stream method, cubic baseline.
+limitation: Calibration only on the real peer path under the default cubic control; loopback gates do not transfer and this is not an approved candidate stability gate.
+required_executables: [python3]
+input_identity:
+  policy_id: unassigned-calibration-only
+  evidence_kind: empirical-target-local
+metric_ids: [network.receive-throughput-gbps, network.retransmits, network.success]
+gate_metric_ids: [network.success]
+stability:
+  metric_id: network.receive-throughput-gbps
+  statistic: cv
+  enforcement: report-only
+  acceptance_limit: null
+  minimum_repeats: 7
+  maximum_repeats: 7
+  source: First real-peer calibration under cubic; threshold deliberately unapproved.
+phases:
+  - id: prepare
+    kind: prepare
+    command:
+      argv: [python3, examples/system-optimizer/network_pressure_measure.py, prepare, --output-dir, .artifacts/system-opt/m2-network-cc-calibration-20260823, --repeats, "{repeats}", --host, 8.148.238.132, --port, "5201", --duration-seconds, "5", --omit-seconds, "2", --parallel-streams, "2", --server-startup-seconds, "0.1"]
+      timeout_seconds: 180
+    declared_duration_seconds: 0
+    purpose: prepare phase of the fixed two-stream peer calibration.
+  - id: warmup
+    kind: warmup
+    command:
+      argv: [python3, examples/system-optimizer/network_pressure_measure.py, warmup, --output-dir, .artifacts/system-opt/m2-network-cc-calibration-20260823, --repeats, "{repeats}", --host, 8.148.238.132, --port, "5201", --duration-seconds, "5", --omit-seconds, "2", --parallel-streams, "2", --server-startup-seconds, "0.1"]
+      timeout_seconds: 180
+    declared_duration_seconds: 5
+    purpose: warmup phase of the fixed two-stream peer calibration.
+  - id: measure
+    kind: measure
+    command:
+      argv: [python3, examples/system-optimizer/network_pressure_measure.py, measure, --output-dir, .artifacts/system-opt/m2-network-cc-calibration-20260823, --repeats, "{repeats}", --host, 8.148.238.132, --port, "5201", --duration-seconds, "5", --omit-seconds, "2", --parallel-streams, "2", --server-startup-seconds, "0.1"]
+      timeout_seconds: 180
+    declared_duration_seconds: 35
+    purpose: measure phase of the fixed two-stream peer calibration.
+  - id: verify
+    kind: verify
+    command:
+      argv: [python3, examples/system-optimizer/network_pressure_measure.py, verify, --output-dir, .artifacts/system-opt/m2-network-cc-calibration-20260823, --repeats, "{repeats}", --host, 8.148.238.132, --port, "5201", --duration-seconds, "5", --omit-seconds, "2", --parallel-streams, "2", --server-startup-seconds, "0.1"]
+      timeout_seconds: 180
+    declared_duration_seconds: 0
+    purpose: verify phase of the fixed two-stream peer calibration.
+  - id: cleanup
+    kind: cleanup
+    command:
+      argv: [python3, examples/system-optimizer/network_pressure_measure.py, cleanup, --output-dir, .artifacts/system-opt/m2-network-cc-calibration-20260823, --repeats, "{repeats}", --host, 8.148.238.132, --port, "5201", --duration-seconds, "5", --omit-seconds, "2", --parallel-streams, "2", --server-startup-seconds, "0.1"]
+      timeout_seconds: 180
+    declared_duration_seconds: 0
+    purpose: cleanup phase of the fixed two-stream peer calibration.

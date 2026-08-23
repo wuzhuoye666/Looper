@@ -1,0 +1,9 @@
+[
+  {
+    "item_id": "tcp-congestion-control",
+    "domain": {"minimum": null, "maximum": null, "step": null, "choices": ["cubic", "reno", "bbr"], "log": false},
+    "verified": true,
+    "source": "2026-08-23 byte-level readback artifact aliyun-network-cc-capability-raw.txt: available lists reno and cubic; bbr kernel module present (modinfo tcp_bbr) and loads on write",
+    "evidence_digest": "sha256:f2478032713c3dfb53c55abaa734344088d1e69b5b75463ff395df5482f6ad69"
+  }
+]

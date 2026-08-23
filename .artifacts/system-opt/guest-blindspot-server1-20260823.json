@@ -1,0 +1,122 @@
+{
+  "cpu": {
+    "cpu.busy-ratio": {
+      "availability": "readable",
+      "reason": null,
+      "value": 0.0
+    },
+    "cpu.online-count": {
+      "availability": "readable",
+      "reason": null,
+      "value": 8.0
+    },
+    "cpu.perf-event-paranoid": {
+      "availability": "readable",
+      "reason": null,
+      "value": 4.0
+    },
+    "cpu.pmu-event-sources": {
+      "availability": "readable",
+      "reason": null,
+      "value": 1.0
+    }
+  },
+  "memory": {
+    "memory.available-ratio": {
+      "availability": "readable",
+      "reason": null,
+      "value": 0.9431771786920318
+    }
+  },
+  "network": {
+    "network.rx-bytes-delta": {
+      "availability": "unavailable",
+      "reason": "network_interfaces were not explicitly supplied; implicit aggregation is forbidden",
+      "value": null
+    },
+    "network.rx-bytes-per-second": {
+      "availability": "unavailable",
+      "reason": "network_interfaces were not explicitly supplied; implicit aggregation is forbidden",
+      "value": null
+    },
+    "network.rx-bytes-total": {
+      "availability": "unavailable",
+      "reason": "network_interfaces were not explicitly supplied; implicit aggregation is forbidden",
+      "value": null
+    },
+    "network.tx-bytes-delta": {
+      "availability": "unavailable",
+      "reason": "network_interfaces were not explicitly supplied; implicit aggregation is forbidden",
+      "value": null
+    },
+    "network.tx-bytes-per-second": {
+      "availability": "unavailable",
+      "reason": "network_interfaces were not explicitly supplied; implicit aggregation is forbidden",
+      "value": null
+    },
+    "network.tx-bytes-total": {
+      "availability": "unavailable",
+      "reason": "network_interfaces were not explicitly supplied; implicit aggregation is forbidden",
+      "value": null
+    }
+  },
+  "numa": {
+    "numa.binding": {
+      "availability": "unavailable",
+      "reason": "NUMA topology visibility does not prove this workload's CPU/memory binding; no workload binding measurement was supplied",
+      "value": null
+    },
+    "numa.node-count": {
+      "availability": "readable",
+      "reason": null,
+      "value": 1.0
+    }
+  },
+  "storage": {
+    "storage.io-ms-delta": {
+      "availability": "unavailable",
+      "reason": "storage_devices were not explicitly supplied; implicit aggregation is forbidden",
+      "value": null
+    },
+    "storage.io-ms-per-second": {
+      "availability": "unavailable",
+      "reason": "storage_devices were not explicitly supplied; implicit aggregation is forbidden",
+      "value": null
+    },
+    "storage.io-ms-total": {
+      "availability": "unavailable",
+      "reason": "storage_devices were not explicitly supplied; implicit aggregation is forbidden",
+      "value": null
+    },
+    "storage.reads-completed-delta": {
+      "availability": "unavailable",
+      "reason": "storage_devices were not explicitly supplied; implicit aggregation is forbidden",
+      "value": null
+    },
+    "storage.reads-completed-per-second": {
+      "availability": "unavailable",
+      "reason": "storage_devices were not explicitly supplied; implicit aggregation is forbidden",
+      "value": null
+    },
+    "storage.reads-completed-total": {
+      "availability": "unavailable",
+      "reason": "storage_devices were not explicitly supplied; implicit aggregation is forbidden",
+      "value": null
+    },
+    "storage.writes-completed-delta": {
+      "availability": "unavailable",
+      "reason": "storage_devices were not explicitly supplied; implicit aggregation is forbidden",
+      "value": null
+    },
+    "storage.writes-completed-per-second": {
+      "availability": "unavailable",
+      "reason": "storage_devices were not explicitly supplied; implicit aggregation is forbidden",
+      "value": null
+    },
+    "storage.writes-completed-total": {
+      "availability": "unavailable",
+      "reason": "storage_devices were not explicitly supplied; implicit aggregation is forbidden",
+      "value": null
+    }
+  }
+}
