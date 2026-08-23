@@ -296,7 +296,13 @@ def test_aliyun_memory_capability_digest_binds_the_raw_readback() -> None:
         )
     )
 
-    assert domains[0]["evidence_digest"] == "sha256:" + hashlib.sha256(raw).hexdigest()
+    expected = "sha256:" + hashlib.sha256(raw).hexdigest()
+    assert domains[0]["evidence_digest"] == expected, (
+        "capability raw evidence bytes do not match the registered digest; "
+        "if the actual value is the CRLF variant, this checkout smudged the "
+        "evidence file — evidence blobs are byte-faithful (-text, SO-D022); "
+        "pull the updated .gitattributes and refresh with git checkout"
+    )
 
 
 def test_aliyun_memory_hard_gate_protocol_binds_the_task_policy() -> None:

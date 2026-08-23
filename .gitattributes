@@ -5,3 +5,4 @@
 .artifacts/** -diff -text
 .artifacts/system-opt/m2-network-cc-calibration-20260823/** -diff -text
 .artifacts/system-opt/m2-network-cc-search-20260823/** -diff -text
+examples/system-optimizer/*-raw.txt -text
