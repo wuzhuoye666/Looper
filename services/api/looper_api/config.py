@@ -4,7 +4,7 @@ from decimal import Decimal
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import AnyHttpUrl, Field
+from pydantic import AnyHttpUrl, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -41,6 +41,13 @@ class Settings(BaseSettings):
     )
     operator_token: str = Field(default="", repr=False)
     max_live_hourly_amount: Decimal = Field(default=Decimal("10"), gt=0)
+
+    @field_validator("remote_worker_api_url", mode="before")
+    @classmethod
+    def empty_remote_worker_api_url_is_unset(cls, value: object) -> object:
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
 
     @property
     def database_uri(self) -> str:
