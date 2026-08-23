@@ -228,7 +228,7 @@ def test_connect_discovers_inventory_without_persisting_credentials(
     view = target_view(record)
     assert view["status"] == "inventory"
     assert view["framework"] == "Ubuntu 24.04.2 LTS"
-    assert view["hardware"] == "AMD EPYC 7B13 · 16 vCPU · 62.78 GiB"
+    assert view["hardware"] == "AMD EPYC 7B13 · x86_64 · 16 vCPU · 62.78 GiB"
 
 
 def test_connect_does_not_persist_failed_probe(external_db_session) -> None:

@@ -1,0 +1,395 @@
+{
+  "evidence_kind": "synthetic",
+  "general": {
+    "baseline": {
+      "gate_values": {
+        "gate.correctness": true
+      },
+      "identity": {
+        "phase": "steady-state",
+        "statistics": "explicit-policy",
+        "target": "synthetic-linux-guest",
+        "tool": "looper-system-opt-synthetic/v1",
+        "workload": "synthetic-general"
+      },
+      "metrics": {
+        "gate.correctness": {
+          "metric_id": "gate.correctness",
+          "values": [
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        "workload.latency-p99": {
+          "metric_id": "workload.latency-p99",
+          "values": [
+            99.88083399026014,
+            100.05736011755425,
+            100.04775553800812,
+            99.88672444908421,
+            100.02618998596124,
+            100.06679405491124,
+            99.98832303780681
+          ]
+        },
+        "workload.score": {
+          "metric_id": "workload.score",
+          "values": [
+            99.8865602196081,
+            99.96762062432208,
+            100.11074555572222,
+            100.05276267868817,
+            99.94860713470496,
+            100.09097397369766,
+            99.88838018266219
+          ]
+        }
+      }
+    },
+    "candidates": [
+      {
+        "accepted": true,
+        "candidate_id": "sha256:1cfbec7713c32ee413ed552846ec8d0ea5962cacdd9311cfea6cdbbac64658c4",
+        "change_count": 3,
+        "comparable": true,
+        "feasible": true,
+        "gates": [
+          {
+            "actual": true,
+            "gate_id": "correctness",
+            "metric": "gate.correctness",
+            "passed": true,
+            "reason": "synthetic workload correctness must pass"
+          }
+        ],
+        "identity_mismatches": [],
+        "improvements": {
+          "workload.latency-p99": {
+            "accepted": true,
+            "baseline_digest": "sha256:e871b03ff082ca390604a740a894b2101a04db270abef8dbd020160c7eeb96e8",
+            "baseline_estimate": 100.02618998596124,
+            "candidate_digest": "sha256:f24a14e4498d8c25a29f7b6f34345338ca1ff38584a5cc661556b76bd4f67070",
+            "candidate_estimate": 87.4750381764032,
+            "estimate": 0.12551151809558037,
+            "formula_id": "F-PROJECT-S6-S7/v1alpha1",
+            "lower": 0.12389748262244168,
+            "metric_id": "workload.latency-p99",
+            "minimum_effect": 0.0,
+            "upper": 0.12619981723512141
+          },
+          "workload.score": {
+            "accepted": true,
+            "baseline_digest": "sha256:a855288addf89cd05598ccb5d84308a94f4719c87c0925520e00e836d443d6d9",
+            "baseline_estimate": 99.96762062432208,
+            "candidate_digest": "sha256:a2c6fded179f0a261d3e7f372144832bbaf1b7817e440d60fe09d857171526fb",
+            "candidate_estimate": 120.0107933577764,
+            "estimate": 0.20043172733454312,
+            "formula_id": "F-PROJECT-S6-S7/v1alpha1",
+            "lower": 0.19874949892071384,
+            "metric_id": "workload.score",
+            "minimum_effect": 0.02,
+            "upper": 0.2019499436514509
+          }
+        },
+        "measurement_digest": "sha256:1f3824f46bea31c68a437aad9928395a5c23c9253231e441e09b9f075166223e",
+        "parameters": {
+          "system.cpu-governor": "performance",
+          "system.net-somaxconn": 128,
+          "system.storage-scheduler": "none",
+          "system.vm-swappiness": 10
+        },
+        "pareto_rank": 1,
+        "safety_reason": "default rollback after measurement",
+        "safety_state": "rolled_back"
+      }
+    ],
+    "diagnostic_priorities": [],
+    "diagnostic_reference": null,
+    "elapsed_seconds": 0.015999999828636646,
+    "manifest_digest": "sha256:e1b73909787b5f0c35febcfe36ff95db285a058a2efabc5731989b2dbaac873a",
+    "mode": "general",
+    "policy_digest": "sha256:16ddab1227d8179aa7b9522eb48f1f697866913fb53bf1bfc318881a5bd67750",
+    "policy_id": "synthetic-general-closed-loop",
+    "recommended_candidate_id": "sha256:1cfbec7713c32ee413ed552846ec8d0ea5962cacdd9311cfea6cdbbac64658c4",
+    "routed_components": [
+      "cpu",
+      "memory",
+      "storage",
+      "network"
+    ],
+    "schema_version": "looper.system-optimization-run/v1alpha1",
+    "stop_detail": "primary confidence lower bound reached the explicit target",
+    "stop_reason": "target-achieved"
+  },
+  "schema_version": "looper.system-optimizer-full-demo/v1alpha1",
+  "warning": "This proves the closed loop only; it is not a Linux performance result.",
+  "workload": {
+    "baseline": {
+      "gate_values": {
+        "gate.correctness": true
+      },
+      "identity": {
+        "phase": "steady-state",
+        "statistics": "explicit-policy",
+        "target": "synthetic-linux-guest",
+        "tool": "looper-system-opt-synthetic/v1",
+        "workload": "synthetic-workload"
+      },
+      "metrics": {
+        "cpu.utilization": {
+          "metric_id": "cpu.utilization",
+          "values": [
+            0.92,
+            0.92,
+            0.92,
+            0.92,
+            0.92,
+            0.92,
+            0.92
+          ]
+        },
+        "gate.correctness": {
+          "metric_id": "gate.correctness",
+          "values": [
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        "memory.psi-some": {
+          "metric_id": "memory.psi-some",
+          "values": [
+            0.14,
+            0.14,
+            0.14,
+            0.14,
+            0.14,
+            0.14,
+            0.14
+          ]
+        },
+        "network.retransmits": {
+          "metric_id": "network.retransmits",
+          "values": [
+            11.0,
+            11.0,
+            11.0,
+            11.0,
+            11.0,
+            11.0,
+            11.0
+          ]
+        },
+        "storage.io-latency": {
+          "metric_id": "storage.io-latency",
+          "values": [
+            12.0,
+            12.0,
+            12.0,
+            12.0,
+            12.0,
+            12.0,
+            12.0
+          ]
+        },
+        "workload.latency-p99": {
+          "metric_id": "workload.latency-p99",
+          "values": [
+            99.88083399026014,
+            100.05736011755425,
+            100.04775553800812,
+            99.88672444908421,
+            100.02618998596124,
+            100.06679405491124,
+            99.98832303780681
+          ]
+        },
+        "workload.score": {
+          "metric_id": "workload.score",
+          "values": [
+            99.8865602196081,
+            99.96762062432208,
+            100.11074555572222,
+            100.05276267868817,
+            99.94860713470496,
+            100.09097397369766,
+            99.88838018266219
+          ]
+        }
+      }
+    },
+    "candidates": [
+      {
+        "accepted": true,
+        "candidate_id": "sha256:bfb846f58848fe4b84070c03cc9c2a3f7fe4e6188726804055310b9f0a3e8893",
+        "change_count": 1,
+        "comparable": true,
+        "feasible": true,
+        "gates": [
+          {
+            "actual": true,
+            "gate_id": "correctness",
+            "metric": "gate.correctness",
+            "passed": true,
+            "reason": "synthetic workload correctness must pass"
+          }
+        ],
+        "identity_mismatches": [],
+        "improvements": {
+          "workload.latency-p99": {
+            "accepted": true,
+            "baseline_digest": "sha256:e871b03ff082ca390604a740a894b2101a04db270abef8dbd020160c7eeb96e8",
+            "baseline_estimate": 100.02618998596124,
+            "candidate_digest": "sha256:9e39f0c77d5032e564d2fcb58960b0fc99ee7398a2fb1bc4e1a3da32b1387b61",
+            "candidate_estimate": 90.45727398039783,
+            "estimate": 0.09568916005563409,
+            "formula_id": "F-PROJECT-S6-S7/v1alpha1",
+            "lower": 0.09416046518444744,
+            "metric_id": "workload.latency-p99",
+            "minimum_effect": 0.0,
+            "upper": 0.09701603584039958
+          },
+          "workload.score": {
+            "accepted": true,
+            "baseline_digest": "sha256:a855288addf89cd05598ccb5d84308a94f4719c87c0925520e00e836d443d6d9",
+            "baseline_estimate": 99.96762062432208,
+            "candidate_digest": "sha256:e7a9ffba1ae87d4290608bacf6597a3529282bbbba06cecd6526990c2c7b10d4",
+            "candidate_estimate": 111.96619755676242,
+            "estimate": 0.11998576932440344,
+            "formula_id": "F-PROJECT-S6-S7/v1alpha1",
+            "lower": 0.1182215801401695,
+            "metric_id": "workload.score",
+            "minimum_effect": 0.02,
+            "upper": 0.12140562813789912
+          }
+        },
+        "measurement_digest": "sha256:35e58981d0f33bdd9f045633086fddbf0408a3399533f60451d6bc4e99ace5a1",
+        "parameters": {
+          "system.cpu-governor": "performance"
+        },
+        "pareto_rank": 1,
+        "safety_reason": "default rollback after measurement",
+        "safety_state": "rolled_back"
+      }
+    ],
+    "diagnostic_priorities": [
+      {
+        "adverse_change": 0.37,
+        "component": "cpu",
+        "confidence": 1.0,
+        "metric_id": "cpu.utilization",
+        "pareto_rank": 1,
+        "persistence": 1.0,
+        "pressure": 0.92
+      },
+      {
+        "adverse_change": 0.7500000000000001,
+        "component": "memory",
+        "confidence": 1.0,
+        "metric_id": "memory.psi-some",
+        "pareto_rank": 1,
+        "persistence": 1.0,
+        "pressure": 0.4000000000000001
+      },
+      {
+        "adverse_change": 0.2631578947368421,
+        "component": "storage",
+        "confidence": 1.0,
+        "metric_id": "storage.io-latency",
+        "pareto_rank": 2,
+        "persistence": 1.0,
+        "pressure": 0.2
+      },
+      {
+        "adverse_change": 0.2222222222222222,
+        "component": "network",
+        "confidence": 1.0,
+        "metric_id": "network.retransmits",
+        "pareto_rank": 3,
+        "persistence": 1.0,
+        "pressure": 0.1
+      }
+    ],
+    "diagnostic_reference": {
+      "gate_values": {},
+      "identity": {
+        "phase": "steady-state",
+        "statistics": "explicit-policy",
+        "target": "synthetic-linux-guest",
+        "tool": "looper-system-opt-synthetic/v1",
+        "workload": "synthetic-workload"
+      },
+      "metrics": {
+        "cpu.utilization": {
+          "metric_id": "cpu.utilization",
+          "values": [
+            0.55,
+            0.55,
+            0.55,
+            0.55,
+            0.55,
+            0.55,
+            0.55
+          ]
+        },
+        "memory.psi-some": {
+          "metric_id": "memory.psi-some",
+          "values": [
+            0.08,
+            0.08,
+            0.08,
+            0.08,
+            0.08,
+            0.08,
+            0.08
+          ]
+        },
+        "network.retransmits": {
+          "metric_id": "network.retransmits",
+          "values": [
+            9.0,
+            9.0,
+            9.0,
+            9.0,
+            9.0,
+            9.0,
+            9.0
+          ]
+        },
+        "storage.io-latency": {
+          "metric_id": "storage.io-latency",
+          "values": [
+            9.5,
+            9.5,
+            9.5,
+            9.5,
+            9.5,
+            9.5,
+            9.5
+          ]
+        }
+      }
+    },
+    "elapsed_seconds": 0.0,
+    "manifest_digest": "sha256:e1b73909787b5f0c35febcfe36ff95db285a058a2efabc5731989b2dbaac873a",
+    "mode": "workload",
+    "policy_digest": "sha256:bf5afeb1babed3790c257716d151ad60adaea2b765ca178e197bffa42d0c34b0",
+    "policy_id": "synthetic-workload-closed-loop",
+    "recommended_candidate_id": "sha256:bfb846f58848fe4b84070c03cc9c2a3f7fe4e6188726804055310b9f0a3e8893",
+    "routed_components": [
+      "cpu"
+    ],
+    "schema_version": "looper.system-optimization-run/v1alpha1",
+    "stop_detail": "primary confidence lower bound reached the explicit target",
+    "stop_reason": "target-achieved"
+  }
+}

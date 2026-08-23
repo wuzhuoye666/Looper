@@ -1,0 +1,94 @@
+{
+  "schema_version": "looper.system-opt-empirical-acceptance/v1alpha1",
+  "evidence_kind": "empirical-aliyun-ecs",
+  "date": "2026-08-23",
+  "source_commits": {
+    "virtualization_fix": "53faa7b",
+    "experiment_contract": "ffa9107"
+  },
+  "environment": {
+    "os": "Ubuntu 24.04.4 LTS",
+    "kernel": "6.8.0-137-generic",
+    "architecture": "x86_64",
+    "virtualization": "kvm",
+    "cpu_count": 8,
+    "numa_nodes": 1,
+    "root_device": "nvme0n1",
+    "root_filesystem": "ext4"
+  },
+  "tests": {
+    "system_optimizer": {"passed": 59, "failed": 0},
+    "full_repository": {"passed": 280, "failed": 0}
+  },
+  "protocol": {
+    "workload": "fio randread 4k direct=1 numjobs=2 iodepth=16",
+    "prepared_file_bytes": 1073741824,
+    "baseline_scheduler": "mq-deadline",
+    "candidate_scheduler": "none",
+    "repeats_per_state": 5,
+    "runtime_seconds_per_repeat": 15,
+    "ramp_seconds_per_repeat": 3,
+    "confidence_level": 0.95,
+    "bootstrap_resamples": 2000,
+    "minimum_effect": 0,
+    "random_seed": 20260823
+  },
+  "result": {
+    "stop_reason": "no-improvement-policy",
+    "recommended_candidate_id": null,
+    "candidate_feasible": true,
+    "candidate_accepted": false,
+    "safety_state": "rolled_back",
+    "final_scheduler": "mq-deadline",
+    "fio_job_errors": 0,
+    "raw_fio_files": 10,
+    "iops": {
+      "baseline_values": [4195.177489, 4197.761194000001, 4194.996793, 4197.914503, 4199.320272000001],
+      "candidate_values": [4198.785424, 4196.141232, 4198.360874, 4194.9643639999995, 4198.215045],
+      "baseline_median": 4197.761194000001,
+      "candidate_median": 4198.215045,
+      "point_change_percent": 0.010811739377838078,
+      "improvement_95_percent_interval_iops": [-2.9501390000004903, 3.3640809999997145],
+      "improvement_95_percent_interval_percent": [-0.07027886684495586, 0.08013988515611863],
+      "baseline_cv": 0.00040050926561904603,
+      "candidate_cv": 0.00035284901737013254
+    },
+    "p99_completion_latency_us": {
+      "baseline_values": [31064.064, 30801.92, 31064.064, 31326.208, 30539.776],
+      "candidate_values": [30801.92, 31588.352, 31326.208, 31326.208, 30801.92],
+      "baseline_median": 31064.064,
+      "candidate_median": 31326.208,
+      "raw_change_percent": 0.8438818565400852,
+      "direction_aware_improvement_95_percent_interval_us": [-786.4319999999971, 262.14400000000023],
+      "baseline_cv": 0.008635088083984365,
+      "candidate_cv": 0.01009251471825064
+    }
+  },
+  "tool_operational_checks": {
+    "fio": {"version": "3.36", "status": "succeeded"},
+    "stress_ng": {
+      "version": "0.17.06",
+      "status": "succeeded",
+      "cpu_workers": 8,
+      "runtime_seconds": 15.001114,
+      "bogo_ops": 194077,
+      "failed_stressors": 0
+    },
+    "iperf3_loopback": {
+      "version": "3.16",
+      "status": "succeeded",
+      "received_bits_per_second": 61927560540.5414,
+      "retransmits": 3,
+      "scope": "loopback tool validation only; not cloud-network performance"
+    },
+    "perf_cycles": {"status": "succeeded"}
+  },
+  "conclusion": "The candidate was safely evaluated and rolled back, but no statistically supported performance improvement was found. The optimizer correctly rejected a noise-sized IOPS increase and did not recommend a configuration.",
+  "limitations": [
+    "This is one Alibaba Cloud ECS host, not a Tencent Cloud CVM.",
+    "Only one root-disk random-read workload and one scheduler candidate were evaluated.",
+    "The p99 metric is the conservative maximum of the two fio jobs per repeat.",
+    "The loopback iperf3 result proves tool operation only.",
+    "No persistent optimized configuration was kept."
+  ]
+}

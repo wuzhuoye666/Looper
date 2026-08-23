@@ -53,6 +53,8 @@
         },
         "adapter": { "$ref": "#/$defs/adapter" },
         "scenario": { "$ref": "#/$defs/scenario" },
+        "infrastructure": { "$ref": "#/$defs/infrastructure" },
+        "audit": { "$ref": "#/$defs/auditPolicy" },
         "runtime": { "$ref": "#/$defs/runtime" },
         "metrics": {
           "type": "object",
@@ -99,7 +101,234 @@
         "id": { "type": "string", "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]*$" },
         "name": { "type": "string", "minLength": 1 },
         "weight": { "type": "number", "minimum": 0, "default": 1 },
-        "metadata": { "type": "object" }
+        "metadata": { "type": "object" },
+        "metrics": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/workloadMetric" }
+        }
+      }
+    },
+    "workloadMetric": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "unit": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "direction": { "enum": ["minimize", "maximize", "none"] },
+        "kind": { "enum": ["sample", "aggregate", "counter", "boolean"] },
+        "required": { "type": "boolean" },
+        "minimumSamples": { "type": "integer", "minimum": 1 },
+        "description": { "type": "string", "maxLength": 500 },
+        "presentation": { "$ref": "#/$defs/metricPresentation" }
+      }
+    },
+    "machineCount": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["minimum", "default", "maximum"],
+      "properties": {
+        "minimum": { "type": "integer", "minimum": 1, "maximum": 1024 },
+        "default": { "type": "integer", "minimum": 1, "maximum": 1024 },
+        "maximum": { "type": "integer", "minimum": 1, "maximum": 1024 }
+      }
+    },
+    "cpuRequirements": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "minimumLogicalCpus": { "type": "integer", "minimum": 1, "maximum": 4096 },
+        "minimumPhysicalCores": { "type": "integer", "minimum": 1, "maximum": 4096 },
+        "minimumSockets": { "type": "integer", "minimum": 1, "maximum": 128 },
+        "minimumNumaNodes": { "type": "integer", "minimum": 1, "maximum": 128 },
+        "requiredFlags": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^[a-zA-Z0-9._-]+$" }
+        }
+      }
+    },
+    "memoryRequirements": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "minimumGiB": { "type": "number", "exclusiveMinimum": 0, "maximum": 1048576 },
+        "minimumHugepageGiB": { "type": "number", "minimum": 0, "maximum": 1048576 }
+      }
+    },
+    "acceleratorRequirements": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "minimumCount"],
+      "properties": {
+        "kind": { "enum": ["gpu", "tpu", "npu", "fpga", "other"] },
+        "vendors": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1, "maxLength": 80 }
+        },
+        "models": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1, "maxLength": 160 }
+        },
+        "minimumCount": { "type": "integer", "minimum": 1, "maximum": 1024 },
+        "minimumMemoryGiBEach": { "type": "number", "exclusiveMinimum": 0, "maximum": 1048576 },
+        "interconnects": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "enum": ["none", "pcie", "nvlink", "xgmi", "other"] }
+        }
+      }
+    },
+    "storageRequirements": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "minimumFreeGiB": { "type": "number", "exclusiveMinimum": 0, "maximum": 1073741824 },
+        "media": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "enum": ["memory", "local-ssd", "local-nvme", "block", "shared-filesystem", "object", "other"] }
+        },
+        "shared": { "type": "boolean" },
+        "destructive": { "type": "boolean", "default": false }
+      }
+    },
+    "networkRequirements": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "minimumGbps": { "type": "number", "exclusiveMinimum": 0, "maximum": 100000 },
+        "maximumRttMs": { "type": "number", "minimum": 0, "maximum": 60000 },
+        "fabrics": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "enum": ["ethernet", "infiniband", "roce", "efa", "shared-memory", "other"] }
+        },
+        "rdmaRequired": { "type": "boolean", "default": false }
+      }
+    },
+    "machineRequirements": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "osFamilies": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "enum": ["linux", "windows", "macos", "aix", "other"] }
+        },
+        "architectures": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "enum": ["x86_64", "aarch64", "ppc64le", "riscv64", "other"] }
+        },
+        "capabilities": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$" }
+        },
+        "cpu": { "$ref": "#/$defs/cpuRequirements" },
+        "memory": { "$ref": "#/$defs/memoryRequirements" },
+        "accelerators": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/acceleratorRequirements" }
+        },
+        "storage": { "$ref": "#/$defs/storageRequirements" },
+        "network": { "$ref": "#/$defs/networkRequirements" },
+        "privileges": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "enum": ["root", "perf", "systemd", "hugepages", "raw-device", "container-runtime", "fault-injection"] }
+        },
+        "software": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name"],
+            "properties": {
+              "name": { "type": "string", "minLength": 1, "maxLength": 120 },
+              "versionConstraint": { "type": "string", "minLength": 1, "maxLength": 120 }
+            }
+          }
+        }
+      }
+    },
+    "nodePlacement": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "coLocateWith": { "type": "array", "uniqueItems": true, "items": { "type": "string" } },
+        "separateFrom": { "type": "array", "uniqueItems": true, "items": { "type": "string" } },
+        "sameZone": { "type": "boolean", "default": true },
+        "dedicated": { "type": "boolean", "default": true }
+      }
+    },
+    "nodeGroup": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "role", "count", "requirements"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z][a-z0-9._-]*$" },
+        "role": { "enum": ["target", "load-generator", "client", "server", "database", "service", "controller", "worker", "storage", "observer", "simulator"] },
+        "count": { "$ref": "#/$defs/machineCount" },
+        "includedInScore": { "type": "boolean", "default": true },
+        "requirements": { "$ref": "#/$defs/machineRequirements" },
+        "placement": { "$ref": "#/$defs/nodePlacement" },
+        "description": { "type": "string", "maxLength": 500 }
+      }
+    },
+    "infrastructureLink": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source", "target", "purpose"],
+      "properties": {
+        "source": { "type": "string", "pattern": "^[a-z][a-z0-9._-]*$" },
+        "target": { "type": "string", "pattern": "^[a-z][a-z0-9._-]*$" },
+        "purpose": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "protocol": { "type": "string", "maxLength": 80 },
+        "minimumGbps": { "type": "number", "exclusiveMinimum": 0, "maximum": 100000 },
+        "maximumRttMs": { "type": "number", "minimum": 0, "maximum": 60000 },
+        "fabric": { "enum": ["ethernet", "infiniband", "roce", "efa", "shared-memory", "other"] },
+        "rdmaRequired": { "type": "boolean", "default": false }
+      }
+    },
+    "infrastructure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["orchestration", "primaryNodeGroup", "nodeGroups"],
+      "properties": {
+        "orchestration": { "enum": ["adapter", "looper"] },
+        "primaryNodeGroup": { "type": "string", "pattern": "^[a-z][a-z0-9._-]*$" },
+        "nodeGroups": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/nodeGroup" }
+        },
+        "links": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/infrastructureLink" }
+        },
+        "notes": { "type": "string", "maxLength": 2000 }
+      }
+    },
+    "auditPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["minimumRepeats", "referencePolicy", "environmentAxes", "requiredEvidence"],
+      "properties": {
+        "minimumRepeats": { "type": "integer", "minimum": 1, "maximum": 1000 },
+        "referencePolicy": { "enum": ["required", "recommended", "not-applicable"] },
+        "environmentAxes": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "enum": ["machine", "day", "placement", "seed", "compiler", "runtime", "driver", "region", "zone", "network", "storage", "dataset"] }
+        },
+        "requiredEvidence": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "enum": ["system-fingerprint", "raw-result", "log", "trace", "histogram", "profile", "topology", "cost", "energy"] }
+        }
       }
     },
     "scenarioRole": {
@@ -254,6 +483,7 @@
           "type": "array",
           "items": { "$ref": "#/$defs/runtimeDependency" }
         },
+        "provisioning": { "$ref": "#/$defs/runtimeProvisioning" },
         "executionPolicy": { "$ref": "#/$defs/executionPolicy" },
         "commands": {
           "type": "object",
@@ -280,6 +510,29 @@
         "source": { "type": "string", "minLength": 1, "maxLength": 2000 },
         "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
         "license": { "type": "string", "minLength": 1, "maxLength": 80 }
+      }
+    },
+    "runtimeProvisioning": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "hostCapabilities", "provides", "cacheKey"],
+      "properties": {
+        "mode": { "const": "managed" },
+        "hostCapabilities": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$" }
+        },
+        "provides": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$" }
+        },
+        "cacheKey": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+        "requiresNetwork": { "type": "boolean", "default": false },
+        "privilege": { "enum": ["none", "sudo"], "default": "none" }
       }
     },
     "executionPolicy": {
@@ -395,7 +648,27 @@
         "kind": { "enum": ["sample", "aggregate", "counter", "boolean"] },
         "required": { "type": "boolean", "default": false },
         "minimumSamples": { "type": "integer", "minimum": 1, "default": 1 },
-        "description": { "type": "string", "maxLength": 500 }
+        "description": { "type": "string", "maxLength": 500 },
+        "presentation": { "$ref": "#/$defs/metricPresentation" }
+      }
+    },
+    "metricPresentation": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "userLabel": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "userDescription": { "type": "string", "maxLength": 1000 },
+        "roles": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "enum": ["primary_outcome", "hard_gate", "guardrail", "cost_efficiency", "stability", "diagnostic", "context"]
+          }
+        },
+        "defaultVisibility": { "enum": ["summary", "detail", "expert", "hidden"] },
+        "displayFormat": { "enum": ["number", "percent", "duration", "bytes", "throughput", "boolean"] },
+        "displayPrecision": { "type": "integer", "minimum": 0 },
+        "glossary": { "type": "string", "maxLength": 500 }
       }
     },
     "outputs": {

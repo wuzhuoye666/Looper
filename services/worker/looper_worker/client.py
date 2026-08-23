@@ -63,10 +63,25 @@ class ControlPlaneClient:
         response.raise_for_status()
         return response.json()
 
-    def heartbeat(self, attempt_id: str, fencing_token: int) -> dict[str, Any]:
+    def heartbeat(
+        self,
+        attempt_id: str,
+        fencing_token: int,
+        *,
+        phase: str | None = None,
+        phase_detail: str | None = None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "workerId": self.worker_id,
+            "fencingToken": fencing_token,
+        }
+        if phase is not None:
+            payload["phase"] = phase
+        if phase_detail is not None:
+            payload["phaseDetail"] = phase_detail
         response = self.client.post(
             f"/worker-attempts/{attempt_id}/heartbeat",
-            json={"workerId": self.worker_id, "fencingToken": fencing_token},
+            json=payload,
         )
         response.raise_for_status()
         return response.json()

@@ -1,0 +1,23 @@
+{
+  "argv": [
+    "python3",
+    "examples/system-optimizer/fio_randread_measure.py",
+    "--file",
+    "/opt/looper-system-opt-evidence/ecs-fio-20260823/fio-randread-1g.bin",
+    "--output-dir",
+    "/opt/looper-system-opt-evidence/ecs-fio-20260823/raw",
+    "--repeats",
+    "{repeats}",
+    "--runtime-seconds",
+    "15",
+    "--ramp-seconds",
+    "3",
+    "--numjobs",
+    "2",
+    "--iodepth",
+    "16",
+    "--fio",
+    "fio"
+  ],
+  "timeout_seconds": 120
+}

@@ -1,0 +1,152 @@
+{
+  "applied_items": [
+    "io-nvme0n1-nomerges"
+  ],
+  "events": [
+    {
+      "item_id": null,
+      "old_value": null,
+      "operation": "preflight",
+      "readback_value": null,
+      "reason": null,
+      "requested_value": null,
+      "round_trip_digest": null,
+      "sequence": 0,
+      "snapshot_digest": null,
+      "state": "preflight",
+      "status": "succeeded"
+    },
+    {
+      "item_id": null,
+      "old_value": null,
+      "operation": "snapshot",
+      "readback_value": null,
+      "reason": null,
+      "requested_value": null,
+      "round_trip_digest": null,
+      "sequence": 1,
+      "snapshot_digest": "sha256:359080115787bdb3b242919d0c1e79ca00e1f6e873df03c8dc996275198bf30a",
+      "state": "snapshot",
+      "status": "succeeded"
+    },
+    {
+      "item_id": "io-nvme0n1-nomerges",
+      "old_value": null,
+      "operation": "apply",
+      "readback_value": null,
+      "reason": null,
+      "requested_value": 1,
+      "round_trip_digest": null,
+      "sequence": 2,
+      "snapshot_digest": null,
+      "state": "apply",
+      "status": "succeeded"
+    },
+    {
+      "item_id": "io-nvme0n1-nomerges",
+      "old_value": null,
+      "operation": "verify",
+      "readback_value": 1,
+      "reason": null,
+      "requested_value": 1,
+      "round_trip_digest": null,
+      "sequence": 3,
+      "snapshot_digest": null,
+      "state": "verify",
+      "status": "succeeded"
+    },
+    {
+      "item_id": null,
+      "old_value": null,
+      "operation": "measure",
+      "readback_value": null,
+      "reason": null,
+      "requested_value": null,
+      "round_trip_digest": null,
+      "sequence": 4,
+      "snapshot_digest": null,
+      "state": "measure",
+      "status": "succeeded"
+    },
+    {
+      "item_id": "io-nvme0n1-nomerges",
+      "old_value": null,
+      "operation": "rollback",
+      "readback_value": null,
+      "reason": null,
+      "requested_value": 0,
+      "round_trip_digest": null,
+      "sequence": 5,
+      "snapshot_digest": null,
+      "state": "rollback",
+      "status": "failed"
+    },
+    {
+      "item_id": "io-nvme0n1-nomerges",
+      "old_value": null,
+      "operation": "rollback_failed",
+      "readback_value": null,
+      "reason": "rollback command failed",
+      "requested_value": 0,
+      "round_trip_digest": null,
+      "sequence": 6,
+      "snapshot_digest": null,
+      "state": "needs-attention",
+      "status": "failed"
+    },
+    {
+      "item_id": null,
+      "old_value": null,
+      "operation": "rollback_failed",
+      "readback_value": null,
+      "reason": "round-trip snapshot digest does not match the baseline",
+      "requested_value": null,
+      "round_trip_digest": "sha256:cb299dc56a42584d8c0da59cfa131cbf1f95e1d7ee921803ca4fdd3cb1da7f06",
+      "sequence": 7,
+      "snapshot_digest": "sha256:359080115787bdb3b242919d0c1e79ca00e1f6e873df03c8dc996275198bf30a",
+      "state": "needs-attention",
+      "status": "failed"
+    },
+    {
+      "item_id": null,
+      "old_value": null,
+      "operation": "rollback-complete",
+      "readback_value": null,
+      "reason": "default rollback after measurement",
+      "requested_value": null,
+      "round_trip_digest": "sha256:cb299dc56a42584d8c0da59cfa131cbf1f95e1d7ee921803ca4fdd3cb1da7f06",
+      "sequence": 8,
+      "snapshot_digest": "sha256:359080115787bdb3b242919d0c1e79ca00e1f6e873df03c8dc996275198bf30a",
+      "state": "needs-attention",
+      "status": "failed"
+    }
+  ],
+  "final_snapshot": {
+    "entries": {
+      "io-nvme0n1-nomerges": {
+        "item_id": "io-nvme0n1-nomerges",
+        "message": null,
+        "raw_output": "1\n",
+        "status": "succeeded",
+        "target": "/sys/block/nvme0n1/queue/nomerges",
+        "value": 1
+      }
+    },
+    "target_id": "aliyun-ecs-8.138.5.244"
+  },
+  "reason": "default rollback after measurement",
+  "snapshot": {
+    "entries": {
+      "io-nvme0n1-nomerges": {
+        "item_id": "io-nvme0n1-nomerges",
+        "message": null,
+        "raw_output": "0\n",
+        "status": "succeeded",
+        "target": "/sys/block/nvme0n1/queue/nomerges",
+        "value": 0
+      }
+    },
+    "target_id": "aliyun-ecs-8.138.5.244"
+  },
+  "state": "needs-attention"
+}

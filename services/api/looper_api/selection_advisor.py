@@ -269,6 +269,8 @@ def _matches_resources(
     bandwidth: bool = False,
     pps: bool = False,
 ) -> bool:
+    if item.attributes.get("purchaseCompatible") is False:
+        return False
     capabilities = _zone_capabilities(item)
     if capabilities:
         return any(

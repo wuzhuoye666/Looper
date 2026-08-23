@@ -1,9 +1,11 @@
 # Python
 .venv/
+.venv-system-opt/
 .tools/
 __pycache__/
 *.py[cod]
 .pytest_cache/
+.pytest-tmp/
 pytest-cache-files-*/
 .pytest_tmp/
 .ruff_cache/

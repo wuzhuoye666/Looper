@@ -1,0 +1,81 @@
+# 配置平面
+
+> 状态：normative draft；配置采集、人工修改和共同安全闭环 confirmed；
+> M1 所有权证据合同已实现，跨发行版持久化优先级解析仍 open。
+
+## 必需状态
+
+一个配置项不能只有 name/value。至少需要表达：
+
+- 稳定配置标识和来源。
+- 读取方式、施加方式和读回验证方式。
+- 当前采集值、用户期望值、实际生效值和持久化值。
+- host/device/process/cgroup 等作用域。
+- 主要组件和可能受影响组件。
+- 声明范围、目标实际能力和本任务允许范围。
+- 前置条件、依赖、互斥、重启需求和风险等级。
+- 所有权、pin、外部写入者和最近变化证据。
+- 快照、apply、verify 和 rollback 结果。
+
+## 全量采集
+
+采集阶段 MUST：
+
+1. 先发现目标上可读取的完整字段，再决定哪些进入调优搜索。
+2. 保存原始读回值和解析结果，不能只保存归一化值。
+3. 区分键不存在、无权限、值为空、解析失败和暂不支持。
+4. 对声明与实际目标不一致的项目显式标记，不静默填默认值。
+5. 对动态或设备级配置保存作用域实例，不用整机单值覆盖。
+
+这里的“全量”必须带显式根目录、文件数和单文件字节上限。报告分别记录
+`enumeration_complete` 与 `all_values_readable`；只有两者都为 true，聚合
+`complete` 才能为 true。读取失败不能被“枚举走完了”掩盖。
+
+## 环境、接口与工具能力
+
+- 每份目标报告必须携带发行版、内核、架构、虚拟化类型和哈希化主机标识。
+- 配置项分别记录 preflight 与 readback，区分不存在、无权限、解析失败和成功。
+- observation-only 项允许 `default=null` 和未知搜索域；只有经目标验证且
+  `searchable=true` 的项目才必须声明默认/基线与完整合法域。
+- 工具 PATH 可解析只证明“已找到可执行文件”，不证明 PMU、内核 feature、权限或
+  workload 可用；例如 WSL2 的 `perf` 已安装但 hardware event 实测不可用。
+- 可选工具缺失降低组件覆盖率；被本轮选中的 workload、正确性检查、snapshot、
+  verify 或 rollback 工具缺失时必须 fail-closed。
+- 系统只生成依赖缺口和安装计划；安装包属于独立外部变更，必须获得用户授权。
+
+WSL2 只用于验证上述状态分支。CVM 必须重新采集全部能力，不继承 WSL2 的存在性、
+可写性、设备/NIC/IRQ 选择器或动态搜索域。
+
+## 人工修改
+
+人工修改 MUST 经过与优化候选相同的 preflight、snapshot、apply、verify、rollback 和审计。界面或 API 不得直接执行系统命令。
+
+自动写入前还必须提供与 target、manifest 和当前环境指纹同时绑定的状态证据：
+
+- 显式源文件采集保留全部可解析 `key=value`，只做 target 或 manifest 显式
+  `persistent_keys` 精确匹配，不从路径/同名字段猜测语义等价。
+- 单一外部声明记为 `external-writer`；重复声明不猜测发行版优先级，记为 ownership conflict。
+- 没有证据的项保持 unknown；external、conflict、unknown 和 pinned 均 fail-closed。
+- 操作者只能通过显式 `authorize-state` 声明，把逐项运行时写所有权授予指定 actor；
+  声明绑定原状态证据 digest，未列出的项目不会连带授权。
+- 当前值偏离 manifest default 不能证明人工所有权，也不能触发自动覆盖。
+
+人工意图的候选语义仍待确认：单次修改、pin、新基线或保存为 Profile。确认前实现不得把所有人工修改自动视为永久 pin，也不得自动交给优化器覆盖。
+
+## 动态合法域
+
+候选值必须同时满足：
+
+- 配置声明允许。
+- 当前目标实际支持。
+- 本次任务策略授权。
+- 与其他配置的依赖和互斥满足。
+- 风险、安全和重启策略允许。
+
+静态 ValueDomain 只能表达声明层，不能证明目标实际支持。目标能力发生变化时必须使旧候选身份或可比性失效。
+
+## Profile
+
+Profile SHOULD 包含：配置值、目标环境约束、来源任务、冻结基线、业务或标准压力证据、风险、可恢复快照引用和验证状态。
+
+Profile 至少区分 general、scenario、manual 和 experimental。best observed 不自动晋升为 deployable。

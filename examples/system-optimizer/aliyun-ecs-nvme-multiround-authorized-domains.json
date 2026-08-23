@@ -1,0 +1,24 @@
+[
+  {
+    "item_id": "io-nvme0n1-scheduler",
+    "domain": {
+      "minimum": null,
+      "maximum": null,
+      "step": null,
+      "choices": ["mq-deadline", "none"],
+      "log": false
+    },
+    "reason": "User explicitly authorized the shared-server multi-round test on 2026-08-23; every candidate must roll back."
+  },
+  {
+    "item_id": "io-nvme0n1-nomerges",
+    "domain": {
+      "minimum": 0,
+      "maximum": 2,
+      "step": 1,
+      "choices": null,
+      "log": false
+    },
+    "reason": "User explicitly authorized scheduler and nomerges temporary changes on 2026-08-23; every candidate must roll back."
+  }
+]

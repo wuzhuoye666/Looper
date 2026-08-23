@@ -1,0 +1,36 @@
+infrastructure:
+  orchestration: adapter
+  primaryNodeGroup: server
+  nodeGroups:
+    - id: server
+      role: target
+      count: {minimum: 2, default: 2, maximum: 16}
+      includedInScore: true
+      requirements:
+        osFamilies: [linux]
+        cpu: {minimumLogicalCpus: 16}
+        memory: {minimumGiB: 64}
+        network: {minimumGbps: 25}
+      placement: {separateFrom: [client], sameZone: true, dedicated: true}
+    - id: client
+      role: load-generator
+      count: {minimum: 1, default: 2, maximum: 8}
+      includedInScore: false
+      requirements:
+        osFamilies: [linux]
+        cpu: {minimumLogicalCpus: 8}
+        memory: {minimumGiB: 16}
+      placement: {separateFrom: [server], sameZone: true, dedicated: true}
+  links:
+    - source: client
+      target: server
+      purpose: benchmark traffic
+      protocol: tcp
+      minimumGbps: 10
+      maximumRttMs: 1
+audit:
+  minimumRepeats: 5
+  referencePolicy: required
+  environmentAxes: [machine, day, placement]
+  requiredEvidence: [system-fingerprint, raw-result, topology, log]
+

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 
+import looper_api.app as app_module
 import pytest
 from cryptography.fernet import Fernet
 from looper_api import remote_recovery
@@ -151,3 +152,62 @@ def test_recovery_refuses_changed_host_key(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(remote_recovery, "deploy_remote_worker", deploy)
 
     assert remote_recovery.recover_remembered_target(target_id, settings) is True
+
+
+def test_manual_ssh_test_reuses_saved_credentials_and_restores_worker(
+    tmp_path, monkeypatch
+) -> None:
+    settings = Settings(_env_file=None, data_dir=tmp_path)
+    target_id = "external:10.0.0.8"
+    host_key = "SHA256:" + "A" * 43
+    EncryptedSshCredentialStore(settings).save(target_id, _request(), host_key)
+    target = SimpleNamespace(
+        id=target_id,
+        provider="external",
+        lifecycle_status="active",
+        fingerprint_json={"host_key_sha256": host_key},
+    )
+
+    class FakeSession:
+        committed = False
+
+        def get(self, _model, requested_id):
+            return target if requested_id == target_id else None
+
+        def commit(self) -> None:
+            self.committed = True
+
+    session = FakeSession()
+    observed = []
+    monkeypatch.setattr(
+        app_module,
+        "connect_external_target",
+        lambda _session, request: observed.append(request) or target,
+    )
+    monkeypatch.setattr(
+        app_module,
+        "deploy_remote_worker",
+        lambda request, record, _settings: {
+            "status": "deploying",
+            "workerId": "remote-test",
+        },
+    )
+    monkeypatch.setattr(
+        app_module,
+        "target_view",
+        lambda record: {"id": record.id, "runnable": False},
+    )
+
+    result = app_module.test_target_ssh_connection(
+        target_id,
+        session,
+        settings,
+        None,
+    )
+
+    assert session.committed is True
+    assert observed[0].password.get_secret_value() == "one-time-secret"
+    assert observed[0].expected_host_key_sha256 == host_key
+    assert result["credentialsRemembered"] is True
+    assert result["connectionTest"]["status"] == "connected"
+    assert result["deployment"]["workerId"] == "remote-test"

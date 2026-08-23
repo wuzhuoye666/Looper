@@ -337,6 +337,23 @@ def test_alibaba_quote_and_run_use_postpaid_network_disk_and_token(monkeypatch) 
     ]
 
 
+def test_alibaba_blocks_generation_one_instance_before_quote_or_purchase(monkeypatch) -> None:
+    provider = AlibabaEcsProvider()
+    legacy_spec = purchase_spec("alibaba").model_copy(
+        update={"instance_type": "ecs.s2.small"}
+    )
+    provider_call = pytest.fail
+    monkeypatch.setattr(provider, "_call", provider_call)
+
+    with pytest.raises(CloudProviderError) as quote_error:
+        provider.quote(legacy_spec)
+    with pytest.raises(CloudProviderError) as purchase_error:
+        provider.purchase(legacy_spec, client_token="stable-token")
+
+    assert quote_error.value.code == "instance_type_vpc_incompatible"
+    assert purchase_error.value.code == "instance_type_vpc_incompatible"
+
+
 def test_alibaba_network_catalog_maps_vpc_resources(monkeypatch) -> None:
     provider = AlibabaEcsProvider()
     calls: list[tuple[str, object]] = []

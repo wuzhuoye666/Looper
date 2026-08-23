@@ -3,7 +3,7 @@ import type {
   CloudOrderEvent, CloudOrderEvidence, CloudProviderId, CloudProviderInfo, CloudPurchaseReadiness, CloudPurchaseSpec,
   CloudKeyPair, CloudQuote, CloudReconciliationContext, CloudRegion, CloudSecurityGroup, CloudSubnet, CloudVpc, CloudZone,
   DashboardData, Experiment, GlobalSearchResult, ListResponse, PostOptimizationStatus, SelectionAdvisorRequest,
-  SelectionAdvisorResponse, Target, VariabilityData,
+  SelectionAdvisorResponse, Target, TargetDestroyPreview, TargetDestroyResult, VariabilityData,
 } from './types';
 
 export const API_BASE = (import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000/api/v1').replace(/\/$/, '');
@@ -120,6 +120,16 @@ export const api = {
   connectExternalTarget: (payload: Record<string, unknown>) => request<Target>(
     '/targets/connect', { method: 'POST', body: JSON.stringify(payload) },
   ),
+  testTargetSsh: (targetId: string) => request<Target>(
+    `/targets/${encodeURIComponent(targetId)}/ssh-test`, { method: 'POST' },
+  ),
+  targetDestroyPreview: (targetId: string) => request<TargetDestroyPreview>(
+    `/targets/${encodeURIComponent(targetId)}/destroy-preview`,
+  ),
+  destroyTarget: (targetId: string, acknowledgement: string) => request<TargetDestroyResult>(
+    `/targets/${encodeURIComponent(targetId)}/destroy`,
+    { method: 'POST', body: JSON.stringify({ acknowledgement }) },
+  ),
   createExperiment: (payload: Record<string, unknown>) => request<Experiment>('/experiments', { method: 'POST', body: JSON.stringify(payload) }),
   experimentAction: (id: string, action: 'start' | 'pause' | 'resume' | 'cancel') => request<Experiment>(`/experiments/${encodeURIComponent(id)}/${action}`, { method: 'POST' }),
   retryAttempt: (id: string) => request<unknown>(`/attempts/${encodeURIComponent(id)}/retry`, { method: 'POST' }),
@@ -150,20 +160,14 @@ export const api = {
   quote: (spec: CloudPurchaseSpec, key: string) => request<CloudQuote>('/cloud/quotes', {
     method: 'POST', headers: { 'Idempotency-Key': key }, body: JSON.stringify({ spec }),
   }),
-  prepareOrder: (quoteId: string, key: string) => request<CloudOrder>('/cloud/orders/prepare', {
+  purchaseQuote: (quoteId: string, key: string) => request<CloudOrder>('/cloud/orders/purchase', {
     method: 'POST', headers: { 'Idempotency-Key': key }, body: JSON.stringify({ quoteId }),
   }),
-  renewOrderConfirmation: (id: string) => request<CloudOrder>(
-    `/cloud/orders/${encodeURIComponent(id)}/renew-confirmation`,
-    { method: 'POST' },
-  ),
   orders: async (status = '') => list(await request<CloudOrder[] | ListResponse<CloudOrder>>(`/cloud/orders${status ? `?status=${encodeURIComponent(status)}` : ''}`)),
   order: (id: string) => request<CloudOrder>(`/cloud/orders/${encodeURIComponent(id)}`),
   orderEvents: async (id: string) => list(await request<CloudOrderEvent[] | ListResponse<CloudOrderEvent>>(`/cloud/orders/${encodeURIComponent(id)}/events`)),
   orderReconciliationContext: (id: string) => request<CloudReconciliationContext>(`/cloud/orders/${encodeURIComponent(id)}/reconciliation-context`),
   orderEvidence: (id: string) => request<CloudOrderEvidence>(`/cloud/orders/${encodeURIComponent(id)}/evidence`),
-  confirmOrder: (id: string, payload: { confirmationToken: string; acknowledgement: string; expectedHourlyAmount: string }) =>
-    request<CloudOrder>(`/cloud/orders/${encodeURIComponent(id)}/confirm`, { method: 'POST', body: JSON.stringify(payload) }),
   resolveOrder: (id: string, payload: { resolution: 'submitted' | 'not_created'; instanceIds: string[]; providerOrderId?: string; note: string }) =>
     request<CloudOrder>(`/cloud/orders/${encodeURIComponent(id)}/resolve`, { method: 'POST', body: JSON.stringify(payload) }),
   searchAll: (value: string) => request<{ items: GlobalSearchResult[]; total: number; query: string }>(`/search?q=${encodeURIComponent(value)}`),

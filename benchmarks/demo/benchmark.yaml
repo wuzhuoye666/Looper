@@ -64,30 +64,64 @@ spec:
       kind: sample
       required: true
       minimumSamples: 3
+      presentation:
+        userLabel: 吞吐量
+        userDescription: 每秒处理的压缩数据量，越高越好，是选择压缩参数时的主结果。
+        roles: [primary_outcome]
+        defaultVisibility: summary
+        displayFormat: throughput
+        displayPrecision: 2
     latency_ms:
       unit: ms
       direction: minimize
       kind: sample
       required: true
       minimumSamples: 3
+      presentation:
+        userLabel: 处理延迟
+        userDescription: 单次压缩处理耗时，用于确保吞吐提升不以延迟剧增为代价。
+        roles: [guardrail]
+        defaultVisibility: detail
+        displayFormat: duration
+        displayPrecision: 2
     compression_ratio:
       unit: ratio
       direction: minimize
       kind: aggregate
       required: true
       minimumSamples: 1
+      presentation:
+        userLabel: 压缩率
+        userDescription: 压缩产物与原始数据的大小比值，数值越小压缩越强，是吞吐优化的保护指标。
+        roles: [guardrail]
+        defaultVisibility: detail
+        displayFormat: number
+        displayPrecision: 4
     roundtrip_ok:
       unit: bool
       direction: none
       kind: boolean
       required: true
       minimumSamples: 1
+      presentation:
+        userLabel: 往返校验
+        userDescription: 压缩后能否无损还原原始数据，必须为真，否则本次结果无效。
+        roles: [hard_gate]
+        defaultVisibility: hidden
+        displayFormat: boolean
     output_bytes:
       unit: bytes
       direction: minimize
       kind: counter
       required: false
       minimumSamples: 1
+      presentation:
+        userLabel: 输出字节数
+        userDescription: 压缩产物体积，用于问题定位与成本估算，不代表用户收益。
+        roles: [diagnostic]
+        defaultVisibility: expert
+        displayFormat: bytes
+        displayPrecision: 0
   outputs:
     maxBytes: 16777216
     maxMetricLines: 1000
@@ -101,6 +135,7 @@ spec:
         mediaType: text/plain
         required: true
   x-extensions:
+    bootstrapCatalog: true
     postBenchmarkActions:
       - id: larger-compression-chunks
         label: 增大压缩分块并复测

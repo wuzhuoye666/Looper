@@ -1,0 +1,437 @@
+{
+  "attempt_count": 8,
+  "baseline": {
+    "gate_values": {
+      "fio.success": true
+    },
+    "identity": {
+      "phase": "steady-state",
+      "statistics": "repeats=5;runtime=15s;ramp=3s;randseed=20260823",
+      "target": "sha256:9fb11d6a5ce5de3e7398a82e723dd6a73adf432939250f30baa80dc185683922",
+      "tool": "fio-3.36",
+      "workload": "fio-randread-4k-direct-numjobs2-iodepth16"
+    },
+    "metrics": {
+      "fio.read-clat-p99-us": {
+        "metric_id": "fio.read-clat-p99-us",
+        "values": [
+          31326.208,
+          30539.776,
+          30277.632,
+          31064.064,
+          31588.352
+        ]
+      },
+      "fio.read-iops": {
+        "metric_id": "fio.read-iops",
+        "values": [
+          4195.486091,
+          4196.709299,
+          4197.921525,
+          4198.441247,
+          4195.843326
+        ]
+      }
+    }
+  },
+  "baseline_history": [
+    {
+      "gate_values": {
+        "fio.success": true
+      },
+      "identity": {
+        "phase": "steady-state",
+        "statistics": "repeats=5;runtime=15s;ramp=3s;randseed=20260823",
+        "target": "sha256:9fb11d6a5ce5de3e7398a82e723dd6a73adf432939250f30baa80dc185683922",
+        "tool": "fio-3.36",
+        "workload": "fio-randread-4k-direct-numjobs2-iodepth16"
+      },
+      "metrics": {
+        "fio.read-clat-p99-us": {
+          "metric_id": "fio.read-clat-p99-us",
+          "values": [
+            31326.208,
+            30539.776,
+            30277.632,
+            31064.064,
+            31588.352
+          ]
+        },
+        "fio.read-iops": {
+          "metric_id": "fio.read-iops",
+          "values": [
+            4195.486091,
+            4196.709299,
+            4197.921525,
+            4198.441247,
+            4195.843326
+          ]
+        }
+      }
+    },
+    {
+      "gate_values": {
+        "fio.success": true
+      },
+      "identity": {
+        "phase": "steady-state",
+        "statistics": "repeats=5;runtime=15s;ramp=3s;randseed=20260823",
+        "target": "sha256:9fb11d6a5ce5de3e7398a82e723dd6a73adf432939250f30baa80dc185683922",
+        "tool": "fio-3.36",
+        "workload": "fio-randread-4k-direct-numjobs2-iodepth16"
+      },
+      "metrics": {
+        "fio.read-clat-p99-us": {
+          "metric_id": "fio.read-clat-p99-us",
+          "values": [
+            30801.92,
+            31326.208,
+            31326.208,
+            31326.208,
+            31326.208
+          ]
+        },
+        "fio.read-iops": {
+          "metric_id": "fio.read-iops",
+          "values": [
+            4198.193703999999,
+            4197.068621,
+            4186.192189,
+            4196.062571,
+            4184.277147999999
+          ]
+        }
+      }
+    },
+    {
+      "gate_values": {
+        "fio.success": true
+      },
+      "identity": {
+        "phase": "steady-state",
+        "statistics": "repeats=5;runtime=15s;ramp=3s;randseed=20260823",
+        "target": "sha256:9fb11d6a5ce5de3e7398a82e723dd6a73adf432939250f30baa80dc185683922",
+        "tool": "fio-3.36",
+        "workload": "fio-randread-4k-direct-numjobs2-iodepth16"
+      },
+      "metrics": {
+        "fio.read-clat-p99-us": {
+          "metric_id": "fio.read-clat-p99-us",
+          "values": [
+            31588.352,
+            31326.208,
+            31326.208,
+            31326.208,
+            31326.208
+          ]
+        },
+        "fio.read-iops": {
+          "metric_id": "fio.read-iops",
+          "values": [
+            4189.7062160000005,
+            4196.789022,
+            4190.235943,
+            4197.961310000001,
+            4197.520992
+          ]
+        }
+      }
+    }
+  ],
+  "candidates": [
+    {
+      "accepted": false,
+      "attempt_index": 2,
+      "candidate_id": "sha256:9c8d78d44dda213079f60253881488f382e22e0dad8a521446254e5738008ff4",
+      "change_count": 1,
+      "comparable": true,
+      "comparison_baseline_digest": "sha256:13c071a0c712e13b889c94067dc846523bf41fd119079fdf4af8d4b9eafbb573",
+      "feasible": true,
+      "gates": [
+        {
+          "actual": true,
+          "gate_id": "fio-execution-success",
+          "metric": "fio.success",
+          "passed": true,
+          "reason": "every fio job must complete successfully and read data"
+        }
+      ],
+      "identity_mismatches": [],
+      "improvements": {
+        "fio.read-clat-p99-us": {
+          "accepted": false,
+          "baseline_digest": "sha256:ffe72fde14cae034ffe79527839d884549f588258fc87230b3c579f1118b8f00",
+          "baseline_estimate": 31064.064,
+          "candidate_digest": "sha256:8f4122b060867e30f72a2fd2d5bd953723de939191a48c9915b3440439cd0f69",
+          "candidate_estimate": 31064.064,
+          "estimate": 0.0,
+          "formula_id": "F-PROJECT-S6-S7/v1alpha1",
+          "lower": -786.4319999999971,
+          "metric_id": "fio.read-clat-p99-us",
+          "minimum_effect": 0.0,
+          "upper": 1048.5759999999973
+        },
+        "fio.read-iops": {
+          "accepted": false,
+          "baseline_digest": "sha256:787e339933a9b9ed35cac504574d4b874ca97e369e8cef455648bbb9fe371bf1",
+          "baseline_estimate": 4196.709299,
+          "candidate_digest": "sha256:d800278782b4b024b98c218cce2ee36dc0af1b5205cba425a30062ef485ed1f2",
+          "candidate_estimate": 4198.193885000001,
+          "estimate": 1.4845860000004905,
+          "formula_id": "F-PROJECT-S6-S7/v1alpha1",
+          "lower": -0.24736199999915698,
+          "metric_id": "fio.read-iops",
+          "minimum_effect": 0.0,
+          "upper": 2.9815970000008747
+        }
+      },
+      "measurement_digest": "sha256:8c5f04299ec9cf010d63496fc984f086c30a794eabb9836e83e8784977342f6d",
+      "parameters": {
+        "system.io-nvme0n1-nomerges": 0,
+        "system.io-nvme0n1-scheduler": "none"
+      },
+      "pareto_rank": 2,
+      "round_index": 1,
+      "safety_reason": "default rollback after measurement",
+      "safety_state": "rolled_back"
+    },
+    {
+      "accepted": false,
+      "attempt_index": 3,
+      "candidate_id": "sha256:4d528c2580806b9a8fb4c1f16627a86f98f0e00c37524cf6f6de0dd9a1734a1d",
+      "change_count": 1,
+      "comparable": true,
+      "comparison_baseline_digest": "sha256:13c071a0c712e13b889c94067dc846523bf41fd119079fdf4af8d4b9eafbb573",
+      "feasible": true,
+      "gates": [
+        {
+          "actual": true,
+          "gate_id": "fio-execution-success",
+          "metric": "fio.success",
+          "passed": true,
+          "reason": "every fio job must complete successfully and read data"
+        }
+      ],
+      "identity_mismatches": [],
+      "improvements": {
+        "fio.read-clat-p99-us": {
+          "accepted": false,
+          "baseline_digest": "sha256:ffe72fde14cae034ffe79527839d884549f588258fc87230b3c579f1118b8f00",
+          "baseline_estimate": 31064.064,
+          "candidate_digest": "sha256:18e6b03bd749691779e0c7e3d97c95f3a7de8a6a8b30f436211aef66df836cd1",
+          "candidate_estimate": 30801.92,
+          "estimate": 262.14400000000023,
+          "formula_id": "F-PROJECT-S6-S7/v1alpha1",
+          "lower": -786.4319999999971,
+          "metric_id": "fio.read-clat-p99-us",
+          "minimum_effect": 0.0,
+          "upper": 1048.5759999999973
+        },
+        "fio.read-iops": {
+          "accepted": false,
+          "baseline_digest": "sha256:787e339933a9b9ed35cac504574d4b874ca97e369e8cef455648bbb9fe371bf1",
+          "baseline_estimate": 4196.709299,
+          "candidate_digest": "sha256:359b09eb350a7c91a715d219149491b239279aeb0eace31a374acf2d75be57f4",
+          "candidate_estimate": 4196.42172,
+          "estimate": -0.2875789999998233,
+          "formula_id": "F-PROJECT-S6-S7/v1alpha1",
+          "lower": -2.6407359999993787,
+          "metric_id": "fio.read-iops",
+          "minimum_effect": 0.0,
+          "upper": 2.1953000000003158
+        }
+      },
+      "measurement_digest": "sha256:1ea44c90a795363ba8fda164dbfc4f4d93509b03063dea6eda239f144f929867",
+      "parameters": {
+        "system.io-nvme0n1-nomerges": 1,
+        "system.io-nvme0n1-scheduler": "mq-deadline"
+      },
+      "pareto_rank": 2,
+      "round_index": 2,
+      "safety_reason": "default rollback after measurement",
+      "safety_state": "rolled_back"
+    },
+    {
+      "accepted": false,
+      "attempt_index": 5,
+      "candidate_id": "sha256:45fd7fef1f1f8ec787e132f5d7114db58a90bf9d27e1526d8d27b4dad4fc7842",
+      "change_count": 2,
+      "comparable": true,
+      "comparison_baseline_digest": "sha256:a1df929e83bca7b73d3b5fbc4a24b97a8bafee096d18d75104582ab92d2fa87f",
+      "feasible": true,
+      "gates": [
+        {
+          "actual": true,
+          "gate_id": "fio-execution-success",
+          "metric": "fio.success",
+          "passed": true,
+          "reason": "every fio job must complete successfully and read data"
+        }
+      ],
+      "identity_mismatches": [],
+      "improvements": {
+        "fio.read-clat-p99-us": {
+          "accepted": false,
+          "baseline_digest": "sha256:0a2331a3a4a6fae8c030f5727141d997509d4d4748467ed0bdb985faf641251d",
+          "baseline_estimate": 31326.208,
+          "candidate_digest": "sha256:de0363b651030cc5a2d8ba8c40c6ef59409c2005ab0160743bd284389c42a0e6",
+          "candidate_estimate": 31326.208,
+          "estimate": 0.0,
+          "formula_id": "F-PROJECT-S6-S7/v1alpha1",
+          "lower": -524.2880000000005,
+          "metric_id": "fio.read-clat-p99-us",
+          "minimum_effect": 0.0,
+          "upper": 786.4319999999971
+        },
+        "fio.read-iops": {
+          "accepted": false,
+          "baseline_digest": "sha256:167ed3c1f4bd7941e15a7f3cbf2aa81889b1a226f84bae98b3a586becb9ab8ff",
+          "baseline_estimate": 4196.062571,
+          "candidate_digest": "sha256:d95fda1068f464ec7b4bd5315d8341d1fb74aecf43fdcf06c37aac3ee66e6e9e",
+          "candidate_estimate": 4196.825417,
+          "estimate": 0.7628459999996267,
+          "formula_id": "F-PROJECT-S6-S7/v1alpha1",
+          "lower": -1.3682869999993272,
+          "metric_id": "fio.read-iops",
+          "minimum_effect": 0.0,
+          "upper": 12.5482690000008
+        }
+      },
+      "measurement_digest": "sha256:ee0073d2eb8190ea201f276cd69bd8f70ef63683b127bec13457ac7273e30c25",
+      "parameters": {
+        "system.io-nvme0n1-nomerges": 1,
+        "system.io-nvme0n1-scheduler": "none"
+      },
+      "pareto_rank": 3,
+      "round_index": 3,
+      "safety_reason": "default rollback after measurement",
+      "safety_state": "rolled_back"
+    },
+    {
+      "accepted": false,
+      "attempt_index": 6,
+      "candidate_id": "sha256:92fcf1faefb430b77df009d8ca3af8e119d3c8eca4abbd7830356ee2a24764a7",
+      "change_count": 1,
+      "comparable": true,
+      "comparison_baseline_digest": "sha256:a1df929e83bca7b73d3b5fbc4a24b97a8bafee096d18d75104582ab92d2fa87f",
+      "feasible": true,
+      "gates": [
+        {
+          "actual": true,
+          "gate_id": "fio-execution-success",
+          "metric": "fio.success",
+          "passed": true,
+          "reason": "every fio job must complete successfully and read data"
+        }
+      ],
+      "identity_mismatches": [],
+      "improvements": {
+        "fio.read-clat-p99-us": {
+          "accepted": false,
+          "baseline_digest": "sha256:0a2331a3a4a6fae8c030f5727141d997509d4d4748467ed0bdb985faf641251d",
+          "baseline_estimate": 31326.208,
+          "candidate_digest": "sha256:27d3dae6485d640d1901d19116062cadea21e28285055bbf8a9564324494bef7",
+          "candidate_estimate": 30801.92,
+          "estimate": 524.2880000000005,
+          "formula_id": "F-PROJECT-S6-S7/v1alpha1",
+          "lower": 0.0,
+          "metric_id": "fio.read-clat-p99-us",
+          "minimum_effect": 0.0,
+          "upper": 1310.7199999999975
+        },
+        "fio.read-iops": {
+          "accepted": false,
+          "baseline_digest": "sha256:167ed3c1f4bd7941e15a7f3cbf2aa81889b1a226f84bae98b3a586becb9ab8ff",
+          "baseline_estimate": 4196.062571,
+          "candidate_digest": "sha256:6c4a2f686d122dd4c2acfed1e49e54ad9177a158810820a4fae33b2463333a5f",
+          "candidate_estimate": 4197.608151,
+          "estimate": 1.5455799999999726,
+          "formula_id": "F-PROJECT-S6-S7/v1alpha1",
+          "lower": -2.7634300000008807,
+          "metric_id": "fio.read-iops",
+          "minimum_effect": 0.0,
+          "upper": 13.331003000001147
+        }
+      },
+      "measurement_digest": "sha256:9e8d2247e83b59d8468924c92fb0953e2cc783f80906075a0e90e5bc5d4556ff",
+      "parameters": {
+        "system.io-nvme0n1-nomerges": 2,
+        "system.io-nvme0n1-scheduler": "mq-deadline"
+      },
+      "pareto_rank": 1,
+      "round_index": 4,
+      "safety_reason": "default rollback after measurement",
+      "safety_state": "rolled_back"
+    },
+    {
+      "accepted": false,
+      "attempt_index": 8,
+      "candidate_id": "sha256:60e59100504438f65d445a17cd1592b533824891799c476d0d8c8ee8cf7facc3",
+      "change_count": 2,
+      "comparable": true,
+      "comparison_baseline_digest": "sha256:ac2189b2f6f03ef209e50122944cbd80a1bc139f9a2ad63ca4a3c3d198de5eb5",
+      "feasible": true,
+      "gates": [
+        {
+          "actual": true,
+          "gate_id": "fio-execution-success",
+          "metric": "fio.success",
+          "passed": true,
+          "reason": "every fio job must complete successfully and read data"
+        }
+      ],
+      "identity_mismatches": [],
+      "improvements": {
+        "fio.read-clat-p99-us": {
+          "accepted": false,
+          "baseline_digest": "sha256:79970d843ea91fc0169d3ea7c2761c897a11512d8370797b49b063d1cc51753d",
+          "baseline_estimate": 31326.208,
+          "candidate_digest": "sha256:ef7b566a38398535bb5db0e181805ae63f6e065355932fa37f18398541bcb06a",
+          "candidate_estimate": 31326.208,
+          "estimate": 0.0,
+          "formula_id": "F-PROJECT-S6-S7/v1alpha1",
+          "lower": 0.0,
+          "metric_id": "fio.read-clat-p99-us",
+          "minimum_effect": 0.0,
+          "upper": 2621.4399999999987
+        },
+        "fio.read-iops": {
+          "accepted": false,
+          "baseline_digest": "sha256:5458174e23f175fd40cc99846c4ec08297b974fbd4da5c9bbfa3bda66a469e57",
+          "baseline_estimate": 4196.789022,
+          "candidate_digest": "sha256:76652b6b8cd894d1178dfebbc9e7d153e2f1e75da67bece370d3b9ab714951de",
+          "candidate_estimate": 4196.569595,
+          "estimate": -0.21942699999999604,
+          "formula_id": "F-PROJECT-S6-S7/v1alpha1",
+          "lower": -4.105230249999786,
+          "metric_id": "fio.read-iops",
+          "minimum_effect": 0.0,
+          "upper": 7.151769000000058
+        }
+      },
+      "measurement_digest": "sha256:d1616bbd968e00fed1660dae9fe65ef02bd29bcd752fe1d8bd9d037386032434",
+      "parameters": {
+        "system.io-nvme0n1-nomerges": 2,
+        "system.io-nvme0n1-scheduler": "none"
+      },
+      "pareto_rank": 4,
+      "round_index": 5,
+      "safety_reason": "default rollback after measurement",
+      "safety_state": "rolled_back"
+    }
+  ],
+  "diagnostic_priorities": [],
+  "diagnostic_reference": null,
+  "elapsed_seconds": 732.3020854299975,
+  "manifest_digest": "sha256:dc121914546796083ef88a252226b926fb30f7080f3dde48eb7457be0a8a808c",
+  "mode": "general",
+  "policy_digest": "sha256:4ff0e85ecd4479db7ebfadd8fc33851a5743f02ac40aeb207c964434e4810d49",
+  "policy_id": "aliyun-ecs-fio-randread-multiround-20260823",
+  "recommended_candidate_id": null,
+  "routed_components": [
+    "storage"
+  ],
+  "schema_version": "looper.system-optimization-run/v1alpha1",
+  "stop_detail": "explicit consecutive no-improvement policy triggered",
+  "stop_reason": "no-improvement-policy"
+}

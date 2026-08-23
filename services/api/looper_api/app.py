@@ -26,6 +26,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from looper_core.canonical import utc_now
 from looper_core.cas import FileSystemCAS
 from looper_core.contracts import (
     Aggregation,
@@ -49,6 +50,12 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from looper_api.analysis_service import build_analysis_snapshot
+from looper_api.benchmark_packages import (
+    MAX_PACKAGE_BYTES,
+    BenchmarkPackageError,
+    install_benchmark_package,
+    parse_benchmark_package,
+)
 from looper_api.benchmark_registration import (
     BenchmarkRegistrationDraft,
     BenchmarkRegistrationRegister,
@@ -66,18 +73,19 @@ from looper_api.benchmark_runs import BenchmarkSmokeRunRequest, create_benchmark
 from looper_api.cloud_contracts import (
     CatalogFilters,
     InstanceTypeInfo,
-    OrderConfirmRequest,
     OrderPrepareRequest,
     OrderResolveRequest,
     ProviderId,
     QuoteCreateRequest,
+    TargetDestroyRequest,
 )
 from looper_api.cloud_service import (
     CloudWorkflowError,
     catalog_inventory,
     catalog_search,
-    confirm_order,
     create_quote,
+    destroy_target,
+    destroy_target_preview,
     ensure_managed_security_group,
     get_order,
     get_order_evidence,
@@ -88,11 +96,10 @@ from looper_api.cloud_service import (
     list_orders,
     operator_auth_required,
     operator_token_ready,
-    prepare_order,
     provider_views,
+    purchase_quote,
     purchase_readiness,
     recover_interrupted_orders,
-    renew_order_confirmation,
     resolve_unknown_order,
 )
 from looper_api.config import Settings, get_settings
@@ -119,8 +126,12 @@ from looper_api.post_optimization import post_optimization_view, start_post_opti
 from looper_api.providers.base import CloudProviderError
 from looper_api.providers.registry import CloudProviderRegistry, get_provider_registry
 from looper_api.providers.tencent_cvm import TencentInventoryError, sync_cvm_inventory
-from looper_api.remote_credentials import EncryptedSshCredentialStore
-from looper_api.remote_recovery import recover_remembered_target, remembered_target_ids
+from looper_api.remote_credentials import EncryptedSshCredentialStore, RemoteCredentialError
+from looper_api.remote_recovery import (
+    recover_remembered_target,
+    remembered_target_ids,
+    remembered_target_request,
+)
 from looper_api.remote_worker import deploy_remote_worker, deployment_status
 from looper_api.scheduler import (
     SchedulerError,
@@ -303,6 +314,7 @@ async def origin_guard(request: Request, call_next: Any) -> Any:
 @app.exception_handler(CloudWorkflowError)
 @app.exception_handler(RegistrationError)
 @app.exception_handler(ExternalTargetError)
+@app.exception_handler(RemoteCredentialError)
 async def domain_error(_request: Request, error: Exception) -> JSONResponse:
     status_code = getattr(error, "status_code", 409)
     code = getattr(error, "code", error.__class__.__name__)
@@ -348,7 +360,13 @@ def build_benchmark_configure_skill_archive() -> bytes:
     skill_root = files("looper_api").joinpath(
         "assets", "skills", "looper-benchmark-configure"
     )
-    members = ("SKILL.md", "agents/openai.yaml")
+    members = (
+        "SKILL.md",
+        "agents/openai.yaml",
+        "references/benchmark-interface.md",
+        "templates/infrastructure-multi-node.yaml",
+        "templates/infrastructure-single-node.yaml",
+    )
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         for member in members:
@@ -556,17 +574,22 @@ def cloud_quote_get(
     return get_quote(session, quote_id)
 
 
-@app.post("/api/v1/cloud/orders/prepare", status_code=201)
-def cloud_order_prepare(
+@app.post("/api/v1/cloud/orders/purchase", status_code=201)
+def cloud_order_purchase(
     request: OrderPrepareRequest,
     session: SessionDependency,
     app_settings: SettingsDependency,
+    registry: ProviderRegistryDependency,
     _operator: OperatorDependency,
     idempotency_key: str = Header(alias="Idempotency-Key"),
 ) -> dict[str, Any]:
-    result = prepare_order(session, app_settings, request.quote_id, idempotency_key)
-    session.commit()
-    return result
+    return purchase_quote(
+        session,
+        app_settings,
+        registry,
+        request.quote_id,
+        idempotency_key,
+    )
 
 
 @app.get("/api/v1/cloud/orders")
@@ -628,34 +651,24 @@ def cloud_order_resolve(
     return resolve_unknown_order(session, order_id, request)
 
 
-@app.post("/api/v1/cloud/orders/{order_id}/renew-confirmation")
-def cloud_order_renew_confirmation(
-    order_id: str,
-    session: SessionDependency,
-    app_settings: SettingsDependency,
-    registry: ProviderRegistryDependency,
-    _operator: OperatorDependency,
-) -> dict[str, Any]:
-    result = renew_order_confirmation(session, app_settings, registry, order_id)
-    session.commit()
-    return result
-
-
-@app.post("/api/v1/cloud/orders/{order_id}/confirm")
-def cloud_order_confirm(
-    order_id: str,
-    request: OrderConfirmRequest,
-    session: SessionDependency,
-    app_settings: SettingsDependency,
-    registry: ProviderRegistryDependency,
-    _operator: OperatorDependency,
-) -> dict[str, Any]:
-    return confirm_order(session, app_settings, registry, order_id, request)
-
-
 @app.get("/api/v1/benchmarks")
 def list_benchmarks(session: SessionDependency) -> dict[str, Any]:
-    records = list(session.scalars(select(BenchmarkRecord).order_by(BenchmarkRecord.name)))
+    records = list(
+        session.scalars(
+            select(BenchmarkRecord).order_by(
+                BenchmarkRecord.benchmark_id,
+                BenchmarkRecord.installed_at.desc(),
+                BenchmarkRecord.key.desc(),
+            )
+        )
+    )
+    # Versions remain addressable for historical experiments, but the catalog
+    # exposes one current package per stable Benchmark ID. A newly registered
+    # version therefore replaces the old choice instead of creating duplicates.
+    current_by_id: dict[str, BenchmarkRecord] = {}
+    for record in records:
+        current_by_id.setdefault(record.benchmark_id, record)
+    current = sorted(current_by_id.values(), key=lambda item: item.name.casefold())
     registrations = {
         item.benchmark_key: item
         for item in session.scalars(
@@ -665,8 +678,8 @@ def list_benchmarks(session: SessionDependency) -> dict[str, Any]:
         )
     }
     return {
-        "items": [benchmark_view(item, registrations.get(item.key)) for item in records],
-        "total": len(records),
+        "items": [benchmark_view(item, registrations.get(item.key)) for item in current],
+        "total": len(current),
     }
 
 
@@ -721,14 +734,37 @@ def create_benchmark_registration(
 @app.post("/api/v1/benchmark-registrations/import", status_code=201)
 async def import_benchmark_registration(
     session: SessionDependency,
+    app_settings: SettingsDependency,
     _operator: OperatorDependency,
     configuration: UploadFile = File(...),
 ) -> dict[str, Any]:
-    draft = draft_from_manifest_bytes(
-        await configuration.read(2 * 1024 * 1024 + 1),
-        filename=configuration.filename or "benchmark.yaml",
+    filename = configuration.filename or "benchmark.yaml"
+    limit = MAX_PACKAGE_BYTES if filename.casefold().endswith(".zip") else 2 * 1024 * 1024
+    raw = await configuration.read(limit + 1)
+    package_digest: str | None = None
+    package_path: str | None = None
+    if filename.casefold().endswith(".zip"):
+        try:
+            package = parse_benchmark_package(raw)
+        except BenchmarkPackageError as error:
+            raise RegistrationError(
+                str(error), status_code=422, code="invalid_benchmark_package"
+            ) from error
+        draft = draft_from_manifest_bytes(
+            package.manifest_bytes,
+            filename=package.manifest_name,
+        )
+        installed = install_benchmark_package(app_settings.data_dir, package)
+        package_digest = package.package_digest
+        package_path = str(installed)
+    else:
+        draft = draft_from_manifest_bytes(raw, filename=filename)
+    record = create_registration(
+        session,
+        draft,
+        package_digest=package_digest,
+        package_path=package_path,
     )
-    record = create_registration(session, draft)
     session.commit()
     return registration_view(record)
 
@@ -808,7 +844,18 @@ def list_targets(
     if not include_inactive:
         statement = statement.where(TargetRecord.lifecycle_status == "active")
     records = list(session.scalars(statement.order_by(TargetRecord.name)))
-    return {"items": [target_view(item) for item in records], "total": len(records)}
+    try:
+        remembered = set(EncryptedSshCredentialStore(app_settings).target_ids())
+    except RemoteCredentialError:
+        # Inventory remains readable even if the local credential vault needs repair.
+        remembered = set()
+    items: list[dict[str, Any]] = []
+    for record in records:
+        item = target_view(record)
+        item["credentialsRemembered"] = record.id in remembered
+        item["deployment"] = deployment_status(record.id)
+        items.append(item)
+    return {"items": items, "total": len(records)}
 
 
 @app.post("/api/v1/targets/tencent-cvm/sync")
@@ -842,16 +889,22 @@ def connect_target(
     _operator: OperatorDependency,
 ) -> dict[str, Any]:
     record = connect_external_target(session, payload)
-    session.commit()
-    result = target_view(record)
     if payload.deploy_worker:
-        result["deployment"] = deploy_remote_worker(payload, record, app_settings)
+        deployment = deploy_remote_worker(payload, record, app_settings)
         host_key = str(record.fingerprint_json.get("host_key_sha256") or "")
-        result["credentialsRemembered"] = EncryptedSshCredentialStore(app_settings).save(
+        remembered = EncryptedSshCredentialStore(app_settings).save(
             record.id,
             payload,
             host_key,
         )
+        # Mark the target as available and runnable after successful Worker deployment
+        record.status = "available"
+        record.runnable = True
+    session.commit()
+    result = target_view(record)
+    if payload.deploy_worker:
+        result["deployment"] = deployment
+        result["credentialsRemembered"] = remembered
     return result
 
 
@@ -861,6 +914,125 @@ def get_target_worker(target_id: str, session: SessionDependency) -> dict[str, A
     if record is None:
         raise HTTPException(status_code=404, detail="target not found")
     return deployment_status(target_id)
+
+
+@app.post("/api/v1/targets/{target_id}/ssh-test")
+def test_target_ssh_connection(
+    target_id: str,
+    session: SessionDependency,
+    app_settings: SettingsDependency,
+    _operator: OperatorDependency,
+) -> dict[str, Any]:
+    """Verify SSH with encrypted saved credentials and restore the remote Worker."""
+
+    target = session.get(TargetRecord, target_id)
+    if target is None:
+        raise HTTPException(status_code=404, detail="target not found")
+    request = remembered_target_request(target, app_settings)
+    refreshed = connect_external_target(session, request)
+    if refreshed.id != target_id:
+        raise ExternalTargetError("SSH endpoint no longer resolves to the selected target")
+    session.commit()
+    deployment = deploy_remote_worker(request, refreshed, app_settings)
+    result = target_view(refreshed)
+    result["credentialsRemembered"] = True
+    result["connectionTest"] = {
+        "status": "connected",
+        "testedAt": utc_now().isoformat(),
+        "hostKeySha256": refreshed.fingerprint_json.get("host_key_sha256"),
+    }
+    result["deployment"] = deployment
+    return result
+
+
+@app.get("/api/v1/targets/{target_id}/destroy-preview")
+def target_destroy_preview(
+    target_id: str,
+    session: SessionDependency,
+    app_settings: SettingsDependency,
+    operator: OperatorDependency,
+) -> dict[str, Any]:
+    if operator != "operator":
+        raise CloudWorkflowError(
+            "destroy preview requires operator authentication",
+            status_code=401,
+            code="operator_auth_required",
+        )
+    return destroy_target_preview(session, app_settings, target_id)
+
+
+@app.post("/api/v1/targets/{target_id}/destroy")
+def target_destroy(
+    target_id: str,
+    request: TargetDestroyRequest,
+    session: SessionDependency,
+    app_settings: SettingsDependency,
+    registry: ProviderRegistryDependency,
+    operator: OperatorDependency,
+) -> dict[str, Any]:
+    if operator != "operator":
+        raise CloudWorkflowError(
+            "destroy requires operator authentication",
+            status_code=401,
+            code="operator_auth_required",
+        )
+    result = destroy_target(session, app_settings, registry, target_id, request)
+    session.commit()
+    return result
+
+
+@app.patch("/api/v1/targets/{target_id}/cloud-endpoint")
+def update_cloud_endpoint(
+    target_id: str,
+    payload: dict[str, Any],
+    session: SessionDependency,
+    _operator: OperatorDependency,
+) -> dict[str, Any]:
+    """Update cloud target endpoint information (public IP, etc.)."""
+
+    target = session.get(TargetRecord, target_id)
+    if target is None:
+        raise HTTPException(status_code=404, detail="target not found")
+    if target.provider not in {"alibaba", "tencent", "baidu", "volcengine"}:
+        raise HTTPException(status_code=400, detail="not a cloud target")
+
+    inventory = target.inventory_json or {}
+    now = utc_now()
+
+    # Update endpoint and public IP if provided
+    if "public_ip" in payload:
+        inventory["public_ip"] = payload["public_ip"]
+        inventory["endpoint"] = payload["public_ip"]
+        inventory["public_ip_present"] = bool(payload["public_ip"])
+
+    if "private_ip" in payload:
+        inventory["private_ip"] = payload["private_ip"]
+
+    if "status" in payload:
+        inventory["status"] = payload["status"]
+        # Update target status based on instance state
+        status_upper = str(payload["status"]).upper()
+        if status_upper == "RUNNING":
+            target.status = "inventory-only"
+        elif status_upper in {"STOPPED", "TERMINATED"}:
+            target.status = "offline"
+
+    # Update fingerprint with hardware info if provided
+    fingerprint = target.fingerprint_json or {}
+    if "instance_type" in payload:
+        fingerprint["instance_type"] = payload["instance_type"]
+    if "cpu_core_count" in payload:
+        fingerprint["logical_cpu_count"] = payload["cpu_core_count"]
+    if "memory_gib" in payload:
+        fingerprint["memory_gib"] = payload["memory_gib"]
+
+    target.inventory_json = inventory
+    target.fingerprint_json = fingerprint
+    target.last_inventory_seen_at = now
+    target.updated_at = now
+
+    session.commit()
+    return target_view(target)
 
 
 @app.get("/api/v1/experiments")
@@ -949,12 +1121,26 @@ def _normalize_create_request(payload: dict[str, Any], session: Session) -> Expe
 def _selection_create_request(payload: dict[str, Any], session: Session) -> ExperimentCreate:
     benchmark_id = str(payload.get("benchmarkId") or "")
     benchmark_version = str(payload.get("benchmarkVersion") or "")
-    statement = select(BenchmarkRecord).where(BenchmarkRecord.benchmark_id == benchmark_id)
+    current = session.scalar(
+        select(BenchmarkRecord)
+        .where(BenchmarkRecord.benchmark_id == benchmark_id)
+        .order_by(BenchmarkRecord.installed_at.desc(), BenchmarkRecord.key.desc())
+        .limit(1)
+    )
+    benchmark = current
     if benchmark_version:
-        statement = statement.where(BenchmarkRecord.version == benchmark_version)
-    benchmark = session.scalar(statement.order_by(BenchmarkRecord.installed_at.desc()).limit(1))
+        benchmark = session.scalar(
+            select(BenchmarkRecord).where(
+                BenchmarkRecord.benchmark_id == benchmark_id,
+                BenchmarkRecord.version == benchmark_version,
+            )
+        )
     if benchmark is None:
         raise SchedulerError("scenario benchmark version is not installed")
+    if current is None or benchmark.key != current.key:
+        raise SchedulerError(
+            "selected benchmark version has been replaced; use the current catalog version"
+        )
     registration = session.scalar(
         select(BenchmarkRegistrationRecord).where(
             BenchmarkRegistrationRecord.benchmark_key == benchmark.key,
@@ -964,6 +1150,11 @@ def _selection_create_request(payload: dict[str, Any], session: Session) -> Expe
     scenario_document = selection_scenario_document(benchmark, registration)
     if scenario_document is None:
         raise SchedulerError("selected benchmark is missing a selection scenario contract")
+    if not benchmark_view(benchmark, registration)["selectionReady"]:
+        raise SchedulerError(
+            "selected benchmark is not directly testable; install a trusted executable package "
+            "with automatic target provisioning"
+        )
     scenario = ScenarioBenchmarkSpec.model_validate(scenario_document)
 
     raw_target_ids = payload.get("targetIds")

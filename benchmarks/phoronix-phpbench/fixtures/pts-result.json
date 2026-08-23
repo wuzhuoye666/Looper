@@ -1,0 +1,31 @@
+{
+  "title": "Looper PHPBench fixture",
+  "last_modified": "2026-08-23 00:00:00",
+  "description": "Sanitized contract fixture for the pinned PTS JSON exporter",
+  "systems": {
+    "looper-candidate": {
+      "identifier": "looper-candidate",
+      "hardware": {"Processor": "Sanitized fixture CPU"},
+      "software": {"OS": "Sanitized fixture Linux"},
+      "client_version": "10.8.6"
+    }
+  },
+  "results": {
+    "946f5e0360cf178c425ab9080de3597a148b632b": {
+      "identifier": "pts/phpbench-1.1.6",
+      "title": "PHPBench",
+      "app_version": "0.8.1",
+      "description": "PHP Benchmark Suite",
+      "scale": "Score",
+      "proportion": "HIB",
+      "display_format": "BAR_GRAPH",
+      "results": {
+        "looper-candidate": {
+          "value": 420000.0,
+          "raw_values": [410000.0, 420000.0, 430000.0]
+        }
+      }
+    }
+  }
+}
+

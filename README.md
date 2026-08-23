@@ -97,3 +97,13 @@ Stage 0 和本次 CPU 试点设计没有创建、启动或购买任何云资源�
 阶段 1 已落地统一实验与 Trace 数据底座：CCL-style、BenchBase、DCPerf 三种原始输出经各自 Adapter 归一为同一 Evidence Contract，Trace 离线重算无需重新运行 Benchmark。设计、数据分层、新 Adapter 编写指南与当前边界见 `docs/unified-evidence-contract.md`。
 
 VGO 变异导向波动分析器（Variability Analyzer）已作为公共组件上线：与 BenchTrust 平行挂在统一实验数据之上，输出分布统计、稳定性结论、快/慢模式识别、慢运行关联线索、方差来源归因、控制变量 A/B 建议与分布级配置比较（"均值改善但尾部恶化"会显式标出）。所有 Benchmark 共用，无需各自实现。设计、指标契约与边界见 `docs/variability-analyzer.md`，前端入口为实验详情页"波动分析"标签。
+
+## 系统优化器（架构重新基线中）
+
+Looper System Optimizer 的共同底座负责操作系统配置发现、全量采集、用户手动修改、快照、施加、读回验证、回滚和审计。其上有两条不同闭环：通用路径使用受控标准压力形成基础 Profile；场景路径使用 workload 业务目标裁决结果，并通过低开销动态观测和按需微指标下钻定位候选组件。
+
+第一阶段只做离线或受控环境中的有限闭环调优，不做生产常驻自动控制器，也不按 workload 阶段在线切换配置。组件内部的“当前不利压力 × 不利变化”只决定下钻顺序，不进入整体业务评分；指标方向不能只按上升判断。
+
+当前工作树已有 Config Manifest、Profile、安全执行和 simulated/local/SSH backend 的部分 M1 代码及测试，但这些实现正在按新架构复核，**不存在已验收的 system-opt CLI，真实 Linux/CVM 后端仍未验证且默认禁用**。已知安全缺口和当前状态见 [`docs/system-optimizer/README.md`](docs/system-optimizer/README.md)。
+
+当前文档入口、决策日志、指标/评分契约、路线图和历史迁移资料统一位于 [`docs/system-optimizer/`](docs/system-optimizer/README.md)。模块实现状态见 [`packages/core/looper_core/system_opt/README.md`](packages/core/looper_core/system_opt/README.md)。缓存和中间结果复用属于功能闭环跑通后的过程优化阶段，当前不实现。

@@ -82,6 +82,25 @@ spec:
       required_statistics: [p50, p95, p99, timeout]
       histogram_format: upstream-summary
       timeout_accounting: separate
+  infrastructure:
+    orchestration: adapter
+    primaryNodeGroup: target
+    nodeGroups:
+      - id: target
+        role: target
+        count: {minimum: 1, default: 1, maximum: 1}
+        includedInScore: true
+        requirements:
+          osFamilies: [linux]
+          architectures: [x86_64]
+          capabilities: [dcperf, systemd]
+          privileges: [root, perf, systemd]
+          software:
+            - name: python
+              versionConstraint: ">=3.7"
+        placement:
+          sameZone: true
+          dedicated: true
   runtime:
     type: container
     image: null
@@ -105,66 +124,141 @@ spec:
       kind: aggregate
       required: true
       minimumSamples: 1
+      presentation:
+        userLabel: 成功请求率
+        userDescription: 每秒成功完成的全栈请求数，是用户关心的主结果，仅计入 committed goodput。
+        roles: [primary_outcome]
+        defaultVisibility: summary
+        displayFormat: throughput
+        displayPrecision: 2
     wrk_rps:
       unit: requests/second
       direction: none
       kind: aggregate
       required: true
       minimumSamples: 1
+      presentation:
+        userLabel: 客户端施加速率
+        userDescription: 负载生成器 wrk 实际发出的请求速率，是测试条件的上下文，不代表已完成业务。
+        roles: [context]
+        defaultVisibility: detail
+        displayFormat: throughput
+        displayPrecision: 2
     successful_requests:
       unit: requests
       direction: maximize
       kind: counter
       required: true
       minimumSamples: 1
+      presentation:
+        userLabel: 成功请求数
+        userDescription: 测量窗口内成功完成的请求总数，是主结果的累计口径。
+        roles: [context]
+        defaultVisibility: expert
+        displayFormat: number
     failed_request_ratio:
       unit: ratio
       direction: minimize
       kind: aggregate
       required: true
       minimumSamples: 1
+      presentation:
+        userLabel: 失败请求率
+        userDescription: 失败请求占比，超过请求结算门限即不可接受。
+        roles: [hard_gate]
+        defaultVisibility: detail
+        displayFormat: number
+        displayPrecision: 4
     error_ratio:
       unit: ratio
       direction: minimize
       kind: aggregate
       required: true
       minimumSamples: 1
+      presentation:
+        userLabel: 错误率
+        userDescription: 出错请求占比，超过门限即不可接受。
+        roles: [hard_gate]
+        defaultVisibility: detail
+        displayFormat: number
+        displayPrecision: 4
     timeout_count:
       unit: requests
       direction: minimize
       kind: counter
       required: true
       minimumSamples: 1
+      presentation:
+        userLabel: 超时请求数
+        userDescription: 超时请求总数，用于定位容量下降原因。
+        roles: [diagnostic]
+        defaultVisibility: expert
+        displayFormat: number
     timeout_ratio:
       unit: ratio
       direction: minimize
       kind: aggregate
       required: true
       minimumSamples: 1
+      presentation:
+        userLabel: 超时率
+        userDescription: 超时请求占比，超过门限即不可接受。
+        roles: [hard_gate]
+        defaultVisibility: detail
+        displayFormat: number
+        displayPrecision: 4
     latency_p50_ms:
       unit: ms
       direction: minimize
       kind: aggregate
       required: true
       minimumSamples: 100000
+      presentation:
+        userLabel: P50 延迟
+        userDescription: 请求延迟中位数，用于定位延迟分布。
+        roles: [diagnostic]
+        defaultVisibility: detail
+        displayFormat: duration
+        displayPrecision: 2
     latency_p95_ms:
       unit: ms
       direction: minimize
       kind: aggregate
       required: true
       minimumSamples: 100000
+      presentation:
+        userLabel: P95 延迟
+        userDescription: 请求延迟 P95，是尾延迟保护指标。
+        roles: [guardrail]
+        defaultVisibility: detail
+        displayFormat: duration
+        displayPrecision: 2
     latency_p99_ms:
       unit: ms
       direction: minimize
       kind: aggregate
       required: true
       minimumSamples: 100000
+      presentation:
+        userLabel: P99 延迟
+        userDescription: 请求延迟 P99，是尾延迟保护与 SLO 判定关键指标。
+        roles: [guardrail]
+        defaultVisibility: detail
+        displayFormat: duration
+        displayPrecision: 2
     cpu_utilization_p95:
       unit: percent
       direction: none
       kind: aggregate
       required: true
       minimumSamples: 1
+      presentation:
+        userLabel: CPU 利用率 P95
+        userDescription: 目标机 CPU 利用率 P95，用于诊断是否资源饱和，也是资源门禁的观察对象。
+        roles: [diagnostic]
+        defaultVisibility: detail
+        displayFormat: percent
+        displayPrecision: 1
   outputs:
     maxBytes: 5368709120
     maxMetricLines: 1000000
@@ -181,7 +275,13 @@ spec:
         role: log
         mediaType: text/plain
         required: true
+  audit:
+    minimumRepeats: 5
+    referencePolicy: required
+    environmentAxes: [machine, day]
+    requiredEvidence: [system-fingerprint, raw-result, profile, log]
   x-extensions:
+    bootstrapCatalog: true
     executionStatus: stage0-adapter-only
     adapterPath: adapters/dcperf-mediawiki
     includesClientWork: true

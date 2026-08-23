@@ -26,6 +26,7 @@ from looper_core.fingerprint import system_fingerprint
 from looper_core.scenario_adapters import ScenarioAdapterError
 
 from looper_worker.client import ControlPlaneClient
+from looper_worker.package_cache import PackageCacheError, materialize_package
 
 
 class RunnerError(RuntimeError):
@@ -230,6 +231,15 @@ def build_container_command(
         "--workdir",
         _container_working_directory(str(runtime.get("workingDirectory", "."))),
     ]
+    cache_path = host_paths.get("cache")
+    if cache_path is not None:
+        if not cache_path.is_dir() or cache_path.is_symlink():
+            raise RunnerError("container cache mount must be a real directory")
+        workdir_index = docker_argv.index("--workdir")
+        docker_argv[workdir_index:workdir_index] = [
+            "--mount",
+            f"type=bind,source={cache_path},destination=/looper/cache",
+        ]
     for environment_name, value in command.get("environment", {}).items():
         _validate_container_environment(environment_name)
         docker_argv.extend(("--env", f"{environment_name}={_expand(value, placeholders)}"))
@@ -312,10 +322,35 @@ class LocalAttemptRunner:
         self.work_root.mkdir(parents=True, exist_ok=True)
         self.secret_root = secret_root.resolve() if secret_root is not None else None
 
+    def _report_phase(
+        self,
+        attempt_id: str,
+        fencing_token: int,
+        phase: str,
+        detail: str,
+    ) -> None:
+        try:
+            self.client.heartbeat(
+                attempt_id,
+                fencing_token,
+                phase=phase,
+                phase_detail=detail,
+            )
+        except TypeError:
+            # Backwards compatibility for third-party/testing clients that
+            # implement the v1 heartbeat without optional phase fields.
+            self.client.heartbeat(attempt_id, fencing_token)
+
     def run_claim(self, claim: dict[str, Any]) -> dict[str, Any]:
         attempt_id = str(claim["attemptId"])
         fencing_token = int(claim["fencingToken"])
         manifest = claim["manifest"]
+        self._report_phase(
+            attempt_id,
+            fencing_token,
+            "deploying-package",
+            "正在校验并部署 Benchmark 脚本包",
+        )
         runtime = manifest["spec"]["runtime"]
         runtime_type = runtime.get("type")
         if runtime_type == "local-process" and manifest["spec"]["trust"] != "trusted":
@@ -343,7 +378,16 @@ class LocalAttemptRunner:
             "profile": "looper.system-fingerprint/v1alpha1",
             "fingerprint": fingerprint,
         }
-        benchmark_root = Path(claim["benchmarkRoot"]).resolve()
+        benchmark_bundle = claim.get("benchmarkBundle")
+        if isinstance(benchmark_bundle, dict):
+            try:
+                benchmark_root = materialize_package(
+                    benchmark_bundle, self.work_root / "benchmark-packages"
+                )
+            except PackageCacheError as error:
+                raise RunnerError(f"could not deploy Benchmark package: {error}") from error
+        else:
+            benchmark_root = Path(claim["benchmarkRoot"]).resolve()
         if not benchmark_root.is_dir():
             repository_root = os.environ.get("LOOPER_REPOSITORY_ROOT")
             relative_root = claim.get("benchmarkRelativeRoot")
@@ -351,6 +395,19 @@ class LocalAttemptRunner:
                 benchmark_root = (Path(repository_root) / str(relative_root)).resolve()
         if not benchmark_root.is_dir():
             raise RunnerError("the deployed Worker does not contain this Benchmark package")
+        dependency_cache = (
+            self.work_root
+            / "dependency-cache"
+            / str(manifest["metadata"]["id"])
+            / str(manifest["metadata"]["version"])
+        ).resolve()
+        dependency_cache.mkdir(parents=True, exist_ok=True)
+        self._report_phase(
+            attempt_id,
+            fencing_token,
+            "checking-environment",
+            "正在检查目标机器基础环境",
+        )
         if runtime_type == "container":
             envelope["paths"] = {
                 "input": "/looper/input",
@@ -363,6 +420,7 @@ class LocalAttemptRunner:
                 "workspace": "/looper/workspace",
                 "envelope": "/looper/input/run-envelope.json",
                 "benchmarkRoot": "/looper/benchmark",
+                "cache": "/looper/cache",
             }
         else:
             envelope["paths"] = {
@@ -377,6 +435,7 @@ class LocalAttemptRunner:
                 "workspace": str(workspace.resolve()),
                 "envelope": str((input_dir / "run-envelope.json").resolve()),
                 "benchmarkRoot": str(benchmark_root),
+                "cache": str(dependency_cache),
             }
         envelope_path = input_dir / "run-envelope.json"
         envelope_path.write_text(json.dumps(envelope, indent=2), encoding="utf-8")
@@ -386,6 +445,7 @@ class LocalAttemptRunner:
             "output": output_dir.resolve(),
             "workspace": workspace.resolve(),
             "benchmarkRoot": benchmark_root,
+            "cache": dependency_cache,
         }
         if self.secret_root is not None:
             benchmark_secret_dir = self.secret_root / str(manifest["metadata"]["id"])
@@ -403,6 +463,21 @@ class LocalAttemptRunner:
                 command = command_map.get(stage)
                 if command is None:
                     continue
+                phase_labels = {
+                    "prepare": ("preparing-environment", "正在自动安装并校验测试依赖"),
+                    "warmup": ("warming-up", "正在预热测试场景"),
+                    "run": ("running-benchmark", "正在执行 Benchmark"),
+                    "normalize": ("normalizing-results", "正在标准化测试结果"),
+                    "validate": ("validating-results", "正在校验正确性与结果合同"),
+                    "collect": ("collecting-evidence", "正在收集测试证据"),
+                }
+                phase, phase_detail = phase_labels[stage]
+                self._report_phase(
+                    attempt_id,
+                    fencing_token,
+                    phase,
+                    phase_detail,
+                )
                 result = self._run_stage(
                     attempt_id,
                     fencing_token,
@@ -429,6 +504,12 @@ class LocalAttemptRunner:
                 failure and failure.message and "control-plane heartbeat failed" in failure.message
             )
             if cleanup is not None and not lease_invalid:
+                self._report_phase(
+                    attempt_id,
+                    fencing_token,
+                    "cleaning-up",
+                    "正在清理本次测试环境",
+                )
                 cleanup_result = self._run_stage(
                     attempt_id,
                     fencing_token,
@@ -450,6 +531,12 @@ class LocalAttemptRunner:
             if normalizer_failure is not None:
                 failure = normalizer_failure
         result = self._collect_result(manifest, output_dir, failure, cancelled)
+        self._report_phase(
+            attempt_id,
+            fencing_token,
+            "uploading-evidence",
+            "正在回传日志、指标和原始结果",
+        )
         evidence_limit = min(
             int(claim.get("maxOutputBytes", 16 * 1024 * 1024)),
             int(manifest["spec"]["outputs"]["maxBytes"]),

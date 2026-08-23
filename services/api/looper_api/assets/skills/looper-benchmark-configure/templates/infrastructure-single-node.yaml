@@ -1,0 +1,20 @@
+infrastructure:
+  orchestration: adapter
+  primaryNodeGroup: target
+  nodeGroups:
+    - id: target
+      role: target
+      count: {minimum: 1, default: 1, maximum: 1}
+      includedInScore: true
+      requirements:
+        osFamilies: [linux]
+        architectures: [x86_64, aarch64]
+        cpu: {minimumLogicalCpus: 4}
+        memory: {minimumGiB: 8}
+      placement: {sameZone: true, dedicated: true}
+audit:
+  minimumRepeats: 3
+  referencePolicy: required
+  environmentAxes: [machine, day]
+  requiredEvidence: [system-fingerprint, raw-result, log]
+

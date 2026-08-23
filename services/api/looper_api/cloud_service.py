@@ -20,6 +20,7 @@ from looper_api.cloud_contracts import (
     CatalogFilters,
     CatalogResponse,
     CloudPurchaseSpec,
+    DestroyedResource,
     ImageInfo,
     InstanceTypeInfo,
     OrderConfirmRequest,
@@ -27,6 +28,8 @@ from looper_api.cloud_contracts import (
     ProviderId,
     ProvisionedInstance,
     SearchResult,
+    TargetDestroyPreview,
+    TargetDestroyRequest,
 )
 from looper_api.config import Settings
 from looper_api.events import append_event
@@ -932,6 +935,8 @@ def _upsert_provisioned_target(session: Session, order: CloudOrderRecord, instan
             if record is not None:
                 break
     now = utc_now()
+    # Use public_ip as endpoint if available, otherwise private_ip
+    endpoint = instance.public_ip or instance.private_ip
     inventory = {
         "source": "cloud-order",
         "order_id": order.id,
@@ -940,6 +945,8 @@ def _upsert_provisioned_target(session: Session, order: CloudOrderRecord, instan
         "zone": instance.zone,
         "status": instance.status,
         "private_ip": instance.private_ip,
+        "public_ip": instance.public_ip,
+        "endpoint": endpoint,
         "public_ip_present": instance.public_ip_present,
     }
     fingerprint = {
@@ -1196,6 +1203,45 @@ def confirm_order(
     return _order_view(order)
 
 
+def purchase_quote(
+    session: Session,
+    settings: Settings,
+    registry: CloudProviderRegistry,
+    quote_id: str,
+    idempotency_key: str,
+) -> dict[str, Any]:
+    """Purchase an exact quote in one user action.
+
+    The former browser-visible confirmation token and acknowledgement phrase
+    remain internal implementation details so the existing immutable binding,
+    repricing, spend-limit, provider gate, and idempotency guarantees are kept.
+    """
+    prepared = prepare_order(session, settings, quote_id, idempotency_key)
+    if prepared["status"] != "awaiting_confirmation":
+        return prepared
+
+    request = OrderConfirmRequest(
+        confirmationToken=str(prepared["confirmationToken"]),
+        acknowledgement=str(prepared["acknowledgement"]),
+        expectedHourlyAmount=Decimal(str(prepared["hourlyAmount"])),
+    )
+    try:
+        return confirm_order(session, settings, registry, str(prepared["id"]), request)
+    except CloudWorkflowError:
+        # Once provider submission has been attempted, return the persisted
+        # order so the one-click flow always lands on an auditable result page.
+        order = session.get(CloudOrderRecord, str(prepared["id"]))
+        if order is not None and order.status in {
+            "failed",
+            "unknown",
+            "expired",
+            "submitted",
+            "succeeded",
+        }:
+            return _order_view(order)
+        raise
+
+
 def recover_interrupted_orders(session: Session) -> int:
     orders = list(
         session.scalars(select(CloudOrderRecord).where(CloudOrderRecord.status == "submitting"))
@@ -1283,6 +1329,228 @@ def resolve_unknown_order(
     )
     session.flush()
     return _order_view(order)
+
+
+_PROVIDER_LABELS = {
+    "tencent": "腾讯云 CVM",
+    "alibaba": "阿里云 ECS",
+    "volcengine": "火山引擎 ECS",
+    "baidu": "百度智能云 BCC",
+}
+
+_CLOUD_PROVIDERS = {item.value for item in ProviderId}
+
+
+def _alibaba_instance_id_from_hostname(hostname: str) -> str | None:
+    """Derive an Alibaba ECS instance id from its default hostname (``iZ<id>Z``)."""
+    if not hostname or len(hostname) < 4:
+        return None
+    if hostname.startswith("iZ") and hostname.endswith("Z"):
+        return "i-" + hostname[2:-1]
+    return None
+
+
+def _destroy_identity(
+    session: Session, settings: Settings, target: TargetRecord
+) -> tuple[ProviderId, str, str]:
+    """Resolve the (provider, region, instance_id) to destroy for a target.
+
+    Cloud targets carry their provider/region/instance id in inventory. External
+    targets imported over SSH are recognised as Alibaba ECS when their hostname
+    matches the default ``iZ<id>Z`` shape, in which case the instance id is derived
+    and the region falls back to ``alibaba_default_region``.
+    """
+    inventory = target.inventory_json or {}
+    fingerprint = target.fingerprint_json or {}
+    provider_value = str(target.provider)
+    if provider_value in _CLOUD_PROVIDERS:
+        instance_id = inventory.get("instance_id") or inventory.get("provider_instance_id")
+        region = inventory.get("region") or fingerprint.get("region")
+        if not instance_id:
+            raise CloudWorkflowError(
+                "cloud target is missing an instance id",
+                status_code=422,
+                code="cloud_instance_missing",
+            )
+        if not region:
+            raise CloudWorkflowError(
+                "cloud target is missing a region", status_code=422, code="cloud_region_missing"
+            )
+        return ProviderId(provider_value), str(region), str(instance_id)
+    if provider_value == "external":
+        hostname = fingerprint.get("hostname") or target.name
+        instance_id = _alibaba_instance_id_from_hostname(str(hostname or ""))
+        if instance_id is None:
+            raise CloudWorkflowError(
+                "external target is not a recognised Alibaba ECS instance",
+                status_code=422,
+                code="not_a_destroyable_instance",
+            )
+        return ProviderId.ALIBABA, settings.alibaba_default_region, instance_id
+    raise CloudWorkflowError(
+        "target is not a destroyable cloud instance",
+        status_code=422,
+        code="not_a_cloud_instance",
+    )
+
+
+def _target_order(session: Session, target: TargetRecord) -> CloudOrderRecord | None:
+    order_id = (target.inventory_json or {}).get("order_id")
+    if not order_id:
+        return None
+    return session.get(CloudOrderRecord, order_id)
+
+
+def _destroy_acknowledgement(
+    provider_id: ProviderId, instance_name: str, instance_id: str
+) -> str:
+    provider_label = _PROVIDER_LABELS.get(provider_id.value, provider_id.value)
+    return (
+        f"确认销毁 {provider_label} 实例 {instance_name}（{instance_id}），"
+        f"并释放其系统盘、本地盘（含机械盘）、公网及 Looper 纳管的子网/安全组等随附资源"
+    )
+
+
+def _destroy_preview_resources(
+    session: Session, target: TargetRecord, instance_id: str
+) -> list[DestroyedResource]:
+    resources = [
+        DestroyedResource(kind="instance", id=instance_id, note="按量实例将被销毁"),
+        DestroyedResource(
+            kind="system-disk", id=f"{instance_id}:system-disk", note="系统盘随实例释放"
+        ),
+        DestroyedResource(
+            kind="local-disk",
+            id=f"{instance_id}:local-disk",
+            note="本地盘（含机械盘）随实例释放",
+        ),
+        DestroyedResource(
+            kind="public-ip",
+            id=f"{instance_id}:public-ip",
+            note="按量公网 IP 与带宽随实例释放",
+        ),
+    ]
+    order = _target_order(session, target)
+    if order is not None:
+        subnet_id = order.spec_json.get("subnet_id")
+        if subnet_id:
+            resources.append(
+                DestroyedResource(
+                    kind="subnet",
+                    id=str(subnet_id),
+                    note="仅当为 Looper 纳管子网时删除，否则保留",
+                )
+            )
+        for security_group_id in order.spec_json.get("security_group_ids") or []:
+            resources.append(
+                DestroyedResource(
+                    kind="security-group",
+                    id=str(security_group_id),
+                    note="仅当为 Looper 纳管安全组且不再被引用时删除，否则保留",
+                )
+            )
+    return resources
+
+
+def destroy_target_preview(
+    session: Session, settings: Settings, target_id: str
+) -> dict[str, Any]:
+    target = session.get(TargetRecord, target_id)
+    if target is None:
+        raise CloudWorkflowError("target not found", status_code=404, code="target_not_found")
+    provider_id, region, instance_id = _destroy_identity(session, settings, target)
+    preview = TargetDestroyPreview(
+        target_id=target.id,
+        provider=provider_id,
+        region=region,
+        instance_id=instance_id,
+        instance_name=target.name,
+        acknowledgement=_destroy_acknowledgement(provider_id, target.name, instance_id),
+        resources=_destroy_preview_resources(session, target, instance_id),
+    )
+    return preview.model_dump(mode="json", by_alias=True)
+
+
+def destroy_target(
+    session: Session,
+    settings: Settings,
+    registry: CloudProviderRegistry,
+    target_id: str,
+    request: TargetDestroyRequest,
+) -> dict[str, Any]:
+    target = session.get(TargetRecord, target_id)
+    if target is None:
+        raise CloudWorkflowError("target not found", status_code=404, code="target_not_found")
+    provider_id, region, instance_id = _destroy_identity(session, settings, target)
+
+    expected = _destroy_acknowledgement(provider_id, target.name, instance_id)
+    if _hash_phrase(request.acknowledgement) != _hash_phrase(expected):
+        raise CloudWorkflowError(
+            "销毁确认文本不匹配，请原样输入确认文本", code="acknowledgement_mismatch"
+        )
+    if target.lifecycle_status == "archived" and target.archive_reason == "destroyed":
+        raise CloudWorkflowError(
+            "target has already been destroyed", status_code=409, code="target_already_destroyed"
+        )
+
+    provider = registry.get(provider_id)
+    result = provider.destroy(region=region, instance_ids=[instance_id])
+
+    network_resources: list[DestroyedResource] = []
+    order = _target_order(session, target)
+    if order is not None:
+        network_resources = provider.cleanup_managed_network(
+            region=region,
+            vpc_id=order.spec_json.get("vpc_id"),
+            subnet_id=order.spec_json.get("subnet_id"),
+            security_group_ids=order.spec_json.get("security_group_ids") or [],
+        )
+
+    now = utc_now()
+    target.status = "offline"
+    target.runnable = False
+    target.lifecycle_status = "archived"
+    target.archived_at = now
+    target.archive_reason = "destroyed"
+    target.updated_at = now
+    target.inventory_json = {
+        **(target.inventory_json or {}),
+        "instance_state": "TERMINATED",
+        "destroyed_at": now.isoformat(),
+        "destroy_request_id": result.request_id,
+    }
+
+    released_resources = list(result.released_resources) + network_resources
+    append_event(
+        session,
+        experiment_id=None,
+        event_type="cloud.target.destroyed",
+        entity_type="target",
+        entity_id=target.id,
+        idempotency_key=f"cloud-target-destroyed:{target.id}:{instance_id}",
+        payload={
+            "provider": provider_id.value,
+            "targetProvider": target.provider,
+            "region": region,
+            "instanceId": instance_id,
+            "requestId": result.request_id,
+            "releasedResources": [
+                item.model_dump(mode="json", by_alias=True) for item in released_resources
+            ],
+        },
+    )
+    session.flush()
+    return {
+        "targetId": target.id,
+        "provider": provider_id.value,
+        "targetProvider": target.provider,
+        "instanceId": instance_id,
+        "requestId": result.request_id,
+        "status": "destroyed",
+        "resources": [
+            item.model_dump(mode="json", by_alias=True) for item in released_resources
+        ],
+    }
 
 
 def get_quote(session: Session, quote_id: str) -> dict[str, Any]:

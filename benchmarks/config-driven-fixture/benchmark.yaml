@@ -48,6 +48,12 @@ spec:
       kind: aggregate
       required: true
       minimumSamples: 1
+      presentation:
+        userLabel: 夹具得分
+        userDescription: 契约夹具产出的示例指标，仅用于验证配置驱动的采集与正常化链路。
+        roles: [primary_outcome]
+        defaultVisibility: summary
+        displayFormat: number
   outputs:
     maxBytes: 1048576
     maxMetricLines: 10
@@ -65,5 +71,6 @@ spec:
         mediaType: text/plain
         required: true
   x-extensions:
+    bootstrapCatalog: true
     executionStatus: executable
     fixtureOnly: true
