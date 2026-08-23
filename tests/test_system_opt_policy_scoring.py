@@ -100,16 +100,19 @@ def test_workload_priority_routes_high_pressure_adverse_cpu() -> None:
     assert priorities[0].component == "cpu"
     assert priorities[0].pressure == pytest.approx(0.92)
     assert priorities[0].adverse_change > 0
+    assert priorities[0].formula_id == "F-PROJECT-S4-PIECEWISE-LINEAR/v1alpha1"
+    assert priorities[0].current_batch_digest == current.digest
+    assert priorities[0].reference_batch_digest == reference.digest
 
 
-def test_near_zero_diagnostic_change_requires_explicit_scale() -> None:
+def test_utilization_change_uses_capacity_reference_not_baseline_or_scale() -> None:
     contract = build_demo_policy(OptimizationMode.WORKLOAD).metric("cpu.utilization")
     payload = contract.model_dump(mode="python")
     payload["scale"] = None
     unscaled = contract.model_construct(**payload)
 
-    with pytest.raises(InsufficientEvidence, match="explicit scale"):
-        adverse_change(0.2, 0, unscaled)
+    assert adverse_change(0.2, 0.0, unscaled) == pytest.approx(0.2)
+    assert adverse_change(0.2001, 0.0001, unscaled) == pytest.approx(0.2)
 
 
 def _metric_with(
@@ -188,3 +191,152 @@ def test_target_range_adverse_change_is_negated_improvement(
         assert adverse_change(current, baseline, contract) == pytest.approx(
             -improvement_value(current, baseline, contract)
         ), f"identity broken for current={current}, baseline={baseline}"
+
+def test_f_project_002_adverse_change_is_continuous_across_zero() -> None:
+    contract = _metric_with(
+        direction=MetricDirection.MINIMIZE,
+        scale=0.1,
+        pressure_method=PressureMethod.UPPER_LIMIT_EXCESS,
+        pressure_reference=0.5,
+    )
+
+    assert adverse_change(0.0002, 0.0001, contract) == pytest.approx(0.001)
+    assert adverse_change(0.0001, 0.0, contract) == pytest.approx(0.001)
+
+
+@pytest.mark.parametrize(
+    "method,direction,current,baseline,reference,scale,expected",
+    [
+        (PressureMethod.UTILIZATION, MetricDirection.DIAGNOSTIC_ONLY, 0.8, 0.6, 1.0, 7.0, 0.2),
+        (PressureMethod.UPPER_LIMIT_EXCESS, MetricDirection.MINIMIZE, 12.0, 10.0, 9.0, 4.0, 0.5),
+        (PressureMethod.LOWER_LIMIT_DEFICIT, MetricDirection.MAXIMIZE, 8.0, 10.0, 9.0, 4.0, 0.5),
+        (PressureMethod.TARGET_DISTANCE, MetricDirection.TARGET, 14.0, 11.0, 10.0, 2.0, 1.5),
+        (PressureMethod.RANGE_EXCESS, MetricDirection.RANGE, 14.0, 11.0, None, 2.0, 1.5),
+        (PressureMethod.EXPLICIT_SCORE, MetricDirection.DIAGNOSTIC_ONLY, 0.8, 0.3, None, 9.0, 0.5),
+    ],
+)
+def test_f_project_002_adverse_transform_family(
+    method: PressureMethod,
+    direction: MetricDirection,
+    current: float,
+    baseline: float,
+    reference: float | None,
+    scale: float,
+    expected: float,
+) -> None:
+    bounds = {"lower_bound": 9.0, "upper_bound": 11.0} if direction == MetricDirection.RANGE else {}
+    contract = _metric_with(
+        direction=direction,
+        scale=scale,
+        target=reference if direction == MetricDirection.TARGET else None,
+        pressure_method=method,
+        pressure_reference=reference,
+        **bounds,
+    )
+
+    assert adverse_change(current, baseline, contract) == pytest.approx(expected)
+
+
+@pytest.mark.parametrize(
+    "method,direction",
+    [
+        (PressureMethod.UPPER_LIMIT_EXCESS, MetricDirection.MAXIMIZE),
+        (PressureMethod.LOWER_LIMIT_DEFICIT, MetricDirection.MINIMIZE),
+        (PressureMethod.TARGET_DISTANCE, MetricDirection.MINIMIZE),
+        (PressureMethod.RANGE_EXCESS, MetricDirection.TARGET),
+        (PressureMethod.EXPLICIT_SCORE, MetricDirection.MAXIMIZE),
+    ],
+)
+def test_pressure_method_rejects_incompatible_direction(
+    method: PressureMethod, direction: MetricDirection
+) -> None:
+    payload = build_demo_policy(OptimizationMode.GENERAL).metric("workload.score").model_dump(
+        mode="python"
+    )
+    payload.update(
+        role="component-diagnostic",
+        direction=direction,
+        scale=1.0,
+        target=0.5 if direction == MetricDirection.TARGET else None,
+        lower_bound=0.0 if direction == MetricDirection.RANGE else None,
+        upper_bound=1.0 if direction == MetricDirection.RANGE else None,
+        pressure_method=method,
+        pressure_reference=None if method == PressureMethod.EXPLICIT_SCORE else 0.5,
+    )
+
+    with pytest.raises(ValidationError, match="incompatible"):
+        MetricContract.model_validate(payload)
+
+
+def test_target_pressure_reference_must_equal_target() -> None:
+    payload = build_demo_policy(OptimizationMode.GENERAL).metric("workload.score").model_dump(
+        mode="python"
+    )
+    payload.update(
+        role="component-diagnostic",
+        direction=MetricDirection.TARGET,
+        target=10.0,
+        scale=2.0,
+        pressure_method=PressureMethod.TARGET_DISTANCE,
+        pressure_reference=11.0,
+    )
+
+    with pytest.raises(ValidationError, match="must equal metric target"):
+        MetricContract.model_validate(payload)
+
+
+def test_idle_batch_uses_measurement_model_but_cannot_enter_diagnosis() -> None:
+    manifest = build_demo_manifest()
+    backend = SimulatedBackend({item.id: item.default for item in manifest.items})
+    policy = build_demo_policy(OptimizationMode.WORKLOAD)
+    loaded = SyntheticMeasurementAdapter(backend, mode=OptimizationMode.WORKLOAD)(7)
+    idle_payload = loaded.model_dump(mode="python")
+    idle_payload["identity"]["load_state"] = "idle"
+    idle = type(loaded).model_validate(idle_payload)
+    contracts = [metric for metric in policy.metrics if metric.role.value == "component-diagnostic"]
+
+    assert idle.identity["load_state"] == "idle"
+    with pytest.raises(InsufficientEvidence, match="requires load_state=loaded"):
+        diagnostic_priorities(idle, idle, contracts)
+
+
+def test_loaded_diagnosis_rejects_cross_phase_reference() -> None:
+    manifest = build_demo_manifest()
+    backend = SimulatedBackend({item.id: item.default for item in manifest.items})
+    policy = build_demo_policy(OptimizationMode.WORKLOAD)
+    current = SyntheticMeasurementAdapter(backend, mode=OptimizationMode.WORKLOAD)(7)
+    reference = build_workload_reference(policy)
+    payload = reference.model_dump(mode="python")
+    payload["identity"]["phase"] = "idle-baseline"
+    cross_phase = type(reference).model_validate(payload)
+    contracts = [metric for metric in policy.metrics if metric.role.value == "component-diagnostic"]
+
+    with pytest.raises(InsufficientEvidence, match="identity mismatch.*phase"):
+        diagnostic_priorities(current, cross_phase, contracts)
+
+
+def test_component_pressure_can_worsen_while_business_utility_improves() -> None:
+    policy = build_demo_policy(OptimizationMode.WORKLOAD)
+    component = policy.metric("cpu.utilization")
+    business = policy.metric("workload.score")
+
+    component_change = adverse_change(0.9, 0.7, component)
+    business_change = improvement_value(110.0, 100.0, business)
+
+    assert component_change > 0
+    assert business_change > 0
+
+
+def test_loaded_diagnosis_rejects_metric_contract_from_another_phase() -> None:
+    manifest = build_demo_manifest()
+    backend = SimulatedBackend({item.id: item.default for item in manifest.items})
+    policy = build_demo_policy(OptimizationMode.WORKLOAD)
+    current = SyntheticMeasurementAdapter(backend, mode=OptimizationMode.WORKLOAD)(7)
+    reference = build_workload_reference(policy)
+    contract = policy.metric("cpu.utilization")
+    payload = contract.model_dump(mode="python")
+    payload["phase"] = "idle-baseline"
+    wrong_phase_contract = MetricContract.model_validate(payload)
+
+    with pytest.raises(InsufficientEvidence, match="metric phase.*does not match"):
+        diagnostic_priorities(current, reference, [wrong_phase_contract])

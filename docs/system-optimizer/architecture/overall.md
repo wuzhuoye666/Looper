@@ -214,7 +214,7 @@ loop:
 
 ## 10. 待确认开放点
 
-1. S4 的 PressureTransform/AdverseChangeTransform 具体变换（F-PROJECT-002）。
+1. S4 已采用 `F-PROJECT-S4-PIECEWISE-LINEAR/v1alpha1`；各 metric 的 scale、四象限解释阈值及是否启用压缩敏感性对照仍待目标环境校准。
 2. 动态相位的重激活判据（负载模式显著变化的定义）。
 3. L6c 退化回退的退化阈值与 last-good 定义。
 4. L7 负缓存的存储位置（本地文件/CAS/DB）与 TTL 策略。

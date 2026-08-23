@@ -298,7 +298,7 @@ def build_demo_policy(mode: OptimizationMode) -> SystemOptimizationPolicy:
         id=f"synthetic-{mode.value}-closed-loop",
         mode=mode,
         identity=IdentityPolicy(
-            required_fields=["target", "workload", "phase", "tool", "statistics"]
+            required_fields=["target", "workload", "phase", "load_state", "tool", "statistics"]
         ),
         statistics=StatisticsPolicy(
             confidence_level=0.95,
@@ -421,6 +421,7 @@ class SyntheticMeasurementAdapter:
                 "target": "synthetic-linux-guest",
                 "workload": f"synthetic-{self.mode.value}",
                 "phase": "steady-state",
+                "load_state": "loaded",
                 "tool": "looper-system-opt-synthetic/v1",
                 "statistics": "explicit-policy",
             },
@@ -445,6 +446,7 @@ def build_workload_reference(policy: SystemOptimizationPolicy) -> MeasurementBat
             "target": "synthetic-linux-guest",
             "workload": "synthetic-workload",
             "phase": "steady-state",
+            "load_state": "loaded",
             "tool": "looper-system-opt-synthetic/v1",
             "statistics": "explicit-policy",
         },

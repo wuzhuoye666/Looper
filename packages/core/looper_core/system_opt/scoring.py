@@ -98,6 +98,9 @@ class DiagnosticPriority(StrictModel):
     persistence: float = Field(ge=0, le=1)
     confidence: float = Field(ge=0, le=1)
     pareto_rank: int | None = None
+    formula_id: str | None = None
+    current_batch_digest: str | None = Field(default=None, pattern=r"^sha256:[0-9a-f]{64}$")
+    reference_batch_digest: str | None = Field(default=None, pattern=r"^sha256:[0-9a-f]{64}$")
 
 
 def comparable(
@@ -204,10 +207,10 @@ def pressure_value(value: float, contract: MetricContract) -> float:
         if not 0 <= value <= 1:
             raise InsufficientEvidence("explicit pressure score must be in [0, 1]")
         return value
-    if contract.pressure_method == PressureMethod.NONE or reference is None:
+    if contract.pressure_method == PressureMethod.NONE:
         raise InsufficientEvidence(f"{contract.id} has no pressure transform")
     if contract.pressure_method == PressureMethod.UTILIZATION:
-        if reference <= 0:
+        if reference is None or reference <= 0:
             raise InsufficientEvidence("utilization capacity must be positive")
         if value < 0:
             raise InsufficientEvidence(
@@ -215,14 +218,20 @@ def pressure_value(value: float, contract: MetricContract) -> float:
             )
         return value / reference
     if contract.pressure_method == PressureMethod.UPPER_LIMIT_EXCESS:
+        if reference is None:
+            raise InsufficientEvidence("upper-limit pressure requires a reference")
         if contract.scale is None:
             raise InsufficientEvidence("upper-limit pressure requires an explicit scale")
         return max(0.0, value - reference) / contract.scale
     if contract.pressure_method == PressureMethod.LOWER_LIMIT_DEFICIT:
+        if reference is None:
+            raise InsufficientEvidence("lower-limit pressure requires a reference")
         if contract.scale is None:
             raise InsufficientEvidence("lower-limit pressure requires an explicit scale")
         return max(0.0, reference - value) / contract.scale
     if contract.pressure_method == PressureMethod.TARGET_DISTANCE:
+        if reference is None:
+            raise InsufficientEvidence("target-distance pressure requires a reference")
         if contract.scale is None:
             raise InsufficientEvidence("target-distance pressure requires an explicit scale")
         return abs(value - reference) / contract.scale
@@ -235,28 +244,51 @@ def pressure_value(value: float, contract: MetricContract) -> float:
     raise InsufficientEvidence(f"unsupported pressure method {contract.pressure_method}")
 
 
-def adverse_change(current: float, baseline: float, contract: MetricContract) -> float:
-    if contract.direction == MetricDirection.MINIMIZE:
-        if baseline == 0:
-            if contract.scale is None:
-                raise InsufficientEvidence("near-zero baseline requires an explicit scale")
-            return (current - baseline) / contract.scale
-        return (current - baseline) / abs(baseline)
-    if contract.direction == MetricDirection.MAXIMIZE:
-        if baseline == 0:
-            if contract.scale is None:
-                raise InsufficientEvidence("near-zero baseline requires an explicit scale")
-            return (baseline - current) / contract.scale
-        return (baseline - current) / abs(baseline)
-    if contract.direction in {MetricDirection.TARGET, MetricDirection.RANGE}:
-        if contract.scale is None:
-            raise InsufficientEvidence(
-                f"{contract.id} target/range adverse change requires an explicit scale"
-            )
-        return (_distance(current, contract) - _distance(baseline, contract)) / contract.scale
+def _explicit_scale(contract: MetricContract, purpose: str) -> float:
     if contract.scale is None:
-        raise InsufficientEvidence("diagnostic-only adverse change requires an explicit scale")
-    return (current - baseline) / contract.scale
+        raise InsufficientEvidence(f"{contract.id} {purpose} requires an explicit scale")
+    return contract.scale
+
+
+def adverse_change(current: float, baseline: float, contract: MetricContract) -> float:
+    """Return the F-PROJECT-002 signed diagnostic displacement.
+
+    Positive always means movement in the pressure contract's adverse direction.
+    The transform uses a contract-stable scale; it never switches to ``abs(baseline)``
+    near zero. Pressure is diagnostic evidence, not candidate acceptance utility.
+    """
+
+    method = contract.pressure_method
+    reference = contract.pressure_reference
+    if method == PressureMethod.UTILIZATION:
+        if reference is None or reference <= 0:
+            raise InsufficientEvidence("utilization capacity must be positive")
+        return (current - baseline) / reference
+    if method == PressureMethod.UPPER_LIMIT_EXCESS:
+        return (current - baseline) / _explicit_scale(contract, "adverse change")
+    if method == PressureMethod.LOWER_LIMIT_DEFICIT:
+        return (baseline - current) / _explicit_scale(contract, "adverse change")
+    if method == PressureMethod.TARGET_DISTANCE:
+        if reference is None:
+            raise InsufficientEvidence("target-distance pressure requires a reference")
+        scale = _explicit_scale(contract, "adverse change")
+        return (abs(current - reference) - abs(baseline - reference)) / scale
+    if method == PressureMethod.RANGE_EXCESS:
+        scale = _explicit_scale(contract, "adverse change")
+        return (_distance(current, contract) - _distance(baseline, contract)) / scale
+    if method == PressureMethod.EXPLICIT_SCORE:
+        if not 0 <= current <= 1 or not 0 <= baseline <= 1:
+            raise InsufficientEvidence("explicit pressure score must be in [0, 1]")
+        return current - baseline
+
+    scale = _explicit_scale(contract, "adverse change")
+    if contract.direction == MetricDirection.MINIMIZE:
+        return (current - baseline) / scale
+    if contract.direction == MetricDirection.MAXIMIZE:
+        return (baseline - current) / scale
+    if contract.direction in {MetricDirection.TARGET, MetricDirection.RANGE}:
+        return (_distance(current, contract) - _distance(baseline, contract)) / scale
+    return (current - baseline) / scale
 
 
 def _gate_matches(actual: float | bool | None, gate: HardGateContract) -> bool:
@@ -293,13 +325,43 @@ def evaluate_hard_gates(
     ]
 
 
+def _require_loaded_diagnostic_identity(
+    current: MeasurementBatch, reference: MeasurementBatch
+) -> None:
+    required = ("workload", "phase", "load_state")
+    missing = [
+        f"{side}.{field}"
+        for side, batch in (("current", current), ("reference", reference))
+        for field in required
+        if field not in batch.identity
+    ]
+    if missing:
+        raise InsufficientEvidence(f"diagnostic identity is missing: {missing}")
+    mismatches = [
+        field for field in required if current.identity[field] != reference.identity[field]
+    ]
+    if mismatches:
+        raise InsufficientEvidence(f"diagnostic identity mismatch: {mismatches}")
+    if current.identity["load_state"] != "loaded":
+        raise InsufficientEvidence(
+            "component diagnosis requires load_state=loaded; idle/capability/overhead "
+            "batches remain collection evidence only"
+        )
+
+
 def diagnostic_priorities(
     current: MeasurementBatch,
     reference: MeasurementBatch,
     contracts: Sequence[MetricContract],
 ) -> list[DiagnosticPriority]:
+    _require_loaded_diagnostic_identity(current, reference)
     priorities: list[DiagnosticPriority] = []
     for contract in contracts:
+        if contract.phase != current.identity["phase"]:
+            raise InsufficientEvidence(
+                f"{contract.id} metric phase {contract.phase!r} does not match "
+                f"measurement phase {current.identity['phase']!r}"
+            )
         if contract.id not in current.metrics or contract.id not in reference.metrics:
             continue
         current_values = current.metrics[contract.id].values
@@ -317,6 +379,9 @@ def diagnostic_priorities(
                 adverse_change=adverse_change(current_estimate, reference_estimate, contract),
                 persistence=adverse_samples / len(current_values),
                 confidence=min(1.0, len(current_values) / contract.minimum_samples),
+                formula_id="F-PROJECT-S4-PIECEWISE-LINEAR/v1alpha1",
+                current_batch_digest=current.digest,
+                reference_batch_digest=reference.digest,
             )
         )
 
