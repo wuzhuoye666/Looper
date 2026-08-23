@@ -178,7 +178,7 @@
 | PKG-D | ✅ 完成 2026-08-23 | 主 agent（zcode） | engine/loop.py 主循环（调度→组件执行→终裁→负缓存→S10 停止→相位门禁）+ 6 测试 |
 | PKG-E | 🟡 大部分完成 2026-08-23 | 主 agent | 盲区双机实测✅ + tuned 恢复✅ + 网络会话资产就绪✅；真实 peer 闭环✅（用户点出改走 VPC 内网后完成：bbr/reno 均未达显著，全部回滚；公网路径不适合作吞吐通道）|
 | PKG-F | ✅ 完成 2026-08-23 | 主 agent（zcode） | engine-demo/cache-inspect 命令 + 4 测试；Windows 全流程 demo 一条命令可复现 |
-| PKG-G | 待领（低优先） | — | |
+| PKG-G | ✅ 设计稿完成 2026-08-23 | 主 agent（zcode） | workload-tuning.md 扩写 D1-D6：O0-O3 观察分层（术语消歧）、S3 症状→多组件假设路由（open #4 提案）、S9 复验窗口生产者（闭合 M11 设计缺口）、DynamicPhaseGateContract 参数化合同、重激活三案（推荐 A+B，等用户选）；全部数值占位待校准，未写任何实现 |
 | PKG-H | 🟡 第一批进行中 2026-08-23 | DeepSeek agent | M7/M12/C6/C7/§4 杂项；治理见 PKG-H 节；第二批（M1-M8/M10 等）按分诊表逐步解锁 |
 
 ## 登记补充（2026-08-23 A 级审计）
