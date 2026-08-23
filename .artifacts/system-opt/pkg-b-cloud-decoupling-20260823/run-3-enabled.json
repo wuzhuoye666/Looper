@@ -1,0 +1,333 @@
+{
+  "schema_version": "looper.pressure-collection-result/v1alpha1",
+  "protocol_id": "pkg-b-cloud-cpu-v1",
+  "protocol_digest": "sha256:db845d7eb8a77d034d8ebf662545f30f8d484486d504b5a02103e6b4e99a6b4c",
+  "phase_evidence": [
+    {
+      "phase_id": "prepare",
+      "kind": "prepare",
+      "command_digest": "sha256:57ebcff3adbb1a7467556ae2d1ff6b965f911c760b0c8ab19e486d965e633908",
+      "status": "succeeded",
+      "elapsed_seconds": 0.557701914003701
+    },
+    {
+      "phase_id": "warmup",
+      "kind": "warmup",
+      "command_digest": "sha256:df0c69e1e169d9a58578f28de9bbe7a42b52126ce88c0185ad3ecee5fa90923d",
+      "status": "succeeded",
+      "elapsed_seconds": 0.533610698999837
+    },
+    {
+      "phase_id": "measure",
+      "kind": "measure",
+      "command_digest": "sha256:16086bb0bfebfe3e3ea1ab4254986fef84453ae83e9c4cda06a650addad9e736",
+      "status": "succeeded",
+      "elapsed_seconds": 3.7076471020118333
+    },
+    {
+      "phase_id": "verify",
+      "kind": "verify",
+      "command_digest": "sha256:5c11016bb5eb13e7cc97fb3ecd7f88bd93ca9cc6d43152bbb47ab68e918ba7a8",
+      "status": "succeeded",
+      "elapsed_seconds": 0.5247426940040896
+    },
+    {
+      "phase_id": "cleanup",
+      "kind": "cleanup",
+      "command_digest": "sha256:f807c8d616c892673b400670d78a55e320d961181eee7abffdad0e533462820b",
+      "status": "succeeded",
+      "elapsed_seconds": 0.5313818979921052
+    }
+  ],
+  "execution_evidence": {
+    "schema_version": "looper.pressure-execution-evidence/v1alpha1",
+    "protocol_id": "pkg-b-cloud-cpu-v1",
+    "component": "cpu",
+    "workload_phase_id": "measure",
+    "measurement_identity": {
+      "target": "8.148.238.132",
+      "workload": "stress-ng-cpu-1-all-timeout-1s",
+      "phase": "measure",
+      "tool": "stress-ng-0.17.06",
+      "statistics": "repeats=3"
+    },
+    "artifacts": [
+      {
+        "artifact_id": "cpu-pressure-bundle",
+        "source": "/opt/looper-pkg-b-cloud/evidence/raw/bundle-4aba6d0afbf5418ba049c3a2fdc7f240.zip",
+        "media_type": "application/vnd.looper.collection-artifact-bundle+zip",
+        "digest": "sha256:1e263effb88d0f6703c382d488b991bd81fdf43af9f2931ec077cb347865ce58"
+      }
+    ],
+    "gate_values": {
+      "cpu.success": true
+    }
+  },
+  "collection_run": {
+    "schema_version": "looper.component-collection-run/v1alpha1",
+    "request": {
+      "schema_version": "looper.component-collection-request/v1alpha1",
+      "component": "cpu",
+      "target_id": "8.148.238.132",
+      "environment_digest": "sha256:7ca99596c6c03ccbb45685b4ba5137731bc7831ef1656759829104defbb85737",
+      "workload_phase_id": "measure",
+      "workload_source": "stress-ng raw YAML bundle parsed by L4",
+      "collector_id": "looper.builtin-linux-guest",
+      "requested_metrics": [
+        "cpu.bogo-ops-per-second",
+        "cpu.success",
+        "cpu.busy-ratio"
+      ],
+      "input_artifacts": [
+        {
+          "artifact_id": "cpu-pressure-bundle",
+          "source": "/opt/looper-pkg-b-cloud/evidence/raw/bundle-4aba6d0afbf5418ba049c3a2fdc7f240.zip",
+          "media_type": "application/vnd.looper.collection-artifact-bundle+zip",
+          "digest": "sha256:1e263effb88d0f6703c382d488b991bd81fdf43af9f2931ec077cb347865ce58"
+        }
+      ],
+      "gate_values": {
+        "cpu.success": true
+      },
+      "interval_seconds": 0.2,
+      "scope": {
+        "network_interfaces": null,
+        "storage_devices": null
+      },
+      "measurement_identity": {
+        "target": "8.148.238.132",
+        "workload": "stress-ng-cpu-1-all-timeout-1s",
+        "phase": "measure",
+        "tool": "stress-ng-0.17.06",
+        "statistics": "repeats=3"
+      }
+    },
+    "collector_id": "looper.builtin-linux-guest",
+    "collector_version": "1.0.0",
+    "enabled": true,
+    "started_at": "2026-08-23T13:06:09.739523Z",
+    "finished_at": "2026-08-23T13:06:13.466442Z",
+    "snapshot": {
+      "schema_version": "looper.component-metric-snapshot/v1alpha1",
+      "component": "cpu",
+      "target_id": "8.148.238.132",
+      "environment_digest": "sha256:7ca99596c6c03ccbb45685b4ba5137731bc7831ef1656759829104defbb85737",
+      "collected_at": "2026-08-23T13:06:13.466251Z",
+      "metrics": {
+        "cpu.bogo-ops-per-second": {
+          "name": "cpu.bogo-ops-per-second",
+          "unit": "bogo-ops/s",
+          "value": [
+            1369.074885,
+            1368.881577,
+            1372.334822
+          ],
+          "availability": "readable",
+          "unavailable_reason": null,
+          "source": "manifest:sha256:1e263effb88d0f6703c382d488b991bd81fdf43af9f2931ec077cb347865ce58 members=raw/stress-ng-4aba6d0afbf5418ba049c3a2fdc7f240-1.yaml,raw/stress-ng-4aba6d0afbf5418ba049c3a2fdc7f240-2.yaml,raw/stress-ng-4aba6d0afbf5418ba049c3a2fdc7f240-3.yaml"
+        },
+        "cpu.success": {
+          "name": "cpu.success",
+          "unit": "boolean",
+          "value": [
+            1.0
+          ],
+          "availability": "readable",
+          "unavailable_reason": null,
+          "source": "pressure execution gate evidence"
+        },
+        "cpu.busy-ratio": {
+          "name": "cpu.busy-ratio",
+          "unit": "ratio",
+          "value": 0.5381526104417671,
+          "availability": "readable",
+          "unavailable_reason": null,
+          "source": "/proc/stat actual monotonic window=3.7108409350039437s"
+        }
+      },
+      "counting_basis": "busy ratio from two /proc/stat samples (user through steal; guest fields excluded from double counting); canonical CPU PMU source and perf_event_paranoid reported separately; periodic sampling interval=0.2s; actual monotonic window=3.7108409350039437s; pressure artifact identity is canonical manifest digest"
+    }
+  },
+  "envelope": {
+    "schema_version": "looper.collection-measurement-envelope/v1alpha1",
+    "collection_run": {
+      "schema_version": "looper.component-collection-run/v1alpha1",
+      "request": {
+        "schema_version": "looper.component-collection-request/v1alpha1",
+        "component": "cpu",
+        "target_id": "8.148.238.132",
+        "environment_digest": "sha256:7ca99596c6c03ccbb45685b4ba5137731bc7831ef1656759829104defbb85737",
+        "workload_phase_id": "measure",
+        "workload_source": "stress-ng raw YAML bundle parsed by L4",
+        "collector_id": "looper.builtin-linux-guest",
+        "requested_metrics": [
+          "cpu.bogo-ops-per-second",
+          "cpu.success",
+          "cpu.busy-ratio"
+        ],
+        "input_artifacts": [
+          {
+            "artifact_id": "cpu-pressure-bundle",
+            "source": "/opt/looper-pkg-b-cloud/evidence/raw/bundle-4aba6d0afbf5418ba049c3a2fdc7f240.zip",
+            "media_type": "application/vnd.looper.collection-artifact-bundle+zip",
+            "digest": "sha256:1e263effb88d0f6703c382d488b991bd81fdf43af9f2931ec077cb347865ce58"
+          }
+        ],
+        "gate_values": {
+          "cpu.success": true
+        },
+        "interval_seconds": 0.2,
+        "scope": {
+          "network_interfaces": null,
+          "storage_devices": null
+        },
+        "measurement_identity": {
+          "target": "8.148.238.132",
+          "workload": "stress-ng-cpu-1-all-timeout-1s",
+          "phase": "measure",
+          "tool": "stress-ng-0.17.06",
+          "statistics": "repeats=3"
+        }
+      },
+      "collector_id": "looper.builtin-linux-guest",
+      "collector_version": "1.0.0",
+      "enabled": true,
+      "started_at": "2026-08-23T13:06:09.739523Z",
+      "finished_at": "2026-08-23T13:06:13.466442Z",
+      "snapshot": {
+        "schema_version": "looper.component-metric-snapshot/v1alpha1",
+        "component": "cpu",
+        "target_id": "8.148.238.132",
+        "environment_digest": "sha256:7ca99596c6c03ccbb45685b4ba5137731bc7831ef1656759829104defbb85737",
+        "collected_at": "2026-08-23T13:06:13.466251Z",
+        "metrics": {
+          "cpu.bogo-ops-per-second": {
+            "name": "cpu.bogo-ops-per-second",
+            "unit": "bogo-ops/s",
+            "value": [
+              1369.074885,
+              1368.881577,
+              1372.334822
+            ],
+            "availability": "readable",
+            "unavailable_reason": null,
+            "source": "manifest:sha256:1e263effb88d0f6703c382d488b991bd81fdf43af9f2931ec077cb347865ce58 members=raw/stress-ng-4aba6d0afbf5418ba049c3a2fdc7f240-1.yaml,raw/stress-ng-4aba6d0afbf5418ba049c3a2fdc7f240-2.yaml,raw/stress-ng-4aba6d0afbf5418ba049c3a2fdc7f240-3.yaml"
+          },
+          "cpu.success": {
+            "name": "cpu.success",
+            "unit": "boolean",
+            "value": [
+              1.0
+            ],
+            "availability": "readable",
+            "unavailable_reason": null,
+            "source": "pressure execution gate evidence"
+          },
+          "cpu.busy-ratio": {
+            "name": "cpu.busy-ratio",
+            "unit": "ratio",
+            "value": 0.5381526104417671,
+            "availability": "readable",
+            "unavailable_reason": null,
+            "source": "/proc/stat actual monotonic window=3.7108409350039437s"
+          }
+        },
+        "counting_basis": "busy ratio from two /proc/stat samples (user through steal; guest fields excluded from double counting); canonical CPU PMU source and perf_event_paranoid reported separately; periodic sampling interval=0.2s; actual monotonic window=3.7108409350039437s; pressure artifact identity is canonical manifest digest"
+      }
+    },
+    "measurement_batch": {
+      "identity": {
+        "target": "8.148.238.132",
+        "workload": "stress-ng-cpu-1-all-timeout-1s",
+        "phase": "measure",
+        "tool": "stress-ng-0.17.06",
+        "statistics": "repeats=3",
+        "component": "cpu",
+        "target_id": "8.148.238.132",
+        "environment_digest": "sha256:7ca99596c6c03ccbb45685b4ba5137731bc7831ef1656759829104defbb85737",
+        "collection_run_digest": "sha256:c4028553f509e0aa22f190ef67a4c7ed10a3f7e3d061b5ee1f56a8c9a21f1782"
+      },
+      "metrics": {
+        "cpu.bogo-ops-per-second": {
+          "metric_id": "cpu.bogo-ops-per-second",
+          "values": [
+            1369.074885,
+            1368.881577,
+            1372.334822
+          ]
+        },
+        "cpu.success": {
+          "metric_id": "cpu.success",
+          "values": [
+            1.0
+          ]
+        },
+        "cpu.busy-ratio": {
+          "metric_id": "cpu.busy-ratio",
+          "values": [
+            0.5381526104417671
+          ]
+        }
+      },
+      "gate_values": {
+        "cpu.success": true
+      },
+      "pressure_protocol_digest": "sha256:db845d7eb8a77d034d8ebf662545f30f8d484486d504b5a02103e6b4e99a6b4c",
+      "phase_evidence": [
+        {
+          "phase_id": "prepare",
+          "kind": "prepare",
+          "command_digest": "sha256:57ebcff3adbb1a7467556ae2d1ff6b965f911c760b0c8ab19e486d965e633908",
+          "status": "succeeded",
+          "elapsed_seconds": 0.557701914003701
+        },
+        {
+          "phase_id": "warmup",
+          "kind": "warmup",
+          "command_digest": "sha256:df0c69e1e169d9a58578f28de9bbe7a42b52126ce88c0185ad3ecee5fa90923d",
+          "status": "succeeded",
+          "elapsed_seconds": 0.533610698999837
+        },
+        {
+          "phase_id": "measure",
+          "kind": "measure",
+          "command_digest": "sha256:16086bb0bfebfe3e3ea1ab4254986fef84453ae83e9c4cda06a650addad9e736",
+          "status": "succeeded",
+          "elapsed_seconds": 3.7076471020118333
+        },
+        {
+          "phase_id": "verify",
+          "kind": "verify",
+          "command_digest": "sha256:5c11016bb5eb13e7cc97fb3ecd7f88bd93ca9cc6d43152bbb47ab68e918ba7a8",
+          "status": "succeeded",
+          "elapsed_seconds": 0.5247426940040896
+        },
+        {
+          "phase_id": "cleanup",
+          "kind": "cleanup",
+          "command_digest": "sha256:f807c8d616c892673b400670d78a55e320d961181eee7abffdad0e533462820b",
+          "status": "succeeded",
+          "elapsed_seconds": 0.5313818979921052
+        }
+      ],
+      "stability_evidence": {
+        "metric_id": "cpu.bogo-ops-per-second",
+        "statistic": "cv",
+        "formula_id": "F-PROJECT-PRESSURE-CV/v1alpha1",
+        "sample_count": 3,
+        "value": 0.0014162043932362577,
+        "enforcement": "report-only",
+        "acceptance_limit": null,
+        "accepted": null
+      }
+    },
+    "measurement_batch_digest": "sha256:4d1afb151e8945dabe8af8e42b35a380a4988e44d5211819ade8dca6edc93561",
+    "collection_metric_names": [
+      "cpu.bogo-ops-per-second",
+      "cpu.busy-ratio",
+      "cpu.success"
+    ],
+    "unavailable_metrics": {}
+  },
+  "elapsed_seconds": 5.87511619500583
+}

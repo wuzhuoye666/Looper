@@ -1,0 +1,8 @@
+{
+  "target_id": "8.148.238.132",
+  "uname": "Linux iZ7xv1fc2pmggfdftlu37jZ 6.8.0-137-generic #137-Ubuntu SMP PREEMPT_DYNAMIC Fri Jul 17 20:28:23 UTC 2026 x86_64 x86_64 x86_64 GNU/Linux",
+  "python": "3.12.3",
+  "stress_ng": "stress-ng, version 0.17.06 (gcc 13.2.0, x86_64 Linux 6.8.0-137-generic)",
+  "cpu_count": "2",
+  "environment_digest": "sha256:7ca99596c6c03ccbb45685b4ba5137731bc7831ef1656759829104defbb85737"
+}

@@ -1,0 +1,114 @@
+{
+  "schema_version": "looper.pressure-collection-result/v1alpha1",
+  "protocol_id": "pkg-b-cloud-cpu-v1",
+  "protocol_digest": "sha256:db845d7eb8a77d034d8ebf662545f30f8d484486d504b5a02103e6b4e99a6b4c",
+  "phase_evidence": [
+    {
+      "phase_id": "prepare",
+      "kind": "prepare",
+      "command_digest": "sha256:57ebcff3adbb1a7467556ae2d1ff6b965f911c760b0c8ab19e486d965e633908",
+      "status": "succeeded",
+      "elapsed_seconds": 0.5289542859973153
+    },
+    {
+      "phase_id": "warmup",
+      "kind": "warmup",
+      "command_digest": "sha256:df0c69e1e169d9a58578f28de9bbe7a42b52126ce88c0185ad3ecee5fa90923d",
+      "status": "succeeded",
+      "elapsed_seconds": 0.530913762995624
+    },
+    {
+      "phase_id": "measure",
+      "kind": "measure",
+      "command_digest": "sha256:16086bb0bfebfe3e3ea1ab4254986fef84453ae83e9c4cda06a650addad9e736",
+      "status": "succeeded",
+      "elapsed_seconds": 3.6846090250037378
+    },
+    {
+      "phase_id": "verify",
+      "kind": "verify",
+      "command_digest": "sha256:5c11016bb5eb13e7cc97fb3ecd7f88bd93ca9cc6d43152bbb47ab68e918ba7a8",
+      "status": "succeeded",
+      "elapsed_seconds": 0.538803678995464
+    },
+    {
+      "phase_id": "cleanup",
+      "kind": "cleanup",
+      "command_digest": "sha256:f807c8d616c892673b400670d78a55e320d961181eee7abffdad0e533462820b",
+      "status": "succeeded",
+      "elapsed_seconds": 0.5407782310066978
+    }
+  ],
+  "execution_evidence": {
+    "schema_version": "looper.pressure-execution-evidence/v1alpha1",
+    "protocol_id": "pkg-b-cloud-cpu-v1",
+    "component": "cpu",
+    "workload_phase_id": "measure",
+    "measurement_identity": {
+      "target": "8.148.238.132",
+      "workload": "stress-ng-cpu-1-all-timeout-1s",
+      "phase": "measure",
+      "tool": "stress-ng-0.17.06",
+      "statistics": "repeats=3"
+    },
+    "artifacts": [
+      {
+        "artifact_id": "cpu-pressure-bundle",
+        "source": "/opt/looper-pkg-b-cloud/evidence/raw/bundle-c5f5717ddf2143cba1e832613d1a3212.zip",
+        "media_type": "application/vnd.looper.collection-artifact-bundle+zip",
+        "digest": "sha256:d0dad8ad55ca6377167da3b5d758ebb2b5ddadc8f50b2277c21651856ef5c1db"
+      }
+    ],
+    "gate_values": {
+      "cpu.success": true
+    }
+  },
+  "collection_run": {
+    "schema_version": "looper.component-collection-run/v1alpha1",
+    "request": {
+      "schema_version": "looper.component-collection-request/v1alpha1",
+      "component": "cpu",
+      "target_id": "8.148.238.132",
+      "environment_digest": "sha256:7ca99596c6c03ccbb45685b4ba5137731bc7831ef1656759829104defbb85737",
+      "workload_phase_id": "measure",
+      "workload_source": "stress-ng raw YAML bundle parsed by L4",
+      "collector_id": "looper.builtin-linux-guest",
+      "requested_metrics": [
+        "cpu.bogo-ops-per-second",
+        "cpu.success",
+        "cpu.busy-ratio"
+      ],
+      "input_artifacts": [
+        {
+          "artifact_id": "cpu-pressure-bundle",
+          "source": "/opt/looper-pkg-b-cloud/evidence/raw/bundle-c5f5717ddf2143cba1e832613d1a3212.zip",
+          "media_type": "application/vnd.looper.collection-artifact-bundle+zip",
+          "digest": "sha256:d0dad8ad55ca6377167da3b5d758ebb2b5ddadc8f50b2277c21651856ef5c1db"
+        }
+      ],
+      "gate_values": {
+        "cpu.success": true
+      },
+      "interval_seconds": 0.2,
+      "scope": {
+        "network_interfaces": null,
+        "storage_devices": null
+      },
+      "measurement_identity": {
+        "target": "8.148.238.132",
+        "workload": "stress-ng-cpu-1-all-timeout-1s",
+        "phase": "measure",
+        "tool": "stress-ng-0.17.06",
+        "statistics": "repeats=3"
+      }
+    },
+    "collector_id": "looper.builtin-linux-guest",
+    "collector_version": "1.0.0",
+    "enabled": false,
+    "started_at": "2026-08-23T13:05:52.134206Z",
+    "finished_at": "2026-08-23T13:05:55.820084Z",
+    "snapshot": null
+  },
+  "envelope": null,
+  "elapsed_seconds": 5.825855760005652
+}

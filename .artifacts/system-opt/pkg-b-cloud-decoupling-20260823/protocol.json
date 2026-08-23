@@ -1,0 +1,132 @@
+{
+  "schema_version": "looper.standard-pressure-protocol/v1alpha1",
+  "id": "pkg-b-cloud-cpu-v1",
+  "component": "cpu",
+  "target_scope": "one explicit Alibaba Cloud ECS guest",
+  "limitation": "single-host acceptance evidence; no portability claim",
+  "required_executables": [
+    "python3",
+    "stress-ng"
+  ],
+  "input_identity": {
+    "workload": "stress-ng-cpu-1-all-timeout-1s"
+  },
+  "metric_ids": [
+    "cpu.bogo-ops-per-second",
+    "cpu.success"
+  ],
+  "gate_metric_ids": [
+    "cpu.success"
+  ],
+  "stability": {
+    "metric_id": "cpu.bogo-ops-per-second",
+    "statistic": "cv",
+    "enforcement": "report-only",
+    "acceptance_limit": null,
+    "minimum_repeats": 3,
+    "maximum_repeats": 3,
+    "source": "PKG-B cloud acceptance; report-only"
+  },
+  "phases": [
+    {
+      "id": "prepare",
+      "kind": "prepare",
+      "command": {
+        "argv": [
+          "python3",
+          "/opt/looper-pkg-b-cloud/harness.py",
+          "phase",
+          "prepare",
+          "{repeats}"
+        ],
+        "timeout_seconds": 5.0
+      },
+      "declared_duration_seconds": 0.0,
+      "purpose": "create no workload and preserve phase identity"
+    },
+    {
+      "id": "warmup",
+      "kind": "warmup",
+      "command": {
+        "argv": [
+          "python3",
+          "/opt/looper-pkg-b-cloud/harness.py",
+          "phase",
+          "warmup",
+          "{repeats}"
+        ],
+        "timeout_seconds": 5.0
+      },
+      "declared_duration_seconds": 0.01,
+      "purpose": "explicit no-op harness warmup boundary"
+    },
+    {
+      "id": "measure",
+      "kind": "measure",
+      "command": {
+        "argv": [
+          "python3",
+          "/opt/looper-pkg-b-cloud/harness.py",
+          "phase",
+          "measure",
+          "{repeats}"
+        ],
+        "timeout_seconds": 60.0
+      },
+      "declared_duration_seconds": 3.0,
+      "purpose": "run stress-ng and emit one raw artifact bundle identity"
+    },
+    {
+      "id": "verify",
+      "kind": "verify",
+      "command": {
+        "argv": [
+          "python3",
+          "/opt/looper-pkg-b-cloud/harness.py",
+          "phase",
+          "verify",
+          "{repeats}"
+        ],
+        "timeout_seconds": 5.0
+      },
+      "declared_duration_seconds": 0.0,
+      "purpose": "adapter performs digest and manifest verification"
+    },
+    {
+      "id": "cleanup",
+      "kind": "cleanup",
+      "command": {
+        "argv": [
+          "python3",
+          "/opt/looper-pkg-b-cloud/harness.py",
+          "phase",
+          "cleanup",
+          "{repeats}"
+        ],
+        "timeout_seconds": 5.0
+      },
+      "declared_duration_seconds": 0.0,
+      "purpose": "no persistent workload remains"
+    }
+  ],
+  "collection": {
+    "collector_id": "looper.builtin-linux-guest",
+    "requested_metrics": [
+      "cpu.bogo-ops-per-second",
+      "cpu.success",
+      "cpu.busy-ratio"
+    ],
+    "artifact_requirements": [
+      {
+        "artifact_id": "cpu-pressure-bundle",
+        "media_type": "application/vnd.looper.collection-artifact-bundle+zip"
+      }
+    ],
+    "interval_seconds": 0.2,
+    "scope": {
+      "network_interfaces": null,
+      "storage_devices": null
+    },
+    "workload_source": "stress-ng raw YAML bundle parsed by L4"
+  }
+}

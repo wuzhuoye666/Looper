@@ -1,0 +1,258 @@
+{
+  "schema_version": "looper.pkg-b-cloud-verification/v1alpha1",
+  "bundle_identity_basis": "canonical manifest digest; ZIP container hash is not evidence identity",
+  "validated_bundles": [
+    {
+      "file": "raw/bundle-0430890985624c0aba0578fbe0ea68f8.zip",
+      "manifest_digest": "sha256:a9266c4b44897614836e6321da5813910f949255809c123c7f1ddf7d55419939",
+      "member_count": 3
+    },
+    {
+      "file": "raw/bundle-1c02c48d9e83425c9bd2fa73d8a6a39a.zip",
+      "manifest_digest": "sha256:6ca65c97625c72ff500376c697649cc18255f370312df73f59ce08941d061631",
+      "member_count": 3
+    },
+    {
+      "file": "raw/bundle-4aba6d0afbf5418ba049c3a2fdc7f240.zip",
+      "manifest_digest": "sha256:1e263effb88d0f6703c382d488b991bd81fdf43af9f2931ec077cb347865ce58",
+      "member_count": 3
+    },
+    {
+      "file": "raw/bundle-646a275dceaf4edc86572a53d6250756.zip",
+      "manifest_digest": "sha256:19f839bd9d6cd6d5af546059018259ca49cd3ccdcc16a3a9e05d0c1ea357a91d",
+      "member_count": 3
+    },
+    {
+      "file": "raw/bundle-c5f5717ddf2143cba1e832613d1a3212.zip",
+      "manifest_digest": "sha256:d0dad8ad55ca6377167da3b5d758ebb2b5ddadc8f50b2277c21651856ef5c1db",
+      "member_count": 3
+    },
+    {
+      "file": "raw/bundle-e1d155a57b50460e9cbc6751d80732e4.zip",
+      "manifest_digest": "sha256:94012bd0c3d9717967bdc6746b0c0cea5ba7dc3f6d45e48dd52d73d5b6c29e7b",
+      "member_count": 3
+    }
+  ],
+  "validated_runs": [
+    {
+      "file": "run-1-disabled.json",
+      "enabled": false,
+      "digest": "sha256:8fa03bbea53869b66ed4b01d6b9dd5b833766a72e2e4f2fbd1fc653090f6ac61",
+      "elapsed_seconds": 5.9316527569899336,
+      "artifact_manifest_digest": "sha256:94012bd0c3d9717967bdc6746b0c0cea5ba7dc3f6d45e48dd52d73d5b6c29e7b",
+      "measurement_batch_digest": null
+    },
+    {
+      "file": "run-1-enabled.json",
+      "enabled": true,
+      "digest": "sha256:36ec5adc515e08c40f7def9b6131ed0b3b84b38e1a743145e8361b8845f456e5",
+      "elapsed_seconds": 5.861428773001535,
+      "artifact_manifest_digest": "sha256:19f839bd9d6cd6d5af546059018259ca49cd3ccdcc16a3a9e05d0c1ea357a91d",
+      "measurement_batch_digest": "sha256:87051a279a859771c6d2d62ea5bc597c2dc1598c2afd6feafa3de91719ddd429"
+    },
+    {
+      "file": "run-2-disabled.json",
+      "enabled": false,
+      "digest": "sha256:80b290b76795f83e6dc7fb4bbf93ca4d08ec2c65675db266b9bad8b41738f414",
+      "elapsed_seconds": 5.825855760005652,
+      "artifact_manifest_digest": "sha256:d0dad8ad55ca6377167da3b5d758ebb2b5ddadc8f50b2277c21651856ef5c1db",
+      "measurement_batch_digest": null
+    },
+    {
+      "file": "run-2-enabled.json",
+      "enabled": true,
+      "digest": "sha256:57bd83c381b2e479777e544a6e4238d173df59852343b83b5df36c4acc2836ef",
+      "elapsed_seconds": 5.831471858997247,
+      "artifact_manifest_digest": "sha256:a9266c4b44897614836e6321da5813910f949255809c123c7f1ddf7d55419939",
+      "measurement_batch_digest": "sha256:c431f610da816dcb876219b9c6f485d4f204067f0e39f7675500eae021c72762"
+    },
+    {
+      "file": "run-3-disabled.json",
+      "enabled": false,
+      "digest": "sha256:218acfca29b88d65c789b0a5c3f49699ae5540fb6ac076dcd18844ed8a15f5c8",
+      "elapsed_seconds": 5.912297001006664,
+      "artifact_manifest_digest": "sha256:6ca65c97625c72ff500376c697649cc18255f370312df73f59ce08941d061631",
+      "measurement_batch_digest": null
+    },
+    {
+      "file": "run-3-enabled.json",
+      "enabled": true,
+      "digest": "sha256:c7aef70fcb08512f8333715ce003a45c992af13e0193e83987bac2a24fef6462",
+      "elapsed_seconds": 5.87511619500583,
+      "artifact_manifest_digest": "sha256:1e263effb88d0f6703c382d488b991bd81fdf43af9f2931ec077cb347865ce58",
+      "measurement_batch_digest": "sha256:4d1afb151e8945dabe8af8e42b35a380a4988e44d5211819ade8dca6edc93561"
+    }
+  ],
+  "files": [
+    {
+      "path": "acceptance-summary.json",
+      "size_bytes": 2055,
+      "sha256": "sha256:a8d870f02155545d1c278d29b3168941bca181c810de5d871deae10021338f32"
+    },
+    {
+      "path": "collection-overhead-ab.json",
+      "size_bytes": 795,
+      "sha256": "sha256:71902e52f3984fd9e66e0b8c0d722cb87b22086bd46c6aeedfb465b11b176398"
+    },
+    {
+      "path": "environment.json",
+      "size_bytes": 420,
+      "sha256": "sha256:84b59198b8259edbd396747b0e6dc851562ea75f14548bde5ade9370d9244075"
+    },
+    {
+      "path": "protocol.json",
+      "size_bytes": 3240,
+      "sha256": "sha256:3073b64965ff8d74c865cb1fa69c69d7c9276e16b7bf63cf58ade45b4101eb4a"
+    },
+    {
+      "path": "raw/bundle-0430890985624c0aba0578fbe0ea68f8.zip",
+      "size_bytes": 2579,
+      "sha256": "sha256:388e2f2b61e124b3abd13f96606b04aea6f88ec31a8e729528d06faa7b319f34"
+    },
+    {
+      "path": "raw/bundle-1c02c48d9e83425c9bd2fa73d8a6a39a.zip",
+      "size_bytes": 2584,
+      "sha256": "sha256:2d87ee6538568d115ab444095597331a42bc374d10a3550348ca433eeef75d68"
+    },
+    {
+      "path": "raw/bundle-4aba6d0afbf5418ba049c3a2fdc7f240.zip",
+      "size_bytes": 2576,
+      "sha256": "sha256:5e7f955ff6eaa8cf93e22b829fad8e721a9d6776014eafc27a708595329d8548"
+    },
+    {
+      "path": "raw/bundle-646a275dceaf4edc86572a53d6250756.zip",
+      "size_bytes": 2581,
+      "sha256": "sha256:86ffe090b9900a0652e115cdcd3ed753e8a2fb06b0ee300ed496c8d4d23854df"
+    },
+    {
+      "path": "raw/bundle-c5f5717ddf2143cba1e832613d1a3212.zip",
+      "size_bytes": 2589,
+      "sha256": "sha256:ac1aeec170a25521567b4304818a8c62ba3be17a710f4a9e1be6eec45ec0620c"
+    },
+    {
+      "path": "raw/bundle-e1d155a57b50460e9cbc6751d80732e4.zip",
+      "size_bytes": 2584,
+      "sha256": "sha256:af1c56bde3bf9483f053495fff0d6f4187b4ea07d28cb72982beb47b39e0bb22"
+    },
+    {
+      "path": "raw/stress-ng-0430890985624c0aba0578fbe0ea68f8-1.yaml",
+      "size_bytes": 992,
+      "sha256": "sha256:edac5160c111510a3f60d428012bea1b3e9a491f603b092eacad23e59d298d04"
+    },
+    {
+      "path": "raw/stress-ng-0430890985624c0aba0578fbe0ea68f8-2.yaml",
+      "size_bytes": 992,
+      "sha256": "sha256:80cf31e33ed0828c13747374ac9e07a226a4fc23a555b1d067d26c03a9e3c001"
+    },
+    {
+      "path": "raw/stress-ng-0430890985624c0aba0578fbe0ea68f8-3.yaml",
+      "size_bytes": 992,
+      "sha256": "sha256:0acbc686798f2ab8fa1b65a38cfa7381aa64a55dc443d6e987e1ef7a9b92cbd5"
+    },
+    {
+      "path": "raw/stress-ng-1c02c48d9e83425c9bd2fa73d8a6a39a-1.yaml",
+      "size_bytes": 992,
+      "sha256": "sha256:0d2599fdb5b0bb54f45cb8462b35962980732c7e1060aec9a379283ac7542ed2"
+    },
+    {
+      "path": "raw/stress-ng-1c02c48d9e83425c9bd2fa73d8a6a39a-2.yaml",
+      "size_bytes": 992,
+      "sha256": "sha256:d45dceac5d5e22a664a40eaf29e6d9e16e59237e3f67001ec02317964a30b6ce"
+    },
+    {
+      "path": "raw/stress-ng-1c02c48d9e83425c9bd2fa73d8a6a39a-3.yaml",
+      "size_bytes": 993,
+      "sha256": "sha256:ac202884b097fe738b9414791c5c00b61746fdc910a154378ddd65b243896bbc"
+    },
+    {
+      "path": "raw/stress-ng-4aba6d0afbf5418ba049c3a2fdc7f240-1.yaml",
+      "size_bytes": 992,
+      "sha256": "sha256:f512dcafae7e1b6ed580ee99db776dbd0d84b74eecaa6a3826dea0f6e05537c2"
+    },
+    {
+      "path": "raw/stress-ng-4aba6d0afbf5418ba049c3a2fdc7f240-2.yaml",
+      "size_bytes": 992,
+      "sha256": "sha256:ca0a99f6805b2eb3e432aa310aaeb5b453310ada6825bedc5336a43d98b79734"
+    },
+    {
+      "path": "raw/stress-ng-4aba6d0afbf5418ba049c3a2fdc7f240-3.yaml",
+      "size_bytes": 992,
+      "sha256": "sha256:d7fbbfb5b256a953612ab8c07cb49dffcd320dfdb22a148afc16c944e635f709"
+    },
+    {
+      "path": "raw/stress-ng-646a275dceaf4edc86572a53d6250756-1.yaml",
+      "size_bytes": 992,
+      "sha256": "sha256:ef9efacdf2b3e57d3c39ce4d3b4238803d14dfed59dc4d7654a8c96fd8108ef3"
+    },
+    {
+      "path": "raw/stress-ng-646a275dceaf4edc86572a53d6250756-2.yaml",
+      "size_bytes": 992,
+      "sha256": "sha256:0bcbf31426959e88c284d88fe4ed9d4c043cfe27298c1e05eff9786397f4e7e0"
+    },
+    {
+      "path": "raw/stress-ng-646a275dceaf4edc86572a53d6250756-3.yaml",
+      "size_bytes": 992,
+      "sha256": "sha256:29f4991f1ad0bcdd4d1e00eb71c436baf94d7487e337e879cc636d97851c977f"
+    },
+    {
+      "path": "raw/stress-ng-c5f5717ddf2143cba1e832613d1a3212-1.yaml",
+      "size_bytes": 993,
+      "sha256": "sha256:e9da872b0f416c2c6a1d8369b4eee7a9cfa920dda2806dbf56560e2352d26290"
+    },
+    {
+      "path": "raw/stress-ng-c5f5717ddf2143cba1e832613d1a3212-2.yaml",
+      "size_bytes": 992,
+      "sha256": "sha256:ac5ecadfe0f06d12fb574dbc307366e3ee1f6b5a0ad39c87e20d3bddd17216fb"
+    },
+    {
+      "path": "raw/stress-ng-c5f5717ddf2143cba1e832613d1a3212-3.yaml",
+      "size_bytes": 992,
+      "sha256": "sha256:6efc499762106f03d839b8169d9a45d2b31b58c5232ef601ba81e30299443f4a"
+    },
+    {
+      "path": "raw/stress-ng-e1d155a57b50460e9cbc6751d80732e4-1.yaml",
+      "size_bytes": 991,
+      "sha256": "sha256:093aadcdadcad0f2554fc219ca552ab88b3779147a161b5a7d1e4d4b10d02384"
+    },
+    {
+      "path": "raw/stress-ng-e1d155a57b50460e9cbc6751d80732e4-2.yaml",
+      "size_bytes": 992,
+      "sha256": "sha256:026a60bd132c611e63066076de66a82b519fdbdf4fc35708d688a92846db7a82"
+    },
+    {
+      "path": "raw/stress-ng-e1d155a57b50460e9cbc6751d80732e4-3.yaml",
+      "size_bytes": 993,
+      "sha256": "sha256:5fb17519e3fa119491feb6c1dcf5d96f03f41c931fc6b12196a9a2fd70f52ff7"
+    },
+    {
+      "path": "run-1-disabled.json",
+      "size_bytes": 3966,
+      "sha256": "sha256:298a91b7536f2b3c4abd0471ceb3e7ad65e53c046c82bd0c97756e6047d3680c"
+    },
+    {
+      "path": "run-1-enabled.json",
+      "size_bytes": 12622,
+      "sha256": "sha256:ce226825a6d131c134f12dda32ad7653b504d97c54b4d413527e6af0ffea91e9"
+    },
+    {
+      "path": "run-2-disabled.json",
+      "size_bytes": 3963,
+      "sha256": "sha256:6f925099c57b929bc56cbe070ecb3d80d2b16b96c29ecba028b92d95d0c55975"
+    },
+    {
+      "path": "run-2-enabled.json",
+      "size_bytes": 12615,
+      "sha256": "sha256:2dcdb1d59dcf80fe6159acf10daa14372399135ac8aee8d704499b3c60183972"
+    },
+    {
+      "path": "run-3-disabled.json",
+      "size_bytes": 3965,
+      "sha256": "sha256:16671a0fc12f9a99b1b5b96cd6ef591116e59acb8997aa7a6bd219dd6b94940f"
+    },
+    {
+      "path": "run-3-enabled.json",
+      "size_bytes": 12623,
+      "sha256": "sha256:8c24265c59652a66abb21c8d551771a213294b6b6694eeca2d78edae0d30500c"
+    }
+  ]
+}

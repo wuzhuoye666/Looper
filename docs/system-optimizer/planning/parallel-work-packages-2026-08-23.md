@@ -175,7 +175,7 @@
 | 包 | 状态 | 负责 | 备注 |
 |---|---|---|---|
 | PKG-A | ✅ 完成 2026-08-23 | 主 agent（zcode） | component.py + 语义标注 + 6 测试；全仓 167 绿 |
-| PKG-B | 🟡 部分阻塞 | 待领 | 解耦子项等 L4 新合同（L4 修复：GPT agent 进行中）；存储协议子项不依赖 L4 可先做 |
+| PKG-B | 🟢 云端解耦验收通过 2026-08-23 | GPT agent（主 agent 验收） | 真机 8.148.238.132 实测：3 对采集开销 A/B（裸墙钟，enabled≈disabled，无阈值无裁决）、6 个 ZIP bundle（manifest 内容身份，容器字节不作身份）、enabled 臂出 MeasurementBatch（cpu.bogo-ops-per-second 三值 CV≈0.1%）。主 agent 字节级重放验收：protocol/run/AB 三模型重解析 ✓、AB 用 build_collection_overhead_evidence 重建 digest 一致 ✓、6 bundle 全成员 sha256 校验 ✓、18 份 stress-ng 原始 YAML 均为 bundle 成员且摘要一致 ✓。证据落 `.artifacts/system-opt/pkg-b-cloud-decoupling-20260823/`。剩余：F-PROJECT-002 提案（PressureTransform/AdverseChangeTransform） |
 | PKG-C | ✅ 完成 2026-08-23 | 主 agent（zcode） | result_vector.py（S8 六元向量+Pareto+任务决胜、S9 晋升合同 fail-closed、L6c 触发判定）+ 11 测试；归一化保持任务注入式提案待确认 |
 | PKG-D | ✅ 完成 2026-08-23 | 主 agent（zcode） | engine/loop.py 主循环（调度→组件执行→终裁→负缓存→S10 停止→相位门禁）+ 6 测试 |
 | PKG-E | 🟡 大部分完成 2026-08-23 | 主 agent | 盲区双机实测✅ + tuned 恢复✅ + 网络会话资产就绪✅；真实 peer 闭环✅（用户点出改走 VPC 内网后完成：bbr/reno 均未达显著，全部回滚；公网路径不适合作吞吐通道）|

@@ -1,0 +1,70 @@
+{
+  "protocol_digest": "sha256:db845d7eb8a77d034d8ebf662545f30f8d484486d504b5a02103e6b4e99a6b4c",
+  "environment_digest": "sha256:7ca99596c6c03ccbb45685b4ba5137731bc7831ef1656759829104defbb85737",
+  "sequence": [
+    {
+      "pair": 1,
+      "arm": "disabled",
+      "elapsed_seconds": 5.9316527569899336
+    },
+    {
+      "pair": 1,
+      "arm": "enabled",
+      "elapsed_seconds": 5.861428773001535
+    },
+    {
+      "pair": 2,
+      "arm": "disabled",
+      "elapsed_seconds": 5.825855760005652
+    },
+    {
+      "pair": 2,
+      "arm": "enabled",
+      "elapsed_seconds": 5.831471858997247
+    },
+    {
+      "pair": 3,
+      "arm": "disabled",
+      "elapsed_seconds": 5.912297001006664
+    },
+    {
+      "pair": 3,
+      "arm": "enabled",
+      "elapsed_seconds": 5.87511619500583
+    }
+  ],
+  "bundle_manifest_digests": [
+    "sha256:94012bd0c3d9717967bdc6746b0c0cea5ba7dc3f6d45e48dd52d73d5b6c29e7b",
+    "sha256:d0dad8ad55ca6377167da3b5d758ebb2b5ddadc8f50b2277c21651856ef5c1db",
+    "sha256:6ca65c97625c72ff500376c697649cc18255f370312df73f59ce08941d061631",
+    "sha256:19f839bd9d6cd6d5af546059018259ca49cd3ccdcc16a3a9e05d0c1ea357a91d",
+    "sha256:a9266c4b44897614836e6321da5813910f949255809c123c7f1ddf7d55419939",
+    "sha256:1e263effb88d0f6703c382d488b991bd81fdf43af9f2931ec077cb347865ce58"
+  ],
+  "enabled_measurement_batch_digest": "sha256:4d1afb151e8945dabe8af8e42b35a380a4988e44d5211819ade8dca6edc93561",
+  "enabled_metrics": {
+    "cpu.bogo-ops-per-second": {
+      "metric_id": "cpu.bogo-ops-per-second",
+      "values": [
+        1369.074885,
+        1368.881577,
+        1372.334822
+      ]
+    },
+    "cpu.success": {
+      "metric_id": "cpu.success",
+      "values": [
+        1.0
+      ]
+    },
+    "cpu.busy-ratio": {
+      "metric_id": "cpu.busy-ratio",
+      "values": [
+        0.5381526104417671
+      ]
+    }
+  },
+  "overhead_evidence_digest": "sha256:9fda53766b003702c1aa5c16d4d3a7cb2a3b89f818308107680aa15b6b2ec68c",
+  "adjudication": null,
+  "note": "raw paired durations only; no threshold, ratio, delta, or verdict"
+}

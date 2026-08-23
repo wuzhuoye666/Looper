@@ -1,0 +1,22 @@
+{
+  "schema_version": "looper.collection-overhead-ab-evidence/v1alpha1",
+  "target_id": "8.148.238.132",
+  "environment_digest": "sha256:7ca99596c6c03ccbb45685b4ba5137731bc7831ef1656759829104defbb85737",
+  "workload_identity": {
+    "protocol_id": "pkg-b-cloud-cpu-v1",
+    "protocol_digest": "sha256:db845d7eb8a77d034d8ebf662545f30f8d484486d504b5a02103e6b4e99a6b4c",
+    "measurement_identity_digest": "sha256:e4b58e1e23566fdea569d15c18c282a0e5661209f98cd2df065eba4613aa7ca8"
+  },
+  "collector_id": "looper.builtin-linux-guest",
+  "collection_disabled_seconds": [
+    5.9316527569899336,
+    5.825855760005652,
+    5.912297001006664
+  ],
+  "collection_enabled_seconds": [
+    5.861428773001535,
+    5.831471858997247,
+    5.87511619500583
+  ],
+  "collected_at": "2026-08-23T13:06:14.525139Z"
+}
