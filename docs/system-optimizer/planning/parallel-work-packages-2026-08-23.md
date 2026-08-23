@@ -187,6 +187,13 @@
   同时采集主指标+分布+微指标（含压力工具输出解析）。修复责任：GPT agent。
   PKG-B 解耦子项、PKG-A 公式映射钩子的实际供数均等待新 L4 合同。
 - 主 agent 不接触其他工作区的未提交修改。
+- 🟡 **误放事故（2026-08-23 晚，用户确认非人工搬运）**：GPT agent 执行 PKG-B
+  期间把工作目录误配到主 agent worktree（`Looper-system-optimizer/`），
+  多波写入未提交文件（collector.py / pressure/__init__.py 修改 +
+  4 个 collection 测试文件，18:56-19:55+）。其指派 worktree（`Looper-l4-fix/`）
+  干净，**误放文件是其 PKG-B 工作唯一副本，暂停后需字节级保全搬迁**。
+  处置规则见工作区 `AGENTS.md` §十四。主 agent 当晚回归已用 `--ignore`
+  隔离不完整文件集，未吸收、未删除、未提交任何外来文件。
 
 ## 冲突与协调
 
