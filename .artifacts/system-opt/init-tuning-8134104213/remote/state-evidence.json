@@ -1,0 +1,364 @@
+{
+  "assignments": [
+    {
+      "key": "summary",
+      "section": "main",
+      "source": {
+        "content_sha256": "a42376e0e262ec537ab7ddcbbdb3adfedf0dde5e712523b5539d2c2df7cb7107",
+        "kind": "tuned-profile",
+        "line": 6,
+        "locator": "/usr/lib/tuned/virtual-guest/tuned.conf",
+        "raw_value": "Optimize for running inside a virtual guest"
+      },
+      "value": "Optimize for running inside a virtual guest"
+    },
+    {
+      "key": "include",
+      "section": "main",
+      "source": {
+        "content_sha256": "a42376e0e262ec537ab7ddcbbdb3adfedf0dde5e712523b5539d2c2df7cb7107",
+        "kind": "tuned-profile",
+        "line": 7,
+        "locator": "/usr/lib/tuned/virtual-guest/tuned.conf",
+        "raw_value": "throughput-performance"
+      },
+      "value": "throughput-performance"
+    },
+    {
+      "key": "vm.dirty_ratio",
+      "section": "sysctl",
+      "source": {
+        "content_sha256": "a42376e0e262ec537ab7ddcbbdb3adfedf0dde5e712523b5539d2c2df7cb7107",
+        "kind": "tuned-profile",
+        "line": 17,
+        "locator": "/usr/lib/tuned/virtual-guest/tuned.conf",
+        "raw_value": "30"
+      },
+      "value": "30"
+    },
+    {
+      "key": "vm.swappiness",
+      "section": "sysctl",
+      "source": {
+        "content_sha256": "a42376e0e262ec537ab7ddcbbdb3adfedf0dde5e712523b5539d2c2df7cb7107",
+        "kind": "tuned-profile",
+        "line": 22,
+        "locator": "/usr/lib/tuned/virtual-guest/tuned.conf",
+        "raw_value": "30"
+      },
+      "value": "30"
+    },
+    {
+      "key": "summary",
+      "section": "main",
+      "source": {
+        "content_sha256": "b5a2ae4396565526dfe94fdb5ba33acc555eb38ca5260dfaf073caeb4f04bb88",
+        "kind": "tuned-profile",
+        "line": 6,
+        "locator": "/usr/lib/tuned/throughput-performance/tuned.conf",
+        "raw_value": "Broadly applicable tuning that provides excellent performance across a variety of common server workloads"
+      },
+      "value": "Broadly applicable tuning that provides excellent performance across a variety of common server workloads"
+    },
+    {
+      "key": "thunderx_cpuinfo_regex",
+      "section": "variables",
+      "source": {
+        "content_sha256": "b5a2ae4396565526dfe94fdb5ba33acc555eb38ca5260dfaf073caeb4f04bb88",
+        "kind": "tuned-profile",
+        "line": 9,
+        "locator": "/usr/lib/tuned/throughput-performance/tuned.conf",
+        "raw_value": "CPU part\\s+:\\s+(0x0?516)|(0x0?af)|(0x0?a[0-3])|(0x0?b8)\\b"
+      },
+      "value": "CPU part\\s+:\\s+(0x0?516)|(0x0?af)|(0x0?a[0-3])|(0x0?b8)\\b"
+    },
+    {
+      "key": "amd_cpuinfo_regex",
+      "section": "variables",
+      "source": {
+        "content_sha256": "b5a2ae4396565526dfe94fdb5ba33acc555eb38ca5260dfaf073caeb4f04bb88",
+        "kind": "tuned-profile",
+        "line": 10,
+        "locator": "/usr/lib/tuned/throughput-performance/tuned.conf",
+        "raw_value": "model name\\s+:.*\\bAMD\\b"
+      },
+      "value": "model name\\s+:.*\\bAMD\\b"
+    },
+    {
+      "key": "governor",
+      "section": "cpu",
+      "source": {
+        "content_sha256": "b5a2ae4396565526dfe94fdb5ba33acc555eb38ca5260dfaf073caeb4f04bb88",
+        "kind": "tuned-profile",
+        "line": 13,
+        "locator": "/usr/lib/tuned/throughput-performance/tuned.conf",
+        "raw_value": "performance"
+      },
+      "value": "performance"
+    },
+    {
+      "key": "energy_perf_bias",
+      "section": "cpu",
+      "source": {
+        "content_sha256": "b5a2ae4396565526dfe94fdb5ba33acc555eb38ca5260dfaf073caeb4f04bb88",
+        "kind": "tuned-profile",
+        "line": 14,
+        "locator": "/usr/lib/tuned/throughput-performance/tuned.conf",
+        "raw_value": "performance"
+      },
+      "value": "performance"
+    },
+    {
+      "key": "min_perf_pct",
+      "section": "cpu",
+      "source": {
+        "content_sha256": "b5a2ae4396565526dfe94fdb5ba33acc555eb38ca5260dfaf073caeb4f04bb88",
+        "kind": "tuned-profile",
+        "line": 15,
+        "locator": "/usr/lib/tuned/throughput-performance/tuned.conf",
+        "raw_value": "100"
+      },
+      "value": "100"
+    },
+    {
+      "key": "type",
+      "section": "vm.thunderx",
+      "source": {
+        "content_sha256": "b5a2ae4396565526dfe94fdb5ba33acc555eb38ca5260dfaf073caeb4f04bb88",
+        "kind": "tuned-profile",
+        "line": 19,
+        "locator": "/usr/lib/tuned/throughput-performance/tuned.conf",
+        "raw_value": "vm"
+      },
+      "value": "vm"
+    },
+    {
+      "key": "uname_regex",
+      "section": "vm.thunderx",
+      "source": {
+        "content_sha256": "b5a2ae4396565526dfe94fdb5ba33acc555eb38ca5260dfaf073caeb4f04bb88",
+        "kind": "tuned-profile",
+        "line": 20,
+        "locator": "/usr/lib/tuned/throughput-performance/tuned.conf",
+        "raw_value": "aarch64"
+      },
+      "value": "aarch64"
+    },
+    {
+      "key": "cpuinfo_regex",
+      "section": "vm.thunderx",
+      "source": {
+        "content_sha256": "b5a2ae4396565526dfe94fdb5ba33acc555eb38ca5260dfaf073caeb4f04bb88",
+        "kind": "tuned-profile",
+        "line": 21,
+        "locator": "/usr/lib/tuned/throughput-performance/tuned.conf",
+        "raw_value": "${thunderx_cpuinfo_regex}"
+      },
+      "value": "${thunderx_cpuinfo_regex}"
+    },
+    {
+      "key": "transparent_hugepages",
+      "section": "vm.thunderx",
+      "source": {
+        "content_sha256": "b5a2ae4396565526dfe94fdb5ba33acc555eb38ca5260dfaf073caeb4f04bb88",
+        "kind": "tuned-profile",
+        "line": 22,
+        "locator": "/usr/lib/tuned/throughput-performance/tuned.conf",
+        "raw_value": "never"
+      },
+      "value": "never"
+    },
+    {
+      "key": "readahead",
+      "section": "disk",
+      "source": {
+        "content_sha256": "b5a2ae4396565526dfe94fdb5ba33acc555eb38ca5260dfaf073caeb4f04bb88",
+        "kind": "tuned-profile",
+        "line": 28,
+        "locator": "/usr/lib/tuned/throughput-performance/tuned.conf",
+        "raw_value": ">4096"
+      },
+      "value": ">4096"
+    },
+    {
+      "key": "kernel.sched_min_granularity_ns",
+      "section": "sysctl",
+      "source": {
+        "content_sha256": "b5a2ae4396565526dfe94fdb5ba33acc555eb38ca5260dfaf073caeb4f04bb88",
+        "kind": "tuned-profile",
+        "line": 35,
+        "locator": "/usr/lib/tuned/throughput-performance/tuned.conf",
+        "raw_value": "10000000"
+      },
+      "value": "10000000"
+    },
+    {
+      "key": "kernel.sched_wakeup_granularity_ns",
+      "section": "sysctl",
+      "source": {
+        "content_sha256": "b5a2ae4396565526dfe94fdb5ba33acc555eb38ca5260dfaf073caeb4f04bb88",
+        "kind": "tuned-profile",
+        "line": 43,
+        "locator": "/usr/lib/tuned/throughput-performance/tuned.conf",
+        "raw_value": "15000000"
+      },
+      "value": "15000000"
+    },
+    {
+      "key": "vm.dirty_ratio",
+      "section": "sysctl",
+      "source": {
+        "content_sha256": "b5a2ae4396565526dfe94fdb5ba33acc555eb38ca5260dfaf073caeb4f04bb88",
+        "kind": "tuned-profile",
+        "line": 52,
+        "locator": "/usr/lib/tuned/throughput-performance/tuned.conf",
+        "raw_value": "40"
+      },
+      "value": "40"
+    },
+    {
+      "key": "vm.dirty_background_ratio",
+      "section": "sysctl",
+      "source": {
+        "content_sha256": "b5a2ae4396565526dfe94fdb5ba33acc555eb38ca5260dfaf073caeb4f04bb88",
+        "kind": "tuned-profile",
+        "line": 56,
+        "locator": "/usr/lib/tuned/throughput-performance/tuned.conf",
+        "raw_value": "10"
+      },
+      "value": "10"
+    },
+    {
+      "key": "vm.swappiness",
+      "section": "sysctl",
+      "source": {
+        "content_sha256": "b5a2ae4396565526dfe94fdb5ba33acc555eb38ca5260dfaf073caeb4f04bb88",
+        "kind": "tuned-profile",
+        "line": 73,
+        "locator": "/usr/lib/tuned/throughput-performance/tuned.conf",
+        "raw_value": "10"
+      },
+      "value": "10"
+    },
+    {
+      "key": "type",
+      "section": "sysctl.thunderx",
+      "source": {
+        "content_sha256": "b5a2ae4396565526dfe94fdb5ba33acc555eb38ca5260dfaf073caeb4f04bb88",
+        "kind": "tuned-profile",
+        "line": 77,
+        "locator": "/usr/lib/tuned/throughput-performance/tuned.conf",
+        "raw_value": "sysctl"
+      },
+      "value": "sysctl"
+    },
+    {
+      "key": "uname_regex",
+      "section": "sysctl.thunderx",
+      "source": {
+        "content_sha256": "b5a2ae4396565526dfe94fdb5ba33acc555eb38ca5260dfaf073caeb4f04bb88",
+        "kind": "tuned-profile",
+        "line": 78,
+        "locator": "/usr/lib/tuned/throughput-performance/tuned.conf",
+        "raw_value": "aarch64"
+      },
+      "value": "aarch64"
+    },
+    {
+      "key": "cpuinfo_regex",
+      "section": "sysctl.thunderx",
+      "source": {
+        "content_sha256": "b5a2ae4396565526dfe94fdb5ba33acc555eb38ca5260dfaf073caeb4f04bb88",
+        "kind": "tuned-profile",
+        "line": 79,
+        "locator": "/usr/lib/tuned/throughput-performance/tuned.conf",
+        "raw_value": "${thunderx_cpuinfo_regex}"
+      },
+      "value": "${thunderx_cpuinfo_regex}"
+    },
+    {
+      "key": "kernel.numa_balancing",
+      "section": "sysctl.thunderx",
+      "source": {
+        "content_sha256": "b5a2ae4396565526dfe94fdb5ba33acc555eb38ca5260dfaf073caeb4f04bb88",
+        "kind": "tuned-profile",
+        "line": 80,
+        "locator": "/usr/lib/tuned/throughput-performance/tuned.conf",
+        "raw_value": "0"
+      },
+      "value": "0"
+    },
+    {
+      "key": "type",
+      "section": "sysctl.amd",
+      "source": {
+        "content_sha256": "b5a2ae4396565526dfe94fdb5ba33acc555eb38ca5260dfaf073caeb4f04bb88",
+        "kind": "tuned-profile",
+        "line": 84,
+        "locator": "/usr/lib/tuned/throughput-performance/tuned.conf",
+        "raw_value": "sysctl"
+      },
+      "value": "sysctl"
+    },
+    {
+      "key": "uname_regex",
+      "section": "sysctl.amd",
+      "source": {
+        "content_sha256": "b5a2ae4396565526dfe94fdb5ba33acc555eb38ca5260dfaf073caeb4f04bb88",
+        "kind": "tuned-profile",
+        "line": 85,
+        "locator": "/usr/lib/tuned/throughput-performance/tuned.conf",
+        "raw_value": "x86_64"
+      },
+      "value": "x86_64"
+    },
+    {
+      "key": "cpuinfo_regex",
+      "section": "sysctl.amd",
+      "source": {
+        "content_sha256": "b5a2ae4396565526dfe94fdb5ba33acc555eb38ca5260dfaf073caeb4f04bb88",
+        "kind": "tuned-profile",
+        "line": 86,
+        "locator": "/usr/lib/tuned/throughput-performance/tuned.conf",
+        "raw_value": "${amd_cpuinfo_regex}"
+      },
+      "value": "${amd_cpuinfo_regex}"
+    },
+    {
+      "key": "kernel.sched_migration_cost_ns",
+      "section": "sysctl.amd",
+      "source": {
+        "content_sha256": "b5a2ae4396565526dfe94fdb5ba33acc555eb38ca5260dfaf073caeb4f04bb88",
+        "kind": "tuned-profile",
+        "line": 87,
+        "locator": "/usr/lib/tuned/throughput-performance/tuned.conf",
+        "raw_value": "5000000"
+      },
+      "value": "5000000"
+    }
+  ],
+  "collected_at": "2026-08-23T14:52:16.943818Z",
+  "counting_basis": "all parseable key=value assignments from every explicitly listed source are retained; exact target or manifest-declared persistent-key matching only; no precedence inference",
+  "environment_digest": "sha256:934a5f13e7f90538f32ea59365677cb64086cd5564b7d243f7d48d12013a68cb",
+  "manifest_digest": "sha256:66154ca0f7d9e7fe53c4d969c826b745e192d1b1d032f9868db7c928c9ef09a0",
+  "ownership_declarations": [],
+  "records": [
+    {
+      "item_id": "thp-enabled",
+      "owner_id": null,
+      "ownership": "unknown",
+      "parameter_id": "system.thp-enabled",
+      "persistence": "unknown",
+      "persistent_value": null,
+      "pinned": false,
+      "reason": "no exact target or manifest-declared persistent-key assignment was found in the explicit source scope",
+      "sources": []
+    }
+  ],
+  "schema_version": "looper.system-config-state-evidence/v1alpha1",
+  "source_scope": [
+    "/usr/lib/tuned/virtual-guest/tuned.conf",
+    "/usr/lib/tuned/throughput-performance/tuned.conf"
+  ],
+  "target_id": "external:8.134.104.213"
+}

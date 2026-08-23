@@ -1,0 +1,39 @@
+╭───────────────────── Traceback (most recent call last) ──────────────────────╮
+│ /opt/looper-system-opt-3b01722/services/api/looper_api/cli.py:871 in         │
+│ run_linux_system_optimization                                                │
+│                                                                              │
+│    868 │   │   │   domains,                                                  │
+│    869 │   │   │   backend,                                                  │
+│    870 │   │   │   state_evidence_digest=state_evidence.digest,              │
+│ ❱  871 │   │   ).run(                                                        │
+│    872 │   │   │   baseline_parameters=baseline,                             │
+│    873 │   │   │   measure=measure,                                          │
+│    874 │   │   │   fencing_token=lease.fencing_token,                        │
+│                                                                              │
+│ /opt/looper-system-opt-3b01722/packages/core/looper_core/system_opt/tuning.p │
+│ y:237 in run                                                                 │
+│                                                                              │
+│   234 │   │   selected_parameters: Mapping[str, Any] | None = None,          │
+│   235 │   ) -> OptimizationRun:                                              │
+│   236 │   │   started = time.monotonic()                                     │
+│ ❱ 237 │   │   baseline = measure(self.policy.statistics.baseline_repeats)    │
+│   238 │   │   current_baseline = baseline                                    │
+│   239 │   │   baseline_history = [baseline]                                  │
+│   240 │   │   priorities: list[DiagnosticPriority] = []                      │
+│                                                                              │
+│ /opt/looper-system-opt-3b01722/packages/core/looper_core/system_opt/pressure │
+│ /__init__.py:827 in __call__                                                 │
+│                                                                              │
+│   824 │   │   │   raise PressureProtocolError("measurement batch is not      │
+│       bound to the pressure protocol")                                       │
+│   825 │   │   stability = evaluate_measurement_stability(batch,              │
+│       self.protocol.stability)                                               │
+│   826 │   │   if self.protocol.stability.enforcement == "hard-gate" and not  │
+│       stability.accepted:                                                    │
+│ ❱ 827 │   │   │   raise PressureProtocolError(                               │
+│   828 │   │   │   │   f"measurement stability {stability.value} exceeds "    │
+│   829 │   │   │   │   f"the explicit limit {stability.acceptance_limit}"     │
+│   830 │   │   │   )                                                          │
+╰──────────────────────────────────────────────────────────────────────────────╯
+PressureProtocolError: measurement stability 0.08895496129510108 exceeds the 
+explicit limit 0.046409798043284295

@@ -1,0 +1,7 @@
+060b7d8fe0e43d697475687bf0658d5bfd9ab47e08a0874654f2e8277b2d228a  /opt/looper-system-opt-3b01722.tar.gz
+examples
+packages
+services
+DEPRECATION: The HTML index page being used (https://mirrors.aliyun.com/pypi/simple/mdurl/) is not a proper HTML 5 document. This is in violation of PEP 503 which requires these pages to be well-formed HTML 5 documents. Please reach out to the owners of this index page, and ask them to update this index page to a valid HTML 5 document. pip 22.2 will enforce this behaviour change. Discussion can be found at https://github.com/pypa/pip/issues/10825
+DEPRECATION: The HTML index page being used (https://mirrors.aliyun.com/pypi/simple/markupsafe/) is not a proper HTML 5 document. This is in violation of PEP 503 which requires these pages to be well-formed HTML 5 documents. Please reach out to the owners of this index page, and ask them to update this index page to a valid HTML 5 document. pip 22.2 will enforce this behaviour change. Discussion can be found at https://github.com/pypa/pip/issues/10825
+venv deps ok

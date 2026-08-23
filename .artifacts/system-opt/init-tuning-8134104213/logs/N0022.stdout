@@ -1,0 +1,9 @@
+{
+  "stop_reason": "no-improvement-policy",
+  "stop_detail": "explicit consecutive no-improvement policy triggered",
+  "candidate_rounds": 2,
+  "measurement_attempts": 3,
+  "baseline_measurements": 1,
+  "recommended_candidate_id": null,
+  "output": "/opt/looper-system-opt-3b01722/.artifacts/system-opt/init-tuning-8134104213/run1r-madvise-baseline.json"
+}

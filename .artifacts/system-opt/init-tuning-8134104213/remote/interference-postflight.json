@@ -1,0 +1,23 @@
+{
+  "counting_basis": "one observation per live numeric /proc PID whose comm or cmdline matches at least one explicit pattern; the checker and all ancestors are excluded; raw command lines are not persisted",
+  "forbidden_patterns": [
+    "Phoronix Test Suite",
+    "phpbench",
+    "benchmark-packages/.*\\.py",
+    "stress-ng",
+    "sysbench",
+    "(^|/)fio( |$)",
+    "iperf3",
+    "pytest"
+  ],
+  "ignored_ancestor_pids": [
+    1,
+    838,
+    16982,
+    17042,
+    17146
+  ],
+  "matches": [],
+  "recorded_at": "2026-08-23T15:13:03.893241Z",
+  "schema_version": "looper.process-interference-evidence/v1alpha1"
+}

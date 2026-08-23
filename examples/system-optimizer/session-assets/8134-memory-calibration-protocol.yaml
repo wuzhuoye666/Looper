@@ -1,0 +1,167 @@
+schema_version: looper.standard-pressure-protocol/v1alpha1
+id: memory-sysbench-write-calibration-8134-20260823
+component: memory
+target_scope: Alibaba ECS iZ7xvhz4676o4p0ohgytbuZ (8.134.104.213), 2 vCPU / 2 threads,
+  global sequential 1-MiB writes for fixed time windows.
+limitation: Measures guest-visible memory copy behavior; it is not MESS loaded-latency
+  or DRAM-counter evidence.
+required_executables:
+- /opt/looper-venv/bin/python
+input_identity:
+  policy_id: unassigned-calibration-only
+  evidence_kind: empirical-target-local
+metric_ids:
+- memory.bandwidth-mib-per-second
+- memory.latency-p95-ms
+- memory.success
+gate_metric_ids:
+- memory.success
+stability:
+  metric_id: memory.bandwidth-mib-per-second
+  statistic: cv
+  enforcement: report-only
+  acceptance_limit: null
+  minimum_repeats: 7
+  maximum_repeats: 7
+  source: First Alibaba ECS calibration contract; threshold deliberately unapproved.
+phases:
+- id: prepare
+  kind: prepare
+  command:
+    argv:
+    - /opt/looper-venv/bin/python
+    - examples/system-optimizer/memory_pressure_measure.py
+    - prepare
+    - --output-dir
+    - .artifacts/system-opt/init-tuning-8134104213
+    - --repeats
+    - '{repeats}'
+    - --threads
+    - '2'
+    - --duration-seconds
+    - '5'
+    - --block-size
+    - 1M
+    - --total-size
+    - 1T
+    - --scope
+    - global
+    - --operation
+    - write
+    - --access-mode
+    - seq
+    timeout_seconds: 15
+  declared_duration_seconds: 0
+  purpose: Verify Linux, sysbench, thread count, and freeze memory workload inputs.
+- id: warmup
+  kind: warmup
+  command:
+    argv:
+    - /opt/looper-venv/bin/python
+    - examples/system-optimizer/memory_pressure_measure.py
+    - warmup
+    - --output-dir
+    - .artifacts/system-opt/init-tuning-8134104213
+    - --repeats
+    - '{repeats}'
+    - --threads
+    - '2'
+    - --duration-seconds
+    - '5'
+    - --block-size
+    - 1M
+    - --total-size
+    - 1T
+    - --scope
+    - global
+    - --operation
+    - write
+    - --access-mode
+    - seq
+    timeout_seconds: 45
+  declared_duration_seconds: 5
+  purpose: Discard one complete memory-write warmup interval.
+- id: measure
+  kind: measure
+  command:
+    argv:
+    - /opt/looper-venv/bin/python
+    - examples/system-optimizer/memory_pressure_measure.py
+    - measure
+    - --output-dir
+    - .artifacts/system-opt/init-tuning-8134104213
+    - --repeats
+    - '{repeats}'
+    - --threads
+    - '2'
+    - --duration-seconds
+    - '5'
+    - --block-size
+    - 1M
+    - --total-size
+    - 1T
+    - --scope
+    - global
+    - --operation
+    - write
+    - --access-mode
+    - seq
+    timeout_seconds: 120
+  declared_duration_seconds: 35
+  purpose: Emit bandwidth and p95 event-latency repetitions as one MeasurementBatch.
+- id: verify
+  kind: verify
+  command:
+    argv:
+    - /opt/looper-venv/bin/python
+    - examples/system-optimizer/memory_pressure_measure.py
+    - verify
+    - --output-dir
+    - .artifacts/system-opt/init-tuning-8134104213
+    - --repeats
+    - '{repeats}'
+    - --threads
+    - '2'
+    - --duration-seconds
+    - '5'
+    - --block-size
+    - 1M
+    - --total-size
+    - 1T
+    - --scope
+    - global
+    - --operation
+    - write
+    - --access-mode
+    - seq
+    timeout_seconds: 15
+  declared_duration_seconds: 0
+  purpose: Require finite bandwidth and latency arrays plus the success gate.
+- id: cleanup
+  kind: cleanup
+  command:
+    argv:
+    - /opt/looper-venv/bin/python
+    - examples/system-optimizer/memory_pressure_measure.py
+    - cleanup
+    - --output-dir
+    - .artifacts/system-opt/init-tuning-8134104213
+    - --repeats
+    - '{repeats}'
+    - --threads
+    - '2'
+    - --duration-seconds
+    - '5'
+    - --block-size
+    - 1M
+    - --total-size
+    - 1T
+    - --scope
+    - global
+    - --operation
+    - write
+    - --access-mode
+    - seq
+    timeout_seconds: 15
+  declared_duration_seconds: 0
+  purpose: Fail if a memory-pressure process marker remains.

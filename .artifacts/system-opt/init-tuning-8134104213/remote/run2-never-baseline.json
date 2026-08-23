@@ -1,0 +1,290 @@
+{
+  "attempt_count": 3,
+  "baseline": {
+    "gate_values": {
+      "memory.success": true
+    },
+    "identity": {
+      "phase": "steady-state-after-discarded-warmup",
+      "statistics": "repeats=7;duration=5s;total=1T;scope=global",
+      "target": "sha256:949f917f5fa0923c0a9effcbb0675364d8aed0adce0b47e7ca5d566f49c6c963",
+      "tool": "sysbench 1.0.20",
+      "workload": "sysbench-memory-write-seq-threads2-block1M"
+    },
+    "metrics": {
+      "memory.bandwidth-mib-per-second": {
+        "metric_id": "memory.bandwidth-mib-per-second",
+        "values": [
+          21816.14,
+          24714.25,
+          24240.67,
+          24566.33,
+          23946.29,
+          23604.42,
+          22494.33
+        ]
+      },
+      "memory.latency-p95-ms": {
+        "metric_id": "memory.latency-p95-ms",
+        "values": [
+          0.12,
+          0.09,
+          0.1,
+          0.1,
+          0.11,
+          0.11,
+          0.12
+        ]
+      },
+      "memory.success": {
+        "metric_id": "memory.success",
+        "values": [
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ]
+      }
+    },
+    "phase_evidence": [
+      {
+        "command_digest": "sha256:c9bf7f652b4dacc63aff926f48b941a43d5daf113514f42daaa2b484df083b33",
+        "elapsed_seconds": 0.2993164979998255,
+        "kind": "prepare",
+        "phase_id": "exclusive-window",
+        "status": "succeeded"
+      },
+      {
+        "command_digest": "sha256:8955ce420c28d1f569a64866509d2feedee39c3dae239e9ba49a2b79475ea6d6",
+        "elapsed_seconds": 0.054664625999976124,
+        "kind": "prepare",
+        "phase_id": "prepare",
+        "status": "succeeded"
+      },
+      {
+        "command_digest": "sha256:92dbeb14996847619c31a9e8040d7d0f44b26049ebb9eeea42d911ae51624c51",
+        "elapsed_seconds": 5.060343915999965,
+        "kind": "warmup",
+        "phase_id": "warmup",
+        "status": "succeeded"
+      },
+      {
+        "command_digest": "sha256:b2c3ecc4f9417e72a2da012e4b2304bfa99835613f27ecba94d5b1c47f518605",
+        "elapsed_seconds": 35.122920638000096,
+        "kind": "measure",
+        "phase_id": "measure",
+        "status": "succeeded"
+      },
+      {
+        "command_digest": "sha256:b816c3475c8db02990cacd33b4904fc0952eece9472906ff9d3617297f3360e6",
+        "elapsed_seconds": 0.3147191240000211,
+        "kind": "verify",
+        "phase_id": "exclusive-window-after",
+        "status": "succeeded"
+      },
+      {
+        "command_digest": "sha256:433a4ac09fb1bf649c967c0dcc6843011d51c7777e8d4c0d5b9a1f120b58c445",
+        "elapsed_seconds": 0.052518854999789255,
+        "kind": "verify",
+        "phase_id": "verify",
+        "status": "succeeded"
+      },
+      {
+        "command_digest": "sha256:b1af3779f16f23ea823b4a7f67204a7b8483b21200891c7bb8a9ad3230af4501",
+        "elapsed_seconds": 0.0476346119999107,
+        "kind": "cleanup",
+        "phase_id": "cleanup",
+        "status": "succeeded"
+      }
+    ],
+    "pressure_protocol_digest": "sha256:16aa8fb27b59e10134de8729b7d54161fa532408ac8b12d6d4e9b4c20259cd82",
+    "stability_evidence": {
+      "acceptance_limit": 0.046409798043284295,
+      "accepted": true,
+      "enforcement": "hard-gate",
+      "formula_id": "F-PROJECT-PRESSURE-CV/v1alpha1",
+      "metric_id": "memory.bandwidth-mib-per-second",
+      "sample_count": 7,
+      "statistic": "cv",
+      "value": 0.04606116645155971
+    }
+  },
+  "baseline_history": [
+    {
+      "gate_values": {
+        "memory.success": true
+      },
+      "identity": {
+        "phase": "steady-state-after-discarded-warmup",
+        "statistics": "repeats=7;duration=5s;total=1T;scope=global",
+        "target": "sha256:949f917f5fa0923c0a9effcbb0675364d8aed0adce0b47e7ca5d566f49c6c963",
+        "tool": "sysbench 1.0.20",
+        "workload": "sysbench-memory-write-seq-threads2-block1M"
+      },
+      "metrics": {
+        "memory.bandwidth-mib-per-second": {
+          "metric_id": "memory.bandwidth-mib-per-second",
+          "values": [
+            21816.14,
+            24714.25,
+            24240.67,
+            24566.33,
+            23946.29,
+            23604.42,
+            22494.33
+          ]
+        },
+        "memory.latency-p95-ms": {
+          "metric_id": "memory.latency-p95-ms",
+          "values": [
+            0.12,
+            0.09,
+            0.1,
+            0.1,
+            0.11,
+            0.11,
+            0.12
+          ]
+        },
+        "memory.success": {
+          "metric_id": "memory.success",
+          "values": [
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ]
+        }
+      },
+      "phase_evidence": [
+        {
+          "command_digest": "sha256:c9bf7f652b4dacc63aff926f48b941a43d5daf113514f42daaa2b484df083b33",
+          "elapsed_seconds": 0.2993164979998255,
+          "kind": "prepare",
+          "phase_id": "exclusive-window",
+          "status": "succeeded"
+        },
+        {
+          "command_digest": "sha256:8955ce420c28d1f569a64866509d2feedee39c3dae239e9ba49a2b79475ea6d6",
+          "elapsed_seconds": 0.054664625999976124,
+          "kind": "prepare",
+          "phase_id": "prepare",
+          "status": "succeeded"
+        },
+        {
+          "command_digest": "sha256:92dbeb14996847619c31a9e8040d7d0f44b26049ebb9eeea42d911ae51624c51",
+          "elapsed_seconds": 5.060343915999965,
+          "kind": "warmup",
+          "phase_id": "warmup",
+          "status": "succeeded"
+        },
+        {
+          "command_digest": "sha256:b2c3ecc4f9417e72a2da012e4b2304bfa99835613f27ecba94d5b1c47f518605",
+          "elapsed_seconds": 35.122920638000096,
+          "kind": "measure",
+          "phase_id": "measure",
+          "status": "succeeded"
+        },
+        {
+          "command_digest": "sha256:b816c3475c8db02990cacd33b4904fc0952eece9472906ff9d3617297f3360e6",
+          "elapsed_seconds": 0.3147191240000211,
+          "kind": "verify",
+          "phase_id": "exclusive-window-after",
+          "status": "succeeded"
+        },
+        {
+          "command_digest": "sha256:433a4ac09fb1bf649c967c0dcc6843011d51c7777e8d4c0d5b9a1f120b58c445",
+          "elapsed_seconds": 0.052518854999789255,
+          "kind": "verify",
+          "phase_id": "verify",
+          "status": "succeeded"
+        },
+        {
+          "command_digest": "sha256:b1af3779f16f23ea823b4a7f67204a7b8483b21200891c7bb8a9ad3230af4501",
+          "elapsed_seconds": 0.0476346119999107,
+          "kind": "cleanup",
+          "phase_id": "cleanup",
+          "status": "succeeded"
+        }
+      ],
+      "pressure_protocol_digest": "sha256:16aa8fb27b59e10134de8729b7d54161fa532408ac8b12d6d4e9b4c20259cd82",
+      "stability_evidence": {
+        "acceptance_limit": 0.046409798043284295,
+        "accepted": true,
+        "enforcement": "hard-gate",
+        "formula_id": "F-PROJECT-PRESSURE-CV/v1alpha1",
+        "metric_id": "memory.bandwidth-mib-per-second",
+        "sample_count": 7,
+        "statistic": "cv",
+        "value": 0.04606116645155971
+      }
+    }
+  ],
+  "candidates": [
+    {
+      "accepted": false,
+      "attempt_index": 2,
+      "candidate_id": "sha256:51ffdeb07f0cb09fa5465783af6a83df2a08c2c3221a58d970b3f87bf2bf6945",
+      "change_count": 1,
+      "comparable": false,
+      "comparison_baseline_digest": "sha256:78e0425bf0a1a4f52a26c11bfe2065d1971cbceb525347061c56a74702b1bf96",
+      "feasible": false,
+      "gates": [],
+      "identity_mismatches": [
+        "measurement-missing"
+      ],
+      "improvements": {},
+      "measurement_digest": null,
+      "parameters": {
+        "system.thp-enabled": "always"
+      },
+      "pareto_rank": null,
+      "round_index": 1,
+      "safety_reason": "thp-enabled ownership is unknown and cannot be changed",
+      "safety_state": "rejected"
+    },
+    {
+      "accepted": false,
+      "attempt_index": 3,
+      "candidate_id": "sha256:5f473a11c7ab13735e0a234c8bd552e9e01ede9de925061b47b4a0546b08e135",
+      "change_count": 1,
+      "comparable": false,
+      "comparison_baseline_digest": "sha256:78e0425bf0a1a4f52a26c11bfe2065d1971cbceb525347061c56a74702b1bf96",
+      "feasible": false,
+      "gates": [],
+      "identity_mismatches": [
+        "measurement-missing"
+      ],
+      "improvements": {},
+      "measurement_digest": null,
+      "parameters": {
+        "system.thp-enabled": "madvise"
+      },
+      "pareto_rank": null,
+      "round_index": 2,
+      "safety_reason": "thp-enabled ownership is unknown and cannot be changed",
+      "safety_state": "rejected"
+    }
+  ],
+  "diagnostic_priorities": [],
+  "diagnostic_reference": null,
+  "elapsed_seconds": 40.955676778,
+  "manifest_digest": "sha256:66154ca0f7d9e7fe53c4d969c826b745e192d1b1d032f9868db7c928c9ef09a0",
+  "mode": "general",
+  "policy_digest": "sha256:4766470d27f89824bc48d73042a4350c8f9ff15c9316fb4bc44b09346d514e58",
+  "policy_id": "aliyun-ecs-memory-thp-20260823",
+  "recommended_candidate_id": null,
+  "routed_components": [
+    "memory"
+  ],
+  "schema_version": "looper.system-optimization-run/v1alpha2",
+  "state_evidence_digest": "sha256:b2ee080bbc934a700f6d50b3395dbeddd763dda481a2d9cec49e3b241df66475",
+  "stop_detail": "explicit consecutive no-improvement policy triggered",
+  "stop_reason": "no-improvement-policy"
+}

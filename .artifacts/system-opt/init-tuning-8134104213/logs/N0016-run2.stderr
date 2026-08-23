@@ -1,0 +1,27 @@
+╭───────────────────── Traceback (most recent call last) ──────────────────────╮
+│ /opt/looper-system-opt-3b01722/services/api/looper_api/cli.py:871 in         │
+│ run_linux_system_optimization                                                │
+│                                                                              │
+│    868 │   │   │   domains,                                                  │
+│    869 │   │   │   backend,                                                  │
+│    870 │   │   │   state_evidence_digest=state_evidence.digest,              │
+│ ❱  871 │   │   ).run(                                                        │
+│    872 │   │   │   baseline_parameters=baseline,                             │
+│    873 │   │   │   measure=measure,                                          │
+│    874 │   │   │   fencing_token=lease.fencing_token,                        │
+│                                                                              │
+│ /opt/looper-system-opt-3b01722/packages/core/looper_core/system_opt/tuning.p │
+│ y:295 in run                                                                 │
+│                                                                              │
+│   292 │   │   │   )                                                          │
+│   293 │   │   missing_baseline = sorted(set(search_space) -                  │
+│       set(baseline_parameters))                                              │
+│   294 │   │   if missing_baseline:                                           │
+│ ❱ 295 │   │   │   raise ValueError(f"baseline parameters are missing:        │
+│       {missing_baseline}")                                                   │
+│   296 │   │   selected = dict(selected_parameters) if selected_parameters is │
+│       not None else None                                                     │
+│   297 │   │   if selected is not None:                                       │
+│   298 │   │   │   self._validate_selected_parameters(selected, search_space) │
+╰──────────────────────────────────────────────────────────────────────────────╯
+ValueError: baseline parameters are missing: ['system.thp-enabled']
