@@ -14,12 +14,12 @@ from looper_core.action_loop import VerificationPolicy
 from looper_core.adapters import load_and_apply_adapter
 from looper_core.canonical import canonical_digest
 from looper_core.manifest import load_and_validate_manifest
+from looper_core.system_opt.component import ComponentOptimizer
 from looper_core.system_opt.config_manifest import (
     ConfigItem,
     ConfigManifest,
     parse_config_manifest_yaml,
 )
-from looper_core.system_opt.component import ComponentOptimizer
 from looper_core.system_opt.demo import (
     SyntheticMeasurementAdapter,
     build_demo_manifest,
@@ -27,13 +27,12 @@ from looper_core.system_opt.demo import (
     resolve_demo_domains,
     run_full_demo,
 )
-from looper_core.system_opt.engine import EngineLoopConfig, run_engine_loop
-from looper_core.system_opt.negative_cache import NegativeCache
 from looper_core.system_opt.domain import (
     AuthorizedDomain,
     DomainEvidence,
     resolve_domain,
 )
+from looper_core.system_opt.engine import EngineLoopConfig, run_engine_loop
 from looper_core.system_opt.executor import ConfigSnapshot
 from looper_core.system_opt.executor.local_linux import LocalLinuxBackend
 from looper_core.system_opt.executor.runner import SubprocessCommandRunner
@@ -56,6 +55,7 @@ from looper_core.system_opt.measurement import (
     CommandMeasurementAdapter,
     MeasurementCommandSpec,
 )
+from looper_core.system_opt.negative_cache import NegativeCache
 from looper_core.system_opt.policy import (
     OptimizationMode,
     parse_optimization_policy_yaml,

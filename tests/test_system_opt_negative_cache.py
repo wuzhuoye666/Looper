@@ -4,7 +4,6 @@ import json
 from datetime import UTC, datetime
 
 import pytest
-
 from looper_core.system_opt.negative_cache import (
     NegativeCache,
     NegativeCacheEntry,

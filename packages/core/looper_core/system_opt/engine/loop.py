@@ -37,6 +37,7 @@ from looper_core.system_opt.engine.scheduler import (
     select_next_candidate,
 )
 from looper_core.system_opt.engine.scorer import ComponentScore
+from looper_core.system_opt.executor import ConfigSnapshot
 from looper_core.system_opt.negative_cache import (
     NegativeCache,
     NegativeCacheEntry,
@@ -47,7 +48,6 @@ from looper_core.system_opt.negative_cache import (
 from looper_core.system_opt.result_vector import PromotionContract, VerificationObservation
 from looper_core.system_opt.rollback import PhaseRestoration, verify_phase_restoration
 from looper_core.system_opt.safety import SafetyState
-from looper_core.system_opt.executor import ConfigSnapshot
 
 ENGINE_LOOP_SCHEMA = "looper.engine-loop-result/v1alpha1"
 

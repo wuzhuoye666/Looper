@@ -18,7 +18,11 @@ from looper_core.canonical import canonical_digest
 from looper_core.contracts import StrictModel
 from looper_core.system_opt.collector import ComponentMetricSnapshot
 from looper_core.system_opt.scoring import MeasurementBatch
-from looper_core.system_opt.tuning import CandidateEvaluation, OptimizationRun, SystemOptimizationEngine
+from looper_core.system_opt.tuning import (
+    CandidateEvaluation,
+    OptimizationRun,
+    SystemOptimizationEngine,
+)
 
 COMPONENT_REPORT_SCHEMA = "looper.component-report/v1alpha1"
 NO_FINAL_VERDICT_NOTE = (

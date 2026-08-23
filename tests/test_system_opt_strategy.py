@@ -3,7 +3,6 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-
 from looper_core.system_opt.component.strategy import (
     ComponentStrategy,
     load_strategies,

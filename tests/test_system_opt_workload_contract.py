@@ -6,8 +6,6 @@ from pathlib import Path
 
 import pytest
 import yaml
-from pydantic import ValidationError
-
 from looper_core.system_opt.workload import (
     LoadCommandIdentity,
     WorkloadContract,
@@ -16,6 +14,7 @@ from looper_core.system_opt.workload import (
     parse_workload_contract_yaml,
     same_load,
 )
+from pydantic import ValidationError
 
 EXAMPLE = (
     Path(__file__).parents[1]

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import pytest
-
 from looper_core.system_opt.component import ComponentOptimizer
 from looper_core.system_opt.demo import (
     SyntheticMeasurementAdapter,
@@ -70,9 +69,6 @@ class TestEngineLoop:
         backend = SimulatedBackend(initial, target_id="engine-loop-test")
         optimizers, manifest = _optimizers(["cpu", "memory"], backend)
         cache = NegativeCache()
-        from datetime import UTC, datetime
-
-        fixed_at = datetime(2026, 8, 23, 12, 0, 0, tzinfo=UTC)
         result = run_engine_loop(
             optimizers,
             baseline_parameters=_baseline_parameters(manifest),
@@ -217,6 +213,7 @@ class TestEngineLoop:
 class TestOptimizations:
     def _cache_entry_for(self, parameters, metric="demo.metric"):
         from datetime import UTC, datetime
+
         from looper_core.system_opt.negative_cache import NegativeCacheIdentity
 
         return NegativeCacheEntry(
@@ -294,7 +291,9 @@ class TestOptimizations:
             run_engine_loop(
                 optimizers,
                 baseline_parameters=_baseline_parameters(manifest),
-                measures={"cpu": SyntheticMeasurementAdapter(backend, mode=OptimizationMode.GENERAL)},
+                measures={
+                    "cpu": SyntheticMeasurementAdapter(backend, mode=OptimizationMode.GENERAL),
+                },
                 negative_cache=NegativeCache(),
                 config=EngineLoopConfig(
                     environment_digest=ENV,
@@ -399,8 +398,8 @@ DIGEST = "sha256:" + "4" * 64
 
 class TestPromotionObservations:
     def test_promotion_observation_only_for_accepted(self):
-        from looper_core.system_opt.engine.loop import promotion_observation
         from looper_core.system_opt.engine.judge import CandidateVerdict
+        from looper_core.system_opt.engine.loop import promotion_observation
         
         accepted = CandidateVerdict(
             candidate_id="c1", comparable=True, feasible=True, accepted=True,

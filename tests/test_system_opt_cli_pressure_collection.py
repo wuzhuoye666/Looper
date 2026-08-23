@@ -8,6 +8,7 @@ import pytest
 import typer
 import yaml
 from looper_api.cli import _decoupled_pressure_measure
+from looper_core.system_opt.collector import COLLECTION_BUNDLE_MEDIA_TYPE
 from looper_core.system_opt.pressure import (
     StandardPressureProtocol,
     parse_standard_pressure_protocol_yaml,
@@ -70,8 +71,8 @@ def _collection_payload(collector_id: str) -> dict[str, Any]:
             "requested_metrics": ["cpu.score", "cpu.success"],
             "artifact_requirements": [
                 {
-                    "artifact_id": "cpu-tool-output",
-                    "media_type": "application/vnd.fixture.cpu+json",
+                    "artifact_id": "cpu-tool-bundle",
+                    "media_type": COLLECTION_BUNDLE_MEDIA_TYPE,
                 }
             ],
             "interval_seconds": 0.25,
@@ -158,18 +159,24 @@ def test_unavailable_collector_identity_fails_closed() -> None:
 
 
 @requires_collection_contract
-def test_builtin_collector_without_windowed_sessions_fails_closed() -> None:
+def test_builtin_windowed_collector_wires_the_decoupled_route() -> None:
+    """Since PKG-B the builtin collector implements begin_collection, so a
+    builtin-named collection contract wires the decoupled route; the measure
+    callable is only constructed here, never invoked (running the real
+    pressure phases belongs to integration runs)."""
+
     protocol = StandardPressureProtocol.model_validate(
         _collection_payload("looper.builtin-linux-guest")
     )
 
-    with pytest.raises(typer.BadParameter, match="does not implement measure-window"):
-        _decoupled_pressure_measure(
-            protocol,
-            None,
-            target_id="target-1",
-            collection_enabled=True,
-        )
+    measure = _decoupled_pressure_measure(
+        protocol,
+        None,
+        target_id="target-1",
+        collection_enabled=True,
+    )
+
+    assert callable(measure)
 
 
 @requires_collection_contract

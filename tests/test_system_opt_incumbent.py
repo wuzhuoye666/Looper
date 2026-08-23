@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import pytest
-
 from looper_core.system_opt.engine.incumbent import (
     IncumbentTracker,
     ScreenVerdict,

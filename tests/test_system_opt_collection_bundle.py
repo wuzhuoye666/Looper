@@ -125,7 +125,12 @@ def test_bundle_rejects_duplicate_zip_member_path() -> None:
     files = {"raw/run.json": ("application/json", b'{"value":1}')}
     manifest = _manifest(files)
     output = io.BytesIO()
-    with zipfile.ZipFile(output, "w") as archive:
+    # Writing a duplicate member is exactly the malformed case under test;
+    # assert zipfile's own warning instead of leaking it into the suite log.
+    with (
+        pytest.warns(UserWarning, match="Duplicate name"),
+        zipfile.ZipFile(output, "w") as archive,
+    ):
         archive.writestr(
             COLLECTION_BUNDLE_MANIFEST_NAME,
             json.dumps(manifest.model_dump(mode="json")),

@@ -3,7 +3,6 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 import pytest
-
 from looper_core.system_opt.executor import ConfigSnapshot, OperationStatus, SnapshotEntry
 from looper_core.system_opt.rollback import (
     REGRESSION_DEPENDENCY,

@@ -3,7 +3,6 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 import pytest
-
 from looper_core.system_opt.engine import (
     ComponentScore,
     evaluate_candidate,

@@ -1,7 +1,13 @@
 from __future__ import annotations
 
-import pytest
+from datetime import UTC, datetime
 
+import pytest
+from looper_core.system_opt.collector import (
+    CollectedMetric,
+    ComponentMetricSnapshot,
+    MetricAvailability,
+)
 from looper_core.system_opt.component import CandidateSuggestion
 from looper_core.system_opt.component.mapping import (
     CandidateRule,
@@ -13,13 +19,7 @@ from looper_core.system_opt.component.mapping import (
     StrategyFormulaMapping,
     validate_suggestions_in_domain,
 )
-from looper_core.system_opt.collector import (
-    CollectedMetric,
-    ComponentMetricSnapshot,
-    MetricAvailability,
-)
 from looper_core.system_opt.scoring import MeasurementBatch, MetricEvidence
-from datetime import UTC, datetime
 
 FIXED_AT = datetime(2026, 8, 23, 12, 0, 0, tzinfo=UTC)
 
@@ -27,7 +27,8 @@ FIXED_AT = datetime(2026, 8, 23, 12, 0, 0, tzinfo=UTC)
 def _rule(rule_id="r-1", priority=1, when=None, parameters=None, formula="F-RULE/v0"):
     return CandidateRule(
         rule_id=rule_id,
-        when=when or [EvidenceCondition(metric_id="cpu.load", operator=ConditionOperator.GT, threshold=0.5)],
+        when=when
+        or [EvidenceCondition(metric_id="cpu.load", operator=ConditionOperator.GT, threshold=0.5)],
         suggest_parameters=parameters or {"system.governor": "performance"},
         rationale="high load suggests the performance governor",
         formula_id=formula,
@@ -37,8 +38,12 @@ def _rule(rule_id="r-1", priority=1, when=None, parameters=None, formula="F-RULE
 
 def _batch(values: dict[str, list[float]]) -> MeasurementBatch:
     return MeasurementBatch(
-        identity={"target": "t", "workload": "w", "phase": "p", "tool": "x", "statistics": "s"},
-        metrics={name: MetricEvidence(metric_id=name, values=vals) for name, vals in values.items()},
+        identity={
+            "target": "t", "workload": "w", "phase": "p", "tool": "x", "statistics": "s",
+        },
+        metrics={
+            name: MetricEvidence(metric_id=name, values=vals) for name, vals in values.items()
+        },
         gate_values={},
     )
 
@@ -60,10 +65,17 @@ def _snapshot(values: dict[str, float]) -> ComponentMetricSnapshot:
 
 class TestRuleEvaluation:
     def test_condition_hit_produces_suggestion_in_priority_order(self):
-        mapping = StrategyFormulaMapping([_rule(priority=2), _rule(rule_id="r-0", priority=1,
-                                                                  parameters={"system.governor": "schedutil"})])
+        mapping = StrategyFormulaMapping(
+            [
+                _rule(priority=2),
+                _rule(rule_id="r-0", priority=1, parameters={"system.governor": "schedutil"}),
+            ]
+        )
         suggestions = mapping.suggest(None, _batch({"cpu.load": [0.9]}))
-        assert [s.parameters["system.governor"] for s in suggestions] == ["schedutil", "performance"]
+        assert [s.parameters["system.governor"] for s in suggestions] == [
+            "schedutil",
+            "performance",
+        ]
 
     def test_condition_miss_records_rejection_reason(self):
         mapping = StrategyFormulaMapping([_rule()])
@@ -81,9 +93,13 @@ class TestRuleEvaluation:
         snapshot = ComponentMetricSnapshot(
             component="cpu", target_id="t", environment_digest="sha256:" + "a" * 64,
             collected_at=FIXED_AT,
-            metrics={"cpu.load": CollectedMetric(name="cpu.load", unit="unit", value=None,
-                                                 availability=MetricAvailability.UNAVAILABLE,
-                                                 unavailable_reason="hidden in guest", source="/sys/x")},
+            metrics={
+                "cpu.load": CollectedMetric(
+                    name="cpu.load", unit="unit", value=None,
+                    availability=MetricAvailability.UNAVAILABLE,
+                    unavailable_reason="hidden in guest", source="/sys/x",
+                ),
+            },
             counting_basis="test",
         )
         mapping = StrategyFormulaMapping([_rule()])

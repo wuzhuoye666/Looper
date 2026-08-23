@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 import pytest
-
 from looper_core.system_opt.component import (
+    NO_FINAL_VERDICT_NOTE,
     CandidateSuggestion,
     ComponentOptimizer,
     ComponentReport,
-    NO_FINAL_VERDICT_NOTE,
     NullFormulaMapping,
 )
 from looper_core.system_opt.demo import (
