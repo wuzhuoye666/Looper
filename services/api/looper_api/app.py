@@ -83,6 +83,7 @@ from looper_api.cloud_contracts import (
 )
 from looper_api.cloud_service import (
     CloudWorkflowError,
+    _default_cloud_ssh_credentials,
     catalog_inventory,
     catalog_search,
     create_quote,
@@ -404,9 +405,7 @@ def download_benchmark_configure_skill() -> StreamingResponse:
 
 
 def build_benchmark_configure_skill_archive() -> bytes:
-    skill_root = files("looper_api").joinpath(
-        "assets", "skills", "looper-benchmark-configure"
-    )
+    skill_root = files("looper_api").joinpath("assets", "skills", "looper-benchmark-configure")
     members = (
         "SKILL.md",
         "agents/openai.yaml",
@@ -767,9 +766,7 @@ def cloud_resolve_instance_network(
     app_settings: SettingsDependency,
     registry: ProviderRegistryDependency,
     _operator: OperatorDependency,
-    idempotency_key: Annotated[
-        str, Header(alias="Idempotency-Key", min_length=8, max_length=160)
-    ],
+    idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=8, max_length=160)],
 ) -> dict[str, Any]:
     result = resolve_instance_network(
         session,
@@ -828,6 +825,7 @@ def cloud_order_purchase(
         request.quote_id,
         idempotency_key,
         request.ssh_credentials,
+        request.remember_credentials,
     )
 
 
@@ -1100,11 +1098,17 @@ def list_targets(
 @app.post("/api/v1/targets/tencent-cvm/sync")
 def sync_tencent_targets(
     session: SessionDependency,
+    app_settings: SettingsDependency,
     _operator: OperatorDependency,
     region: str = Query(default="ap-guangzhou", min_length=3, max_length=40),
     instance_id: list[str] | None = Query(default=None),
 ) -> dict[str, Any]:
-    records = sync_cvm_inventory(session, region, instance_ids=instance_id)
+    records = sync_cvm_inventory(
+        session,
+        region,
+        instance_ids=instance_id,
+        credential_store=EncryptedSshCredentialStore(app_settings),
+    )
     session.commit()
     return {"items": [target_view(item) for item in records], "total": len(records)}
 
@@ -1112,11 +1116,17 @@ def sync_tencent_targets(
 @app.post("/api/v1/targets/alibaba-ecs/sync")
 def sync_alibaba_targets(
     session: SessionDependency,
+    app_settings: SettingsDependency,
     _operator: OperatorDependency,
     region: str = Query(default="cn-hangzhou", min_length=3, max_length=40),
     instance_id: list[str] | None = Query(default=None),
 ) -> dict[str, Any]:
-    records = sync_ecs_inventory(session, region, instance_ids=instance_id)
+    records = sync_ecs_inventory(
+        session,
+        region,
+        instance_ids=instance_id,
+        credential_store=EncryptedSshCredentialStore(app_settings),
+    )
     session.commit()
     return {"items": [target_view(item) for item in records], "total": len(records)}
 
@@ -1207,10 +1217,10 @@ def test_target_ssh_connection(
 @app.post("/api/v1/targets/{target_id}/ssh-connect", status_code=200)
 def connect_existing_target_ssh(
     target_id: str,
-    payload: ConnectExternalTargetRequest,
     session: SessionDependency,
     app_settings: SettingsDependency,
     _operator: OperatorDependency,
+    payload: ConnectExternalTargetRequest | None = None,
 ) -> dict[str, Any]:
     """Verify SSH and bind encrypted credentials to a purchased target."""
 
@@ -1219,6 +1229,22 @@ def connect_existing_target_ssh(
         raise HTTPException(status_code=404, detail="target not found")
     if target.provider == "external":
         raise HTTPException(status_code=400, detail="use the external target connect endpoint")
+    if payload is None:
+        endpoint = str((target.inventory_json or {}).get("endpoint") or "")
+        if not endpoint:
+            raise HTTPException(status_code=409, detail="cloud target has no reachable endpoint")
+        credentials = _default_cloud_ssh_credentials(app_settings, remember_credentials=True)
+        payload = ConnectExternalTargetRequest(
+            endpoint=endpoint,
+            port=credentials.port,
+            username=credentials.username,
+            auth_method=credentials.auth_method,
+            password=credentials.password,
+            private_key=credentials.private_key,
+            passphrase=credentials.passphrase,
+            deploy_worker=True,
+            remember_credentials=True,
+        )
     refreshed = connect_existing_target(session, target, payload)
     deployment = deploy_remote_worker(payload, refreshed, app_settings)
     host_key = str(refreshed.fingerprint_json.get("host_key_sha256") or "")

@@ -45,6 +45,18 @@ class RemoteWorkerDeployment:
 _deployments: dict[str, RemoteWorkerDeployment] = {}
 _deployments_lock = threading.Lock()
 
+_deploy_locks: dict[str, threading.Lock] = {}
+_deploy_locks_guard = threading.Lock()
+
+
+def _deploy_lock(target_id: str) -> threading.Lock:
+    with _deploy_locks_guard:
+        lock = _deploy_locks.get(target_id)
+        if lock is None:
+            lock = threading.Lock()
+            _deploy_locks[target_id] = lock
+        return lock
+
 
 def _source_archive() -> bytes:
     root = repository_root()
@@ -157,6 +169,22 @@ def deploy_remote_worker(
     target: TargetRecord,
     settings: Settings,
 ) -> dict[str, Any]:
+    """Upload the Worker, establish an SSH reverse tunnel, and start it remotely.
+
+    Deployments to the same target are serialized: the control-plane recovery
+    loop and user-triggered SSH tests can otherwise overlap and interleave the
+    remote bootstrap (tree extraction, process restart), corrupting the Worker
+    sources or leaving stale processes behind.
+    """
+    with _deploy_lock(target.id):
+        return _deploy_remote_worker_impl(request, target, settings)
+
+
+def _deploy_remote_worker_impl(
+    request: ConnectExternalTargetRequest,
+    target: TargetRecord,
+    settings: Settings,
+) -> dict[str, Any]:
     """Upload the Worker, establish an SSH reverse tunnel, and start it remotely."""
 
     client = open_ssh_client(request)
@@ -222,7 +250,8 @@ def deploy_remote_worker(
                 (
                     f"{remote_root}/venv/bin/python -m pip install "
                     "--disable-pip-version-check -q 'httpx>=0.28,<1' 'psutil>=7,<8' "
-                    "'pydantic>=2.11,<3' 'PyYAML>=6,<7' 'jsonschema>=4.24,<5'"
+                    "'pydantic>=2.11,<3' 'PyYAML>=6,<7' 'jsonschema>=4.24,<5' "
+                    "'python-dotenv>=1.0,<2'"
                 ),
                 f"rm -rf {remote_root}/source",
                 f"mkdir -p {remote_root}/source",

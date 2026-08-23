@@ -292,6 +292,7 @@ class CloudSshCredentials(ApiModel):
 class OrderPrepareRequest(ApiModel):
     quote_id: str = Field(min_length=8, max_length=100)
     ssh_credentials: CloudSshCredentials | None = None
+    remember_credentials: bool | None = None
 
 
 class OrderConfirmRequest(ApiModel):
@@ -336,9 +337,7 @@ class SearchResult(ApiModel):
 
 
 class DestroyedResource(ApiModel):
-    kind: Literal[
-        "instance", "system-disk", "local-disk", "public-ip", "subnet", "security-group"
-    ]
+    kind: Literal["instance", "system-disk", "local-disk", "public-ip", "subnet", "security-group"]
     id: str = Field(min_length=1, max_length=180)
     released: bool = True
     note: str | None = Field(default=None, max_length=500)

@@ -163,6 +163,16 @@ def _constraint(
     }
 
 
+def _is_bootstrap_catalog_record(record: BenchmarkRecord | None) -> bool:
+    if record is None or record.package_digest is not None or not record.manifest_path:
+        return False
+    normalized = record.manifest_path.replace("\\", "/").casefold()
+    return (
+        "/benchmarks/" in f"/{normalized.strip('/')}"
+        and "/benchmark-packages/" not in normalized
+    )
+
+
 def evaluate_registration_constraints(
     draft: BenchmarkRegistrationDraft,
     *,
@@ -520,31 +530,46 @@ def evaluate_registration_constraints(
     if session is not None:
         benchmark_key = f"{draft.benchmark_id}@{draft.version}"
         version_owner = session.get(BenchmarkRecord, benchmark_key)
+        bootstrap_owner = _is_bootstrap_catalog_record(version_owner)
+        version_available = version_owner is None or bootstrap_owner
         constraints.insert(2, _constraint(
             "identity.version-available",
             "身份",
-            "Benchmark ID 与版本尚未被占用",
-            version_owner is None,
+            "Benchmark ID 与版本尚未被占用，或正在升级 source-seeded catalog entry",
+            version_available,
             (
                 f"{benchmark_key} 可以登记。"
                 if version_owner is None
-                else f"{benchmark_key} 已存在；请提升版本号。新版本会成为目录中的当前版本，"
-                "旧版本仅供已有实验追溯。"
+                else (
+                    f"{benchmark_key} 是 source-seeded catalog entry；"
+                    "导入已批准 ZIP 后将原地升级并保留该身份。"
+                    if bootstrap_owner
+                    else f"{benchmark_key} 已存在；请提升版本号。新版本会成为目录中的当前版本，"
+                    "旧版本仅供已有实验追溯。"
+                )
             ),
         ))
         if digest is not None:
             digest_owner = session.scalar(
                 select(BenchmarkRecord).where(BenchmarkRecord.manifest_digest == digest)
             )
+            digest_available = digest_owner is None or (
+                bootstrap_owner and digest_owner is version_owner
+            )
             constraints.insert(5, _constraint(
                 "contract.digest-available",
                 "合同",
-                "manifest 内容不是已登记版本的重复副本",
-                digest_owner is None,
+                "manifest 内容不是已登记版本的重复副本，或正在升级 source-seeded catalog entry",
+                digest_available,
                 (
                     "manifest 摘要尚未登记。"
                     if digest_owner is None
-                    else f"配置内容与 {digest_owner.key} 完全相同；请确认版本和内容确实有变化。"
+                    else (
+                        f"配置内容与 {digest_owner.key} 相同；"
+                        "该 source-seeded 条目可由 ZIP 原地升级。"
+                        if digest_available
+                        else f"配置内容与 {digest_owner.key} 完全相同；请确认版本和内容确实有变化。"
+                    )
                 ),
             ))
     return constraints, digest
@@ -831,14 +856,16 @@ def register_benchmark(
             )
         raise RegistrationError("registration revision conflict", code="revision_conflict")
     key = f"{draft.benchmark_id}@{draft.version}"
-    if session.get(BenchmarkRecord, key) is not None:
+    existing = session.get(BenchmarkRecord, key)
+    bootstrap_upgrade = _is_bootstrap_catalog_record(existing)
+    if existing is not None and not bootstrap_upgrade:
         raise RegistrationError(
             "benchmark id and version already exist", code="benchmark_version_exists"
         )
     digest_owner = session.scalar(
         select(BenchmarkRecord).where(BenchmarkRecord.manifest_digest == manifest_digest)
     )
-    if digest_owner is not None:
+    if digest_owner is not None and not (bootstrap_upgrade and digest_owner is existing):
         raise RegistrationError(
             "manifest digest is already registered", code="manifest_digest_exists"
         )
@@ -850,20 +877,33 @@ def register_benchmark(
         and draft.runtime_type == "local-process"
         and manifest["spec"].get("trust") == "trusted"
     )
-    session.add(BenchmarkRecord(
-        key=key,
-        benchmark_id=draft.benchmark_id,
-        version=draft.version,
-        name=draft.name,
-        description=metadata.get("description", ""),
-        license=draft.license,
-        manifest_digest=manifest_digest,
-        manifest_json=manifest,
-        manifest_path=record.package_path,
-        package_digest=record.package_digest,
-        trusted=trusted_package,
-        installed_at=now,
-    ))
+    if existing is None:
+        benchmark = BenchmarkRecord(
+            key=key,
+            benchmark_id=draft.benchmark_id,
+            version=draft.version,
+            name=draft.name,
+            description=metadata.get("description", ""),
+            license=draft.license,
+            manifest_digest=manifest_digest,
+            manifest_json=manifest,
+            manifest_path=record.package_path,
+            package_digest=record.package_digest,
+            trusted=trusted_package,
+            installed_at=now,
+        )
+        session.add(benchmark)
+    else:
+        benchmark = existing
+        benchmark.name = draft.name
+        benchmark.description = metadata.get("description", "")
+        benchmark.license = draft.license
+        benchmark.manifest_digest = manifest_digest
+        benchmark.manifest_json = manifest
+        benchmark.manifest_path = record.package_path
+        benchmark.package_digest = record.package_digest
+        benchmark.trusted = trusted_package
+        benchmark.installed_at = now
     session.expire(record)
     record.status = "registered"
     record.benchmark_key = key

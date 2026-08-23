@@ -28,6 +28,7 @@ from looper_api.cloud_contracts import (
     VpcInfo,
     ZoneInfo,
 )
+from looper_api.external_targets import reconcile_external_duplicate
 from looper_api.models import TargetRecord
 from looper_api.providers.base import CloudProvider, CloudProviderError
 from looper_api.providers.utils import (
@@ -39,6 +40,7 @@ from looper_api.providers.utils import (
     environment_credentials,
     filter_images,
     filter_instance_types,
+    has_online_worker_for_target,
     legacy_cloud_target_ids,
     nested,
     optional_environment,
@@ -52,6 +54,7 @@ _REQUIRED_ENV = ["ALIBABA_CLOUD_ACCESS_KEY_ID", "ALIBABA_CLOUD_ACCESS_KEY_SECRET
 
 class AlibabaInventoryError(CloudProviderError):
     pass
+
 
 _SYSTEM_DISK_CATEGORY_PREFERENCE = (
     "cloud_essd",
@@ -310,15 +313,15 @@ class AlibabaEcsProvider(CloudProvider):
                             "zone": zone_id,
                             "available": self._stock_status(status, status_category),
                             "status": str(status) if status else None,
-                            "statusCategory": (
-                                str(status_category) if status_category else None
-                            ),
+                            "statusCategory": (str(status_category) if status_category else None),
                         }
                         existing = by_instance.setdefault(str(value), {}).get(zone_id)
                         status_rank = {None: 0, False: 1, True: 2}
-                        if existing is None or status_rank[capability["available"]] > status_rank[
-                            existing["available"]
-                        ]:
+                        if (
+                            existing is None
+                            or status_rank[capability["available"]]
+                            > status_rank[existing["available"]]
+                        ):
                             by_instance[str(value)][zone_id] = capability
         return {
             instance_type: [capabilities[zone] for zone in sorted(capabilities)]
@@ -518,8 +521,7 @@ class AlibabaEcsProvider(CloudProvider):
                     region=region,
                     id=str(attr(item, "vpc_id")),
                     name=str(
-                        attr(item, "vpc_name", default=attr(item, "vpc_id"))
-                        or attr(item, "vpc_id")
+                        attr(item, "vpc_name", default=attr(item, "vpc_id")) or attr(item, "vpc_id")
                     ),
                     cidrBlock=attr(item, "cidr_block"),
                     isDefault=bool(attr(item, "is_default", default=False)),
@@ -539,9 +541,7 @@ class AlibabaEcsProvider(CloudProvider):
     def list_vpc_subnets(self, region: str, vpc_id: str) -> list[SubnetInfo]:
         return self._list_vswitches(region, vpc_id=vpc_id, zone=None)
 
-    def _list_vswitches(
-        self, region: str, *, vpc_id: str, zone: str | None
-    ) -> list[SubnetInfo]:
+    def _list_vswitches(self, region: str, *, vpc_id: str, zone: str | None) -> list[SubnetInfo]:
         from alibabacloud_ecs20140526 import models
 
         items: list[SubnetInfo] = []
@@ -555,9 +555,7 @@ class AlibabaEcsProvider(CloudProvider):
                 page_size=50,
             )
             response = self._call("describe_vswitches", region, request)
-            rows = as_list(
-                nested(response, ("body",), ("v_switches",), ("v_switch",), default=[])
-            )
+            rows = as_list(nested(response, ("body",), ("v_switches",), ("v_switch",), default=[]))
             for item in rows:
                 if not attr(item, "v_switch_id"):
                     continue
@@ -567,22 +565,24 @@ class AlibabaEcsProvider(CloudProvider):
                     for tag in tag_rows
                     if attr(tag, "tag_key")
                 }
-                items.append(SubnetInfo(
-                    provider=self.id,
-                    region=region,
-                    zone=str(attr(item, "zone_id")),
-                    vpcId=str(attr(item, "vpc_id")),
-                    id=str(attr(item, "v_switch_id")),
-                    name=str(
-                        attr(item, "v_switch_name", default=attr(item, "v_switch_id"))
-                        or attr(item, "v_switch_id")
-                    ),
-                    cidrBlock=attr(item, "cidr_block"),
-                    availableIpCount=attr(item, "available_ip_address_count"),
-                    isDefault=bool(attr(item, "is_default", default=False)),
-                    tags=tags,
-                    managed=tags.get("managedBy", "").casefold() == "looper",
-                ))
+                items.append(
+                    SubnetInfo(
+                        provider=self.id,
+                        region=region,
+                        zone=str(attr(item, "zone_id")),
+                        vpcId=str(attr(item, "vpc_id")),
+                        id=str(attr(item, "v_switch_id")),
+                        name=str(
+                            attr(item, "v_switch_name", default=attr(item, "v_switch_id"))
+                            or attr(item, "v_switch_id")
+                        ),
+                        cidrBlock=attr(item, "cidr_block"),
+                        availableIpCount=attr(item, "available_ip_address_count"),
+                        isDefault=bool(attr(item, "is_default", default=False)),
+                        tags=tags,
+                        managed=tags.get("managedBy", "").casefold() == "looper",
+                    )
+                )
             total = int(attr(nested(response, ("body",)), "total_count", default=0) or 0)
             if not rows or len(items) >= total:
                 break
@@ -723,9 +723,7 @@ class AlibabaEcsProvider(CloudProvider):
                 page_size=50,
             )
             response = self._call("describe_key_pairs", region, request)
-            rows = as_list(
-                nested(response, ("body",), ("key_pairs",), ("key_pair",), default=[])
-            )
+            rows = as_list(nested(response, ("body",), ("key_pairs",), ("key_pair",), default=[]))
             items.extend(
                 KeyPairInfo(
                     provider=self.id,
@@ -933,6 +931,21 @@ class AlibabaEcsProvider(CloudProvider):
             )
         request_id = attr(body, "request_id")
 
+        # VPC RunInstances may return before a public address is attached.
+        # Allocate one explicitly when the purchase requested internet access.
+        public_ip_warning: str | None = None
+        if spec.public_ip:
+            for instance_id in instance_ids:
+                try:
+                    self._call(
+                        "allocate_public_ip_address",
+                        spec.region,
+                        models.AllocatePublicIpAddressRequest(instance_id=str(instance_id)),
+                    )
+                except CloudProviderError as error:
+                    # An existing public IP is harmless; describe below remains authoritative.
+                    public_ip_warning = str(error)
+
         # Fetch instance details to get public IP
         provisioned_instances = []
         for instance_id in instance_ids:
@@ -943,9 +956,7 @@ class AlibabaEcsProvider(CloudProvider):
                     region_id=spec.region,
                     instance_ids=[str(instance_id)],
                 )
-                describe_response = self._call(
-                    "describe_instances", spec.region, describe_request
-                )
+                describe_response = self._call("describe_instances", spec.region, describe_request)
                 instances = nested(
                     describe_response,
                     ("body",),
@@ -975,9 +986,7 @@ class AlibabaEcsProvider(CloudProvider):
                     )
                     if vpc_attr:
                         private_ip = (
-                            str(vpc_attr[0])
-                            if isinstance(vpc_attr, list)
-                            else str(vpc_attr)
+                            str(vpc_attr[0]) if isinstance(vpc_attr, list) else str(vpc_attr)
                         )
             except Exception:
                 pass
@@ -999,7 +1008,10 @@ class AlibabaEcsProvider(CloudProvider):
             providerOrderId=request_id,
             requestId=request_id,
             instances=provisioned_instances,
-            details={"requestId": request_id},
+            details={
+                "requestId": request_id,
+                **({"publicIpWarning": public_ip_warning} if public_ip_warning else {}),
+            },
         )
 
     def destroy(self, *, region: str, instance_ids: list[str]) -> ProviderDestroyResult:
@@ -1067,9 +1079,7 @@ class AlibabaEcsProvider(CloudProvider):
             )
             tag_rows = as_list(nested(item, ("tags",), ("tag",), default=[]))
             tags = {
-                str(attr(tag, "key", "tag_key")): str(
-                    attr(tag, "value", "tag_value", default="")
-                )
+                str(attr(tag, "key", "tag_key")): str(attr(tag, "value", "tag_value", default=""))
                 for tag in tag_rows
                 if attr(tag, "key", "tag_key")
             }
@@ -1088,9 +1098,7 @@ class AlibabaEcsProvider(CloudProvider):
             )
             self._vpc_call("delete_vswitch", region, delete_request)
             return [
-                DestroyedResource(
-                    kind="subnet", id=subnet_id, note="Looper 纳管 vSwitch 已删除"
-                )
+                DestroyedResource(kind="subnet", id=subnet_id, note="Looper 纳管 vSwitch 已删除")
             ]
         except CloudProviderError as error:
             return [
@@ -1107,7 +1115,11 @@ _ARCHIVE_AFTER_AUTHORITATIVE_MISSES = 3
 
 
 def sync_ecs_inventory(
-    session: Session, region: str, instance_ids: list[str] | None = None
+    session: Session,
+    region: str,
+    instance_ids: list[str] | None = None,
+    *,
+    credential_store: Any | None = None,
 ) -> list[TargetRecord]:
     """Sync Alibaba Cloud ECS instances for a region into the target inventory."""
     if not region:
@@ -1127,10 +1139,11 @@ def sync_ecs_inventory(
             region_id=region, instance_ids=normalized_ids, page_size=len(normalized_ids)
         )
         response = provider._call("describe_instances", region, request)
-        instances = as_list(
-            nested(response, ("body",), ("instances",), ("instance",), default=[])
-        )
-        return [_upsert_instance(session, region, item) for item in instances]
+        instances = as_list(nested(response, ("body",), ("instances",), ("instance",), default=[]))
+        imported = [_upsert_instance(session, region, item) for item in instances]
+        for record in imported:
+            reconcile_external_duplicate(session, record, credential_store=credential_store)
+        return imported
 
     page_number = 1
     page_size = 100
@@ -1143,7 +1156,9 @@ def sync_ecs_inventory(
         body = nested(response, ("body",))
         instances = as_list(nested(body, ("instances",), ("instance",), default=[]))
         for instance in instances:
-            imported.append(_upsert_instance(session, region, instance))
+            record = _upsert_instance(session, region, instance)
+            reconcile_external_duplicate(session, record, credential_store=credential_store)
+            imported.append(record)
         total = int(attr(body, "total_count", default=0) or 0)
         if not instances or len(imported) >= total:
             break
@@ -1152,14 +1167,10 @@ def sync_ecs_inventory(
     return imported
 
 
-def _reconcile_missing_inventory(
-    session: Session, region: str, seen_target_ids: set[str]
-) -> None:
+def _reconcile_missing_inventory(session: Session, region: str, seen_target_ids: set[str]) -> None:
     """Retain historical targets while removing absent instances from the active pool."""
     now = utc_now()
-    records = list(
-        session.scalars(select(TargetRecord).where(TargetRecord.provider == "alibaba"))
-    )
+    records = list(session.scalars(select(TargetRecord).where(TargetRecord.provider == "alibaba")))
     for record in records:
         inventory = record.inventory_json or {}
         if inventory.get("region") != region or record.id in seen_target_ids:
@@ -1181,9 +1192,7 @@ def _upsert_instance(session: Session, region: str, instance: Any) -> TargetReco
     now = utc_now()
     instance_id = str(attr(instance, "instance_id") or "")
     target_id = cloud_target_id("alibaba", region, instance_id)
-    public_ips = as_list(
-        nested(instance, ("public_ip_address",), ("ip_address",), default=[])
-    )
+    public_ips = as_list(nested(instance, ("public_ip_address",), ("ip_address",), default=[]))
     private_ips = as_list(
         nested(
             instance,
@@ -1194,7 +1203,17 @@ def _upsert_instance(session: Session, region: str, instance: Any) -> TargetReco
         )
     )
     vpc = nested(instance, ("vpc_attributes",), default=None)
+    record = session.get(TargetRecord, target_id)
+    if record is None:
+        for legacy_id in legacy_cloud_target_ids("alibaba", region, instance_id):
+            record = session.get(TargetRecord, legacy_id)
+            if record is not None:
+                break
+    existing_inventory = record.inventory_json if record is not None else {}
+    public_ip = public_ips[0] if public_ips else None
+    private_ip = private_ips[0] if private_ips else None
     inventory = {
+        "source": existing_inventory.get("source", "cloud-inventory"),
         "region": region,
         "zone": attr(instance, "zone_id"),
         "instance_id": instance_id,
@@ -1203,12 +1222,22 @@ def _upsert_instance(session: Session, region: str, instance: Any) -> TargetReco
         "image_id": attr(instance, "image_id"),
         "vpc_id": attr(vpc, "vpc_id") if vpc else None,
         "subnet_id": attr(vpc, "vswitch_id") if vpc else None,
-        "private_ip": private_ips[0] if private_ips else None,
-        "public_ip_present": bool(public_ips),
+        "private_ip": private_ip,
+        "public_ip": public_ip,
+        "endpoint": public_ip or private_ip,
+        "public_ip_present": bool(public_ip),
     }
+    for key in ("order_id", "autoSsh"):
+        if key in existing_inventory:
+            inventory[key] = existing_inventory[key]
     memory_mib = attr(instance, "memory", default=0) or 0
     memory_gib = (float(memory_mib) / 1024) if memory_mib else None
+    # Keep SSH-verified facts (host key, probe inventory) inherited from an
+    # external twin when duplicate records are folded; provider facts below
+    # stay authoritative for their own keys.
+    preserved_fingerprint = record.fingerprint_json if record is not None else {}
     fingerprint = {
+        **preserved_fingerprint,
         "provider": "alibaba",
         "region": region,
         "zone": inventory["zone"],
@@ -1224,21 +1253,19 @@ def _upsert_instance(session: Session, region: str, instance: Any) -> TargetReco
         "capabilities": capabilities,
         "fingerprint": fingerprint,
     }
-    record = session.get(TargetRecord, target_id)
-    if record is None:
-        for legacy_id in legacy_cloud_target_ids("alibaba", region, instance_id):
-            record = session.get(TargetRecord, legacy_id)
-            if record is not None:
-                break
+    runnable_now = (
+        inventory.get("autoSsh", {}).get("status") == "connected"
+        or (record is not None and has_online_worker_for_target(session, record.id))
+    )
     values: dict[str, Any] = {
         "name": attr(instance, "instance_name") or instance_id,
         "provider": "alibaba",
-        "status": "inventory-only",
+        "status": "available" if runnable_now else "inventory-only",
         "capabilities_json": capabilities,
         "inventory_json": inventory,
         "fingerprint_json": fingerprint,
         "snapshot_digest": canonical_digest(snapshot),
-        "runnable": False,
+        "runnable": runnable_now,
         "lifecycle_status": "active",
         "last_inventory_seen_at": now,
         "inventory_missing_since": None,

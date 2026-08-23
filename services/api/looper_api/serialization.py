@@ -244,6 +244,7 @@ def target_view(record: TargetRecord) -> dict[str, Any]:
         "orderId": inventory.get("order_id"),
         "endpoint": (
             inventory.get("endpoint")
+            or inventory.get("public_ip")
             or inventory.get("private_ip")
             or ("local" if record.id == "local" else "—")
         ),

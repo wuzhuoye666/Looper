@@ -27,6 +27,7 @@ from looper_api.cloud_contracts import (
     VpcInfo,
     ZoneInfo,
 )
+from looper_api.external_targets import reconcile_external_duplicate
 from looper_api.models import TargetRecord
 from looper_api.providers.base import CloudProvider, CloudProviderError
 from looper_api.providers.utils import (
@@ -37,6 +38,7 @@ from looper_api.providers.utils import (
     environment_credentials,
     filter_images,
     filter_instance_types,
+    has_online_worker_for_target,
     legacy_cloud_target_ids,
     optional_environment,
     parse_datetime,
@@ -100,8 +102,7 @@ def _local_disk_details(item: Any) -> tuple[str | None, float | None, list[dict[
                 "type": disk_type,
                 "minSizeGib": minimum,
                 "maxSizeGib": maximum,
-                "required": str(attr(disk, "Required", default="") or "").upper()
-                == "REQUIRED",
+                "required": str(attr(disk, "Required", default="") or "").upper() == "REQUIRED",
             }
         )
     categories = sorted({str(detail["type"]) for detail in details if detail["type"]})
@@ -300,9 +301,7 @@ class TencentCvmProvider(CloudProvider):
     def list_vpc_subnets(self, region: str, vpc_id: str) -> list[SubnetInfo]:
         return self._list_subnets(region, vpc_id=vpc_id, zone=None)
 
-    def _list_subnets(
-        self, region: str, *, vpc_id: str, zone: str | None
-    ) -> list[SubnetInfo]:
+    def _list_subnets(self, region: str, *, vpc_id: str, zone: str | None) -> list[SubnetInfo]:
         from tencentcloud.vpc.v20170312 import models
 
         filters = [{"Name": "vpc-id", "Values": [vpc_id]}]
@@ -313,27 +312,27 @@ class TencentCvmProvider(CloudProvider):
         while True:
             request = models.DescribeSubnetsRequest()
             request.from_json_string(
-                canonical_json(
-                    {"Filters": filters, "Offset": str(offset), "Limit": "100"}
-                )
+                canonical_json({"Filters": filters, "Offset": str(offset), "Limit": "100"})
             )
             response = self._vpc_call("DescribeSubnets", region, request)
             rows = list(response.SubnetSet or [])
             for item in rows:
                 tags = _tag_map(attr(item, "TagSet", default=[]))
-                items.append(SubnetInfo(
-                    provider=self.id,
-                    region=region,
-                    zone=str(item.Zone),
-                    vpcId=str(item.VpcId),
-                    id=str(item.SubnetId),
-                    name=str(item.SubnetName or item.SubnetId),
-                    cidrBlock=attr(item, "CidrBlock"),
-                    availableIpCount=attr(item, "AvailableIpAddressCount"),
-                    isDefault=bool(attr(item, "IsDefault", default=False)),
-                    tags=tags,
-                    managed=tags.get("managedBy", "").casefold() == "looper",
-                ))
+                items.append(
+                    SubnetInfo(
+                        provider=self.id,
+                        region=region,
+                        zone=str(item.Zone),
+                        vpcId=str(item.VpcId),
+                        id=str(item.SubnetId),
+                        name=str(item.SubnetName or item.SubnetId),
+                        cidrBlock=attr(item, "CidrBlock"),
+                        availableIpCount=attr(item, "AvailableIpAddressCount"),
+                        isDefault=bool(attr(item, "IsDefault", default=False)),
+                        tags=tags,
+                        managed=tags.get("managedBy", "").casefold() == "looper",
+                    )
+                )
             offset += len(rows)
             total = attr(response, "TotalCount")
             if not rows or len(rows) < 100 or (total is not None and offset >= int(total)):
@@ -406,10 +405,9 @@ class TencentCvmProvider(CloudProvider):
             for item in rows:
                 tags = _tag_map(attr(item, "TagSet", default=[]))
                 name = str(item.SecurityGroupName or item.SecurityGroupId)
-                recommended = (
-                    tags.get("managedBy", "").lower() == "looper"
-                    or name.lower().startswith("looper")
-                )
+                recommended = tags.get(
+                    "managedBy", ""
+                ).lower() == "looper" or name.lower().startswith("looper")
                 items.append(
                     SecurityGroupInfo(
                         provider=self.id,
@@ -511,9 +509,7 @@ class TencentCvmProvider(CloudProvider):
             raise CloudProviderError("region is required", code="invalid_request")
         from tencentcloud.cvm.v20170312 import models
 
-        provider_filters = [
-            {"Name": "instance-charge-type", "Values": ["POSTPAID_BY_HOUR"]}
-        ]
+        provider_filters = [{"Name": "instance-charge-type", "Values": ["POSTPAID_BY_HOUR"]}]
         if filters.zone:
             provider_filters.append({"Name": "zone", "Values": [filters.zone]})
         request = models.DescribeZoneInstanceConfigInfosRequest()
@@ -846,9 +842,7 @@ class TencentCvmProvider(CloudProvider):
                     note="非 Looper 纳管子网，保留不动",
                 )
             delete = models.DeleteSubnetRequest()
-            delete.from_json_string(
-                canonical_json({"SubnetId": subnet_id, "VpcId": vpc_id})
-            )
+            delete.from_json_string(canonical_json({"SubnetId": subnet_id, "VpcId": vpc_id}))
             provider._vpc_call("DeleteSubnet", region, delete)
             return DestroyedResource(kind="subnet", id=subnet_id, note="Looper 纳管子网已删除")
         except CloudProviderError as error:
@@ -917,7 +911,11 @@ def _provisioned_instance(
 
 
 def sync_cvm_inventory(
-    session: Session, region: str, instance_ids: list[str] | None = None
+    session: Session,
+    region: str,
+    instance_ids: list[str] | None = None,
+    *,
+    credential_store: Any | None = None,
 ) -> list[TargetRecord]:
     if not region or not region.startswith("ap-"):
         raise TencentInventoryError("a valid Tencent Cloud region is required")
@@ -935,9 +933,12 @@ def sync_cvm_inventory(
         request = models.DescribeInstancesRequest()
         request.from_json_string(canonical_json({"InstanceIds": normalized_ids}))
         response = provider._call("DescribeInstances", region, request)
-        return [
+        imported = [
             _upsert_instance(session, region, item) for item in list(response.InstanceSet or [])
         ]
+        for record in imported:
+            reconcile_external_duplicate(session, record, credential_store=credential_store)
+        return imported
 
     offset = 0
     page_size = 100
@@ -948,7 +949,9 @@ def sync_cvm_inventory(
         response = provider._call("DescribeInstances", region, request)
         instances = list(response.InstanceSet or [])
         for instance in instances:
-            imported.append(_upsert_instance(session, region, instance))
+            record = _upsert_instance(session, region, instance)
+            reconcile_external_duplicate(session, record, credential_store=credential_store)
+            imported.append(record)
         if len(instances) < page_size:
             break
         offset += page_size
@@ -959,9 +962,7 @@ def sync_cvm_inventory(
 _ARCHIVE_AFTER_AUTHORITATIVE_MISSES = 3
 
 
-def _reconcile_missing_inventory(
-    session: Session, region: str, seen_target_ids: set[str]
-) -> None:
+def _reconcile_missing_inventory(session: Session, region: str, seen_target_ids: set[str]) -> None:
     """Retain historical targets while removing absent instances from the active pool.
 
     This is called only after a complete, successful regional inventory traversal. A
@@ -969,18 +970,14 @@ def _reconcile_missing_inventory(
     region, not proof that it was destroyed.
     """
     now = utc_now()
-    records = list(
-        session.scalars(select(TargetRecord).where(TargetRecord.provider == "tencent"))
-    )
+    records = list(session.scalars(select(TargetRecord).where(TargetRecord.provider == "tencent")))
     for record in records:
         inventory = record.inventory_json or {}
         if inventory.get("region") != region or record.id in seen_target_ids:
             continue
         misses = record.inventory_miss_count + 1
         record.lifecycle_status = (
-            "archived"
-            if misses >= _ARCHIVE_AFTER_AUTHORITATIVE_MISSES
-            else "missing"
+            "archived" if misses >= _ARCHIVE_AFTER_AUTHORITATIVE_MISSES else "missing"
         )
         record.inventory_missing_since = record.inventory_missing_since or now
         record.inventory_miss_count = misses
@@ -997,7 +994,17 @@ def _upsert_instance(session: Session, region: str, instance: Any) -> TargetReco
     target_id = cloud_target_id("tencent", region, instance_id)
     public_ips = list(instance.PublicIpAddresses or [])
     private_ips = list(instance.PrivateIpAddresses or [])
+    record = session.get(TargetRecord, target_id)
+    if record is None:
+        for legacy_id in legacy_cloud_target_ids("tencent", region, instance_id):
+            record = session.get(TargetRecord, legacy_id)
+            if record is not None:
+                break
+    existing_inventory = record.inventory_json if record is not None else {}
+    public_ip = public_ips[0] if public_ips else None
+    private_ip = private_ips[0] if private_ips else None
     inventory = {
+        "source": existing_inventory.get("source", "cloud-inventory"),
         "region": region,
         "zone": instance.Placement.Zone if instance.Placement else None,
         "instance_id": instance_id,
@@ -1008,10 +1015,20 @@ def _upsert_instance(session: Session, region: str, instance: Any) -> TargetReco
         "subnet_id": instance.VirtualPrivateCloud.SubnetId
         if instance.VirtualPrivateCloud
         else None,
-        "private_ip": private_ips[0] if private_ips else None,
-        "public_ip_present": bool(public_ips),
+        "private_ip": private_ip,
+        "public_ip": public_ip,
+        "endpoint": public_ip or private_ip,
+        "public_ip_present": bool(public_ip),
     }
+    for key in ("order_id", "autoSsh"):
+        if key in existing_inventory:
+            inventory[key] = existing_inventory[key]
+    # Keep SSH-verified facts (host key, probe inventory) inherited from an
+    # external twin when duplicate records are folded; provider facts below
+    # stay authoritative for their own keys.
+    preserved_fingerprint = record.fingerprint_json if record is not None else {}
     fingerprint = {
+        **preserved_fingerprint,
         "provider": "tencent",
         "region": region,
         "zone": inventory["zone"],
@@ -1027,21 +1044,19 @@ def _upsert_instance(session: Session, region: str, instance: Any) -> TargetReco
         "capabilities": capabilities,
         "fingerprint": fingerprint,
     }
-    record = session.get(TargetRecord, target_id)
-    if record is None:
-        for legacy_id in legacy_cloud_target_ids("tencent", region, instance_id):
-            record = session.get(TargetRecord, legacy_id)
-            if record is not None:
-                break
+    runnable_now = (
+        inventory.get("autoSsh", {}).get("status") == "connected"
+        or (record is not None and has_online_worker_for_target(session, record.id))
+    )
     values: dict[str, Any] = {
         "name": instance.InstanceName or instance_id,
         "provider": "tencent",
-        "status": "inventory-only",
+        "status": "available" if runnable_now else "inventory-only",
         "capabilities_json": capabilities,
         "inventory_json": inventory,
         "fingerprint_json": fingerprint,
         "snapshot_digest": canonical_digest(snapshot),
-        "runnable": False,
+        "runnable": runnable_now,
         "lifecycle_status": "active",
         "last_inventory_seen_at": now,
         "inventory_missing_since": None,

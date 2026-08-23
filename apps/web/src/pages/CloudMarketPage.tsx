@@ -19,7 +19,6 @@ import {
   Sparkles,
   Terminal,
   XCircle,
-  Upload,
 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -45,7 +44,6 @@ const providerLabels: Record<CloudProviderId, string> = {
 const kindLabels = { 'instance-type': '机型', image: '镜像' } as const;
 type CatalogKind = keyof typeof kindLabels;
 type NetworkMode = 'catalog' | 'manual';
-type PurchaseAuthMethod = 'password' | 'private-key';
 type MarketStep = 'instance' | 'image' | 'configure';
 const CATALOG_PAGE_SIZE = 20;
 const DEFAULT_INSTANCE_NAME = 'looper-instance';
@@ -92,14 +90,9 @@ export function CloudMarketPage() {
   const [manualSecurityGroups, setManualSecurityGroups] = useState('');
   const [manualKeyPairId, setManualKeyPairId] = useState('');
   const [disk, setDisk] = useState(DEFAULT_SYSTEM_DISK_GIB);
-  const [publicIp, setPublicIp] = useState(false);
+  const [publicIp, setPublicIp] = useState(true);
   const [bandwidth, setBandwidth] = useState(0);
-  const [sshUsername, setSshUsername] = useState('root');
-  const [sshAuthMethod, setSshAuthMethod] = useState<PurchaseAuthMethod>('private-key');
-  const [sshPassword, setSshPassword] = useState('');
-  const [sshPrivateKey, setSshPrivateKey] = useState('');
   const [rememberSshCredentials, setRememberSshCredentials] = useState(true);
-  const [sshKeyFileName, setSshKeyFileName] = useState('');
   const [quote, setQuote] = useState<CloudQuote | null>(null);
   const [quoteSignature, setQuoteSignature] = useState('');
   const [networkNotice, setNetworkNotice] = useState('');
@@ -205,7 +198,7 @@ export function CloudMarketPage() {
     },
   });
   const purchaseMutation = useMutation({
-    mutationFn: (request: { quoteId: string; credentials: { username: string; port: number; authMethod: PurchaseAuthMethod; password?: string; privateKey?: string; passphrase?: string; rememberCredentials: boolean } }) => api.purchaseQuote(request.quoteId, orderKey.current, { sshCredentials: request.credentials }),
+    mutationFn: (request: { quoteId: string; rememberCredentials: boolean }) => api.purchaseQuote(request.quoteId, orderKey.current, { rememberCredentials: request.rememberCredentials }),
     onSuccess: order => {
       void queryClient.invalidateQueries({ queryKey: ['targets'] });
       navigate(`/cloud/orders/${order.id}`, { state: order });
@@ -427,14 +420,6 @@ export function CloudMarketPage() {
   }, [items, kind, selectedType, selectedImage]);
 
   const catalogError = vpcs.error || subnets.error || securityGroups.error || keyPairs.error;
-  const sshCredentialsReady = Boolean(sshUsername.trim()) && (sshAuthMethod === 'password' ? Boolean(sshPassword) : Boolean(sshPrivateKey.trim()));
-  const purchaseCredentials = {
-    username: sshUsername.trim(),
-    port: 22,
-    authMethod: sshAuthMethod,
-    ...(sshAuthMethod === 'password' ? { password: sshPassword } : { privateKey: sshPrivateKey,  }),
-    rememberCredentials: rememberSshCredentials,
-  };
   const hasRecommendedGroup = securityGroupItems.some(item => item.recommended);
   const applyRecommendedDefaults = () => {
     setName(DEFAULT_INSTANCE_NAME);
@@ -575,33 +560,24 @@ export function CloudMarketPage() {
             </details>
             {!hasRecommendedGroup && region && operatorAccessReady && <button type="button" className="button secondary compact-button managed-group-button" disabled={managedGroupMutation.isPending} onClick={() => managedGroupMutation.mutate()}><Plus size={14} />{managedGroupMutation.isPending ? '创建中…' : '创建 Looper 安全组'}</button>}
           </div>
-          <label><span>SSH 密钥 *</span><select id="launch-key-pair" value={keyPairId} disabled={!networkQueriesEnabled || !region || keyPairs.isLoading} onChange={event => setKeyPairId(event.target.value)}><option value="">{keyPairs.isLoading ? '正在读取 SSH 密钥…' : keyPairs.data?.items.length ? '选择 SSH 密钥' : '未找到 SSH 密钥'}</option>{keyPairs.data?.items.map(item => <option key={item.id} value={item.id}>{item.name} · {item.id}</option>)}</select><small>{keyPairs.data?.items.length ? '已自动选择第一把密钥；购买后请在订单详情配置对应私钥。' : '当前地域没有云端密钥，不能购买无法被 Looper 接入的机器。请先在云厂商控制台创建密钥后刷新目录。'}</small></label>
+          <label><span>SSH 密钥 *</span><select id="launch-key-pair" value={keyPairId} disabled={!networkQueriesEnabled || !region || keyPairs.isLoading} onChange={event => setKeyPairId(event.target.value)}><option value="">{keyPairs.isLoading ? '正在读取 SSH 密钥…' : keyPairs.data?.items.length ? '选择 SSH 密钥' : '未找到 SSH 密钥'}</option>{keyPairs.data?.items.map(item => <option key={item.id} value={item.id}>{item.name} · {item.id}</option>)}</select><small>{keyPairs.data?.items.length ? '云厂商公钥资源；平台购买后使用本机统一私钥自动接入。' : '当前地域没有云端密钥，无法创建可由平台接入的机器。请先在云厂商控制台创建密钥后刷新目录。'}</small></label>
           {catalogError && <div className="network-catalog-error full"><AlertTriangle size={16} /><span>云网络目录读取失败。</span><button type="button" onClick={() => setNetworkMode('manual')}>改用手动 ID</button></div>}
           {managedGroupMutation.isError && <div className="inline-error full">{managedGroupMutation.error instanceof Error ? managedGroupMutation.error.message : '安全组创建失败'}</div>}
         </> : <>
           <label><span>VPC ID *</span><input value={manualVpcId} onChange={event => setManualVpcId(event.target.value)} placeholder="vpc-..." /></label>
           <label><span>子网 / vSwitch ID *</span><input value={manualSubnetId} onChange={event => setManualSubnetId(event.target.value)} placeholder="subnet-..." /></label>
           <label><span>安全组 ID *</span><input value={manualSecurityGroups} onChange={event => setManualSecurityGroups(event.target.value)} placeholder="最多 5 个，用逗号分隔" /></label>
-          <label><span>SSH 密钥 ID *</span><input required value={manualKeyPairId} onChange={event => setManualKeyPairId(event.target.value)} placeholder="云厂商中已存在的密钥 ID" /><small>必须使用已导入云厂商的公钥；购买后在订单详情提供对应私钥。</small></label>
+          <label><span>SSH 密钥 ID *</span><input required value={manualKeyPairId} onChange={event => setManualKeyPairId(event.target.value)} placeholder="云厂商中已存在的密钥 ID" /><small>必须使用已导入云厂商的公钥；平台购买后使用本机统一私钥自动接入。</small></label>
         </>}
 
-        <div className="ssh-credentials-panel full">
-          <div className="ssh-credentials-heading"><div><strong>购买后自动接入 SSH</strong><small>平台会用这组凭据读取机器参数、部署 Worker；是否保存到本机加密凭据仓库由下方开关决定。密码和私钥不会写入订单数据库。</small></div><LockKeyhole size={17} /></div>
-          <div className="form-grid ssh-credentials-grid">
-            <label><span>SSH 用户名 *</span><input value={sshUsername} onChange={event => setSshUsername(event.target.value)} placeholder="root 或 ubuntu" /></label>
-            <label><span>SSH 端口 *</span><input value="22" readOnly /></label>
-            <label><span>认证方式 *</span><select value={sshAuthMethod} onChange={event => setSshAuthMethod(event.target.value as PurchaseAuthMethod)}><option value="private-key">SSH 私钥</option><option value="password">SSH 密码</option></select></label>
-            {sshAuthMethod === 'password' ? <label><span>SSH 密码 *</span><input type="password" value={sshPassword} onChange={event => setSshPassword(event.target.value)} autoComplete="new-password" /></label> : <label className="full"><span>SSH 私钥文件 *</span><div className="ssh-key-file-picker"><input aria-label="SSH 私钥文件 *" type="file" accept=".pem,.key,.pub,application/x-pem-file,text/plain" onChange={async event => { const file = event.target.files?.[0]; if (!file) return; const reader = new FileReader(); reader.onload = () => setSshPrivateKey(String(reader.result || '')); reader.readAsText(file); setSshKeyFileName(file.name); }} /><span>{sshKeyFileName || '请选择 .pem 或 .key 文件'}</span><Upload size={15} /></div><small>平台只读取文件内容用于本次 SSH 连接，不会上传原始文件路径。</small></label>}
-            <label className="checkbox-field ssh-save-field full"><input type="checkbox" checked={rememberSshCredentials} onChange={event => setRememberSshCredentials(event.target.checked)} /><span>购买后保存密钥 / 密码</span><small>{rememberSshCredentials ? '保存到本机加密凭据仓库，后续可自动测试和恢复 Worker。' : '仅本次购买使用，成功后不会保存。'}</small></label>
-          </div>
-        </div>
+        <label className="checkbox-field ssh-save-field full"><input type="checkbox" checked={rememberSshCredentials} onChange={event => setRememberSshCredentials(event.target.checked)} /><span>购买后保存密钥 / 密码</span></label>
         <label><span>系统盘 GB</span><input type="number" min={minimumSystemDiskGib} max={2048} value={disk} onChange={event => setDisk(Math.max(minimumSystemDiskGib, Number(event.target.value)))} /><small>所选镜像至少需要 {minimumSystemDiskGib} GiB</small></label>
         <label className="checkbox-field"><input type="checkbox" checked={publicIp} disabled={!publicIpSupported} onChange={event => setPublicIp(event.target.checked)} /><span>{publicIpSupported ? '分配固定带宽公网 IP' : '公网 IP 需独立定价流程'}</span><small>{publicIp ? '推荐保留，平台购买后才能直接 SSH 接入。' : '关闭后需要确保 Looper 能访问该实例私网地址。'}</small></label>
         <label><span>公网带宽 Mbps</span><input type="number" min={0} max={1000} disabled={!publicIp} value={bandwidth} onChange={event => setBandwidth(Number(event.target.value))} /></label>
       </div>
       <div className="launch-summary"><div><span>已选机型</span><strong>{selectedType ? `${selectedType.id} · ${selectedType.cpu} vCPU / ${selectedType.memoryGib} GiB${defaultTypeId === selectedType.id ? ' · 推荐' : ''}` : '未选择'}</strong></div><div><span>已选镜像</span><strong>{selectedImage ? `${selectedImage.name}${defaultImageId === selectedImage.id ? ' · 推荐' : ''}` : '未选择'}</strong></div><button className="button primary" disabled={!spec || !quoteSupported || quoteMutation.isPending || !operatorAccessReady} onClick={() => spec && quoteMutation.mutate({ spec, key: quoteKey.current, signature: specSignature })}><Calculator size={16} />{!operatorAccessReady ? '需要操作员认证' : !quoteSupported ? '报价配置未完成' : quoteMutation.isPending ? '询价中...' : '获取小时报价'}</button></div>
       {quoteMutation.isError && <div className="inline-error">{quoteMutation.error instanceof Error ? quoteMutation.error.message : '询价失败'}</div>}
-      {quote && quoteMatchesCurrentSpec && <div className="quote-card"><div><span>报价快照</span><strong>{quote.hourlyAmount} {quote.currency}<small> / 小时{quote.estimated ? ' · 预计' : ''}</small></strong><em>{providerLabels[quote.provider]} · {quote.spec.region} · {quote.spec.instanceType} · {quote.spec.imageId} · {quote.spec.count} 台</em><em>有效至 {new Date(quote.expiresAt).toLocaleString()}</em></div><button className="button primary" disabled={purchaseMutation.isPending || quote.estimated || !quoteMatchesCurrentSpec || !purchaseReady || !sshCredentialsReady} onClick={() => quoteMatchesCurrentSpec && purchaseReady && sshCredentialsReady && purchaseMutation.mutate({ quoteId: quote.id, credentials: purchaseCredentials })}><ShoppingCart size={16} />{quote.estimated ? '估算价不可购买' : !purchaseReady ? '购买门禁未就绪' : !sshCredentialsReady ? '请先填写 SSH 凭据' : purchaseMutation.isPending ? '正在购买...' : '立即购买'}</button></div>}
+      {quote && quoteMatchesCurrentSpec && <div className="quote-card"><div><span>报价快照</span><strong>{quote.hourlyAmount} {quote.currency}<small> / 小时{quote.estimated ? ' · 预计' : ''}</small></strong><em>{providerLabels[quote.provider]} · {quote.spec.region} · {quote.spec.instanceType} · {quote.spec.imageId} · {quote.spec.count} 台</em><em>有效至 {new Date(quote.expiresAt).toLocaleString()}</em></div><button className="button primary" disabled={purchaseMutation.isPending || quote.estimated || !quoteMatchesCurrentSpec || !purchaseReady} onClick={() => quoteMatchesCurrentSpec && purchaseReady && purchaseMutation.mutate({ quoteId: quote.id, rememberCredentials: rememberSshCredentials })}><ShoppingCart size={16} />{quote.estimated ? '估算价不可购买' : !purchaseReady ? '购买门禁未就绪' : purchaseMutation.isPending ? '正在购买...' : '立即购买'}</button></div>}
       {purchaseMutation.isError && <div className="inline-error">{purchaseMutation.error instanceof Error ? purchaseMutation.error.message : '购买失败'}</div>}
     </section>}
   </div>;

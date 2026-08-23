@@ -106,9 +106,11 @@ def seed_system(session: Session) -> None:
         }
         if benchmark is None:
             session.add(BenchmarkRecord(key=key, installed_at=now, **values))
-        else:
+        elif benchmark.package_digest is None:
             for field, value in values.items():
                 setattr(benchmark, field, value)
+        # A package imported through Registration owns its immutable manifest path
+        # and digest; startup seeding must not silently replace it with source files.
 
     session.flush()
 
