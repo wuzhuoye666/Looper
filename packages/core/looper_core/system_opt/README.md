@@ -24,7 +24,7 @@
 | profiles.py | Profile 展开、条件与参数映射 | 人工意图长期持久化仍待集成 |
 | safety.py | preflight、snapshot、apply、verify、rollback 与补偿 | simulated 故障注入通过，真实写未测 |
 | lease.py | 单目标文件租约、fencing 和 needs-attention | 多节点协调不在当前范围 |
-| policy/scoring/tuning.py | 公式、门禁、诊断优先级、搜索与停止条件 | 真实压力/workload 未测 |
+| policy/scoring/tuning.py | 公式、门禁、诊断优先级、多轮搜索、周期基线与停止条件 | simulated 多轮已测；真实多参数压力/workload 未测 |
 | measurement.py | argv measurement adapter | 工具能力必须逐目标 preflight |
 | demo.py | general/workload deterministic synthetic E2E | 只证明代码闭环，不证明性能收益 |
 | executor/simulated.py | 确定性模拟目标与故障注入基础 | 是当前唯一可安全作为默认测试基础的 backend |
@@ -69,3 +69,7 @@
 6. 功能闭环验收后才进入缓存和中间结果复用。
 
 历史 M0 模块 README 已无损保存于 docs/system-optimizer/legacy/module-readme-m0-2026-08-22.md。
+
+多轮闭环的当前语义和验收锚点见
+`docs/system-optimizer/planning/multi-round-closed-loop-2026-08-23.md`。2026-08-23 阿里云 fio
+实录是单候选安全验证，不是完整自动搜索验收。

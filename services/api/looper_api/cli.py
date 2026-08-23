@@ -476,6 +476,9 @@ def run_linux_system_optimization(
             {
                 "stop_reason": result.stop_reason,
                 "stop_detail": result.stop_detail,
+                "candidate_rounds": len(result.candidates),
+                "measurement_attempts": result.attempt_count,
+                "baseline_measurements": len(result.baseline_history),
                 "recommended_candidate_id": result.recommended_candidate_id,
                 "output": str(output.resolve()),
             }

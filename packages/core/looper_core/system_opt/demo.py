@@ -300,6 +300,7 @@ def build_demo_policy(mode: OptimizationMode) -> SystemOptimizationPolicy:
             random_seed=20260822,
             baseline_repeats=7,
             candidate_repeats=7,
+            baseline_every_n=3,
         ),
         search=SearchPolicy(
             generator="grid",
@@ -308,7 +309,7 @@ def build_demo_policy(mode: OptimizationMode) -> SystemOptimizationPolicy:
             max_attempts=32,
             wall_time_seconds=30,
             no_improvement_limit=8,
-            target_improvement=0.08,
+            target_improvement=None if mode == OptimizationMode.GENERAL else 0.08,
             routed_component_limit=1 if mode == OptimizationMode.WORKLOAD else None,
             tie_break_order=[
                 "primary-lower",

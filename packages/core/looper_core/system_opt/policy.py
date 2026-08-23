@@ -121,6 +121,7 @@ class StatisticsPolicy(StrictModel):
     random_seed: int = Field(ge=0)
     baseline_repeats: int = Field(ge=2, le=10000)
     candidate_repeats: int = Field(ge=2, le=10000)
+    baseline_every_n: int = Field(ge=1, le=100000)
 
 
 class SearchPolicy(StrictModel):

@@ -53,12 +53,15 @@ class StopReason(StrEnum):
 
 
 class CandidateEvaluation(StrictModel):
+    round_index: int = Field(ge=1)
+    attempt_index: int = Field(ge=1)
     candidate_id: str
     parameters: dict[str, Any]
     change_count: int
     safety_state: SafetyState
     safety_reason: str | None = None
     measurement_digest: str | None = None
+    comparison_baseline_digest: str
     comparable: bool
     identity_mismatches: list[str]
     gates: list[GateEvidence]
@@ -75,6 +78,7 @@ class OptimizationRun(StrictModel):
     manifest_digest: str
     mode: OptimizationMode
     baseline: MeasurementBatch
+    baseline_history: list[MeasurementBatch]
     diagnostic_reference: MeasurementBatch | None = None
     diagnostic_priorities: list[DiagnosticPriority]
     routed_components: list[str]
@@ -83,6 +87,7 @@ class OptimizationRun(StrictModel):
     stop_reason: StopReason
     stop_detail: str
     elapsed_seconds: float = Field(ge=0)
+    attempt_count: int = Field(ge=1)
 
     @property
     def digest(self) -> str:
@@ -123,6 +128,8 @@ class SystemOptimizationEngine:
     ) -> OptimizationRun:
         started = time.monotonic()
         baseline = measure(self.policy.statistics.baseline_repeats)
+        current_baseline = baseline
+        baseline_history = [baseline]
         priorities: list[DiagnosticPriority] = []
         routed_components = list(self.policy.authorized_components)
         if self.policy.mode == OptimizationMode.WORKLOAD:
@@ -154,6 +161,7 @@ class SystemOptimizationEngine:
                 return self._result(
                     started,
                     baseline,
+                    baseline_history,
                     diagnostic_reference,
                     priorities,
                     [],
@@ -167,6 +175,7 @@ class SystemOptimizationEngine:
             return self._result(
                 started,
                 baseline,
+                baseline_history,
                 diagnostic_reference,
                 priorities,
                 routed_components,
@@ -201,11 +210,35 @@ class SystemOptimizationEngine:
         candidates: list[CandidateEvaluation] = []
         no_improvement = 0
         best_lower = float("-inf")
-        attempts = 0
+        # The initial baseline is a measurement attempt and consumes the same
+        # explicit budget as candidate and periodic-baseline measurements.
+        attempts = 1
         stop_reason = StopReason.CANDIDATE_BUDGET
         stop_detail = "explicit candidate budget reached"
 
         while len(candidates) < self.policy.search.max_candidates:
+            if candidates and len(candidates) % self.policy.statistics.baseline_every_n == 0:
+                if attempts >= self.policy.search.max_attempts:
+                    stop_reason = StopReason.ATTEMPT_BUDGET
+                    stop_detail = "explicit attempt budget reached before periodic baseline"
+                    break
+                if time.monotonic() - started >= self.policy.search.wall_time_seconds:
+                    stop_reason = StopReason.WALL_TIME_BUDGET
+                    stop_detail = "explicit wall-time budget reached before periodic baseline"
+                    break
+                attempts += 1
+                refreshed = measure(self.policy.statistics.baseline_repeats)
+                matches, mismatches = comparable(
+                    baseline.identity,
+                    refreshed.identity,
+                    self.policy.identity.required_fields,
+                )
+                baseline_history.append(refreshed)
+                if not matches:
+                    stop_reason = StopReason.MEASUREMENT_ERROR
+                    stop_detail = f"periodic baseline identity mismatch: {mismatches}"
+                    break
+                current_baseline = refreshed
             if attempts >= self.policy.search.max_attempts:
                 stop_reason = StopReason.ATTEMPT_BUDGET
                 stop_detail = "explicit attempt budget reached"
@@ -214,7 +247,6 @@ class SystemOptimizationEngine:
                 stop_reason = StopReason.WALL_TIME_BUDGET
                 stop_detail = "explicit wall-time budget reached"
                 break
-            attempts += 1
             try:
                 parameters = suggest_candidate(
                     search_space,
@@ -228,26 +260,30 @@ class SystemOptimizationEngine:
                 stop_reason = StopReason.SEARCH_SPACE_EXHAUSTED
                 stop_detail = str(error)
                 break
+            attempts += 1
             existing.append({"parameters": parameters})
             evaluation = self._evaluate(
+                len(candidates) + 1,
+                attempts,
                 parameters,
                 baseline_parameters,
-                baseline,
+                current_baseline,
                 measure,
                 fencing_token,
                 scored_metrics,
             )
             candidates.append(evaluation)
-            values = [
-                evaluation.improvements[metric.id].estimate
-                for metric in scored_metrics
-                if metric.id in evaluation.improvements
-            ]
+            values = (
+                [evaluation.improvements[metric.id].estimate for metric in scored_metrics]
+                if evaluation.feasible
+                and all(metric.id in evaluation.improvements for metric in scored_metrics)
+                else None
+            )
             history.append(
                 {
                     "id": evaluation.candidate_id,
                     "parameters": parameters,
-                    "values": values if len(values) == len(scored_metrics) else None,
+                    "values": values,
                 }
             )
             if evaluation.safety_state == SafetyState.NEEDS_ATTENTION:
@@ -278,6 +314,7 @@ class SystemOptimizationEngine:
         return self._result(
             started,
             baseline,
+            baseline_history,
             diagnostic_reference,
             priorities,
             routed_components,
@@ -285,6 +322,7 @@ class SystemOptimizationEngine:
             stop_reason,
             stop_detail,
             recommended.candidate_id if recommended else None,
+            attempts,
         )
 
     def _search_space(self, components: set[str]) -> dict[str, Any]:
@@ -298,6 +336,8 @@ class SystemOptimizationEngine:
 
     def _evaluate(
         self,
+        round_index: int,
+        attempt_index: int,
         parameters: dict[str, Any],
         baseline_parameters: Mapping[str, Any],
         baseline: MeasurementBatch,
@@ -331,11 +371,14 @@ class SystemOptimizationEngine:
         )
         if batch is None:
             return CandidateEvaluation(
+                round_index=round_index,
+                attempt_index=attempt_index,
                 candidate_id=candidate_id,
                 parameters=parameters,
                 change_count=change_count,
                 safety_state=safety.state,
                 safety_reason=safety.reason,
+                comparison_baseline_digest=baseline.digest,
                 comparable=False,
                 identity_mismatches=["measurement-missing"],
                 gates=[],
@@ -371,12 +414,15 @@ class SystemOptimizationEngine:
         )
         primary = improvements.get(self.policy.primary_metric.id)
         return CandidateEvaluation(
+            round_index=round_index,
+            attempt_index=attempt_index,
             candidate_id=candidate_id,
             parameters=parameters,
             change_count=change_count,
             safety_state=safety.state,
             safety_reason=safety.reason,
             measurement_digest=batch.digest,
+            comparison_baseline_digest=baseline.digest,
             comparable=is_comparable,
             identity_mismatches=mismatches,
             gates=gates,
@@ -437,6 +483,7 @@ class SystemOptimizationEngine:
         self,
         started: float,
         baseline: MeasurementBatch,
+        baseline_history: list[MeasurementBatch],
         reference: MeasurementBatch | None,
         priorities: list[DiagnosticPriority],
         routed: list[str],
@@ -444,6 +491,7 @@ class SystemOptimizationEngine:
         stop_reason: StopReason,
         detail: str,
         recommended: str | None = None,
+        attempts: int = 1,
     ) -> OptimizationRun:
         return OptimizationRun(
             schema_version="looper.system-optimization-run/v1alpha1",
@@ -452,6 +500,7 @@ class SystemOptimizationEngine:
             manifest_digest=self.manifest.digest,
             mode=self.policy.mode,
             baseline=baseline,
+            baseline_history=baseline_history,
             diagnostic_reference=reference,
             diagnostic_priorities=priorities,
             routed_components=routed,
@@ -460,6 +509,7 @@ class SystemOptimizationEngine:
             stop_reason=stop_reason,
             stop_detail=detail,
             elapsed_seconds=time.monotonic() - started,
+            attempt_count=attempts,
         )
 
 

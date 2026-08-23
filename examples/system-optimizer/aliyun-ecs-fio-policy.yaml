@@ -9,6 +9,7 @@ statistics:
   random_seed: 20260823
   baseline_repeats: 5
   candidate_repeats: 5
+  baseline_every_n: 1
 search:
   generator: grid
   random_seed: 20260823

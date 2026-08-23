@@ -33,6 +33,14 @@ def test_policy_has_no_implicit_search_or_statistics_contract() -> None:
         SystemOptimizationPolicy.model_validate(payload)
 
 
+def test_periodic_baseline_interval_must_be_explicit() -> None:
+    payload = build_demo_policy(OptimizationMode.GENERAL).model_dump(mode="python")
+    payload["statistics"].pop("baseline_every_n")
+
+    with pytest.raises(ValidationError, match="baseline_every_n"):
+        SystemOptimizationPolicy.model_validate(payload)
+
+
 def test_identity_and_missing_gate_fail_closed() -> None:
     matches, mismatches = comparable(
         {"target": "a", "phase": "steady"},
