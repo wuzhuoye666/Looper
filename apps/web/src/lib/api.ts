@@ -10,6 +10,10 @@ import type {
 
 export const API_BASE = (import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000/api/v1').replace(/\/$/, '');
 
+export function resolveApiUrl(value = API_BASE, origin = window.location.origin) {
+  return new URL(value, origin);
+}
+
 const OPERATOR_TOKEN_KEY = 'looper.operator-token';
 export const OPERATOR_AUTH_INVALID_EVENT = 'looper:operator-auth-invalid';
 

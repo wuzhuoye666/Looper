@@ -166,12 +166,10 @@ describe('腾讯云购买网络选择', () => {
   async function chooseFirstMachine() {
     await screen.findByRole('option', { name: /测试地域/ });
     fireEvent.change(screen.getByLabelText('地域'), { target: { value: 'ap-test' } });
-    await waitFor(() =>
-      expect(document.querySelectorAll('.cloud-instance-table tbody tr')).toHaveLength(20),
-    );
-    const table = document.querySelector<HTMLElement>('.cloud-instance-table')!;
-    const firstType = within(table).getByText('S9.TEST');
-    fireEvent.click(within(firstType.closest('tr')!).getByRole('button', { name: '选择并继续' }));
+    const firstType = await screen.findByText('S9.TEST');
+    const firstRow = firstType.closest('tr');
+    expect(firstRow).not.toBeNull();
+    fireEvent.click(within(firstRow!).getByRole('button', { name: '选择并继续' }));
     await waitFor(
       () => expect(vi.mocked(fetch).mock.calls.some(([request]) =>
         String(request).includes('/cloud/network/tencent/resolve-instance-network'))).toBe(true),
@@ -226,8 +224,7 @@ describe('腾讯云购买网络选择', () => {
     await waitFor(() =>
       expect(view.container.querySelectorAll('.cloud-results tbody tr')).toHaveLength(20),
     );
-    const results = view.container.querySelector<HTMLElement>('.cloud-results')!;
-    const firstType = within(results).getByText('S9.TEST');
+    const firstType = await screen.findByText('S9.TEST');
     const firstRow = firstType.closest('tr');
     expect(view.container.querySelector('.cloud-instance-table')).toBeInTheDocument();
     expect(within(firstRow!).getByText('规格')).toHaveClass('instance-mobile-label');

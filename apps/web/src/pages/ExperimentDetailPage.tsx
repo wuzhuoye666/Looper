@@ -8,7 +8,7 @@ import { StatusBadge } from '../components/StatusBadge';
 import { EmptyState, ErrorState, LoadingState } from '../components/States';
 import { VariabilityPanel } from '../components/VariabilityPanel';
 import { BenchTrustPanel } from '../components/BenchTrustPanel';
-import { API_BASE, api } from '../lib/api';
+import { API_BASE, api, resolveApiUrl } from '../lib/api';
 import { formatDate, formatNumber, scoreDelta } from '../lib/format';
 import type { AnalysisData, Evaluation, Experiment, MetricDefinition, PostOptimizationStatus, SelectionComparison, SelectionTargetResult } from '../lib/types';
 
@@ -226,7 +226,7 @@ function Evidence({ items }: { items: NonNullable<AnalysisData['evidence']> }) {
 function ArtifactLinks({ items }: { items: Array<{ name: string; url: string }> }) {
   if (!items.length) return <>—</>;
   return <div className="artifact-links">{items.map((item, index) => {
-    const href = item.url.startsWith('http') ? item.url : `${new URL(API_BASE).origin}${item.url}`;
+    const href = item.url.startsWith('http') ? item.url : `${resolveApiUrl(API_BASE).origin}${item.url}`;
     return <a key={`${item.url}-${index}`} href={href} target="_blank" rel="noreferrer" title={item.name}>{item.name}<ExternalLink size={12} /></a>;
   })}</div>;
 }
