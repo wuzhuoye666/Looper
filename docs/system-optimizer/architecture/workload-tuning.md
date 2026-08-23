@@ -229,7 +229,7 @@ VerificationWindow（复验窗口）:
 
 | 设计件 | 现有雏形 | 缺口 |
 |---|---|---|
-| O1 观察窗口 | L4 `BuiltinLinuxGuestCollector` / `ComponentMetricSnapshot` | 窗口编排器、O0 业务指标接入、workload_identity_digest |
+| O1 观察窗口 | ✅ M3-2 完成 2026-08-23：`observation.py`（ObservationWindow + `record_window` 组装 + O0 解析器注册表：stress-ng YAML / fio JSON / iperf3 JSON，**真实 2026-08-23 阿里云会话输出做夹具钉数值**）+ 身份漂移 WorkloadIdentityDrift fail-closed | O1 活体采集（接 GPT 窗口化 builtin）、O2/O3 开窗、sysbench 解析器、window 编排进引擎循环 |
 | 开销 A/B | `build_collection_overhead_evidence`（L4 合同） | 动态相位把它接进观察窗口的 overhead_digest |
 | 假设路由 | S4 `diagnostic_priorities`（静态侧） | ComponentHypothesis 记录、竞争假设登记、L7 第二条目类型（open） |
 | S9 复验生产者 | `PromotionContract`/`evaluate_promotion`（合同齐） | VerificationWindow 执行器 + passed 由重测 S7 产生 |

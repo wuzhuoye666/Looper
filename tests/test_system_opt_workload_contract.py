@@ -42,31 +42,31 @@ def _payload(**overrides) -> dict:
         "load_command": _load_command().model_dump(mode="json"),
         "o0_metrics": [
             {
-                "metric_id": "stress-ng.bogo-ops",
+                "metric_id": "stress-ng.bogo-ops-per-second-usr-sys-time",
                 "unit": "bogo-ops/s",
                 "direction": "maximize",
                 "aggregation": "mean",
-                "source": "stress-ng output",
+                "source": "stress-ng yaml metrics",
             },
             {
-                "metric_id": "stress-ng.failed-ops",
+                "metric_id": "stress-ng.bogo-ops",
                 "unit": "ops",
-                "direction": "minimize",
-                "aggregation": "maximum",
-                "source": "stress-ng output",
+                "direction": "maximize",
+                "aggregation": "mean",
+                "source": "stress-ng yaml metrics",
             },
         ],
         "objective": {
-            "primary_metric_id": "stress-ng.bogo-ops",
+            "primary_metric_id": "stress-ng.bogo-ops-per-second-usr-sys-time",
             "scale": 1.0,
             "mde": 0.01,
         },
         "slos": [],
         "correctness_gates": [
             {
-                "metric_id": "stress-ng.failed-ops",
-                "comparator": "at-most",
-                "bound": 0,
+                "metric_id": "stress-ng.bogo-ops",
+                "comparator": "at-least",
+                "bound": 1,
                 "unit": "ops",
             }
         ],
@@ -74,7 +74,10 @@ def _payload(**overrides) -> dict:
             {
                 "phase_id": "steady",
                 "purpose": "sustained load",
-                "o0_metric_ids": ["stress-ng.bogo-ops", "stress-ng.failed-ops"],
+                "o0_metric_ids": [
+                    "stress-ng.bogo-ops-per-second-usr-sys-time",
+                    "stress-ng.bogo-ops",
+                ],
             }
         ],
         "limitations": "test fixture contract",
@@ -178,5 +181,7 @@ def test_example_contract_is_valid_and_argv_digest_is_bound():
 
     assert contract.workload_id == "stress-ng-cpu-standin-v1"
     assert contract.load_command.argv_digest == load_argv_digest(EXAMPLE_ARGV)
-    assert contract.objective.primary_metric_id == "stress-ng.bogo-ops"
+    assert contract.objective.primary_metric_id == (
+        "stress-ng.bogo-ops-per-second-usr-sys-time"
+    )
     assert contract.phases[0].phase_id == "steady"
