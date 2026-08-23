@@ -105,6 +105,84 @@ class OptimizationRun(StrictModel):
         return canonical_digest(self.model_dump(mode="json", exclude_none=False))
 
 
+OPTIMIZATION_RUN_SCHEMA_V1 = "looper.system-optimization-run/v1alpha1"
+OPTIMIZATION_RUN_SCHEMA_V2 = "looper.system-optimization-run/v1alpha2"
+
+
+class LegacyCandidateEvaluation(StrictModel):
+    """Pre-multi-round candidate shape (before commit 2cd521e).
+
+    Loads committed historical evidence as-is. Round/attempt tracking and the
+    per-candidate comparison baseline did not exist in that era; their absence
+    is the honest record and is never back-filled (SO-D021, D0-09 repair).
+    """
+
+    candidate_id: str
+    parameters: dict[str, Any]
+    change_count: int
+    safety_state: SafetyState
+    safety_reason: str | None = None
+    measurement_digest: str | None = None
+    comparable: bool
+    identity_mismatches: list[str]
+    gates: list[GateEvidence]
+    improvements: dict[str, ImprovementEvidence]
+    feasible: bool
+    accepted: bool
+    pareto_rank: int | None = None
+
+
+class LegacyOptimizationRun(StrictModel):
+    """Pre-multi-round run shape (before commit 2cd521e).
+
+    Kept only for replaying committed evidence; new runs emit
+    OPTIMIZATION_RUN_SCHEMA_V2.
+    """
+
+    schema_version: str
+    policy_id: str
+    policy_digest: str
+    manifest_digest: str
+    mode: OptimizationMode
+    baseline: MeasurementBatch
+    diagnostic_reference: MeasurementBatch | None = None
+    diagnostic_priorities: list[DiagnosticPriority]
+    routed_components: list[str]
+    candidates: list[LegacyCandidateEvaluation]
+    recommended_candidate_id: str | None = None
+    stop_reason: StopReason
+    stop_detail: str
+    elapsed_seconds: float = Field(ge=0)
+
+    @property
+    def digest(self) -> str:
+        return canonical_digest(self.model_dump(mode="json", exclude_none=False))
+
+
+def load_optimization_run(
+    payload: Mapping[str, Any],
+) -> OptimizationRun | LegacyOptimizationRun:
+    """Load one optimization-run payload by schema version (SO-D021).
+
+    v1alpha1 has two historical shapes: the pre-multi-round shape (before
+    2cd521e) and the multi-round shape emitted afterwards under the same
+    version string. Dispatch on the field set introduced by 2cd521e and never
+    fabricate the missing values in legacy evidence.
+    """
+
+    version = payload.get("schema_version")
+    if version == OPTIMIZATION_RUN_SCHEMA_V2:
+        return OptimizationRun.model_validate(payload)
+    if version == OPTIMIZATION_RUN_SCHEMA_V1:
+        if "baseline_history" in payload and "attempt_count" in payload:
+            return OptimizationRun.model_validate(payload)
+        return LegacyOptimizationRun.model_validate(payload)
+    raise ValueError(
+        f"unsupported optimization-run schema_version: {version!r}; expected "
+        f"{OPTIMIZATION_RUN_SCHEMA_V1!r} or {OPTIMIZATION_RUN_SCHEMA_V2!r}"
+    )
+
+
 class SystemOptimizationEngine:
     def __init__(
         self,
@@ -519,7 +597,7 @@ class SystemOptimizationEngine:
         attempts: int = 1,
     ) -> OptimizationRun:
         return OptimizationRun(
-            schema_version="looper.system-optimization-run/v1alpha1",
+            schema_version=OPTIMIZATION_RUN_SCHEMA_V2,
             policy_id=self.policy.id,
             policy_digest=canonical_digest(self.policy.model_dump(mode="json")),
             manifest_digest=self.manifest.digest,
@@ -540,9 +618,14 @@ class SystemOptimizationEngine:
 
 
 __all__ = [
+    "OPTIMIZATION_RUN_SCHEMA_V1",
+    "OPTIMIZATION_RUN_SCHEMA_V2",
     "CandidateEvaluation",
+    "LegacyCandidateEvaluation",
+    "LegacyOptimizationRun",
     "MeasurementAdapter",
     "OptimizationRun",
     "StopReason",
     "SystemOptimizationEngine",
+    "load_optimization_run",
 ]

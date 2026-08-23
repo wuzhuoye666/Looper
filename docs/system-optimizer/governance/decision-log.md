@@ -27,6 +27,7 @@
 | SO-D018 | SO-D017 预筛作用域澄清（2026-08-23 外部只读审查 C3 发现）：incumbent 跟踪必须按「组件 × 主指标」隔离——一个 IncumbentTracker 实例只服务同一组件的同一主指标，跨组件/跨指标的效用不得进入同一 incumbent 比较（S0 可比性）。原实现使用 loop 级单例 tracker，cpu 与 memory 的改善量混入同一 best，语义不成立，已修复为每组件各持一个 tracker | "候选轮整体性能指标"指该轮所测组件的主指标整体表现，非跨组件聚合；跨组件"轮级整体效用"聚合方案（如 S8 向量聚合）属 open decision，不得在预筛层默认 | confirmed 2026-08-23（修复随引擎回归测试落地） |
 | SO-D019 | PKG-G 动态相位设计方向确认（用户 2026-08-23"我认为可以"）：① D3 观察分层 O0-O3 定名（消除与九层架构 L0-L8 的撞名）；② D2 两条硬规则——一个症状至少两个竞争假设才允许干预、confirmed 的唯一路径是干预实验的业务指标裁决（O2 微证最多推进到 probing）；③ D5 重激活采 A+B 组合（身份漂移 + SLO 持续违反，C 分布漂移列 M6+）。重激活资格 ≠ 自动重启 | L7 第二条目类型（假设级负缓存）的 schema 并存细节留待实现提案另行确认；全部数值参数仍为待校准占位，不得进代码默认 | confirmed direction 2026-08-23（设计稿 workload-tuning.md D1-D6，实现未开始） |
 | SO-D020 | 动态相位负载供给边界（用户定位 2026-08-23）：M3 workload 用 stress-ng/sysbench/fio/iperf3 等基础套件作**业务负载替身**，但由测试/操作侧**外部启动**（"测试给的压力"）；优化器在动态相位**永不主动调用压力工具**——主动造载是静态相位 L3 的专属职责。理由：跨窗负载同身份可比（S0 动态版）、防自证（引擎只能动配置不能动负载）、生产语义对齐（业务方拥有 workload）、观察者效应隔离、两侧台账分账 | 合同落点：workload 合同新增 `load_provider=external-test`（唯一枚举）与 `load_command_identity`（测试侧声明、观察窗核对，不授予引擎执行权）；O0=解析外部负载自身产物；S9 复验窗由测试侧重供同身份负载，无法重供则晋升 fail-closed；动态引擎循环无任何 L3 调用路径 | confirmed 2026-08-23（详见 workload-tuning.md D0） |
+| SO-D021 | 历史证据兼容修复（GPT PKG-B 加载测试发现，2026-08-23）：2cd521e 在未升版本串的情况下给 OptimizationRun/CandidateEvaluation 加了五个必填字段（baseline_history、attempt_count、round_index、attempt_index、comparison_baseline_digest），导致多轮控制器之前的历史证据（aliyun-ecs-fio-20260823）无法加载——违反 D0-09。修复：新增 LegacyOptimizationRun/LegacyCandidateEvaluation（旧形状镜像，按原样加载、不回填不造数）+ `load_optimization_run()` 按 schema_version 分派（v1alpha1 有两个历史形态，按 2cd521e 引入的字段集区分）；**今后新运行发射 v1alpha2**。规则重申：任何证据模型加必填字段必须同时升 schema 版本串并提供分派加载路径 | 影响面：仅 1 份工件（fio 首次会话）受影响，其余 4 份 v1alpha1 工件含新字段走现行模型；遗留工件 digest 钉死 sha256:8bcc…作防篡改锚 | confirmed 2026-08-23（随分派加载器与 4 项测试落地） |
 
 ## 仍有效但需在新架构中复核的历史原则
 
@@ -34,7 +35,7 @@
 |---|---|---|
 | D0-05 | 多接口 apply 是补偿事务，不宣称内核级原子 | 原则保留；失败项补偿边界必须修复实测 |
 | D0-06 | 不能凭当前值不同于默认值推断管理员所有权 | 原则保留；完整所有权状态机待设计 |
-| D0-09 | 新增证据字段不能静默改变 legacy digest | 原则保留；新证据 schema 另行版本化 |
+| D0-09 | 新增证据字段不能静默改变 legacy digest | 原则保留；2026-08-23 发生一次违约（2cd521e 未升版本串加必填字段，破坏历史工件加载），已由 SO-D021 双 schema 分派修复并立规：加必填字段必须同时升版本串 |
 | D0-10 | simulated 是唯一默认启用后端，真实后端显式授权 | 原则保留；真实能力仍 unverified |
 | D0-12 | 共享工作树采用独立 basetemp 和严格时间分片 | 当前协作治理继续有效 |
 
