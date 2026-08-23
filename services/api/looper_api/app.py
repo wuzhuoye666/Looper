@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hmac
 import io
+import ipaddress
 import json
 import logging
 import zipfile
@@ -45,7 +46,7 @@ from looper_core.contracts import (
     TargetBindingSpec,
 )
 from looper_core.state import InvalidTransition
-from pydantic import ValidationError
+from pydantic import BaseModel, SecretStr, ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -107,6 +108,12 @@ from looper_api.cloud_service import (
 )
 from looper_api.config import Settings, get_settings
 from looper_api.database import SessionLocal, get_session, init_database
+from looper_api.deepseek_credentials import (
+    DeepSeekCredentialError,
+    EncryptedDeepSeekCredentialStore,
+    effective_deepseek_key,
+    effective_deepseek_settings,
+)
 from looper_api.evidence import build_evidence_bundle, verify_evidence_bundle
 from looper_api.external_targets import (
     ConnectExternalTargetRequest,
@@ -124,6 +131,7 @@ from looper_api.models import (
     BenchmarkRegistrationRecord,
     EventRecord,
     ExperimentRecord,
+    SourceDiscoveryRecord,
     TargetRecord,
 )
 from looper_api.post_optimization import post_optimization_view, start_post_optimization
@@ -157,6 +165,13 @@ from looper_api.serialization import (
     experiment_view,
     target_view,
 )
+from looper_api.source_discovery import (
+    SourceDiscoveryError,
+    create_discovery,
+    discovery_view,
+    list_discoveries,
+    recover_interrupted_discoveries,
+)
 from looper_api.variability_service import build_variability_report
 from looper_api.worker_protocol import (
     ArtifactMetadata,
@@ -185,6 +200,10 @@ ProviderRegistryDependency = Annotated[CloudProviderRegistry, Depends(get_provid
 WorkerToken = Annotated[str, Header(alias="X-Worker-Token")]
 operator_bearer = HTTPBearer(auto_error=False)
 OperatorCredentials = Annotated[HTTPAuthorizationCredentials | None, Depends(operator_bearer)]
+
+
+class DeepSeekCredentialUpdate(BaseModel):
+    apiKey: SecretStr
 
 
 def _operator_authenticated(
@@ -220,6 +239,28 @@ def require_operator(
 
 
 OperatorDependency = Annotated[str, Depends(require_operator)]
+
+
+def require_configured_operator(
+    credentials: OperatorCredentials,
+    app_settings: SettingsDependency,
+) -> str:
+    if not operator_token_ready(app_settings):
+        raise CloudWorkflowError(
+            "operator authentication must be configured before managing provider credentials",
+            status_code=503,
+            code="operator_auth_not_configured",
+        )
+    if not _operator_authenticated(credentials, app_settings):
+        raise CloudWorkflowError(
+            "valid operator bearer token required",
+            status_code=401,
+            code="operator_auth_required",
+        )
+    return "operator"
+
+
+ConfiguredOperatorDependency = Annotated[str, Depends(require_configured_operator)]
 logger = logging.getLogger(__name__)
 
 
@@ -262,6 +303,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     init_database()
     with SessionLocal() as session:
         recover_interrupted_orders(session)
+        recover_interrupted_discoveries(session)
         seed_system(session)
         session.commit()
     sweeper = asyncio.create_task(_lease_sweeper())
@@ -318,6 +360,8 @@ async def origin_guard(request: Request, call_next: Any) -> Any:
 @app.exception_handler(CloudWorkflowError)
 @app.exception_handler(RegistrationError)
 @app.exception_handler(ExternalTargetError)
+@app.exception_handler(SourceDiscoveryError)
+@app.exception_handler(DeepSeekCredentialError)
 @app.exception_handler(RemoteCredentialError)
 async def domain_error(_request: Request, error: Exception) -> JSONResponse:
     status_code = getattr(error, "status_code", 409)
@@ -423,21 +467,186 @@ def cloud_purchase_readiness(
 def operator_session_status(
     credentials: OperatorCredentials,
     app_settings: SettingsDependency,
+    *,
+    local_bootstrap_available: bool = False,
 ) -> dict[str, bool]:
     return {
         "required": operator_auth_required(app_settings),
         "configured": operator_token_ready(app_settings),
         "authenticated": _operator_authenticated(credentials, app_settings),
         "operatorGateReady": operator_token_ready(app_settings),
+        "localBootstrapAvailable": local_bootstrap_available,
     }
+
+
+def local_operator_bootstrap_available(request: Request, app_settings: Settings) -> bool:
+    if app_settings.host.strip().casefold() not in {"127.0.0.1", "::1", "localhost"}:
+        return False
+    if request.client is None:
+        return False
+    try:
+        return ipaddress.ip_address(request.client.host).is_loopback
+    except ValueError:
+        return request.client.host.casefold() == "localhost"
 
 
 @app.get("/api/v1/operator/session")
 def operator_session(
+    request: Request,
     credentials: OperatorCredentials,
     app_settings: SettingsDependency,
 ) -> dict[str, bool]:
-    return operator_session_status(credentials, app_settings)
+    return operator_session_status(
+        credentials,
+        app_settings,
+        local_bootstrap_available=local_operator_bootstrap_available(request, app_settings),
+    )
+
+
+@app.post("/api/v1/operator/local-session")
+def create_local_operator_session(
+    request: Request,
+    app_settings: SettingsDependency,
+) -> dict[str, str]:
+    if not local_operator_bootstrap_available(request, app_settings):
+        raise CloudWorkflowError(
+            "local operator bootstrap is available only on a loopback-bound control plane",
+            status_code=403,
+            code="local_operator_bootstrap_forbidden",
+        )
+    if not operator_token_ready(app_settings):
+        raise CloudWorkflowError(
+            "operator authentication is not configured",
+            status_code=503,
+            code="operator_auth_not_configured",
+        )
+    return {"token": app_settings.operator_token}
+
+
+@app.get("/api/v1/source-discoveries/readiness")
+def source_discovery_readiness(app_settings: SettingsDependency) -> dict[str, Any]:
+    api_key, _source = effective_deepseek_key(app_settings)
+    configured = bool(api_key)
+    return {
+        "configured": configured,
+        "provider": "deepseek",
+        "model": app_settings.deepseek_model,
+        "baseUrl": str(app_settings.deepseek_base_url).rstrip("/"),
+        "maxArchiveBytes": app_settings.source_discovery_max_archive_bytes,
+        "acceptedMediaTypes": ["application/zip"],
+        "requiredEnvironment": [] if configured else ["LOOPER_DEEPSEEK_API_KEY"],
+        "dataDisclosure": (
+            "Readable, non-sensitive source snippets selected by the harness are sent "
+            "to the configured DeepSeek endpoint."
+        ),
+    }
+
+
+def deepseek_provider_config_view(app_settings: Settings) -> dict[str, Any]:
+    api_key, source = effective_deepseek_key(app_settings)
+    return {
+        "configured": bool(api_key),
+        "source": source,
+        "maskedKey": f"••••••••{api_key[-4:]}" if api_key else None,
+        "provider": "deepseek",
+        "model": app_settings.deepseek_model,
+        "baseUrl": str(app_settings.deepseek_base_url).rstrip("/"),
+        "encryptedAtRest": source == "stored",
+    }
+
+
+@app.get("/api/v1/source-discoveries/provider-config")
+def deepseek_provider_config(
+    app_settings: SettingsDependency,
+    _operator: ConfiguredOperatorDependency,
+) -> dict[str, Any]:
+    return deepseek_provider_config_view(app_settings)
+
+
+@app.put("/api/v1/source-discoveries/provider-config")
+def update_deepseek_provider_config(
+    payload: DeepSeekCredentialUpdate,
+    app_settings: SettingsDependency,
+    _operator: ConfiguredOperatorDependency,
+) -> dict[str, Any]:
+    EncryptedDeepSeekCredentialStore(app_settings).save(payload.apiKey.get_secret_value())
+    return deepseek_provider_config_view(app_settings)
+
+
+@app.delete("/api/v1/source-discoveries/provider-config")
+def delete_deepseek_provider_config(
+    app_settings: SettingsDependency,
+    _operator: ConfiguredOperatorDependency,
+) -> dict[str, Any]:
+    EncryptedDeepSeekCredentialStore(app_settings).delete()
+    return deepseek_provider_config_view(app_settings)
+
+
+@app.get("/api/v1/source-discoveries")
+def source_discovery_history(
+    session: SessionDependency,
+    _operator: OperatorDependency,
+    limit: int = Query(default=30, ge=1, le=100),
+) -> dict[str, Any]:
+    items = [discovery_view(record) for record in list_discoveries(session, limit)]
+    return {"items": items, "total": len(items)}
+
+
+@app.get("/api/v1/source-discoveries/{discovery_id}")
+def source_discovery_detail(
+    discovery_id: str,
+    session: SessionDependency,
+    _operator: OperatorDependency,
+) -> dict[str, Any]:
+    record = session.get(SourceDiscoveryRecord, discovery_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="source discovery not found")
+    return discovery_view(record)
+
+
+@app.post("/api/v1/source-discoveries", status_code=201)
+async def discover_source_interfaces(
+    session: SessionDependency,
+    app_settings: SettingsDependency,
+    _operator: OperatorDependency,
+    archive: UploadFile = File(...),
+) -> dict[str, Any]:
+    content_type = (archive.content_type or "").casefold()
+    if not archive.filename or not archive.filename.casefold().endswith(".zip"):
+        raise SourceDiscoveryError(
+            "source archive filename must end with .zip", code="invalid_archive_type"
+        )
+    if content_type and content_type not in {
+        "application/zip",
+        "application/x-zip-compressed",
+        "application/octet-stream",
+    }:
+        raise SourceDiscoveryError(
+            "only ZIP source archives are accepted", code="invalid_archive_type"
+        )
+    payload = await archive.read(app_settings.source_discovery_max_archive_bytes + 1)
+    record = await create_discovery(
+        session, archive.filename, payload, effective_deepseek_settings(app_settings)
+    )
+    return discovery_view(record)
+
+
+@app.get("/api/v1/source-discoveries/{discovery_id}/contract")
+def export_source_discovery_contract(
+    discovery_id: str,
+    session: SessionDependency,
+    _operator: OperatorDependency,
+) -> JSONResponse:
+    record = session.get(SourceDiscoveryRecord, discovery_id)
+    if record is None or record.contract_json is None:
+        raise HTTPException(status_code=404, detail="completed interface contract not found")
+    return JSONResponse(
+        content=record.contract_json,
+        media_type="application/json",
+        headers={
+            "Content-Disposition": f'attachment; filename="{discovery_id}.interface-contract.json"'
+        },
+    )
 
 
 @app.get("/api/v1/cloud/auth/status")

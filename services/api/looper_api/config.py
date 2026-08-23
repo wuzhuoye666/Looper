@@ -47,6 +47,14 @@ class Settings(BaseSettings):
     )
     operator_token: str = Field(default="", repr=False)
     max_live_hourly_amount: Decimal = Field(default=Decimal("10"), gt=0)
+    deepseek_base_url: AnyHttpUrl = "https://api.deepseek.com"
+    deepseek_api_key: str = Field(default="", repr=False)
+    deepseek_model: str = "deepseek-v4-flash"
+    source_discovery_max_archive_bytes: int = Field(default=20 * 1024 * 1024, ge=1024)
+    source_discovery_max_expanded_bytes: int = Field(default=100 * 1024 * 1024, ge=1024)
+    source_discovery_max_files: int = Field(default=10_000, ge=1, le=100_000)
+    source_discovery_max_tool_rounds: int = Field(default=32, ge=1, le=128)
+    source_discovery_max_output_tokens: int = Field(default=16384, ge=1024, le=32768)
     alibaba_default_region: str = "cn-hangzhou"
 
     @field_validator("remote_worker_api_url", mode="before")
@@ -96,6 +104,14 @@ class Settings(BaseSettings):
     @property
     def remote_credential_store_path(self) -> Path:
         return self.data_dir / "remote-worker-credentials.json"
+
+    @property
+    def deepseek_credential_key_path(self) -> Path:
+        return self.data_dir / "deepseek-credential.key"
+
+    @property
+    def deepseek_credential_store_path(self) -> Path:
+        return self.data_dir / "deepseek-credential.enc"
 
     def ensure_directories(self) -> None:
         self.data_dir.mkdir(parents=True, exist_ok=True)

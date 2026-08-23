@@ -43,6 +43,40 @@ def test_live_purchase_requires_distinct_operator_authentication(tmp_path) -> No
     assert require_operator(credentials("o" * 48), app_settings) == "operator"
 
 
+def test_local_operator_session_is_loopback_only(tmp_path) -> None:
+    token = "o" * 48
+
+    async def exercise(settings: Settings, client_host: str):
+        app.dependency_overrides[get_settings] = lambda: settings
+        async with AsyncClient(
+            transport=ASGITransport(app=app, client=(client_host, 43210)),
+            base_url="http://testserver",
+        ) as client:
+            status = await client.get("/api/v1/operator/session")
+            issued = await client.post("/api/v1/operator/local-session")
+            return status, issued
+
+    try:
+        local_status, local_issued = asyncio.run(
+            exercise(
+                Settings(data_dir=tmp_path, host="127.0.0.1", operator_token=token),
+                "127.0.0.1",
+            )
+        )
+        assert local_status.json()["localBootstrapAvailable"] is True
+        assert local_issued.status_code == 200
+        assert local_issued.json() == {"token": token}
+
+        remote_status, remote_issued = asyncio.run(
+            exercise(Settings(data_dir=tmp_path, host="0.0.0.0", operator_token=token), "127.0.0.1")
+        )
+        assert remote_status.json()["localBootstrapAvailable"] is False
+        assert remote_issued.status_code == 403
+        assert remote_issued.json()["code"] == "local_operator_bootstrap_forbidden"
+    finally:
+        app.dependency_overrides.clear()
+
+
 def test_purchase_readiness_explains_and_clears_tencent_blockers(monkeypatch, tmp_path) -> None:
     monkeypatch.delenv("TENCENTCLOUD_SECRET_ID", raising=False)
     monkeypatch.delenv("TENCENTCLOUD_SECRET_KEY", raising=False)

@@ -4,7 +4,8 @@ import type {
   CloudKeyPair, CloudQuote, CloudReconciliationContext, CloudRegion, CloudSecurityGroup, CloudSubnet, CloudVpc, CloudZone,
   InstanceNetworkResolution, InstanceNetworkResolveRequest,
   DashboardData, Experiment, GlobalSearchResult, ListResponse, PostOptimizationStatus, SelectionAdvisorRequest,
-  SelectionAdvisorResponse, Target, TargetDestroyPreview, TargetDestroyResult, VariabilityData,
+  SelectionAdvisorResponse, SourceDiscovery, SourceDiscoveryProviderConfig, SourceDiscoveryReadiness,
+  Target, TargetDestroyPreview, TargetDestroyResult, VariabilityData,
 } from './types';
 
 export const API_BASE = (import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000/api/v1').replace(/\/$/, '');
@@ -73,6 +74,19 @@ function query(values: Record<string, string | number | undefined>) {
 }
 
 export const api = {
+  sourceDiscoveryReadiness: () => request<SourceDiscoveryReadiness>('/source-discoveries/readiness'),
+  sourceDiscoveryProviderConfig: () => request<SourceDiscoveryProviderConfig>('/source-discoveries/provider-config'),
+  updateSourceDiscoveryProviderConfig: (apiKey: string) => request<SourceDiscoveryProviderConfig>(
+    '/source-discoveries/provider-config', { method: 'PUT', body: JSON.stringify({ apiKey }) },
+  ),
+  deleteSourceDiscoveryProviderConfig: () => request<SourceDiscoveryProviderConfig>(
+    '/source-discoveries/provider-config', { method: 'DELETE' },
+  ),
+  sourceDiscoveries: async () => list(await request<SourceDiscovery[] | ListResponse<SourceDiscovery>>('/source-discoveries')),
+  discoverSource: (archive: File) => {
+    const body = new FormData(); body.append('archive', archive);
+    return request<SourceDiscovery>('/source-discoveries', { method: 'POST', body });
+  },
   dashboard: () => request<DashboardData>('/dashboard'),
   experiments: async (query = '') => list(await request<Experiment[] | ListResponse<Experiment> | { data?: Experiment[] }>(`/experiments${query}`)),
   experiment: (id: string) => request<Experiment>(`/experiments/${encodeURIComponent(id)}`),
@@ -142,7 +156,8 @@ export const api = {
   createExperiment: (payload: Record<string, unknown>) => request<Experiment>('/experiments', { method: 'POST', body: JSON.stringify(payload) }),
   experimentAction: (id: string, action: 'start' | 'pause' | 'resume' | 'cancel') => request<Experiment>(`/experiments/${encodeURIComponent(id)}/${action}`, { method: 'POST' }),
   retryAttempt: (id: string) => request<unknown>(`/attempts/${encodeURIComponent(id)}/retry`, { method: 'POST' }),
-  operatorSession: () => request<{ required: boolean; configured: boolean; authenticated: boolean; operatorGateReady: boolean }>('/operator/session'),
+  operatorSession: () => request<{ required: boolean; configured: boolean; authenticated: boolean; operatorGateReady: boolean; localBootstrapAvailable: boolean }>('/operator/session'),
+  localOperatorSession: () => request<{ token: string }>('/operator/local-session', { method: 'POST' }),
   cloudAuthStatus: () => api.operatorSession(),
   purchaseReadiness: () => request<CloudPurchaseReadiness>('/cloud/purchase-readiness'),
   providers: async () => list(await request<CloudProviderInfo[] | ListResponse<CloudProviderInfo>>('/cloud/providers')),

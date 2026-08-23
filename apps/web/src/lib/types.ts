@@ -1,5 +1,12 @@
 export type ExperimentStatus = 'draft' | 'queued' | 'running' | 'paused' | 'completed' | 'failed' | 'cancelled';
 
+export interface SourceDiscoveryReadiness { configured: boolean; provider: string; model: string; baseUrl: string; maxArchiveBytes: number; acceptedMediaTypes: string[]; requiredEnvironment: string[]; dataDisclosure: string }
+export interface SourceDiscoveryProviderConfig { configured: boolean; source: 'stored' | 'environment' | null; maskedKey: string | null; provider: string; model: string; baseUrl: string; encryptedAtRest: boolean }
+export interface InterfaceEvidence { file: string; startLine: number; endLine: number; excerptDigest: string }
+export interface DiscoveredInterface { id: string; protocol: string; method: string; path: string; summary: string; handler: { symbol?: string | null }; parameters: Array<{ name: string; in: 'path' | 'query' | 'header' | 'cookie' | 'body' | 'form' | 'unknown'; required: boolean; schema: Record<string, unknown> }>; requestBody?: { required: boolean; contentTypes: string[]; schema: Record<string, unknown> } | null; responses: Array<{ statusCode: string; contentTypes: string[]; schema: Record<string, unknown> }>; authentication: string[]; sideEffect: string; confidence: number; evidence: InterfaceEvidence[]; unresolved: string[] }
+export interface InterfaceContract { apiVersion: 'looper.dev/interface-contract/v1'; kind: 'InterfaceContract'; metadata: { provider: string; model: string; harnessVersion: string; sourceDigest: string }; spec: { interfaces: DiscoveredInterface[]; unresolved: string[] } }
+export interface SourceDiscovery { id: string; archiveName: string; sourceDigest: string; status: 'running' | 'completed' | 'failed'; provider: string; model: string; fileManifest: Array<{ path: string; bytes: number; sha256: string }>; excludedFiles: Array<{ path: string; reason: string }>; contract?: InterfaceContract | null; trace: Array<Record<string, unknown>>; error?: { code: string; message: string } | null; createdAt: string; completedAt?: string | null }
+
 export interface Artifact { name: string; url: string; type?: string }
 export interface Metric { name: string; value: number; unit?: string; baseline?: number; direction?: 'min' | 'max' }
 export interface Evaluation { id: string; attemptId?: string; candidate: string; status: ExperimentStatus; phase?: string; phaseDetail?: string; score?: number; duration?: number; cost?: number; createdAt?: string; metrics?: Metric[]; artifacts?: Artifact[]; error?: string }

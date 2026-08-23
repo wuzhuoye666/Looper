@@ -55,9 +55,7 @@ class BenchmarkRecord(Base):
 
 class BenchmarkRegistrationRecord(Base):
     __tablename__ = "benchmark_registrations"
-    __table_args__ = (
-        Index("ix_benchmark_registration_status_updated", "status", "updated_at"),
-    )
+    __table_args__ = (Index("ix_benchmark_registration_status_updated", "status", "updated_at"),)
 
     id: Mapped[str] = mapped_column(String(80), primary_key=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False)
@@ -90,9 +88,7 @@ class TargetRecord(Base):
     fingerprint_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
     snapshot_digest: Mapped[str] = mapped_column(String(71), nullable=False)
     runnable: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    lifecycle_status: Mapped[str] = mapped_column(
-        String(24), default="active", nullable=False
-    )
+    lifecycle_status: Mapped[str] = mapped_column(String(24), default="active", nullable=False)
     last_inventory_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     inventory_missing_since: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     inventory_miss_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
@@ -423,3 +419,23 @@ class WorkerRecord(Base):
     max_concurrency: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     registered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     last_heartbeat_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class SourceDiscoveryRecord(Base):
+    __tablename__ = "source_discoveries"
+    __table_args__ = (Index("ix_source_discovery_created", "created_at"),)
+
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    archive_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    source_digest: Mapped[str] = mapped_column(String(71), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(24), nullable=False)
+    provider: Mapped[str] = mapped_column(String(40), nullable=False)
+    model: Mapped[str] = mapped_column(String(120), nullable=False)
+    file_manifest_json: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=False)
+    excluded_files_json: Mapped[list[dict[str, str]]] = mapped_column(JSON, nullable=False)
+    contract_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    trace_json: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=False)
+    error_code: Mapped[str | None] = mapped_column(String(80))
+    error_message: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

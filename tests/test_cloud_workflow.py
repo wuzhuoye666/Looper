@@ -403,6 +403,94 @@ def test_full_catalog_paginates_searches_and_naturally_sorts_from_one_snapshot(
     assert fake.catalog_calls == 2
 
 
+def test_catalog_orders_instance_sizes_and_prefers_modern_ubuntu_images(
+    db_session, tmp_path
+) -> None:
+    fake = FakeProvider()
+    fake.instance_items = [
+        InstanceTypeInfo(
+            provider=ProviderId.TENCENT,
+            region="ap-test",
+            id=instance_id,
+            family="S9",
+            cpu=cpu,
+            memoryGib=memory,
+            available=available,
+            attributes=attributes,
+        )
+        for instance_id, cpu, memory, available, attributes in [
+            ("S9.4C16G", 4, 16, True, {}),
+            ("S9.2C8G", 2, 8, True, {}),
+            ("S9.2C4G.UNKNOWN", 2, 4, None, {}),
+            ("S9.2C4G.UNAVAILABLE", 2, 4, False, {}),
+            (
+                "S9.2C4G.A-INCOMPATIBLE",
+                2,
+                4,
+                True,
+                {"purchaseCompatible": False},
+            ),
+            ("S9.2C4G.Z-COMPATIBLE", 2, 4, True, {}),
+            ("S9.1C1G.UNAVAILABLE", 1, 1, False, {}),
+            ("S9.8C8G", 8, 8, True, {}),
+        ]
+    ]
+    fake.image_items = [
+        ImageInfo(
+            provider=ProviderId.TENCENT,
+            region="ap-test",
+            id=image_id,
+            name=name,
+            platform=platform,
+            available=available,
+        )
+        for image_id, name, platform, available in [
+            ("img-windows", "Windows Server 2022", "Windows", True),
+            ("img-linux", "TencentOS Server 4", "Linux", True),
+            ("img-ubuntu-2204", "ubuntu_22_04_x64_20G_alibase.vhd", "Ubuntu", True),
+            ("img-ubuntu-2404", "ubuntu_24_04_x64_20G_alibase.vhd", "Ubuntu", True),
+            ("img-ubuntu-unavailable", "Ubuntu Server 24.04 unavailable", "Ubuntu", False),
+        ]
+    ]
+    reg = registry(fake)
+    app_settings = settings(tmp_path)
+
+    instances = catalog_search(
+        db_session,
+        app_settings,
+        reg,
+        ProviderId.TENCENT,
+        "instance-type",
+        CatalogFilters(region="ap-test"),
+    )
+    images = catalog_search(
+        db_session,
+        app_settings,
+        reg,
+        ProviderId.TENCENT,
+        "image",
+        CatalogFilters(region="ap-test"),
+    )
+
+    assert [item["id"] for item in instances.items] == [
+        "S9.2C4G.Z-COMPATIBLE",
+        "S9.2C8G",
+        "S9.4C16G",
+        "S9.8C8G",
+        "S9.2C4G.A-INCOMPATIBLE",
+        "S9.1C1G.UNAVAILABLE",
+        "S9.2C4G.UNAVAILABLE",
+        "S9.2C4G.UNKNOWN",
+    ]
+    assert [item["id"] for item in images.items] == [
+        "img-ubuntu-2404",
+        "img-ubuntu-2204",
+        "img-linux",
+        "img-windows",
+        "img-ubuntu-unavailable",
+    ]
+
+
 @pytest.mark.parametrize(
     ("provider_id", "expected"),
     [
@@ -416,15 +504,15 @@ def test_full_catalog_paginates_searches_and_naturally_sorts_from_one_snapshot(
         ),
         (
             ProviderId.VOLCENGINE,
-            ["C6.0XLARGE", "C6.1XLARGE", "C6.2XLARGE", "C6.3XLARGE", "C6.13XLARGE"],
+            ["C6.2XLARGE", "C6.13XLARGE", "C6.1XLARGE", "C6.3XLARGE", "C6.0XLARGE"],
         ),
         (
             ProviderId.BAIDU,
-            ["C6.0XLARGE", "C6.1XLARGE", "C6.2XLARGE", "C6.3XLARGE", "C6.13XLARGE"],
+            ["C6.2XLARGE", "C6.13XLARGE", "C6.1XLARGE", "C6.3XLARGE", "C6.0XLARGE"],
         ),
     ],
 )
-def test_instance_catalog_inventory_grouping_only_applies_to_tencent_and_alibaba(
+def test_instance_catalog_groups_available_before_unavailable_and_unknown(
     db_session,
     tmp_path,
     provider_id: ProviderId,
