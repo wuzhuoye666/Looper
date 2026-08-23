@@ -353,6 +353,46 @@ class TestPreScreenWiring:
         record = result.rounds[0]
         assert record.incumbent_utility_after is not None
 
+    def test_incumbent_pre_screen_is_isolated_per_component(self):
+        # C3 regression (SO-D018): a cpu incumbent must never screen out a
+        # memory candidate. Each component's first observation is always
+        # FIRST_OBSERVATION inside its own tracker, whatever the other
+        # component's incumbent utility is.
+        manifest = build_demo_manifest()
+        initial = {item.id: item.default for item in manifest.items}
+        backend = SimulatedBackend(initial, target_id="prescreen-isolated-test")
+        optimizers, manifest = _optimizers(["cpu", "memory"], backend)
+        result = run_engine_loop(
+            optimizers,
+            baseline_parameters=_baseline_parameters(manifest),
+            measures={
+                "cpu": SyntheticMeasurementAdapter(backend, mode=OptimizationMode.GENERAL),
+                "memory": SyntheticMeasurementAdapter(backend, mode=OptimizationMode.GENERAL),
+            },
+            negative_cache=NegativeCache(),
+            config=EngineLoopConfig(
+                environment_digest=ENV,
+                formula_versions=FORMULAS,
+                pressure_protocol_digests={"cpu": FIXED_PROTOCOL, "memory": FIXED_PROTOCOL},
+                max_rounds=3,
+                max_pool_size=64,
+                pre_screen_tolerance=0.0,
+            ),
+            fencing_token=3,
+        )
+        assert result.stop_reason is EngineStopReason.COMPLETED
+        records = {record.component: record for record in result.rounds}
+        assert set(records) == {"cpu", "memory"}
+        for component, record in records.items():
+            first_candidate_id = record.verdicts[0].candidate_id
+            assert first_candidate_id not in record.early_screened_candidate_ids, (
+                f"component {component} screened its first observation against "
+                "another component's incumbent; trackers must be isolated (SO-D018)"
+            )
+            assert record.incumbent_utility_after is not None, (
+                f"component {component} must record its own incumbent"
+            )
+
 
 DIGEST = "sha256:" + "4" * 64
 

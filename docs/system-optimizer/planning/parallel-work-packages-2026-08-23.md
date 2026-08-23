@@ -118,6 +118,54 @@
 - 内容：S3 真实组件路由（症状→多组件假设）、L0–L3 观测分层与开销 A/B、
   结束门禁参数化合同、重激活判据提案。只出设计，不写实现。
 
+## PKG-H：外部只读审查整改（DeepSeek agent，2026-08-23 起）
+
+> 来源：`Looper-system-optimizer-只读审查报告-20260823.md`（20 项声明经主 agent
+> 逐条对照源码核实，18 项属实、2 项框架性偏差，分诊见下）。
+> 治理：独立 worktree/分支；无推送权（主 agent 统一推）；只改本包清单内文件；
+> 公式/阈值类改动必须先过 formula-provenance.md 登记并经用户批准。
+
+- **第一批（已派发，2026-08-23 用户批准）**：
+  - M7：补登记 3 个未登记 formula_id（`F-PROJECT-S6-S7/v1alpha1`、
+    `F-PROJECT-PRESSURE-CV/v1alpha1`、`F-PROJECT-CONDITION-BOOTSTRAP/v1`）
+    ——**只改 formula-provenance.md 文本，不改 pressure/mapping 代码**，登记内容用户过目；
+  - M12：`scoring.py` assert 输入校验改显式 raise；
+  - C6：改善量方向契约显式化（helper + 断言，消除 :219 硬编码全 MAXIMIZE 的隐性契约）；
+  - C7：三套 Pareto 收敛到 `analysis.pareto_ranks` + 黄金值测试证明数值不变
+    （`scoring._priority_dominates` / `result_vector._dominates` 改薄封装）；
+  - §4 杂项：`tuning._search_space` 的 related_components 漏项、
+    `scoring.py` `10**9` 哨兵改 `math.inf`。
+- 文件清单：`scoring.py`、`analysis.py`（根 packages/core/looper_core/）、
+  `tuning.py`、`docs/system-optimizer/contracts/formula-provenance.md`、相关 tests。
+- 红线：**不得触碰** `collector.py`、`pressure/`、`examples/system-optimizer/*pressure*`
+  （GPT PKG-B 独占）；不得动 `engine/`（主 agent）；数值口径变更（M5/M4 统一分位数/CV）
+  会改变既有证据 digest，须随公式版本升级，未批前不动。
+
+## 审查问题分诊总表（2026-08-23，未处理项跟踪）
+
+| 项 | 一句话 | 状态 / 归属 | 阻塞点 |
+|---|---|---|---|
+| C1 | L5/L8 双写裁决、终裁上收未完成 | 主 agent（PKG-A 后续阶段，已登记 layer-spec §1） | 无，排期问题；特征测试先行 |
+| C2 | 压/采解耦（老 adapter 直解 MeasurementBatch） | **GPT PKG-B**（SO-D016） | 等 GPT 新 L4 合同 |
+| C3 | 预筛跨组件混比 | ✅ 已修（SO-D018，2026-08-23）：tracker 按组件隔离 + 回归测试 | 无；"轮级整体效用"聚合仍 open |
+| C4 | 路由逻辑三处散落 | 主 agent，随 C1 重构一并收敛 | 依附 C1 |
+| C5 | STABILITY_REJECTED 无生产者 | 待用户决策：稳定性拒绝是否入 L7 + 证据 digest 绑定语义 | 决策日志登记后实施小 |
+| C6 | 方向双重编码 | **DeepSeek 第一批** | — |
+| C7 | 三套 Pareto | **DeepSeek 第一批** | — |
+| M1 | adverse_change 量纲混比 | 待用户拍板 S4 修订方向（除 scale 归一 vs 绝对距离另立字段）→ 可派 DeepSeek 实施 | 公式修订需批准 |
+| M2/M3 | 缺 scale 静默兜底 | 待破坏面扫描（examples/.artifacts 缺 scale 合同计数）→ 用户确认 fail-closed 时机 | 兼容性影响 |
+| M4 | CV 口径 ddof 不一（修正：pressure/mapping 实为一致 ddof=1，仅 analysis.summarize pstdev 不同） | 第二批，随公式版本 /v2 统一 | 数值变更需版本化 |
+| M5 | 分位数两套定义（同名 LCB95 出不同数） | 第二批，统一到 analysis.quantile 插值 + F-PROJECT-CONDITION-BOOTSTRAP 升 /v2 | 数值变更需版本化 |
+| M6 | LCB 实为双侧 CI 下界 | 待用户定语义（单侧/双侧写死进登记表） | 登记表措辞 |
+| M7 | 3 个 formula_id 未登记 | **DeepSeek 第一批** | — |
+| M8 | 重采样 2000 硬编码 + minimum_samples 默认 1 | 第二批：参数化 + 公式 /v2 | 数值变更需版本化 |
+| M9 | confidence 实为样本充足率 | 缓：证据 schema 字段更名需迁移策略 | 用户定迁移 |
+| M10 | UTILIZATION 负值静默 clamp | 第二批：负值显式 unavailable + 调用方适配 | 小 |
+| M11 | S9 复验观测无真实生产者（passed 恒真） | 主 agent，随 PKG-G 动态相设计（复验测量路径） | 设计依赖 |
+| M12 | assert 输入校验 | **DeepSeek 第一批** | — |
+| M13 | 固定 seed 模式泄漏 | 缓：改 seed 派生会改全部可复现 digest，爆炸半径大 | 等 C1 后版本化 |
+| §4.2 | 每次调用重建 generator | 并入 M13 处理 | 同上 |
+
 ---
 
 ## 登记本
@@ -131,6 +179,7 @@
 | PKG-E | 🟡 大部分完成 2026-08-23 | 主 agent | 盲区双机实测✅ + tuned 恢复✅ + 网络会话资产就绪✅；真实 peer 闭环✅（用户点出改走 VPC 内网后完成：bbr/reno 均未达显著，全部回滚；公网路径不适合作吞吐通道）|
 | PKG-F | ✅ 完成 2026-08-23 | 主 agent（zcode） | engine-demo/cache-inspect 命令 + 4 测试；Windows 全流程 demo 一条命令可复现 |
 | PKG-G | 待领（低优先） | — | |
+| PKG-H | 🟡 第一批进行中 2026-08-23 | DeepSeek agent | M7/M12/C6/C7/§4 杂项；治理见 PKG-H 节；第二批（M1-M8/M10 等）按分诊表逐步解锁 |
 
 ## 登记补充（2026-08-23 A 级审计）
 
@@ -143,11 +192,13 @@
 
 | 文件 | 涉及包 | 协调 |
 |---|---|---|
-| tuning.py / policy.py | A（改）、D（读） | D 在 A 合入后开工 |
-| pressure.py / examples 脚本 | B 独占 | — |
-| scoring.py | C 可扩展、B 只读 | C 若并入 scoring.py 先登记 |
-| engine/ | D 独占（A 不碰） | — |
+| tuning.py / policy.py | A（改）、D（读）、H（§4 杂项改） | H 的改动限于 _search_space related_components，不碰 A 已完成的组件包装 |
+| pressure.py / examples 脚本 | B 独占（H 不得触碰） | — |
+| scoring.py | C 可扩展、B 只读、H 第一批（M12/C6/C7/哨兵） | H 改动须带黄金值测试，数值不变 |
+| analysis.py（looper_core 根） | H 第一批（C7 收敛） | 黄金值测试证明 pareto_ranks 数值不变；analysis 为全仓共享模块，回归全绿才可合 |
+| engine/ | D 独占（A/H 不碰） | — |
 | cli.py | F 独占 | — |
 | examples/artifacts | E 独占 | — |
+| formula-provenance.md | H 第一批（M7 补登记） | 登记条目用户过目后合入；数值口径修订（M1/M4/M5/M8）另批 |
 
 包间接口变更：改本文件"登记"节 + 决策日志，不私聊约定。

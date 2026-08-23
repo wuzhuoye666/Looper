@@ -79,6 +79,8 @@ class EngineRoundRecord(StrictModel):
     cache_entry_digests: list[str] = Field(default_factory=list)
     cached_exclusion_count: int = Field(default=0, ge=0)
     early_screened_candidate_ids: list[str] = Field(default_factory=list)
+    # SO-D018: this is the component's OWN incumbent (same primary metric);
+    # values from different components are not comparable and never share a tracker.
     incumbent_utility_after: float | None = None
     promotion_observations: list[VerificationObservation] = Field(default_factory=list)
     note: str | None = Field(default=None, min_length=1, max_length=500)
@@ -202,11 +204,9 @@ def run_engine_loop(
             raise ValueError(f"missing pressure protocol digest for: {component}")
 
     started_at = datetime.now(UTC)
-    tracker = (
-        IncumbentTracker(tolerance=config.pre_screen_tolerance)
-        if config.pre_screen_tolerance is not None
-        else None
-    )
+    # SO-D017 预筛按组件隔离：incumbent 只在「同一组件同一主指标」内比较
+    # （S0 可比性）。跨组件混比不同主指标的改善量语义不成立（审查 C3 修复）。
+    incumbent_trackers: dict[str, IncumbentTracker] = {}
     scores = list(component_scores) if component_scores is not None else _neutral_scores(components)
     by_component = {optimizer.component: optimizer for optimizer in component_optimizers}
     completed: set[str] = set()
@@ -256,6 +256,10 @@ def run_engine_loop(
             break
         component = decision.selection.component
         optimizer = by_component[component]
+        tracker = incumbent_trackers.get(component)
+        if tracker is None and config.pre_screen_tolerance is not None:
+            tracker = IncumbentTracker(tolerance=config.pre_screen_tolerance)
+            incumbent_trackers[component] = tracker
         exclusions = [
             skip.parameters for skip in decision.skipped if skip.component == component
         ]
