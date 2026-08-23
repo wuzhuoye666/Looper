@@ -136,12 +136,14 @@ class ComponentOptimizer:
         measure: Any,
         fencing_token: int,
         diagnostic_reference: MeasurementBatch | None = None,
+        preexisting: Sequence[Mapping[str, Any]] | None = None,
     ) -> ComponentReport:
         run: OptimizationRun = self.engine.run(
             baseline_parameters=baseline_parameters,
             measure=measure,
             fencing_token=fencing_token,
             diagnostic_reference=diagnostic_reference,
+            preexisting=preexisting,
         )
         return self.report(run)
 

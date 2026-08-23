@@ -138,6 +138,7 @@ class SystemOptimizationEngine:
         measure: MeasurementAdapter,
         fencing_token: int,
         diagnostic_reference: MeasurementBatch | None = None,
+        preexisting: Sequence[Mapping[str, Any]] | None = None,
     ) -> OptimizationRun:
         started = time.monotonic()
         baseline = measure(self.policy.statistics.baseline_repeats)
@@ -219,6 +220,10 @@ class SystemOptimizationEngine:
         existing: list[dict[str, Any]] = [
             {"parameters": {name: baseline_parameters[name] for name in search_space}}
         ]
+        # Negative-cached (or otherwise already-tried) candidates are excluded
+        # from search instead of being re-measured.
+        for tried in preexisting or ():
+            existing.append({"parameters": dict(tried)})
         history: list[dict[str, Any]] = []
         candidates: list[CandidateEvaluation] = []
         no_improvement = 0

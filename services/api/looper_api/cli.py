@@ -1157,6 +1157,7 @@ def run_system_optimizer_engine_demo(
     output: Path = typer.Option(..., "--output", dir_okay=False),
     component: list[str] = typer.Option(["cpu", "memory"], "--component"),
     max_rounds: int = typer.Option(10, "--max-rounds", min=1),
+    max_pool_size: int = typer.Option(64, "--max-pool-size", min=1),
 ) -> None:
     """Run the L8 engine loop over a synthetic multi-component demo.
 
@@ -1199,6 +1200,7 @@ def run_system_optimizer_engine_demo(
                 for name in component
             },
             max_rounds=max_rounds,
+            max_pool_size=max_pool_size,
         ),
         fencing_token=1,
     )

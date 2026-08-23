@@ -28,7 +28,7 @@ from pydantic import Field
 
 from looper_core.canonical import canonical_digest
 from looper_core.contracts import StrictModel
-from looper_core.system_opt.component import ComponentOptimizer
+from looper_core.system_opt.component import CandidateSuggestion, ComponentOptimizer
 from looper_core.system_opt.engine.judge import CandidateVerdict, evaluate_candidate
 from looper_core.system_opt.engine.scheduler import (
     SchedulerDecision,
@@ -44,6 +44,7 @@ from looper_core.system_opt.negative_cache import (
     formula_versions_digest,
 )
 from looper_core.system_opt.rollback import PhaseRestoration, verify_phase_restoration
+from looper_core.system_opt.safety import SafetyState
 from looper_core.system_opt.executor import ConfigSnapshot
 
 ENGINE_LOOP_SCHEMA = "looper.engine-loop-result/v1alpha1"
@@ -53,6 +54,7 @@ class EngineStopReason(StrEnum):
     COMPLETED = "completed-all-components"
     ROUND_BUDGET = "round-budget-exhausted"
     ALL_CACHED = "all-candidates-negative-cached"
+    SAFETY_STOP = "safety-stop-needs-attention"
 
 
 class EngineLoopConfig(StrictModel):
@@ -60,6 +62,7 @@ class EngineLoopConfig(StrictModel):
     formula_versions: dict[str, str] = Field(min_length=1)
     pressure_protocol_digests: dict[str, str] = Field(min_length=1)
     max_rounds: int = Field(ge=1)
+    max_pool_size: int = Field(ge=1)
 
 
 class EngineRoundRecord(StrictModel):
@@ -70,6 +73,8 @@ class EngineRoundRecord(StrictModel):
     skipped: list[SkippedCandidate]
     verdicts: list[CandidateVerdict]
     cache_entry_digests: list[str] = Field(default_factory=list)
+    cached_exclusion_count: int = Field(default=0, ge=0)
+    note: str | None = Field(default=None, min_length=1, max_length=500)
 
 
 class EngineLoopResult(StrictModel):
@@ -178,10 +183,24 @@ def run_engine_loop(
             stop_reason = EngineStopReason.COMPLETED
             stop_detail = "every component optimizer finished one engine round"
             break
-        pools = {
-            optimizer.component: optimizer.candidate_pool()
-            for optimizer in active
+        suggestions: dict[str, list[CandidateSuggestion]] = {
+            optimizer.component: optimizer.suggest_candidates() for optimizer in active
         }
+        pools: dict[str, list[dict[str, Any]]] = {}
+        for optimizer in active:
+            component = optimizer.component
+            pool = optimizer.candidate_pool()
+            if len(pool) > config.max_pool_size:
+                raise ValueError(
+                    f"component '{component}' candidate pool {len(pool)} exceeds the "
+                    f"task cap max_pool_size={config.max_pool_size}; raise the cap "
+                    "explicitly or narrow the authorized domain"
+                )
+            pool_with_suggestions = list(pool)
+            for suggestion in suggestions[component]:
+                if suggestion.parameters not in pool_with_suggestions:
+                    pool_with_suggestions.append(suggestion.parameters)
+            pools[component] = pool_with_suggestions
         decision: SchedulerDecision = select_next_candidate(
             [score for score in scores if score.component in pools],
             pools,
@@ -199,12 +218,35 @@ def run_engine_loop(
             break
         component = decision.selection.component
         optimizer = by_component[component]
-        optimizer.suggest_candidates()
+        exclusions = [
+            skip.parameters for skip in decision.skipped if skip.component == component
+        ]
         report = optimizer.run(
             baseline_parameters=baseline_parameters[component],
             measure=measures[component],
             fencing_token=fencing_token,
+            preexisting=exclusions,
         )
+        if (
+            not report.candidates
+            and exclusions
+            and report.stop_reason == "search-space-exhausted"
+        ):
+            rounds.append(
+                EngineRoundRecord(
+                    round_index=round_index,
+                    component=component,
+                    report_digest=report.digest,
+                    selected_parameters=decision.selection.parameters,
+                    skipped=decision.skipped,
+                    verdicts=[],
+                    cached_exclusion_count=len(exclusions),
+                    note="search space fully excluded by the negative cache; "
+                    "component counts as covered without new measurements",
+                )
+            )
+            completed.add(component)
+            continue
         primary = optimizer.engine.policy.primary_metric
         verdicts = [
             evaluate_candidate(
@@ -214,6 +256,11 @@ def run_engine_loop(
             )
             for candidate in report.candidates
         ]
+        if not verdicts:
+            raise ValueError(
+                f"component '{component}' produced no candidate evaluations; "
+                "the engine loop cannot judge an empty report"
+            )
         cache_entry_digests: list[str] = []
         recorded_at = datetime.now(UTC)
         for candidate, verdict in zip(report.candidates, verdicts, strict=True):
@@ -237,11 +284,6 @@ def run_engine_loop(
             )
             negative_cache.add(entry)
             cache_entry_digests.append(entry.digest)
-        if not verdicts:
-            raise ValueError(
-                f"component '{component}' produced no candidate evaluations; "
-                "the engine loop cannot judge an empty report"
-            )
         rounds.append(
             EngineRoundRecord(
                 round_index=round_index,
@@ -251,8 +293,19 @@ def run_engine_loop(
                 skipped=decision.skipped,
                 verdicts=verdicts,
                 cache_entry_digests=cache_entry_digests,
+                cached_exclusion_count=len(exclusions),
             )
         )
+        if any(
+            candidate.safety_state == SafetyState.NEEDS_ATTENTION
+            for candidate in report.candidates
+        ):
+            stop_reason = EngineStopReason.SAFETY_STOP
+            stop_detail = (
+                f"component '{component}' left the target needs-attention; "
+                "the engine stops immediately and no further component runs"
+            )
+            break
         completed.add(component)
 
     finished_at = datetime.now(UTC)

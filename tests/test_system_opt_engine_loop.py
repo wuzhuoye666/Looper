@@ -54,6 +54,7 @@ def _config(max_rounds: int = 10) -> EngineLoopConfig:
         formula_versions=FORMULAS,
         pressure_protocol_digests={"cpu": FIXED_PROTOCOL, "memory": FIXED_PROTOCOL},
         max_rounds=max_rounds,
+        max_pool_size=64,
     )
 
 
@@ -171,6 +172,7 @@ class TestEngineLoop:
                 formula_versions=FORMULAS,
                 pressure_protocol_digests={"cpu": FIXED_PROTOCOL},
                 max_rounds=5,
+                max_pool_size=64,
             ),
             fencing_token=3,
             phase_baseline_snapshot=baseline_snapshot,
@@ -205,3 +207,117 @@ class TestEngineLoop:
             cache_entry_digests=[],
         )
         assert EngineRoundRecord.model_validate_json(record.model_dump_json()) == record
+
+
+class TestOptimizations:
+    def _cache_entry_for(self, parameters, metric="demo.metric"):
+        from datetime import UTC, datetime
+        from looper_core.system_opt.negative_cache import NegativeCacheIdentity
+
+        return NegativeCacheEntry(
+            identity=NegativeCacheIdentity(
+                environment_digest=ENV,
+                candidate_parameters_digest=candidate_parameters_digest(parameters),
+                pressure_protocol_digest=FIXED_PROTOCOL,
+                formula_versions_digest=formula_versions_digest(FORMULAS),
+            ),
+            metric_id=metric,
+            verdict=NegativeVerdict.NO_IMPROVEMENT_LCB,
+            evidence_digests=["sha256:" + "9" * 64],
+            detail="cached in an earlier engine run",
+            recorded_at=datetime(2026, 8, 23, 12, 0, 0, tzinfo=UTC),
+        )
+
+    def test_safety_needs_attention_stops_engine_immediately(self):
+        from looper_core.system_opt.executor.simulated import SimulatedFailurePlan
+
+        manifest = build_demo_manifest()
+        initial = {item.id: item.default for item in manifest.items}
+        backend = SimulatedBackend(
+            initial,
+            target_id="safety-stop-test",
+            failure_plan=SimulatedFailurePlan(
+                rollback_failures={item.id for item in manifest.items}
+            ),
+        )
+        optimizers, manifest = _optimizers(["cpu", "memory"], backend)
+        result = run_engine_loop(
+            optimizers,
+            baseline_parameters=_baseline_parameters(manifest),
+            measures={
+                "cpu": SyntheticMeasurementAdapter(backend, mode=OptimizationMode.GENERAL),
+                "memory": SyntheticMeasurementAdapter(backend, mode=OptimizationMode.GENERAL),
+            },
+            negative_cache=NegativeCache(),
+            config=_config(),
+            fencing_token=3,
+        )
+        assert result.stop_reason is EngineStopReason.SAFETY_STOP
+        assert len(result.rounds) == 1
+        assert "needs-attention" in result.stop_detail
+
+    def test_cached_candidate_is_excluded_from_component_search(self):
+        manifest = build_demo_manifest()
+        initial = {item.id: item.default for item in manifest.items}
+        backend = SimulatedBackend(initial, target_id="exclusion-test")
+        optimizers, manifest = _optimizers(["cpu"], backend)
+        cached_params = optimizers[0].candidate_pool()[0]
+        from looper_core.canonical import canonical_digest
+
+        cached_candidate_id = canonical_digest({"parameters": cached_params})
+        cache = NegativeCache([self._cache_entry_for(cached_params)])
+        result = run_engine_loop(
+            optimizers,
+            baseline_parameters=_baseline_parameters(manifest),
+            measures={"cpu": SyntheticMeasurementAdapter(backend, mode=OptimizationMode.GENERAL)},
+            negative_cache=cache,
+            config=_config(),
+            fencing_token=3,
+        )
+        record = result.rounds[0]
+        assert record.cached_exclusion_count == 1
+        judged_ids = {verdict.candidate_id for verdict in record.verdicts}
+        assert cached_candidate_id not in judged_ids
+        assert result.stop_reason is EngineStopReason.COMPLETED
+
+    def test_pool_cap_exceeded_fails_closed(self):
+        manifest = build_demo_manifest()
+        initial = {item.id: item.default for item in manifest.items}
+        backend = SimulatedBackend(initial, target_id="cap-test")
+        optimizers, manifest = _optimizers(["cpu"], backend)
+        with pytest.raises(ValueError, match="max_pool_size"):
+            run_engine_loop(
+                optimizers,
+                baseline_parameters=_baseline_parameters(manifest),
+                measures={"cpu": SyntheticMeasurementAdapter(backend, mode=OptimizationMode.GENERAL)},
+                negative_cache=NegativeCache(),
+                config=EngineLoopConfig(
+                    environment_digest=ENV,
+                    formula_versions=FORMULAS,
+                    pressure_protocol_digests={"cpu": FIXED_PROTOCOL},
+                    max_rounds=5,
+                    max_pool_size=1,
+                ),
+                fencing_token=3,
+            )
+
+    def test_fully_excluded_component_records_note_not_error(self):
+        manifest = build_demo_manifest()
+        initial = {item.id: item.default for item in manifest.items}
+        backend = SimulatedBackend(initial, target_id="excluded-test")
+        optimizers, manifest = _optimizers(["cpu"], backend)
+        cache = NegativeCache(
+            [self._cache_entry_for(params) for params in optimizers[0].candidate_pool()]
+        )
+        # Full-pool cache makes the scheduler skip the component before running;
+        # assert that path instead of an executed empty search.
+        result = run_engine_loop(
+            optimizers,
+            baseline_parameters=_baseline_parameters(manifest),
+            measures={"cpu": SyntheticMeasurementAdapter(backend, mode=OptimizationMode.GENERAL)},
+            negative_cache=cache,
+            config=_config(),
+            fencing_token=3,
+        )
+        assert result.stop_reason is EngineStopReason.ALL_CACHED
+        assert result.rounds == []

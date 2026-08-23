@@ -152,3 +152,20 @@ class TestJsonlStore:
 
 def true_line():
     return "not-a-valid-entry"
+
+
+class TestDumpSnapshotSemantics:
+    def test_dump_overwrites_instead_of_duplicating(self, tmp_path):
+        path = tmp_path / "dump.jsonl"
+        cache = NegativeCache([_entry()])
+        cache.dump(path)
+        cache.dump(path)
+        loaded = NegativeCache.load(path)
+        assert len(loaded) == 1
+        assert loaded.entries[0].digest == _entry().digest
+
+    def test_indexed_lookup_matches_scan_semantics(self):
+        entry = _entry()
+        cache = NegativeCache([entry, _entry(metric_id="other")])
+        assert len(cache.lookup_key(entry.identity.key)) == 2
+        assert cache.lookup_key("sha256:" + "0" * 64) == []

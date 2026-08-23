@@ -79,6 +79,9 @@ class NegativeCache:
 
     def __init__(self, entries: Sequence[NegativeCacheEntry] | None = None) -> None:
         self._entries: list[NegativeCacheEntry] = list(entries or [])
+        self._by_key: dict[str, list[NegativeCacheEntry]] = {}
+        for entry in self._entries:
+            self._by_key.setdefault(entry.identity.key, []).append(entry)
 
     def __len__(self) -> int:
         return len(self._entries)
@@ -89,9 +92,10 @@ class NegativeCache:
 
     def add(self, entry: NegativeCacheEntry) -> None:
         self._entries.append(entry)
+        self._by_key.setdefault(entry.identity.key, []).append(entry)
 
     def lookup_key(self, key: str) -> list[NegativeCacheEntry]:
-        return [entry for entry in self._entries if entry.identity.key == key]
+        return list(self._by_key.get(key, []))
 
     def lookup(
         self,
@@ -110,8 +114,10 @@ class NegativeCache:
         return self.lookup_key(identity.key)
 
     def dump(self, path: Path) -> None:
+        """Write the full current state as a fresh snapshot (overwrites)."""
+
         path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("a", encoding="utf-8", newline="\n") as handle:
+        with path.open("w", encoding="utf-8", newline="\n") as handle:
             for entry in self._entries:
                 handle.write(json.dumps(entry.model_dump(mode="json"), sort_keys=True) + "\n")
 
