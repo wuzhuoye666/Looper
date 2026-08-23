@@ -1,0 +1,14 @@
+schema_version: looper.component-strategy/v1alpha1
+component: numa
+primary_metric: numa.node-count
+direction: diagnostic-only
+stability_metric: numa.node-count
+search_item_ids: []
+candidate_sources:
+  - formula_id: F-NUMA-UNAVAILABLE/v0
+    provenance: official-doc
+    applies_when: "fewer than two NUMA nodes visible in guest; record unavailable evidence, do not search"
+hard_gates: []
+boundaries: "Both available targets are single-node (2026-08-23 dual-host evidence); binding probes require >=2 nodes."
+references:
+  - docs/system-optimizer/research/dual-host-numa-unavailable-2026-08-23.md

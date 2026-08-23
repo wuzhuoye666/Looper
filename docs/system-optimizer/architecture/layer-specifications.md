@@ -7,6 +7,12 @@
 
 ## 1. 目录与层的对应
 
+层目录已实体化（2026-08-23）：每层一个包，`__init__.py`/模块头写明接口与调用规范：
+`executor/`(L0)、`foundation/`(L1 门面)、`measurement/`(L2 门面)、`pressure/`(L3 门面)、
+`collector.py`(L4，原地不动待 GPT 新合同)、`component/`(L5，含 `strategy.py` +
+`strategies/*.yaml` 五组件优化策略)、`rollback/`(L6)、`negative_cache/`(L7)、
+`engine/`(L8)。单文件层升级为同名包，导入路径不变。
+
 ```
 packages/core/looper_core/system_opt/
 ├── executor/                     L0 执行后端（现有：simulated / local_linux / ssh_remote / runner）

@@ -1,0 +1,18 @@
+schema_version: looper.component-strategy/v1alpha1
+component: cpu
+primary_metric: cpu.bogo-ops-per-second
+direction: maximize
+stability_metric: cpu.bogo-ops-per-second
+search_item_ids: [cpufreq-governor-uniform]
+candidate_sources:
+  - formula_id: F-PROJECT-PRESSURE-CV-BOOTSTRAP-UPPER/v1alpha1
+    provenance: official-doc
+    applies_when: "batch CV exceeds the target-local stability gate; reject the batch, do not tune"
+  - formula_id: F-CPU-GOVERNOR-UNIFORM/v0-proposal
+    provenance: heuristic
+    applies_when: "sustained full-load with schedutil baseline; propose performance only with LCB95>MDE evidence (2026-08-23 Aliyun loop found none)"
+hard_gates: [cpu-execution-success]
+boundaries: "Uniform governor across all per-vCPU policies; guest cpufreq must be exposed; result is target-local and not portable to other guests without recalibration."
+references:
+  - docs/system-optimizer/research/aliyun-ecs-cpu-governor-closed-loop-2026-08-23.md
+  - https://docs.kernel.org/admin-guide/pm/cpufreq.html
