@@ -670,14 +670,27 @@ v1alpha1 采用候选 A，B/C 仅作为使用同一原始证据可重算的敏�
 - `MetricContract` 验证 direction 与 pressure method 相容性，矛盾时 fail-closed；
 - 诊断入口要求 `load_state=loaded`，并验证 workload/phase/load_state 与 metric phase，idle 仍可由
   同一 MeasurementBatch/collector 管线保存，但不能推进组件诊断；
-- 新生成的 DiagnosticPriority 保存 formula id、current/reference batch digest；历史缺失字段保留为
-  null 兼容，不伪造旧工件的公式身份；
+- 新生成的 DiagnosticPriority 继续保存 formula id 与 current/reference batch digest。metric contract、
+  pressure protocol、配置/容量 provenance 的字段化会改变存量 JSON 形状，因此本批不做未版本化追加；
+  它必须与第二阶段 P/D/A/Q/T 及 M9 迁移合并为一次 schema 版本事件。在迁移前，诊断入口直接校验
+  current/reference pressure protocol digest，合同参数仍由 policy digest 绑定，不伪造旧工件身份；
+- current/reference 必须存在且使用同一 pressure protocol；指标缺失或任一侧样本少于合同
+  `minimum_samples` 时，诊断报告显式列出 issue 与 coverage，路由入口 fail-closed；
+- 现字段 `confidence=n/minimum_samples` 不具统计置信含义，只能解释为样本充足率。为避免一次
+  未版本化的 schema 漂移，本批不单独改名；它将与第二阶段 P/D/A/Q/T 拆分及存量 JSON 迁移
+  捆绑为同一个 DiagnosticPriority schema 版本事件。由于 `minimum_samples` 已是准入门槛，获准项
+  的该旧值恒为 1，不能再解释为排序区分度；
+- Pareto 层只在同一 component 内计算；不同 component 没有经过校准的共同坐标，不互相支配。
+  跨组件路由只遵循 policy 已显式声明的 `authorized_components` 顺序，不从 P/D 伪造总严重度；
+- `MetricEvidence` 拒绝 NaN/Inf，MeasurementBatch 强制 metrics 字典 key 与内部 metric_id 一致；
 - 组件压力恶化与业务效用改善的并存行为已由组合测试固定。
 
 仍然开放：
 
 - `高/低` 解释阈值以及是否需要 B/C 压缩，必须由目标环境重复分布和排名敏感性决定；
 - 每个 metric 的 scale 数值仍须逐合同说明依据并经目标机校准；
+- `E_m` 尚未定义、尚未实现。任何候选必须先以 `PROJECT-DRAFT` 进入本公式登记表，列明输入证据、量纲、边界行为和误判成本，经用户确认后才允许改代码；
+- 环境内 ECDF/Z 分位比较 parked 到 M6+。只有积累了同环境、同协议、同 metric 的真实校准分布并完成版本登记后才可提案启用；没有校准数据时必须保持禁用，不得回退到跨组件加权总分；
 - 本式只完成诊断坐标，不证明压力与配置的因果关系，不关闭干预复测和 L8 终裁。
 
 ### F-PROJECT-003：瓶颈假设证据

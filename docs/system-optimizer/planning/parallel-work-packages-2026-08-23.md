@@ -52,9 +52,9 @@
      阶段协议，采集走 L4 collector（同负载可换采集器）；
   2. 压力协议 schema 增加声明"本协议采集哪些指标、由谁采"（只增不删，
      v1alpha1 兼容）；
-  3. ⚠️ 含 open decision：`PressureTransform`/`AdverseChangeTransform` 的
-     具体公式（F-PROJECT-002 标注未确认）。**必须先产出 2–3 个候选公式提案
-     （含依据）交用户确认，确认前不得把任何变换写进代码。**
+  3. ✅ 原 open decision `PressureTransform`/`AdverseChangeTransform` 已按提案制闭环：先产出
+     2–3 个候选及依据，经用户批准 `F-PROJECT-S4-PIECEWISE-LINEAR/v1alpha1` 后才进入实现；
+     **后续 E_m 是独立公式事件，仍须重新走“先登记、后批准、再实现”的提案门。**
 - ⚠️ 状态修正（2026-08-23 A 级审计）：当前 StandardPressureProtocol 覆盖
   CPU/内存/网络(loopback)；**存储仅有 fio_randread_measure.py，尚未纳入协议**
   ——存储协议纳入是本包子项。且本包与 L4 重构强耦合：解耦后采集必须走
@@ -161,11 +161,12 @@
 | M6 | LCB 实为双侧 CI 下界 | 待用户定语义（单侧/双侧写死进登记表） | 登记表措辞 |
 | M7 | 3 个 formula_id 未登记 | **DeepSeek 第一批** | — |
 | M8 | 重采样 2000 硬编码 + minimum_samples 默认 1 | 第二批：参数化 + 公式 /v2 | 数值变更需版本化 |
-| M9 | confidence 实为样本充足率 | 缓：证据 schema 字段更名需迁移策略 | 用户定迁移 |
+| M9 | confidence 实为样本充足率 | 缓：与第二阶段 P/D/A/Q/T 合并为一次 DiagnosticPriority schema 版本事件；本批不单独改字段 | 用户定迁移；存量 JSON/digest 兼容策略 |
 | M10 | UTILIZATION 负值静默 clamp | 第二批：负值显式 unavailable + 调用方适配 | 小 |
 | M11 | S9 复验观测无真实生产者（passed 恒真） | 主 agent，随 PKG-G 动态相设计（复验测量路径） | 设计依赖 |
 | M12 | assert 输入校验 | **DeepSeek 第一批** | — |
 | M13 | 固定 seed 模式泄漏 | 缓：改 seed 派生会改全部可复现 digest，爆炸半径大 | 等 C1 后版本化 |
+| M14 | 环境内 ECDF/Z 分位比较 | parked 到 M6+；无同环境/同协议/同 metric 的真实校准分布时默认禁用，不得形成跨组件总分 | 真实校准分布 + 公式登记 + 用户确认 |
 | §4.2 | 每次调用重建 generator | 并入 M13 处理 | 同上 |
 
 ---

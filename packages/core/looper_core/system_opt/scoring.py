@@ -11,7 +11,7 @@ import random
 from collections.abc import Mapping, Sequence
 from statistics import mean
 
-from pydantic import Field
+from pydantic import Field, field_validator, model_validator
 
 from looper_core.analysis import InsufficientEvidence, aggregate, quantile
 from looper_core.canonical import canonical_digest, canonical_json
@@ -29,6 +29,13 @@ class MetricEvidence(StrictModel):
     metric_id: str
     values: list[float] = Field(min_length=1)
 
+    @field_validator("values")
+    @classmethod
+    def require_finite_values(cls, values: list[float]) -> list[float]:
+        if any(not math.isfinite(value) for value in values):
+            raise ValueError("metric evidence values must be finite")
+        return values
+
     @property
     def digest(self) -> str:
         return canonical_digest(self.model_dump(mode="json"))
@@ -41,6 +48,13 @@ class MeasurementPhaseEvidence(StrictModel):
     status: str
     elapsed_seconds: float = Field(ge=0)
 
+    @field_validator("elapsed_seconds")
+    @classmethod
+    def require_finite_elapsed(cls, value: float) -> float:
+        if not math.isfinite(value):
+            raise ValueError("measurement elapsed_seconds must be finite")
+        return value
+
 
 class MeasurementStabilityEvidence(StrictModel):
     metric_id: str
@@ -52,6 +66,13 @@ class MeasurementStabilityEvidence(StrictModel):
     acceptance_limit: float | None = Field(default=None, gt=0)
     accepted: bool | None
 
+    @field_validator("value", "acceptance_limit")
+    @classmethod
+    def require_finite_statistics(cls, value: float | None) -> float | None:
+        if value is not None and not math.isfinite(value):
+            raise ValueError("measurement stability values must be finite")
+        return value
+
 
 class MeasurementBatch(StrictModel):
     identity: dict[str, str]
@@ -62,6 +83,24 @@ class MeasurementBatch(StrictModel):
     )
     phase_evidence: list[MeasurementPhaseEvidence] = Field(default_factory=list)
     stability_evidence: MeasurementStabilityEvidence | None = None
+
+    @model_validator(mode="after")
+    def validate_metric_keys(self) -> MeasurementBatch:
+        mismatches = [
+            f"{key!r}!={evidence.metric_id!r}"
+            for key, evidence in self.metrics.items()
+            if key != evidence.metric_id
+        ]
+        if mismatches:
+            raise ValueError(f"measurement metric key/id mismatch: {mismatches}")
+        non_finite_gates = [
+            key
+            for key, value in self.gate_values.items()
+            if isinstance(value, float) and not math.isfinite(value)
+        ]
+        if non_finite_gates:
+            raise ValueError(f"measurement gate values must be finite: {non_finite_gates}")
+        return self
 
     @property
     def digest(self) -> str:
@@ -81,6 +120,15 @@ class ImprovementEvidence(StrictModel):
     minimum_effect: float
     accepted: bool
 
+    @field_validator(
+        "baseline_estimate", "candidate_estimate", "estimate", "lower", "upper", "minimum_effect"
+    )
+    @classmethod
+    def require_finite_improvement(cls, value: float) -> float:
+        if not math.isfinite(value):
+            raise ValueError("improvement evidence values must be finite")
+        return value
+
 
 class GateEvidence(StrictModel):
     gate_id: str
@@ -89,18 +137,52 @@ class GateEvidence(StrictModel):
     passed: bool
     reason: str
 
+    @field_validator("actual")
+    @classmethod
+    def require_finite_actual(cls, value: float | bool | None) -> float | bool | None:
+        if isinstance(value, float) and not math.isfinite(value):
+            raise ValueError("gate evidence actual value must be finite")
+        return value
+
 
 class DiagnosticPriority(StrictModel):
     metric_id: str
     component: str
-    pressure: float
+    pressure: float = Field(ge=0)
     adverse_change: float
     persistence: float = Field(ge=0, le=1)
+    # M9 compatibility: this legacy field is n/minimum_samples (sample adequacy),
+    # not statistical confidence. Rename only with the future P/D/A/Q/T schema migration.
     confidence: float = Field(ge=0, le=1)
     pareto_rank: int | None = None
     formula_id: str | None = None
     current_batch_digest: str | None = Field(default=None, pattern=r"^sha256:[0-9a-f]{64}$")
     reference_batch_digest: str | None = Field(default=None, pattern=r"^sha256:[0-9a-f]{64}$")
+
+    @field_validator("pressure", "adverse_change")
+    @classmethod
+    def require_finite_scores(cls, value: float) -> float:
+        if not math.isfinite(value):
+            raise ValueError("diagnostic scores must be finite")
+        return value
+
+class DiagnosticEvidenceIssue(StrictModel):
+    metric_id: str | None = None
+    side: str
+    reason: str
+    observed_samples: int | None = Field(default=None, ge=0)
+    required_samples: int | None = Field(default=None, ge=2)
+
+
+class DiagnosticEvidenceReport(StrictModel):
+    expected_metric_ids: list[str]
+    eligible_metric_ids: list[str]
+    issues: list[DiagnosticEvidenceIssue]
+    coverage: float = Field(ge=0, le=1)
+
+    @property
+    def complete(self) -> bool:
+        return not self.issues
 
 
 def comparable(
@@ -358,21 +440,104 @@ def _require_loaded_diagnostic_identity(
         )
 
 
+def diagnostic_evidence_report(
+    current: MeasurementBatch,
+    reference: MeasurementBatch,
+    contracts: Sequence[MetricContract],
+) -> DiagnosticEvidenceReport:
+    expected = [contract.id for contract in contracts]
+    issues: list[DiagnosticEvidenceIssue] = []
+    if current.pressure_protocol_digest is None:
+        issues.append(DiagnosticEvidenceIssue(side="current", reason="missing-pressure-protocol"))
+    if reference.pressure_protocol_digest is None:
+        issues.append(DiagnosticEvidenceIssue(side="reference", reason="missing-pressure-protocol"))
+    if (
+        current.pressure_protocol_digest is not None
+        and reference.pressure_protocol_digest is not None
+        and current.pressure_protocol_digest != reference.pressure_protocol_digest
+    ):
+        issues.append(DiagnosticEvidenceIssue(side="both", reason="pressure-protocol-mismatch"))
+
+    eligible: list[str] = []
+    for contract in contracts:
+        metric_eligible = True
+        for side, batch in (("current", current), ("reference", reference)):
+            evidence = batch.metrics.get(contract.id)
+            if evidence is None:
+                issues.append(
+                    DiagnosticEvidenceIssue(
+                        metric_id=contract.id, side=side, reason="missing-metric"
+                    )
+                )
+                metric_eligible = False
+            elif len(evidence.values) < contract.minimum_samples:
+                issues.append(
+                    DiagnosticEvidenceIssue(
+                        metric_id=contract.id,
+                        side=side,
+                        reason="insufficient-samples",
+                        observed_samples=len(evidence.values),
+                        required_samples=contract.minimum_samples,
+                    )
+                )
+                metric_eligible = False
+        if metric_eligible:
+            eligible.append(contract.id)
+    return DiagnosticEvidenceReport(
+        expected_metric_ids=expected,
+        eligible_metric_ids=eligible,
+        issues=issues,
+        coverage=len(eligible) / len(expected) if expected else 0.0,
+    )
+
+
+def _assign_component_pareto_ranks(priorities: list[DiagnosticPriority]) -> None:
+    components: dict[str, list[int]] = {}
+    for index, priority in enumerate(priorities):
+        components.setdefault(priority.component, []).append(index)
+    for indices in components.values():
+        remaining = list(indices)
+        rank = 1
+        while remaining:
+            front = [
+                index
+                for index in remaining
+                if not any(
+                    _priority_dominates(priorities[other], priorities[index])
+                    for other in remaining
+                    if other != index
+                )
+            ]
+            if not front:
+                raise RuntimeError("could not resolve diagnostic Pareto front")
+            for index in front:
+                priorities[index].pareto_rank = rank
+            front_set = set(front)
+            remaining = [index for index in remaining if index not in front_set]
+            rank += 1
+
+
 def diagnostic_priorities(
     current: MeasurementBatch,
     reference: MeasurementBatch,
     contracts: Sequence[MetricContract],
 ) -> list[DiagnosticPriority]:
     _require_loaded_diagnostic_identity(current, reference)
-    priorities: list[DiagnosticPriority] = []
     for contract in contracts:
         if contract.phase != current.identity["phase"]:
             raise InsufficientEvidence(
                 f"{contract.id} metric phase {contract.phase!r} does not match "
                 f"measurement phase {current.identity['phase']!r}"
             )
-        if contract.id not in current.metrics or contract.id not in reference.metrics:
-            continue
+    report = diagnostic_evidence_report(current, reference, contracts)
+    if not report.complete:
+        details = [issue.model_dump(mode="json") for issue in report.issues]
+        raise InsufficientEvidence(
+            f"diagnostic evidence incomplete (coverage={report.coverage:.3f}): {details}"
+        )
+
+    priorities: list[DiagnosticPriority] = []
+    for contract in contracts:
         current_values = current.metrics[contract.id].values
         reference_values = reference.metrics[contract.id].values
         current_estimate = aggregate(current_values, contract.aggregation)
@@ -394,29 +559,12 @@ def diagnostic_priorities(
             )
         )
 
-    remaining = list(range(len(priorities)))
-    rank = 1
-    while remaining:
-        front: list[int] = []
-        for index in remaining:
-            point = priorities[index]
-            dominated = any(
-                _priority_dominates(priorities[other], point)
-                for other in remaining
-                if other != index
-            )
-            if not dominated:
-                front.append(index)
-        if not front:
-            raise RuntimeError("could not resolve diagnostic Pareto front")
-        for index in front:
-            priorities[index].pareto_rank = rank
-        remaining = [index for index in remaining if index not in set(front)]
-        rank += 1
+    _assign_component_pareto_ranks(priorities)
     return sorted(
         priorities,
         key=lambda item: (
             item.pareto_rank or math.inf,
+            item.component,
             -item.pressure,
             -item.adverse_change,
             -item.persistence,
@@ -427,8 +575,15 @@ def diagnostic_priorities(
 
 
 def _priority_dominates(left: DiagnosticPriority, right: DiagnosticPriority) -> bool:
+    if left.component != right.component:
+        return False
     left_values = (left.pressure, left.adverse_change, left.persistence, left.confidence)
-    right_values = (right.pressure, right.adverse_change, right.persistence, right.confidence)
+    right_values = (
+        right.pressure,
+        right.adverse_change,
+        right.persistence,
+        right.confidence,
+    )
     no_worse = all(left >= right for left, right in zip(left_values, right_values, strict=True))
     strictly_better = any(
         left > right for left, right in zip(left_values, right_values, strict=True)
@@ -461,6 +616,8 @@ def summarize_priority_by_component(
 
 
 __all__ = [
+    "DiagnosticEvidenceIssue",
+    "DiagnosticEvidenceReport",
     "DiagnosticPriority",
     "GateEvidence",
     "ImprovementEvidence",
@@ -469,6 +626,7 @@ __all__ = [
     "adverse_change",
     "bootstrap_improvement",
     "comparable",
+    "diagnostic_evidence_report",
     "diagnostic_priorities",
     "evaluate_hard_gates",
     "evidence_coverage",

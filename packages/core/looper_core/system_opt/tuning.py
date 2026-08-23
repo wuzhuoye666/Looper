@@ -255,13 +255,15 @@ class SystemOptimizationEngine:
                 if metric.role == MetricRole.COMPONENT_DIAGNOSTIC
             ]
             priorities = diagnostic_priorities(baseline, diagnostic_reference, diagnostic_contracts)
-            component_order: list[str] = []
-            for priority in priorities:
-                if (
-                    priority.component in self.policy.authorized_components
-                    and priority.component not in component_order
-                ):
-                    component_order.append(priority.component)
+            diagnosed_components = {priority.component for priority in priorities}
+            # F-PROJECT-002 Pareto ranks are component-local. Cross-component routing
+            # therefore follows the policy's explicit authorization order rather than
+            # pretending unlike metric coordinates form a calibrated severity score.
+            component_order = [
+                component
+                for component in self.policy.authorized_components
+                if component in diagnosed_components
+            ]
             assert self.policy.search.routed_component_limit is not None
             routed_components = component_order[: self.policy.search.routed_component_limit]
             if not routed_components:
