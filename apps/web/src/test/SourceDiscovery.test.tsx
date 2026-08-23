@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, expect, it, vi } from 'vitest';
 import { App } from '../App';
+import { OPERATOR_ACCESS_CHANGED_EVENT } from '../components/OperatorAccess';
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
@@ -39,4 +40,16 @@ it('已配置时在前端拒绝非 ZIP 文件', async () => {
   fireEvent.change(input, { target: { files: [new File(['x'], 'app.py', { type: 'text/x-python' })] } });
   expect(await screen.findByText(/只接受 .zip 源码包/)).toBeInTheDocument();
   expect(screen.getByRole('button', { name: '开始动态发现' })).toBeDisabled();
+});
+
+it('操作员认证变化后自动重新加载发现记录', async () => {
+  mockApi(true);
+  renderPage();
+  await screen.findByText('deepseek-v4-flash 已就绪');
+  const callsBefore = vi.mocked(fetch).mock.calls.filter(([input]) => String(input).endsWith('/source-discoveries')).length;
+  window.dispatchEvent(new Event(OPERATOR_ACCESS_CHANGED_EVENT));
+  await vi.waitFor(() => {
+    const callsAfter = vi.mocked(fetch).mock.calls.filter(([input]) => String(input).endsWith('/source-discoveries')).length;
+    expect(callsAfter).toBeGreaterThan(callsBefore);
+  });
 });

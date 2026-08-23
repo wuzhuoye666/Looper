@@ -4,6 +4,7 @@ import { createContext, useContext, useEffect, useState, type FormEvent, type Re
 import { api, getOperatorToken, OPERATOR_AUTH_INVALID_EVENT, setOperatorToken } from '../lib/api';
 
 type OperatorAccessContextValue = { authenticated: boolean; show: () => void };
+export const OPERATOR_ACCESS_CHANGED_EVENT = 'looper:operator-access-changed';
 const OperatorAccessContext = createContext<OperatorAccessContextValue | null>(null);
 
 export function OperatorAccessButton() {
@@ -62,6 +63,7 @@ export function OperatorAccessProvider({ children }: { children: ReactNode }) {
       }
       queryClient.setQueryData(['operator-session'], next);
       await queryClient.invalidateQueries();
+      window.dispatchEvent(new Event(OPERATOR_ACCESS_CHANGED_EVENT));
       setError('');
       setOpen(false);
     } catch (nextError) {
@@ -73,6 +75,7 @@ export function OperatorAccessProvider({ children }: { children: ReactNode }) {
     setOperatorToken('');
     setDraft('');
     setError('');
+    window.dispatchEvent(new Event(OPERATOR_ACCESS_CHANGED_EVENT));
     void queryClient.invalidateQueries();
   };
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import fnmatch
 import hashlib
 import io
@@ -38,6 +39,25 @@ _SECRET_NAMES = {".env", "id_rsa", "id_ed25519", "credentials", "credentials.jso
 _SECRET_SUFFIXES = {".pem", ".key", ".p12", ".pfx", ".jks", ".keystore"}
 
 
+def _normalize_schema(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if value is None or str(value).strip().casefold() in {"", "none", "null", "unknown"}:
+        return {}
+    return {"description": str(value)[:500]}
+
+
+def _normalize_string_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return [str(item) for item in value if str(item).strip()]
+    normalized = str(value).strip()
+    if normalized.casefold() in {"", "none", "null", "unknown", "no", "n/a"}:
+        return []
+    return [normalized]
+
+
 class SourceDiscoveryError(Exception):
     def __init__(
         self, message: str, *, status_code: int = 422, code: str = "source_discovery_error"
@@ -45,6 +65,7 @@ class SourceDiscoveryError(Exception):
         super().__init__(message)
         self.status_code = status_code
         self.code = code
+        self.trace: list[dict[str, Any]] = []
 
 
 class EvidenceInput(BaseModel):
@@ -57,9 +78,32 @@ class EvidenceInput(BaseModel):
 class ParameterInput(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
     name: str
-    location: Literal["path", "query", "header", "cookie"] = Field(alias="in")
+    location: Literal["path", "query", "header", "cookie", "body", "form", "unknown"] = Field(
+        alias="in"
+    )
     required: bool = False
     contract_schema: dict[str, Any] = Field(default_factory=dict, alias="schema")
+
+    @field_validator("location", mode="before")
+    @classmethod
+    def normalize_location(cls, value: Any) -> Any:
+        normalized = str(value).strip().casefold().replace("-", "_").replace(" ", "_")
+        aliases = {
+            "path_param": "path",
+            "path_parameter": "path",
+            "query_param": "query",
+            "query_parameter": "query",
+            "requestbody": "body",
+            "request_body": "body",
+            "formdata": "form",
+            "form_data": "form",
+        }
+        return aliases.get(normalized, normalized)
+
+    @field_validator("contract_schema", mode="before")
+    @classmethod
+    def normalize_schema(cls, value: Any) -> dict[str, Any]:
+        return _normalize_schema(value)
 
 
 class RequestBodyInput(BaseModel):
@@ -68,12 +112,37 @@ class RequestBodyInput(BaseModel):
     contentTypes: list[str] = Field(default_factory=list)
     contract_schema: dict[str, Any] = Field(default_factory=dict, alias="schema")
 
+    @field_validator("contentTypes", mode="before")
+    @classmethod
+    def normalize_content_types(cls, value: Any) -> list[str]:
+        return _normalize_string_list(value)
+
+    @field_validator("contract_schema", mode="before")
+    @classmethod
+    def normalize_schema(cls, value: Any) -> dict[str, Any]:
+        return _normalize_schema(value)
+
 
 class ResponseInput(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
     statusCode: str
     contentTypes: list[str] = Field(default_factory=list)
     contract_schema: dict[str, Any] = Field(default_factory=dict, alias="schema")
+
+    @field_validator("statusCode", mode="before")
+    @classmethod
+    def normalize_status_code(cls, value: Any) -> str:
+        return str(value)
+
+    @field_validator("contentTypes", mode="before")
+    @classmethod
+    def normalize_content_types(cls, value: Any) -> list[str]:
+        return _normalize_string_list(value)
+
+    @field_validator("contract_schema", mode="before")
+    @classmethod
+    def normalize_schema(cls, value: Any) -> dict[str, Any]:
+        return _normalize_schema(value)
 
 
 class InterfaceInput(BaseModel):
@@ -97,6 +166,19 @@ class InterfaceInput(BaseModel):
     def validate_http_path(cls, value: str) -> str:
         if not value.startswith("/"):
             raise ValueError("HTTP interface paths must start with /")
+        return value
+
+    @field_validator("authentication", "unresolved", mode="before")
+    @classmethod
+    def normalize_lists(cls, value: Any) -> list[str]:
+        return _normalize_string_list(value)
+
+    @field_validator("confidence", mode="before")
+    @classmethod
+    def normalize_confidence(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            levels = {"high": 0.85, "medium": 0.6, "low": 0.35, "unknown": 0.2}
+            return levels.get(value.strip().casefold(), value)
         return value
 
 
@@ -326,6 +408,7 @@ async def run_deepseek_harness(
         },
     ]
     trace: list[dict[str, Any]] = []
+    repair_attempts = 0
     owns_client = client is None
     http = client or httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=15.0))
     try:
@@ -340,20 +423,36 @@ async def run_deepseek_harness(
                     "model": settings.deepseek_model,
                     "messages": messages,
                     "tools": TOOLS,
-                    "tool_choice": "auto",
+                    "tool_choice": "required" if round_number == 1 else "auto",
+                    "thinking": {"type": "disabled"},
                     "response_format": {"type": "json_object"},
                     "temperature": 0,
+                    "max_tokens": settings.source_discovery_max_output_tokens,
                 },
             )
             if response.status_code >= 400:
+                provider_code = "unknown"
+                provider_message = ""
+                try:
+                    provider_error = response.json().get("error", {})
+                    provider_code = str(provider_error.get("code") or "unknown")[:80]
+                    provider_message = str(provider_error.get("message") or "")[:500]
+                except (ValueError, AttributeError):
+                    pass
+                if settings.deepseek_api_key:
+                    provider_message = provider_message.replace(
+                        settings.deepseek_api_key, "[REDACTED]"
+                    )
+                detail = f" ({provider_code}: {provider_message})" if provider_message else ""
                 raise SourceDiscoveryError(
-                    f"DeepSeek request failed with HTTP {response.status_code}",
+                    f"DeepSeek request failed with HTTP {response.status_code}{detail}",
                     status_code=502,
                     code="deepseek_request_failed",
                 )
             try:
                 body = response.json()
-                message = body["choices"][0]["message"]
+                choice = body["choices"][0]
+                message = choice["message"]
             except (ValueError, KeyError, IndexError, TypeError) as error:
                 raise SourceDiscoveryError(
                     "DeepSeek returned an invalid response envelope",
@@ -394,26 +493,111 @@ async def run_deepseek_harness(
                     )
                 continue
             content = message.get("content")
+            if choice.get("finish_reason") == "length":
+                raise SourceDiscoveryError(
+                    "DeepSeek final contract was truncated at the configured output token limit",
+                    status_code=502,
+                    code="deepseek_output_truncated",
+                )
             if not isinstance(content, str):
                 raise SourceDiscoveryError(
                     "DeepSeek did not return a final JSON object",
                     status_code=502,
                     code="deepseek_missing_output",
                 )
-            try:
-                output = AgentOutput.model_validate(json.loads(content))
-            except (ValueError, ValidationError) as error:
+            if not trace:
                 raise SourceDiscoveryError(
-                    "DeepSeek output does not match the interface contract",
+                    "DeepSeek returned output without inspecting source files",
+                    status_code=502,
+                    code="deepseek_skipped_source_tools",
+                )
+            try:
+                normalized_content = content.strip()
+                if normalized_content.startswith("```"):
+                    first_newline = normalized_content.find("\n")
+                    if first_newline != -1 and normalized_content.endswith("```"):
+                        normalized_content = normalized_content[first_newline + 1 : -3].strip()
+                first_brace = normalized_content.find("{")
+                last_brace = normalized_content.rfind("}")
+                if first_brace != -1 and last_brace > first_brace:
+                    normalized_content = normalized_content[first_brace : last_brace + 1]
+                output = AgentOutput.model_validate(json.loads(normalized_content))
+            except ValidationError as error:
+                details = "; ".join(
+                    f"{'.'.join(str(part) for part in item['loc'])}: {item['msg']}"
+                    for item in error.errors(include_input=False)[:8]
+                )
+                if repair_attempts < 2:
+                    repair_attempts += 1
+                    messages.extend(
+                        [
+                            {"role": "assistant", "content": content},
+                            {
+                                "role": "user",
+                                "content": (
+                                    "Your final JSON failed contract validation. Correct only "
+                                    f"the JSON object and return it again. Errors: {details}"
+                                ),
+                            },
+                        ]
+                    )
+                    continue
+                raise SourceDiscoveryError(
+                    f"DeepSeek output does not match the interface contract: {details}",
                     status_code=502,
                     code="deepseek_contract_invalid",
                 ) from error
-            return build_contract(output, workspace, settings), trace
+            except ValueError as error:
+                if repair_attempts < 2:
+                    repair_attempts += 1
+                    messages.extend(
+                        [
+                            {"role": "assistant", "content": content},
+                            {
+                                "role": "user",
+                                "content": (
+                                    "Your final answer was not a valid JSON object. Return only "
+                                    "one JSON object matching the contract already specified; "
+                                    "do not use Markdown or explanatory text."
+                                ),
+                            },
+                        ]
+                    )
+                    continue
+                raise SourceDiscoveryError(
+                    "DeepSeek output is not valid JSON",
+                    status_code=502,
+                    code="deepseek_json_invalid",
+                ) from error
+            try:
+                contract = build_contract(output, workspace, settings)
+            except SourceDiscoveryError as error:
+                if error.code == "deepseek_evidence_invalid" and repair_attempts < 2:
+                    repair_attempts += 1
+                    messages.extend(
+                        [
+                            {"role": "assistant", "content": content},
+                            {
+                                "role": "user",
+                                "content": (
+                                    "Evidence citations reference missing files or invalid line "
+                                    "ranges. Re-read the relevant files and return corrected JSON "
+                                    "with only verifiable citations."
+                                ),
+                            },
+                        ]
+                    )
+                    continue
+                raise
+            return contract, trace
         raise SourceDiscoveryError(
             "DeepSeek exceeded the configured tool round limit",
             status_code=502,
             code="deepseek_round_limit",
         )
+    except SourceDiscoveryError as error:
+        error.trace = trace
+        raise
     except httpx.HTTPError as error:
         raise SourceDiscoveryError(
             "DeepSeek could not be reached", status_code=502, code="deepseek_unreachable"
@@ -540,8 +724,16 @@ async def create_discovery(
         record.contract_json = contract
         record.trace_json = trace
         record.status = "completed"
+    except asyncio.CancelledError:
+        record.status = "failed"
+        record.error_code = "source_discovery_cancelled"
+        record.error_message = "Source discovery was cancelled before completion"
+        record.completed_at = utc_now()
+        session.commit()
+        raise
     except SourceDiscoveryError as error:
         record.status = "failed"
+        record.trace_json = error.trace
         record.error_code = error.code
         record.error_message = str(error)
         record.completed_at = utc_now()
@@ -560,3 +752,17 @@ def list_discoveries(session: Session, limit: int = 30) -> list[SourceDiscoveryR
             .limit(limit)
         )
     )
+
+
+def recover_interrupted_discoveries(session: Session) -> int:
+    records = list(
+        session.scalars(
+            select(SourceDiscoveryRecord).where(SourceDiscoveryRecord.status == "running")
+        )
+    )
+    for record in records:
+        record.status = "failed"
+        record.error_code = "source_discovery_interrupted"
+        record.error_message = "API process stopped before source discovery completed"
+        record.completed_at = utc_now()
+    return len(records)

@@ -1,6 +1,7 @@
 import { AlertTriangle, Braces, CheckCircle2, Download, FileArchive, LoaderCircle, RefreshCw, ShieldCheck, Upload } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { PageHeader } from '../components/PageHeader';
+import { OPERATOR_ACCESS_CHANGED_EVENT } from '../components/OperatorAccess';
 import { EmptyState, ErrorState, LoadingState } from '../components/States';
 import { api } from '../lib/api';
 import type { SourceDiscovery, SourceDiscoveryReadiness } from '../lib/types';
@@ -29,7 +30,12 @@ export function SourceDiscoveryPage() {
     catch (reason) { setError(reason); }
     finally { setLoading(false); }
   }
-  useEffect(() => { void load(); }, []);
+  useEffect(() => {
+    void load();
+    const reload = () => { void load(); };
+    window.addEventListener(OPERATOR_ACCESS_CHANGED_EVENT, reload);
+    return () => window.removeEventListener(OPERATOR_ACCESS_CHANGED_EVENT, reload);
+  }, []);
 
   function choose(next: File | null) {
     setSubmitError('');

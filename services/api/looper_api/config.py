@@ -48,6 +48,7 @@ class Settings(BaseSettings):
     source_discovery_max_expanded_bytes: int = Field(default=100 * 1024 * 1024, ge=1024)
     source_discovery_max_files: int = Field(default=10_000, ge=1, le=100_000)
     source_discovery_max_tool_rounds: int = Field(default=32, ge=1, le=128)
+    source_discovery_max_output_tokens: int = Field(default=16384, ge=1024, le=32768)
 
     @property
     def database_uri(self) -> str:

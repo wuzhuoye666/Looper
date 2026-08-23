@@ -146,6 +146,7 @@ from looper_api.source_discovery import (
     create_discovery,
     discovery_view,
     list_discoveries,
+    recover_interrupted_discoveries,
 )
 from looper_api.variability_service import build_variability_report
 from looper_api.worker_protocol import (
@@ -252,6 +253,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     init_database()
     with SessionLocal() as session:
         recover_interrupted_orders(session)
+        recover_interrupted_discoveries(session)
         seed_system(session)
         session.commit()
     sweeper = asyncio.create_task(_lease_sweeper())
