@@ -129,7 +129,7 @@
 | PKG-C | ✅ 完成 2026-08-23 | 主 agent（zcode） | result_vector.py（S8 六元向量+Pareto+任务决胜、S9 晋升合同 fail-closed、L6c 触发判定）+ 11 测试；归一化保持任务注入式提案待确认 |
 | PKG-D | ✅ 完成 2026-08-23 | 主 agent（zcode） | engine/loop.py 主循环（调度→组件执行→终裁→负缓存→S10 停止→相位门禁）+ 6 测试 |
 | PKG-E | 待领 | — | 服务器凭证由用户提供，不落盘 |
-| PKG-F | 待领（等 PKG-D） | — | |
+| PKG-F | ✅ 完成 2026-08-23 | 主 agent（zcode） | engine-demo/cache-inspect 命令 + 4 测试；Windows 全流程 demo 一条命令可复现 |
 | PKG-G | 待领（低优先） | — | |
 
 ## 登记补充（2026-08-23 A 级审计）

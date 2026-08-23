@@ -17,7 +17,16 @@ from looper_core.system_opt.config_manifest import (
     ConfigManifest,
     parse_config_manifest_yaml,
 )
-from looper_core.system_opt.demo import run_full_demo
+from looper_core.system_opt.component import ComponentOptimizer
+from looper_core.system_opt.demo import (
+    SyntheticMeasurementAdapter,
+    build_demo_manifest,
+    build_demo_policy,
+    resolve_demo_domains,
+    run_full_demo,
+)
+from looper_core.system_opt.engine import EngineLoopConfig, run_engine_loop
+from looper_core.system_opt.negative_cache import NegativeCache
 from looper_core.system_opt.domain import (
     AuthorizedDomain,
     DomainEvidence,
@@ -1141,6 +1150,108 @@ def run_verified_demo(
     console.print_json(json.dumps(result))
     if result["decision"] == "failed":
         raise typer.Exit(code=2)
+
+
+@system_opt_app.command("engine-demo")
+def run_system_optimizer_engine_demo(
+    output: Path = typer.Option(..., "--output", dir_okay=False),
+    component: list[str] = typer.Option(["cpu", "memory"], "--component"),
+    max_rounds: int = typer.Option(10, "--max-rounds", min=1),
+) -> None:
+    """Run the L8 engine loop over a synthetic multi-component demo.
+
+    Simulated backend only: no Linux writes, safe on the Windows dev host.
+    """
+
+    from looper_core.system_opt.tuning import SystemOptimizationEngine
+
+    manifest = build_demo_manifest()
+    backend = SimulatedBackend(
+        {item.id: item.default for item in manifest.items}, target_id="engine-demo"
+    )
+    optimizers = []
+    for name in component:
+        policy = build_demo_policy(OptimizationMode.GENERAL)
+        policy.authorized_components = [name]
+        policy.search.max_candidates = 2
+        policy.search.max_attempts = 4
+        policy.search.no_improvement_limit = 3
+        policy.search.target_improvement = None
+        optimizers.append(
+            ComponentOptimizer(
+                SystemOptimizationEngine(policy, manifest, resolve_demo_domains(manifest), backend)
+            )
+        )
+    defaults = {item.parameter_id: item.default for item in manifest.items}
+    result = run_engine_loop(
+        optimizers,
+        baseline_parameters={name: defaults for name in component},
+        measures={
+            name: SyntheticMeasurementAdapter(backend, mode=OptimizationMode.GENERAL)
+            for name in component
+        },
+        negative_cache=NegativeCache(),
+        config=EngineLoopConfig(
+            environment_digest=canonical_digest({"kind": "synthetic-engine-demo"}),
+            formula_versions={"F-DEMO-LOOP": "v0"},
+            pressure_protocol_digests={
+                name: canonical_digest({"component": name, "kind": "demo-protocol"})
+                for name in component
+            },
+            max_rounds=max_rounds,
+        ),
+        fencing_token=1,
+    )
+    _write_json(output, result.model_dump(mode="json"))
+    console.print_json(
+        json.dumps(
+            {
+                "evidence_kind": "synthetic",
+                "warning": "not a Linux performance result",
+                "stop_reason": result.stop_reason.value,
+                "rounds": [
+                    {"component": record.component, "verdicts": len(record.verdicts)}
+                    for record in result.rounds
+                ],
+                "phase_restoration": (
+                    result.phase_restoration.status.value
+                    if result.phase_restoration is not None
+                    else None
+                ),
+                "phase_note": result.phase_verification_note,
+                "output": str(output.resolve()),
+            }
+        )
+    )
+
+
+@system_opt_app.command("cache-inspect")
+def inspect_negative_cache_command(
+    path: Path = typer.Option(..., "--path", exists=True, dir_okay=False),
+) -> None:
+    """Summarize an append-only negative result cache (L7)."""
+
+    cache = NegativeCache.load(path)
+    verdict_counts: dict[str, int] = {}
+    environments: set[str] = set()
+    metrics: set[str] = set()
+    for entry in cache.entries:
+        verdict_counts[entry.verdict.value] = (
+            verdict_counts.get(entry.verdict.value, 0) + 1
+        )
+        environments.add(entry.identity.environment_digest)
+        metrics.add(entry.metric_id)
+    console.print_json(
+        json.dumps(
+            {
+                "entries": len(cache),
+                "verdict_counts": verdict_counts,
+                "distinct_environments": len(environments),
+                "distinct_metrics": sorted(metrics),
+                "path": str(path.resolve()),
+            }
+        )
+    )
 
 
 if __name__ == "__main__":
