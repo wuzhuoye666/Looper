@@ -3,9 +3,11 @@ from __future__ import annotations
 import json
 import os
 import platform
+from collections.abc import Callable
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
+from typing import Any
 
 import typer
 from looper_core.action_loop import VerificationPolicy
@@ -60,6 +62,7 @@ from looper_core.system_opt.policy import (
 )
 from looper_core.system_opt.pressure import (
     PhasedPressureMeasurementAdapter,
+    StandardPressureProtocol,
     calibrate_cv_acceptance_limit,
     parse_standard_pressure_protocol_yaml,
     validate_pressure_policy,
@@ -647,6 +650,62 @@ def apply_manual_system_configuration(
         raise typer.Exit(code=2)
 
 
+def _decoupled_pressure_measure(
+    protocol: StandardPressureProtocol,
+    runner: SubprocessCommandRunner,
+    *,
+    target_id: str,
+    collection_enabled: bool,
+    collector: Any | None = None,
+) -> Callable[[int], MeasurementBatch] | None:
+    """Route collection-decoupled pressure protocols to an L4 windowed collector.
+
+    Returns ``None`` for legacy protocols (no ``collection`` contract) so callers
+    keep the existing PhasedPressureMeasurementAdapter path unchanged. The
+    decoupled symbols are imported lazily so this CLI stays importable on trees
+    where the PKG-B collection contract has not landed yet.
+    """
+
+    contract = getattr(protocol, "collection", None)
+    if contract is None:
+        return None
+    if not collection_enabled:
+        raise typer.BadParameter(
+            "collection-decoupled protocols require collection to be enabled: "
+            "a disabled collection run emits no MeasurementBatch"
+        )
+    from looper_core.system_opt.collector import BuiltinLinuxGuestCollector
+    from looper_core.system_opt.pressure import PhasedPressureCollectionAdapter
+
+    selected = collector if collector is not None else BuiltinLinuxGuestCollector()
+    if contract.collector_id != selected.collector_id:
+        raise typer.BadParameter(
+            f"collection contract selects collector '{contract.collector_id}' but "
+            f"only '{selected.collector_id}' is available to this CLI"
+        )
+    if not hasattr(selected, "begin_collection"):
+        raise typer.BadParameter(
+            f"collector '{selected.collector_id}' does not implement measure-window "
+            "collection sessions; windowed production collection is pending PKG-B"
+        )
+    adapter = PhasedPressureCollectionAdapter(
+        protocol,
+        runner,
+        collector=selected,
+        target_id=target_id,
+        environment_digest=_current_environment_digest(),
+        collection_enabled=True,
+    )
+
+    def measure(repeats: int) -> MeasurementBatch:
+        envelope = adapter(repeats).envelope
+        if envelope is None:
+            raise RuntimeError("enabled pressure collection produced no measurement envelope")
+        return envelope.measurement_batch
+
+    return measure
+
+
 @system_opt_app.command("run")
 def run_linux_system_optimization(
     manifest_path: Path = typer.Option(..., "--manifest", exists=True, dir_okay=False),
@@ -665,6 +724,11 @@ def run_linux_system_optimization(
     ),
     pressure_protocol_path: Path | None = typer.Option(
         None, "--pressure-protocol", exists=True, dir_okay=False
+    ),
+    collection_enabled: bool = typer.Option(
+        True,
+        "--collection-enabled/--no-collection-enabled",
+        help="enable L4 windowed collection for collection-decoupled pressure protocols",
     ),
     diagnostic_reference_path: Path | None = typer.Option(
         None, "--diagnostic-reference", exists=True, dir_okay=False
@@ -767,11 +831,21 @@ def run_linux_system_optimization(
         allowed_executables=set(allow_executable),
         writable_file_roots=writable_root,
     )
-    measure = (
-        CommandMeasurementAdapter(measurement_spec, runner)
-        if measurement_spec is not None
-        else PhasedPressureMeasurementAdapter(pressure_protocol, runner)
-    )
+    if measurement_spec is not None:
+        measure: Callable[[int], MeasurementBatch] = CommandMeasurementAdapter(
+            measurement_spec, runner
+        )
+    else:
+        assert pressure_protocol is not None
+        decoupled = _decoupled_pressure_measure(
+            pressure_protocol,
+            runner,
+            target_id=target_id,
+            collection_enabled=collection_enabled,
+        )
+        measure = decoupled if decoupled is not None else PhasedPressureMeasurementAdapter(
+            pressure_protocol, runner
+        )
     reference = (
         MeasurementBatch.model_validate(_read_json(diagnostic_reference_path))
         if diagnostic_reference_path is not None
@@ -839,6 +913,11 @@ def calibrate_linux_pressure(
     lease_ttl_seconds: float = typer.Option(..., "--lease-ttl-seconds", min=1),
     allow_executable: list[str] = typer.Option(..., "--allow-executable"),
     writable_root: list[Path] = typer.Option(..., "--writable-root", file_okay=False),
+    collection_enabled: bool = typer.Option(
+        True,
+        "--collection-enabled/--no-collection-enabled",
+        help="enable L4 windowed collection for collection-decoupled pressure protocols",
+    ),
     enable_real: bool = typer.Option(False, "--enable-real"),
     confirmation: str = typer.Option("", "--confirmation"),
     output: Path = typer.Option(..., "--output", dir_okay=False),
@@ -869,7 +948,18 @@ def calibrate_linux_pressure(
         reconciliation=None,
     )
     try:
-        batch = PhasedPressureMeasurementAdapter(protocol, runner)(repeats)
+        decoupled = _decoupled_pressure_measure(
+            protocol,
+            runner,
+            target_id=target_id,
+            collection_enabled=collection_enabled,
+        )
+        measure = (
+            decoupled
+            if decoupled is not None
+            else PhasedPressureMeasurementAdapter(protocol, runner)
+        )
+        batch = measure(repeats)
         _write_json(output, batch)
     finally:
         guard.release(lease)
