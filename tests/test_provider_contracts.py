@@ -336,6 +336,83 @@ def test_alibaba_quote_and_run_use_postpaid_network_disk_and_token(monkeypatch) 
     ]
 
 
+def test_alibaba_network_catalog_maps_vpc_resources(monkeypatch) -> None:
+    provider = AlibabaEcsProvider()
+    calls: list[tuple[str, object]] = []
+
+    def call(method: str, _region: str, request: object):
+        calls.append((method, request))
+        if method == "describe_vpcs":
+            return SimpleNamespace(
+                body=SimpleNamespace(
+                    total_count=1,
+                    vpcs=SimpleNamespace(
+                        vpc=[SimpleNamespace(
+                            vpc_id="vpc-test", vpc_name="production-vpc",
+                            cidr_block="10.0.0.0/16", is_default=True,
+                        )]
+                    ),
+                )
+            )
+        if method == "describe_vswitches":
+            return SimpleNamespace(
+                body=SimpleNamespace(
+                    total_count=1,
+                    v_switches=SimpleNamespace(
+                        v_switch=[SimpleNamespace(
+                            vpc_id="vpc-test", v_switch_id="vsw-test",
+                            v_switch_name="production-vswitch", zone_id="cn-test-a",
+                            cidr_block="10.0.1.0/24", available_ip_address_count=240,
+                            is_default=True,
+                        )]
+                    ),
+                )
+            )
+        if method == "describe_security_groups":
+            return SimpleNamespace(
+                body=SimpleNamespace(
+                    total_count=1,
+                    security_groups=SimpleNamespace(
+                        security_group=[SimpleNamespace(
+                            security_group_id="sg-test",
+                            security_group_name="looper-private",
+                            description="managed",
+                            tags=SimpleNamespace(tag=[SimpleNamespace(
+                                tag_key="managedBy", tag_value="looper"
+                            )]),
+                        )]
+                    ),
+                )
+            )
+        return SimpleNamespace(
+            body=SimpleNamespace(
+                total_count=1,
+                key_pairs=SimpleNamespace(
+                    key_pair=[SimpleNamespace(
+                        key_pair_name="operator-key",
+                        creation_time="2026-08-20T00:00:00Z",
+                    )]
+                ),
+            )
+        )
+
+    monkeypatch.setattr(provider, "_call", call)
+
+    vpcs = provider.list_vpcs("cn-test")
+    subnets = provider.list_subnets("cn-test", "cn-test-a", "vpc-test")
+    groups = provider.list_security_groups("cn-test")
+    keys = provider.list_key_pairs("cn-test")
+
+    assert vpcs[0].is_default is True
+    assert subnets[0].available_ip_count == 240
+    assert groups[0].recommended is True
+    assert groups[0].tags == {"managedBy": "looper"}
+    assert keys[0].id == "operator-key"
+    assert calls[1][1].zone_id == "cn-test-a"
+    assert calls[1][1].vpc_id == "vpc-test"
+    assert calls[2][1].network_type == "vpc"
+
+
 def test_alibaba_catalog_search_scans_later_pages(monkeypatch) -> None:
     provider = AlibabaEcsProvider()
     calls: list[tuple[str, object]] = []
