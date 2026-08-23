@@ -113,6 +113,11 @@ def test_manifest_validates_against_schema() -> None:
     assert any(role["id"] == "target" for role in scenario["roles"])
     assert len(scenario["slo_gates"]) >= 1
     assert "sysbench_run_ok" in document["spec"]["metrics"]
+    provisioning = document["spec"]["runtime"]["provisioning"]
+    assert provisioning["mode"] == "managed"
+    assert provisioning["hostCapabilities"] == ["python", "local-process", "linux"]
+    assert provisioning["provides"] == ["sysbench"]
+    assert "prepare" in document["spec"]["runtime"]["commands"]
     assert digest.startswith("sha256:")
 
 

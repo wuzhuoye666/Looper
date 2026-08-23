@@ -1,0 +1,9 @@
+{
+  "schemaVersion": "looper.source-lock/v1",
+  "source": "looper://workspace/benchmarks/demo",
+  "files": {
+    "compression_benchmark.py": "sha256:126d5e5637fb794734ce7387f7d6291724564805251a92ed4ca6745659bef0f9",
+    "normalizer.py": "sha256:d4d2d40bd28b07e1d4d8693998f1247c714826439a0f1373233699bbba65dee1",
+    "prepare.py": "sha256:3423e9cdf19ba6f2cb380a56c184517dded37f60710d1f9e10c1f170f7fe5fc7"
+  }
+}

@@ -1,0 +1,34 @@
+{
+  "benchmark": "dcperf.mediawiki.closed-loop",
+  "files": [
+    {
+      "path": "prepare.py",
+      "sha256": "sha256:b40bedd862ee0dbf3ed51250ac0620dbe73350f22b805616592e3e0d0139eaff"
+    },
+    {
+      "path": "producer.py",
+      "sha256": "sha256:e08189febecc7443b9c148cdafdbf36d97bbe84885a5e3a0e5febe2df950fbec"
+    },
+    {
+      "path": "normalizer.py",
+      "sha256": "sha256:6213d3571924e6a4d5e401e13db0e978b1ce4ba6c703e8af1c3af1b1b532f237"
+    },
+    {
+      "path": "validate.py",
+      "sha256": "sha256:80c0637987df7e4e9b8d001ccf404aed9029dff8db59b200bd7c4f19c467bede"
+    },
+    {
+      "path": "cleanup.py",
+      "sha256": "sha256:0daf575dc7590947e84bd741ead2104ab6c14458aaea62854c7764081feb4f26"
+    },
+    {
+      "path": "dependency-lock.json",
+      "sha256": "sha256:de5b6216a2a3896f288d4a5d4426ceeda8546cfed4e220f7753d7d8c0a31e4c2"
+    },
+    {
+      "path": "evidence/upstream-install.md",
+      "sha256": "sha256:88190fa2c77489396a5762481a2e9a4c606f8459734491ef0f40d01ea0a0494f"
+    }
+  ],
+  "schemaVersion": "looper.source-lock/v1"
+}

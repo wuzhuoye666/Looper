@@ -6,9 +6,11 @@ from typing import Any
 from looper_api.cloud_contracts import (
     CatalogFilters,
     CloudPurchaseSpec,
+    DestroyedResource,
     ImageInfo,
     InstanceTypeInfo,
     KeyPairInfo,
+    ProviderDestroyResult,
     ProviderId,
     ProviderInfo,
     ProviderPurchaseResult,
@@ -69,6 +71,26 @@ class CloudProvider(ABC):
     def list_subnets(self, region: str, zone: str, vpc_id: str) -> list[SubnetInfo]:
         raise CloudProviderError("subnet catalog is not supported", code="unsupported_catalog")
 
+    def list_vpc_subnets(self, region: str, vpc_id: str) -> list[SubnetInfo]:
+        items: list[SubnetInfo] = []
+        for zone in self.list_zones(region):
+            items.extend(self.list_subnets(region, zone.id, vpc_id))
+        return items
+
+    def create_managed_subnet(
+        self,
+        *,
+        region: str,
+        zone: str,
+        vpc_id: str,
+        cidr_block: str,
+        name: str,
+        client_token: str,
+    ) -> SubnetInfo:
+        raise CloudProviderError(
+            "managed subnet creation is not supported", code="unsupported_operation"
+        )
+
     def list_security_groups(self, region: str) -> list[SecurityGroupInfo]:
         raise CloudProviderError(
             "security group catalog is not supported", code="unsupported_catalog"
@@ -89,3 +111,24 @@ class CloudProvider(ABC):
     @abstractmethod
     def purchase(self, spec: CloudPurchaseSpec, *, client_token: str) -> ProviderPurchaseResult:
         raise NotImplementedError
+
+    def destroy(self, *, region: str, instance_ids: list[str]) -> ProviderDestroyResult:
+        """Terminate postpaid instances, releasing their system disk, local disks and public IP."""
+        raise CloudProviderError("destroy is not supported", code="unsupported_operation")
+
+    def cleanup_managed_network(
+        self,
+        *,
+        region: str,
+        vpc_id: str | None,
+        subnet_id: str | None,
+        security_group_ids: list[str],
+    ) -> list[DestroyedResource]:
+        """Best-effort removal of Looper-managed subnet/security-group resources.
+
+        Providers that cannot inspect ownership tags leave these resources in place
+        by returning an empty list. Implementations must fail closed: never delete a
+        resource that is not verifiably Looper-managed and not still referenced by
+        other instances.
+        """
+        return []

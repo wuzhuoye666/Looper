@@ -75,6 +75,7 @@ def test_scenario_ranks_without_excluding_and_prefers_x86_when_architecture_unkn
     result = advise(request(codeAvailability="available"), items)
 
     assert result.total == 5
+    assert result.eligible_total == 5
     assert [item.id for item in result.items] == [
         "ecs.g9i.xlarge",
         "ecs.g8i.xlarge",
@@ -85,6 +86,26 @@ def test_scenario_ranks_without_excluding_and_prefers_x86_when_architecture_unkn
     arm = result.items[2]
     assert arm.match_tier == "preferred"
     assert "ARM 兼容性未经代码分析验证" in arm.warnings
+
+
+def test_search_filters_all_ranked_candidates_before_pagination() -> None:
+    items = [
+        instance(
+            "ecs.g9i.needle" if index == 619 else f"ecs.g9i.test-{index}",
+            "ecs.g9i",
+        )
+        for index in range(620)
+    ]
+
+    result = advise(
+        request(query="G9I.NEEDLE", limit=20, codeAvailability="available"),
+        items,
+    )
+
+    assert result.eligible_total == 620
+    assert result.total == 1
+    assert [item.id for item in result.items] == ["ecs.g9i.needle"]
+    assert result.next_offset is None
 
 
 def test_exact_configuration_and_architecture_are_hard_filters() -> None:
@@ -196,7 +217,10 @@ def test_tencent_scenario_ranking_uses_cvm_families_without_excluding() -> None:
     assert [item.id for item in result.items] == ["M8.LARGE32", "S8.LARGE32", "C7.LARGE32"]
 
 
-def test_tencent_region_aggregation_requires_one_zone_to_satisfy_all_constraints() -> None:
+@pytest.mark.parametrize("provider", ["tencent", "alibaba"])
+def test_region_aggregation_requires_one_zone_to_satisfy_all_constraints(
+    provider: str,
+) -> None:
     split_capabilities = [
         {
             "zone": "ap-test-1",
@@ -224,13 +248,17 @@ def test_tencent_region_aggregation_requires_one_zone_to_satisfy_all_constraints
             "localStorageCapacityGib": 1000,
             "networkBandwidthGbps": 20,
             "networkPps": 2_000_000,
+            "statusCategory": "ClosedWithStock",
         }
     ]
+    provider_id = ProviderId(provider)
+    split_id = "GN7.SPLIT" if provider == "tencent" else "ecs.gn7.split"
+    match_id = "GN7.MATCH" if provider == "tencent" else "ecs.gn7.match"
     items = [
         instance(
-            "GN7.SPLIT",
-            "GN7",
-            provider=ProviderId.TENCENT,
+            split_id,
+            "GN7" if provider == "tencent" else "ecs.gn7",
+            provider=provider_id,
             gpu=1,
             local_storage=1,
             bandwidth=20,
@@ -238,9 +266,9 @@ def test_tencent_region_aggregation_requires_one_zone_to_satisfy_all_constraints
             attributes={"zoneCapabilities": split_capabilities},
         ),
         instance(
-            "GN7.MATCH",
-            "GN7",
-            provider=ProviderId.TENCENT,
+            match_id,
+            "GN7" if provider == "tencent" else "ecs.gn7",
+            provider=provider_id,
             gpu=1,
             local_storage=1,
             bandwidth=20,
@@ -251,7 +279,7 @@ def test_tencent_region_aggregation_requires_one_zone_to_satisfy_all_constraints
 
     result = advise(
         request(
-            provider="tencent",
+            provider=provider,
             zone=None,
             primaryScenario="ai",
             minimumGpuCount=1,
@@ -262,8 +290,9 @@ def test_tencent_region_aggregation_requires_one_zone_to_satisfy_all_constraints
         items,
     )
 
-    assert [item.id for item in result.items] == ["GN7.MATCH"]
+    assert [item.id for item in result.items] == [match_id]
     assert "当前匹配：ap-test-3" in result.items[0].warnings[0]
+    assert "不会继续补充" in result.items[0].warnings[1]
     assert {stage.code: stage.removed for stage in result.exclusion_stages}["local-storage"] == 1
 
 
@@ -271,7 +300,7 @@ def test_selection_advisor_route_uses_requested_provider(monkeypatch, db_session
     requested: list[ProviderId] = []
     now = datetime.now(UTC)
 
-    def catalog_search_stub(
+    def catalog_inventory_stub(
         _session: object,
         _settings: object,
         _registry: object,
@@ -291,7 +320,7 @@ def test_selection_advisor_route_uses_requested_provider(monkeypatch, db_session
             expiresAt=now + timedelta(minutes=5),
         )
 
-    monkeypatch.setattr("looper_api.app.catalog_search", catalog_search_stub)
+    monkeypatch.setattr("looper_api.app.catalog_inventory", catalog_inventory_stub)
     response = cloud_selection_advisor(
         request(provider="tencent", codeAvailability="available"),
         db_session,

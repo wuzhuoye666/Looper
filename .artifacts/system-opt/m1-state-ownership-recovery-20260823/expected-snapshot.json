@@ -1,0 +1,13 @@
+{
+  "entries": {
+    "io-nvme0n1-nomerges": {
+      "item_id": "io-nvme0n1-nomerges",
+      "message": null,
+      "raw_output": "0\n",
+      "status": "succeeded",
+      "target": "/sys/block/nvme0n1/queue/nomerges",
+      "value": 0
+    }
+  },
+  "target_id": "aliyun-ecs-8.138.5.244"
+}

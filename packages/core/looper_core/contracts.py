@@ -411,6 +411,26 @@ class FrontierPointEvidence(StrictModel):
         return self
 
 
+class SystemTuningSpec(StrictModel):
+    config_manifest_id: str = Field(min_length=1, max_length=160)
+    config_manifest_digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    profile_id: str | None = Field(default=None, min_length=1, max_length=160)
+    profile_digest: str | None = Field(
+        default=None, pattern=r"^sha256:[0-9a-f]{64}$"
+    )
+    backend: Literal["simulated", "local-linux", "ssh-remote"] = "simulated"
+    max_changes: int = Field(default=5, ge=1, le=100)
+    max_changes_reason: str | None = Field(default=None, min_length=1, max_length=1000)
+
+    @model_validator(mode="after")
+    def validate_binding(self) -> SystemTuningSpec:
+        if (self.profile_id is None) != (self.profile_digest is None):
+            raise ValueError("profile id and digest must be declared together")
+        if self.max_changes > 5 and not self.max_changes_reason:
+            raise ValueError("raising max_changes above 5 requires an explicit reason")
+        return self
+
+
 class ExperimentSpec(StrictModel):
     mode: ExperimentMode = ExperimentMode.OPTIMIZATION
     benchmark_id: str = Field(min_length=1)
@@ -426,6 +446,9 @@ class ExperimentSpec(StrictModel):
     design: ExperimentalDesign = Field(default_factory=ExperimentalDesign)
     budget: BudgetSpec = Field(default_factory=BudgetSpec)
     optimizer: OptimizerSpec = Field(default_factory=OptimizerSpec)
+    system_tuning: SystemTuningSpec | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     scenario: ScenarioBenchmarkSpec | None = None
     selection: SelectionDesign | None = None
 
@@ -460,7 +483,27 @@ class ExperimentSpec(StrictModel):
         if self.mode == ExperimentMode.OPTIMIZATION:
             if self.scenario is not None or self.selection is not None:
                 raise ValueError("optimization experiments cannot declare selection fields")
+            system_parameters = {
+                parameter
+                for parameter in {*self.search_space, *self.baseline_parameters}
+                if parameter.startswith("system.")
+            }
+            if system_parameters and self.system_tuning is None:
+                raise ValueError("system parameters require a system_tuning binding")
+            if self.system_tuning is not None:
+                invalid = sorted(
+                    parameter
+                    for parameter in {*self.search_space, *self.baseline_parameters}
+                    if not parameter.startswith(("benchmark.", "system."))
+                )
+                if invalid:
+                    raise ValueError(
+                        "system tuning candidates require benchmark./system. namespaces: "
+                        f"{invalid}"
+                    )
             return self
+        if self.system_tuning is not None:
+            raise ValueError("selection studies cannot declare system_tuning")
         if self.stability_objectives:
             raise ValueError("stability objectives are only supported in optimization mode")
         if self.scenario is None or self.selection is None:

@@ -1,0 +1,825 @@
+{
+  "counting_basis": "one record per Config Manifest item; no deduplication; declared=20, emitted=20",
+  "items": [
+    {
+      "current": {
+        "source": "backend readback",
+        "status": "succeeded",
+        "value": "performance"
+      },
+      "desired": {
+        "source": "explicit desired values",
+        "status": "unavailable",
+        "value": null
+      },
+      "effective": {
+        "source": "same readback as current; no separate effective source declared",
+        "status": "succeeded",
+        "value": "performance"
+      },
+      "item_id": "cpufreq-governor-policy0",
+      "message": null,
+      "ownership": {
+        "source": "no configuration state evidence supplied",
+        "status": "unavailable",
+        "value": null
+      },
+      "parameter_id": "system.cpufreq-governor-policy0",
+      "persistent": {
+        "source": "no configuration state evidence supplied",
+        "status": "unavailable",
+        "value": null
+      },
+      "preflight": {
+        "source": "backend compatibility and capability preflight",
+        "status": "succeeded",
+        "value": null
+      },
+      "primary_component": "cpu",
+      "raw_readback": "performance\n",
+      "related_components": [],
+      "target": "/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor"
+    },
+    {
+      "current": {
+        "source": "backend readback",
+        "status": "succeeded",
+        "value": 3900000
+      },
+      "desired": {
+        "source": "explicit desired values",
+        "status": "unavailable",
+        "value": null
+      },
+      "effective": {
+        "source": "same readback as current; no separate effective source declared",
+        "status": "succeeded",
+        "value": 3900000
+      },
+      "item_id": "cpufreq-max-policy0",
+      "message": null,
+      "ownership": {
+        "source": "no configuration state evidence supplied",
+        "status": "unavailable",
+        "value": null
+      },
+      "parameter_id": "system.cpufreq-max-policy0",
+      "persistent": {
+        "source": "no configuration state evidence supplied",
+        "status": "unavailable",
+        "value": null
+      },
+      "preflight": {
+        "source": "backend compatibility and capability preflight",
+        "status": "succeeded",
+        "value": null
+      },
+      "primary_component": "cpu",
+      "raw_readback": "3900000\n",
+      "related_components": [],
+      "target": "/sys/devices/system/cpu/cpu0/cpufreq/scaling_max_freq"
+    },
+    {
+      "current": {
+        "source": "backend readback",
+        "status": "succeeded",
+        "value": 3900000
+      },
+      "desired": {
+        "source": "explicit desired values",
+        "status": "unavailable",
+        "value": null
+      },
+      "effective": {
+        "source": "same readback as current; no separate effective source declared",
+        "status": "succeeded",
+        "value": 3900000
+      },
+      "item_id": "cpufreq-min-policy0",
+      "message": null,
+      "ownership": {
+        "source": "no configuration state evidence supplied",
+        "status": "unavailable",
+        "value": null
+      },
+      "parameter_id": "system.cpufreq-min-policy0",
+      "persistent": {
+        "source": "no configuration state evidence supplied",
+        "status": "unavailable",
+        "value": null
+      },
+      "preflight": {
+        "source": "backend compatibility and capability preflight",
+        "status": "succeeded",
+        "value": null
+      },
+      "primary_component": "cpu",
+      "raw_readback": "3900000\n",
+      "related_components": [],
+      "target": "/sys/devices/system/cpu/cpu0/cpufreq/scaling_min_freq"
+    },
+    {
+      "current": {
+        "source": "backend readback",
+        "status": "succeeded",
+        "value": 254
+      },
+      "desired": {
+        "source": "explicit desired values",
+        "status": "unavailable",
+        "value": null
+      },
+      "effective": {
+        "source": "same readback as current; no separate effective source declared",
+        "status": "succeeded",
+        "value": 254
+      },
+      "item_id": "io-nvme0n1-nr-requests",
+      "message": null,
+      "ownership": {
+        "source": "no configuration state evidence supplied",
+        "status": "unavailable",
+        "value": null
+      },
+      "parameter_id": "system.io-nvme0n1-nr-requests",
+      "persistent": {
+        "source": "no configuration state evidence supplied",
+        "status": "unavailable",
+        "value": null
+      },
+      "preflight": {
+        "source": "backend compatibility and capability preflight",
+        "status": "succeeded",
+        "value": null
+      },
+      "primary_component": "storage",
+      "raw_readback": "254\n",
+      "related_components": [],
+      "target": "/sys/block/nvme0n1/queue/nr_requests"
+    },
+    {
+      "current": {
+        "source": "backend readback",
+        "status": "succeeded",
+        "value": 4096
+      },
+      "desired": {
+        "source": "explicit desired values",
+        "status": "unavailable",
+        "value": null
+      },
+      "effective": {
+        "source": "same readback as current; no separate effective source declared",
+        "status": "succeeded",
+        "value": 4096
+      },
+      "item_id": "io-nvme0n1-read-ahead-kb",
+      "message": null,
+      "ownership": {
+        "source": "no configuration state evidence supplied",
+        "status": "unavailable",
+        "value": null
+      },
+      "parameter_id": "system.io-nvme0n1-read-ahead-kb",
+      "persistent": {
+        "source": "no configuration state evidence supplied",
+        "status": "unavailable",
+        "value": null
+      },
+      "preflight": {
+        "source": "backend compatibility and capability preflight",
+        "status": "succeeded",
+        "value": null
+      },
+      "primary_component": "storage",
+      "raw_readback": "4096\n",
+      "related_components": [
+        "memory"
+      ],
+      "target": "/sys/block/nvme0n1/queue/read_ahead_kb"
+    },
+    {
+      "current": {
+        "source": "backend readback",
+        "status": "succeeded",
+        "value": "mq-deadline"
+      },
+      "desired": {
+        "source": "explicit desired values",
+        "status": "unavailable",
+        "value": null
+      },
+      "effective": {
+        "source": "same readback as current; no separate effective source declared",
+        "status": "succeeded",
+        "value": "mq-deadline"
+      },
+      "item_id": "io-nvme0n1-scheduler",
+      "message": null,
+      "ownership": {
+        "source": "no configuration state evidence supplied",
+        "status": "unavailable",
+        "value": null
+      },
+      "parameter_id": "system.io-nvme0n1-scheduler",
+      "persistent": {
+        "source": "no configuration state evidence supplied",
+        "status": "unavailable",
+        "value": null
+      },
+      "preflight": {
+        "source": "backend compatibility and capability preflight",
+        "status": "succeeded",
+        "value": null
+      },
+      "primary_component": "storage",
+      "raw_readback": "none [mq-deadline] \n",
+      "related_components": [],
+      "target": "/sys/block/nvme0n1/queue/scheduler"
+    },
+    {
+      "current": {
+        "source": "backend readback",
+        "status": "succeeded",
+        "value": "0-7"
+      },
+      "desired": {
+        "source": "explicit desired values",
+        "status": "unavailable",
+        "value": null
+      },
+      "effective": {
+        "source": "same readback as current; no separate effective source declared",
+        "status": "succeeded",
+        "value": "0-7"
+      },
+      "item_id": "irq44-smp-affinity-list",
+      "message": null,
+      "ownership": {
+        "source": "no configuration state evidence supplied",
+        "status": "unavailable",
+        "value": null
+      },
+      "parameter_id": "system.irq44-smp-affinity-list",
+      "persistent": {
+        "source": "no configuration state evidence supplied",
+        "status": "unavailable",
+        "value": null
+      },
+      "preflight": {
+        "source": "backend compatibility and capability preflight",
+        "status": "succeeded",
+        "value": null
+      },
+      "primary_component": "cpu",
+      "raw_readback": "0-7\n",
+      "related_components": [
+        "network",
+        "storage"
+      ],
+      "target": "/proc/irq/44/smp_affinity_list"
+    },
+    {
+      "current": {
+        "source": "backend readback",
+        "status": "succeeded",
+        "value": 8500
+      },
+      "desired": {
+        "source": "explicit desired values",
+        "status": "unavailable",
+        "value": null
+      },
+      "effective": {
+        "source": "same readback as current; no separate effective source declared",
+        "status": "succeeded",
+        "value": 8500
+      },
+      "item_id": "net-eth0-mtu",
+      "message": null,
+      "ownership": {
+        "source": "no configuration state evidence supplied",
+        "status": "unavailable",
+        "value": null
+      },
+      "parameter_id": "system.net-eth0-mtu",
+      "persistent": {
+        "source": "no configuration state evidence supplied",
+        "status": "unavailable",
+        "value": null
+      },
+      "preflight": {
+        "source": "backend compatibility and capability preflight",
+        "status": "succeeded",
+        "value": null
+      },
+      "primary_component": "network",
+      "raw_readback": "8500\n",
+      "related_components": [],
+      "target": "/sys/class/net/eth0/mtu"
+    },
+    {
+      "current": {
+        "source": "backend readback",
+        "status": "succeeded",
+        "value": 4096
+      },
+      "desired": {
+        "source": "explicit desired values",
+        "status": "unavailable",
+        "value": null
+      },
+      "effective": {
+        "source": "same readback as current; no separate effective source declared",
+        "status": "succeeded",
+        "value": 4096
+      },
+      "item_id": "net-somaxconn",
+      "message": null,
+      "ownership": {
+        "source": "no configuration state evidence supplied",
+        "status": "unavailable",
+        "value": null
+      },
+      "parameter_id": "system.net-somaxconn",
+      "persistent": {
+        "source": "no configuration state evidence supplied",
+        "status": "unavailable",
+        "value": null
+      },
+      "preflight": {
+        "source": "backend compatibility and capability preflight",
+        "status": "succeeded",
+        "value": null
+      },
+      "primary_component": "network",
+      "raw_readback": "4096\n",
+      "related_components": [],
+      "target": "/proc/sys/net/core/somaxconn"
+    },
+    {
+      "current": {
+        "source": "backend readback",
+        "status": "succeeded",
+        "value": "cubic"
+      },
+      "desired": {
+        "source": "explicit desired values",
+        "status": "unavailable",
+        "value": null
+      },
+      "effective": {
+        "source": "same readback as current; no separate effective source declared",
+        "status": "succeeded",
+        "value": "cubic"
+      },
+      "item_id": "net-tcp-congestion-control",
+      "message": null,
+      "ownership": {
+        "source": "no configuration state evidence supplied",
+        "status": "unavailable",
+        "value": null
+      },
+      "parameter_id": "system.net-tcp-congestion-control",
+      "persistent": {
+        "source": "no configuration state evidence supplied",
+        "status": "unavailable",
+        "value": null
+      },
+      "preflight": {
+        "source": "backend compatibility and capability preflight",
+        "status": "succeeded",
+        "value": null
+      },
+      "primary_component": "network",
+      "raw_readback": "cubic\n",
+      "related_components": [],
+      "target": "/proc/sys/net/ipv4/tcp_congestion_control"
+    },
+    {
+      "current": {
+        "source": "backend readback",
+        "status": "succeeded",
+        "value": 1024
+      },
+      "desired": {
+        "source": "explicit desired values",
+        "status": "unavailable",
+        "value": null
+      },
+      "effective": {
+        "source": "same readback as current; no separate effective source declared",
+        "status": "succeeded",
+        "value": 1024
+      },
+      "item_id": "net-tcp-max-syn-backlog",
+      "message": null,
+      "ownership": {
+        "source": "no configuration state evidence supplied",
+        "status": "unavailable",
+        "value": null
+      },
+      "parameter_id": "system.net-tcp-max-syn-backlog",
+      "persistent": {
+        "source": "no configuration state evidence supplied",
+        "status": "unavailable",
+        "value": null
+      },
+      "preflight": {
+        "source": "backend compatibility and capability preflight",
+        "status": "succeeded",
+        "value": null
+      },
+      "primary_component": "network",
+      "raw_readback": "1024\n",
+      "related_components": [],
+      "target": "/proc/sys/net/ipv4/tcp_max_syn_backlog"
+    },
+    {
+      "current": {
+        "source": "backend readback",
+        "status": "succeeded",
+        "value": false
+      },
+      "desired": {
+        "source": "explicit desired values",
+        "status": "unavailable",
+        "value": null
+      },
+      "effective": {
+        "source": "same readback as current; no separate effective source declared",
+        "status": "succeeded",
+        "value": false
+      },
+      "item_id": "numa-balancing",
+      "message": null,
+      "ownership": {
+        "source": "no configuration state evidence supplied",
+        "status": "unavailable",
+        "value": null
+      },
+      "parameter_id": "system.numa-balancing",
+      "persistent": {
+        "source": "no configuration state evidence supplied",
+        "status": "unavailable",
+        "value": null
+      },
+      "preflight": {
+        "source": "backend compatibility and capability preflight",
+        "status": "succeeded",
+        "value": null
+      },
+      "primary_component": "numa",
+      "raw_readback": "0\n",
+      "related_components": [
+        "memory"
+      ],
+      "target": "/proc/sys/kernel/numa_balancing"
+    },
+    {
+      "current": {
+        "source": "backend readback",
+        "status": "unavailable",
+        "value": null
+      },
+      "desired": {
+        "source": "explicit desired values",
+        "status": "unavailable",
+        "value": null
+      },
+      "effective": {
+        "source": "same readback as current; no separate effective source declared",
+        "status": "unavailable",
+        "value": null
+      },
+      "item_id": "numa-scan-period-max-ms",
+      "message": "[Errno 2] No such file or directory: '/proc/sys/kernel/numa_balancing_scan_period_max_ms'",
+      "ownership": {
+        "source": "no configuration state evidence supplied",
+        "status": "unavailable",
+        "value": null
+      },
+      "parameter_id": "system.numa-scan-period-max-ms",
+      "persistent": {
+        "source": "no configuration state evidence supplied",
+        "status": "unavailable",
+        "value": null
+      },
+      "preflight": {
+        "source": "backend compatibility and capability preflight",
+        "status": "unavailable",
+        "value": null
+      },
+      "primary_component": "numa",
+      "raw_readback": "",
+      "related_components": [
+        "memory"
+      ],
+      "target": "/proc/sys/kernel/numa_balancing_scan_period_max_ms"
+    },
+    {
+      "current": {
+        "source": "backend readback",
+        "status": "unavailable",
+        "value": null
+      },
+      "desired": {
+        "source": "explicit desired values",
+        "status": "unavailable",
+        "value": null
+      },
+      "effective": {
+        "source": "same readback as current; no separate effective source declared",
+        "status": "unavailable",
+        "value": null
+      },
+      "item_id": "numa-scan-period-min-ms",
+      "message": "[Errno 2] No such file or directory: '/proc/sys/kernel/numa_balancing_scan_period_min_ms'",
+      "ownership": {
+        "source": "no configuration state evidence supplied",
+        "status": "unavailable",
+        "value": null
+      },
+      "parameter_id": "system.numa-scan-period-min-ms",
+      "persistent": {
+        "source": "no configuration state evidence supplied",
+        "status": "unavailable",
+        "value": null
+      },
+      "preflight": {
+        "source": "backend compatibility and capability preflight",
+        "status": "unavailable",
+        "value": null
+      },
+      "primary_component": "numa",
+      "raw_readback": "",
+      "related_components": [
+        "memory"
+      ],
+      "target": "/proc/sys/kernel/numa_balancing_scan_period_min_ms"
+    },
+    {
+      "current": {
+        "source": "backend readback",
+        "status": "succeeded",
+        "value": "madvise"
+      },
+      "desired": {
+        "source": "explicit desired values",
+        "status": "unavailable",
+        "value": null
+      },
+      "effective": {
+        "source": "same readback as current; no separate effective source declared",
+        "status": "succeeded",
+        "value": "madvise"
+      },
+      "item_id": "thp-defrag",
+      "message": null,
+      "ownership": {
+        "source": "no configuration state evidence supplied",
+        "status": "unavailable",
+        "value": null
+      },
+      "parameter_id": "system.thp-defrag",
+      "persistent": {
+        "source": "no configuration state evidence supplied",
+        "status": "unavailable",
+        "value": null
+      },
+      "preflight": {
+        "source": "backend compatibility and capability preflight",
+        "status": "succeeded",
+        "value": null
+      },
+      "primary_component": "memory",
+      "raw_readback": "always defer defer+madvise [madvise] never\n",
+      "related_components": [
+        "numa"
+      ],
+      "target": "/sys/kernel/mm/transparent_hugepage/defrag"
+    },
+    {
+      "current": {
+        "source": "backend readback",
+        "status": "succeeded",
+        "value": "madvise"
+      },
+      "desired": {
+        "source": "explicit desired values",
+        "status": "unavailable",
+        "value": null
+      },
+      "effective": {
+        "source": "same readback as current; no separate effective source declared",
+        "status": "succeeded",
+        "value": "madvise"
+      },
+      "item_id": "thp-enabled",
+      "message": null,
+      "ownership": {
+        "source": "no configuration state evidence supplied",
+        "status": "unavailable",
+        "value": null
+      },
+      "parameter_id": "system.thp-enabled",
+      "persistent": {
+        "source": "no configuration state evidence supplied",
+        "status": "unavailable",
+        "value": null
+      },
+      "preflight": {
+        "source": "backend compatibility and capability preflight",
+        "status": "succeeded",
+        "value": null
+      },
+      "primary_component": "memory",
+      "raw_readback": "always [madvise] never\n",
+      "related_components": [
+        "numa"
+      ],
+      "target": "/sys/kernel/mm/transparent_hugepage/enabled"
+    },
+    {
+      "current": {
+        "source": "backend readback",
+        "status": "succeeded",
+        "value": "never"
+      },
+      "desired": {
+        "source": "explicit desired values",
+        "status": "unavailable",
+        "value": null
+      },
+      "effective": {
+        "source": "same readback as current; no separate effective source declared",
+        "status": "succeeded",
+        "value": "never"
+      },
+      "item_id": "thp-shmem-enabled",
+      "message": null,
+      "ownership": {
+        "source": "no configuration state evidence supplied",
+        "status": "unavailable",
+        "value": null
+      },
+      "parameter_id": "system.thp-shmem-enabled",
+      "persistent": {
+        "source": "no configuration state evidence supplied",
+        "status": "unavailable",
+        "value": null
+      },
+      "preflight": {
+        "source": "backend compatibility and capability preflight",
+        "status": "succeeded",
+        "value": null
+      },
+      "primary_component": "memory",
+      "raw_readback": "always within_size advise [never] deny force\n",
+      "related_components": [],
+      "target": "/sys/kernel/mm/transparent_hugepage/shmem_enabled"
+    },
+    {
+      "current": {
+        "source": "backend readback",
+        "status": "succeeded",
+        "value": 10
+      },
+      "desired": {
+        "source": "explicit desired values",
+        "status": "unavailable",
+        "value": null
+      },
+      "effective": {
+        "source": "same readback as current; no separate effective source declared",
+        "status": "succeeded",
+        "value": 10
+      },
+      "item_id": "vm-dirty-background-ratio",
+      "message": null,
+      "ownership": {
+        "source": "no configuration state evidence supplied",
+        "status": "unavailable",
+        "value": null
+      },
+      "parameter_id": "system.vm-dirty-background-ratio",
+      "persistent": {
+        "source": "no configuration state evidence supplied",
+        "status": "unavailable",
+        "value": null
+      },
+      "preflight": {
+        "source": "backend compatibility and capability preflight",
+        "status": "succeeded",
+        "value": null
+      },
+      "primary_component": "memory",
+      "raw_readback": "10\n",
+      "related_components": [
+        "storage"
+      ],
+      "target": "/proc/sys/vm/dirty_background_ratio"
+    },
+    {
+      "current": {
+        "source": "backend readback",
+        "status": "succeeded",
+        "value": 30
+      },
+      "desired": {
+        "source": "explicit desired values",
+        "status": "unavailable",
+        "value": null
+      },
+      "effective": {
+        "source": "same readback as current; no separate effective source declared",
+        "status": "succeeded",
+        "value": 30
+      },
+      "item_id": "vm-dirty-ratio",
+      "message": null,
+      "ownership": {
+        "source": "no configuration state evidence supplied",
+        "status": "unavailable",
+        "value": null
+      },
+      "parameter_id": "system.vm-dirty-ratio",
+      "persistent": {
+        "source": "no configuration state evidence supplied",
+        "status": "unavailable",
+        "value": null
+      },
+      "preflight": {
+        "source": "backend compatibility and capability preflight",
+        "status": "succeeded",
+        "value": null
+      },
+      "primary_component": "memory",
+      "raw_readback": "30\n",
+      "related_components": [
+        "storage"
+      ],
+      "target": "/proc/sys/vm/dirty_ratio"
+    },
+    {
+      "current": {
+        "source": "backend readback",
+        "status": "succeeded",
+        "value": 0
+      },
+      "desired": {
+        "source": "explicit desired values",
+        "status": "unavailable",
+        "value": null
+      },
+      "effective": {
+        "source": "same readback as current; no separate effective source declared",
+        "status": "succeeded",
+        "value": 0
+      },
+      "item_id": "vm-swappiness",
+      "message": null,
+      "ownership": {
+        "source": "no configuration state evidence supplied",
+        "status": "unavailable",
+        "value": null
+      },
+      "parameter_id": "system.vm-swappiness",
+      "persistent": {
+        "source": "no configuration state evidence supplied",
+        "status": "unavailable",
+        "value": null
+      },
+      "preflight": {
+        "source": "backend compatibility and capability preflight",
+        "status": "succeeded",
+        "value": null
+      },
+      "primary_component": "memory",
+      "raw_readback": "0\n",
+      "related_components": [],
+      "target": "/proc/sys/vm/swappiness"
+    }
+  ],
+  "manifest_digest": "sha256:83303d5417b70cf44ed38b75b9c5ac93f6ff1c5b6206120b9575ed5fb44165bd",
+  "manifest_id": "cvm-m1-documented-20-observation-20260823",
+  "metadata": {
+    "collector_environment": {
+      "architecture": "x86_64",
+      "distribution_id": "ubuntu",
+      "distribution_version": "24.04",
+      "host_identifier_sha256": "9fb11d6a5ce5de3e7398a82e723dd6a73adf432939250f30baa80dc185683922",
+      "host_identifier_source": "/etc/machine-id (sha256; raw value not retained)",
+      "kernel_release": "6.8.0-137-generic",
+      "os_name": "linux",
+      "virtualization": "kvm"
+    },
+    "scope_limitations": [
+      "Evidence is specific to this target and collection environment; portability requires independent validation."
+    ],
+    "state_evidence_digest": null
+  },
+  "schema_version": "looper.system-config-inventory/v1alpha3",
+  "target_id": "aliyun-ecs-8.138.5.244",
+  "target_os": "linux"
+}

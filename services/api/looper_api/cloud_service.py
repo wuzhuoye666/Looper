@@ -3,8 +3,11 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import ipaddress
 import json
+import re
 import secrets
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any, Literal
@@ -18,14 +21,25 @@ from looper_api.cloud_contracts import (
     CatalogFilters,
     CatalogResponse,
     CloudPurchaseSpec,
+    CloudSshCredentials,
+    DestroyedResource,
+    ImageInfo,
+    InstanceNetworkResolution,
+    InstanceNetworkResolveRequest,
+    InstanceTypeInfo,
     OrderConfirmRequest,
     OrderResolveRequest,
     ProviderId,
     ProvisionedInstance,
     SearchResult,
+    SubnetInfo,
+    TargetDestroyPreview,
+    TargetDestroyRequest,
+    VpcInfo,
 )
 from looper_api.config import Settings
 from looper_api.events import append_event
+from looper_api.external_targets import ConnectExternalTargetRequest, connect_existing_target
 from looper_api.models import (
     BenchmarkRecord,
     CloudCatalogCacheRecord,
@@ -37,7 +51,15 @@ from looper_api.models import (
 )
 from looper_api.providers.base import CloudProviderError
 from looper_api.providers.registry import CloudProviderRegistry
-from looper_api.providers.utils import cloud_target_id, legacy_cloud_target_ids, to_plain
+from looper_api.providers.utils import (
+    cloud_target_id,
+    filter_images,
+    filter_instance_types,
+    legacy_cloud_target_ids,
+    to_plain,
+)
+from looper_api.remote_credentials import EncryptedSshCredentialStore
+from looper_api.remote_worker import deploy_remote_worker
 
 CatalogKind = Literal[
     "region",
@@ -212,12 +234,41 @@ def ensure_managed_security_group(
     return group.model_dump(mode="json", by_alias=True)
 
 
+_FULL_CATALOG_CACHE_VERSION = 4
+_PAGED_CATALOG_KINDS = {"instance-type", "image"}
+
+
+@dataclass(frozen=True)
+class _CatalogSnapshot:
+    items: list[dict[str, Any]]
+    source: Literal["live", "cache", "stale-cache"]
+    fetched_at: datetime
+    expires_at: datetime
+    stale: bool = False
+    warning: str | None = None
+
+
+def _snapshot_filters(kind: CatalogKind, filters: CatalogFilters) -> CatalogFilters:
+    if kind == "instance-type":
+        return CatalogFilters(region=filters.region, zone=filters.zone)
+    if kind == "image":
+        return CatalogFilters(
+            region=filters.region,
+            imageType=filters.image_type,
+            instanceType=filters.instance_type,
+        )
+    return CatalogFilters(region=filters.region, zone=filters.zone, vpcId=filters.vpc_id)
+
+
 def _cache_key(provider: ProviderId, kind: CatalogKind, filters: CatalogFilters) -> str:
     return canonical_digest(
         {
+            "version": _FULL_CATALOG_CACHE_VERSION,
             "provider": provider.value,
             "kind": kind,
-            "filters": filters.model_dump(mode="json", exclude_none=True),
+            "filters": filters.model_dump(
+                mode="json", exclude_none=True, exclude={"offset", "limit"}
+            ),
         }
     )
 
@@ -248,42 +299,75 @@ def _catalog_call(provider: Any, kind: CatalogKind, filters: CatalogFilters) -> 
     return provider.list_key_pairs(filters.region)
 
 
-def catalog_search(
+def _deduplicate_catalog(kind: CatalogKind, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if kind not in _PAGED_CATALOG_KINDS:
+        return items
+    result: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in items:
+        item_id = str(item.get("id") or "")
+        if not item_id or item_id in seen:
+            continue
+        seen.add(item_id)
+        result.append(item)
+    return result
+
+
+def _catalog_snapshot(
     session: Session,
     settings: Settings,
     registry: CloudProviderRegistry,
     provider_id: ProviderId,
     kind: CatalogKind,
     filters: CatalogFilters,
-) -> CatalogResponse:
+) -> _CatalogSnapshot:
     provider = registry.get(provider_id)
     now = utc_now()
-    key = _cache_key(provider_id, kind, filters)
+    snapshot_filters = _snapshot_filters(kind, filters)
+    key = _cache_key(provider_id, kind, snapshot_filters)
     record = session.get(CloudCatalogCacheRecord, key)
     if record and _aware(record.expires_at) > now:
-        return CatalogResponse(
-            provider=provider_id,
-            resourceType=kind,
+        return _CatalogSnapshot(
             items=record.payload_json,
-            total=len(record.payload_json),
             source="cache",
-            fetchedAt=record.fetched_at,
-            expiresAt=record.expires_at,
+            fetched_at=record.fetched_at,
+            expires_at=record.expires_at,
             stale=False,
+        )
+    if (
+        record
+        and filters.offset > 0
+        and _aware(record.fetched_at) + timedelta(seconds=settings.cloud_stale_cache_seconds) > now
+    ):
+        return _CatalogSnapshot(
+            items=record.payload_json,
+            source="stale-cache",
+            fetched_at=record.fetched_at,
+            expires_at=_aware(record.fetched_at)
+            + timedelta(seconds=settings.cloud_stale_cache_seconds),
+            stale=True,
+            warning="为保持分页顺序一致，继续使用当前目录快照",
         )
 
     try:
-        models = _catalog_call(provider, kind, filters)
-        payload = [model.model_dump(mode="json", by_alias=True) for model in models]
+        models = _catalog_call(provider, kind, snapshot_filters)
+        payload = _deduplicate_catalog(
+            kind, [model.model_dump(mode="json", by_alias=True) for model in models]
+        )
         expires = now + timedelta(seconds=settings.cloud_catalog_ttl_seconds)
         if record is None:
             record = CloudCatalogCacheRecord(
                 key=key,
                 provider=provider_id.value,
                 resource_type=kind,
-                region=filters.region,
-                zone=filters.zone,
-                query_json=filters.model_dump(mode="json", exclude_none=True),
+                region=snapshot_filters.region,
+                zone=snapshot_filters.zone,
+                query_json={
+                    "version": _FULL_CATALOG_CACHE_VERSION,
+                    **snapshot_filters.model_dump(
+                        mode="json", exclude_none=True, exclude={"offset", "limit"}
+                    ),
+                },
                 payload_json=payload,
                 fetched_at=now,
                 expires_at=expires,
@@ -296,14 +380,11 @@ def catalog_search(
             record.expires_at = expires
             record.last_error = None
         session.flush()
-        return CatalogResponse(
-            provider=provider_id,
-            resourceType=kind,
+        return _CatalogSnapshot(
             items=payload,
-            total=len(payload),
             source="live",
-            fetchedAt=now,
-            expiresAt=expires,
+            fetched_at=now,
+            expires_at=expires,
             stale=False,
         )
     except (CloudProviderError, CloudWorkflowError) as error:
@@ -316,18 +397,357 @@ def catalog_search(
             stale_expires = _aware(record.fetched_at) + timedelta(
                 seconds=settings.cloud_stale_cache_seconds
             )
-            return CatalogResponse(
-                provider=provider_id,
-                resourceType=kind,
+            return _CatalogSnapshot(
                 items=record.payload_json,
-                total=len(record.payload_json),
                 source="stale-cache",
-                fetchedAt=record.fetched_at,
-                expiresAt=stale_expires,
+                fetched_at=record.fetched_at,
+                expires_at=stale_expires,
                 stale=True,
                 warning=f"实时查询失败，显示缓存：{error}",
             )
         raise
+
+
+def catalog_inventory(
+    session: Session,
+    settings: Settings,
+    registry: CloudProviderRegistry,
+    provider_id: ProviderId,
+    kind: CatalogKind,
+    filters: CatalogFilters,
+) -> CatalogResponse:
+    snapshot = _catalog_snapshot(session, settings, registry, provider_id, kind, filters)
+    return CatalogResponse(
+        provider=provider_id,
+        resourceType=kind,
+        items=snapshot.items,
+        total=len(snapshot.items),
+        offset=0,
+        limit=max(len(snapshot.items), 1),
+        nextOffset=None,
+        source=snapshot.source,
+        fetchedAt=snapshot.fetched_at,
+        expiresAt=snapshot.expires_at,
+        stale=snapshot.stale,
+        warning=snapshot.warning,
+    )
+
+
+def _natural_catalog_key(value: str) -> tuple[tuple[int, int | str], ...]:
+    return tuple(
+        (1, int(part)) if part.isdigit() else (0, part.casefold())
+        for part in re.split(r"(\d+)", value)
+        if part
+    )
+
+
+def _inventory_sort_rank(available: bool | None) -> int:
+    if available is True:
+        return 0
+    if available is False:
+        return 1
+    return 2
+
+
+def _architecture_group(value: str | None) -> str | None:
+    normalized = (value or "").casefold().replace("-", "_")
+    if "arm" in normalized or "aarch" in normalized:
+        return "arm"
+    if any(token in normalized for token in ("x86", "amd64", "i386", "i686")):
+        return "x86"
+    return None
+
+
+def catalog_search(
+    session: Session,
+    settings: Settings,
+    registry: CloudProviderRegistry,
+    provider_id: ProviderId,
+    kind: CatalogKind,
+    filters: CatalogFilters,
+) -> CatalogResponse:
+    snapshot = _catalog_snapshot(session, settings, registry, provider_id, kind, filters)
+    items = snapshot.items
+    if kind == "instance-type":
+        models = filter_instance_types(
+            [InstanceTypeInfo.model_validate(item) for item in items], filters
+        )
+        if provider_id in {ProviderId.TENCENT, ProviderId.ALIBABA}:
+            models.sort(
+                key=lambda item: (
+                    _inventory_sort_rank(item.available),
+                    _natural_catalog_key(item.id),
+                    item.id,
+                )
+            )
+        else:
+            models.sort(key=lambda item: (_natural_catalog_key(item.id), item.id))
+        items = [item.model_dump(mode="json", by_alias=True) for item in models]
+    elif kind == "image":
+        models = filter_images([ImageInfo.model_validate(item) for item in items], filters)
+        if filters.instance_type:
+            instance_snapshot = _catalog_snapshot(
+                session,
+                settings,
+                registry,
+                provider_id,
+                "instance-type",
+                CatalogFilters(region=filters.region),
+            )
+            instance = next(
+                (
+                    InstanceTypeInfo.model_validate(item)
+                    for item in instance_snapshot.items
+                    if str(item.get("id", "")).casefold()
+                    == filters.instance_type.casefold()
+                ),
+                None,
+            )
+            if instance is None:
+                models = []
+            else:
+                architecture = _architecture_group(instance.architecture)
+                if architecture:
+                    models = [
+                        image
+                        for image in models
+                        if _architecture_group(image.architecture) in {None, architecture}
+                    ]
+        items = [item.model_dump(mode="json", by_alias=True) for item in models]
+
+    total = len(items)
+    if kind in _PAGED_CATALOG_KINDS:
+        page = items[filters.offset : filters.offset + filters.limit]
+        next_offset = filters.offset + filters.limit
+        next_offset = next_offset if next_offset < total else None
+    else:
+        page = items
+        next_offset = None
+    return CatalogResponse(
+        provider=provider_id,
+        resourceType=kind,
+        items=page,
+        total=total,
+        offset=filters.offset if kind in _PAGED_CATALOG_KINDS else 0,
+        limit=filters.limit,
+        nextOffset=next_offset,
+        source=snapshot.source,
+        fetchedAt=snapshot.fetched_at,
+        expiresAt=snapshot.expires_at,
+        stale=snapshot.stale,
+        warning=snapshot.warning,
+    )
+
+
+def _eligible_instance_zones(item: InstanceTypeInfo) -> list[str]:
+    capabilities = item.attributes.get("zoneCapabilities")
+    if isinstance(capabilities, list):
+        zones = {
+            str(capability.get("zone"))
+            for capability in capabilities
+            if isinstance(capability, dict)
+            and capability.get("zone")
+            and capability.get("available") is True
+        }
+        if zones:
+            return sorted(zones)
+    return sorted(set(item.zones)) if item.available is True else []
+
+
+def _usable_subnet(item: SubnetInfo) -> bool:
+    return item.available_ip_count is None or item.available_ip_count > 0
+
+
+def _subnet_rank(item: SubnetInfo, preferred_id: str | None) -> tuple[int, str]:
+    if preferred_id and item.id == preferred_id:
+        return (0, item.id)
+    if item.managed or item.tags.get("managedBy", "").casefold() == "looper":
+        return (1, item.id)
+    if item.is_default:
+        return (2, item.id)
+    return (3, item.id)
+
+
+def _free_subnet_cidr(vpc: VpcInfo, subnets: list[SubnetInfo]) -> str:
+    if not vpc.cidr_block:
+        raise CloudWorkflowError(
+            "所选 VPC 未返回 IPv4 CIDR，无法安全生成子网",
+            status_code=422,
+            code="vpc_cidr_missing",
+        )
+    try:
+        network = ipaddress.ip_network(vpc.cidr_block, strict=False)
+    except ValueError as error:
+        raise CloudWorkflowError(
+            "所选 VPC 的 IPv4 CIDR 无效",
+            status_code=422,
+            code="vpc_cidr_invalid",
+        ) from error
+    if network.version != 4 or network.prefixlen > 28:
+        raise CloudWorkflowError(
+            "所选 VPC 没有可用于自动创建子网的 IPv4 地址空间",
+            status_code=409,
+            code="subnet_cidr_unavailable",
+        )
+    occupied: list[ipaddress.IPv4Network] = []
+    for subnet in subnets:
+        if not subnet.cidr_block:
+            continue
+        try:
+            candidate = ipaddress.ip_network(subnet.cidr_block, strict=False)
+        except ValueError:
+            continue
+        if isinstance(candidate, ipaddress.IPv4Network):
+            occupied.append(candidate)
+    prefix = max(24, network.prefixlen)
+    for candidate in network.subnets(new_prefix=prefix):
+        if not any(candidate.overlaps(item) for item in occupied):
+            return str(candidate)
+    raise CloudWorkflowError(
+        "所选 VPC 没有不重叠的可用子网网段",
+        status_code=409,
+        code="subnet_cidr_exhausted",
+    )
+
+
+def resolve_instance_network(
+    session: Session,
+    settings: Settings,
+    registry: CloudProviderRegistry,
+    provider_id: ProviderId,
+    request: InstanceNetworkResolveRequest,
+    *,
+    idempotency_key: str,
+) -> InstanceNetworkResolution:
+    if provider_id not in {ProviderId.TENCENT, ProviderId.ALIBABA}:
+        raise CloudWorkflowError(
+            "当前云厂商尚不支持自动准备子网",
+            status_code=422,
+            code="managed_subnet_unsupported",
+        )
+    provider = registry.get(provider_id)
+    inventory = catalog_inventory(
+        session,
+        settings,
+        registry,
+        provider_id,
+        "instance-type",
+        CatalogFilters(region=request.region),
+    )
+    instance = next(
+        (
+            InstanceTypeInfo.model_validate(item)
+            for item in inventory.items
+            if str(item.get("id", "")).casefold() == request.instance_type.casefold()
+        ),
+        None,
+    )
+    if instance is None:
+        raise CloudWorkflowError(
+            "所选机型不在当前地域目录中",
+            status_code=409,
+            code="instance_type_unavailable",
+        )
+    eligible_zones = _eligible_instance_zones(instance)
+    if not eligible_zones:
+        raise CloudWorkflowError(
+            "所选机型在当前地域没有明确可售的可用区",
+            status_code=409,
+            code="instance_type_out_of_stock",
+        )
+    if request.zone and request.zone not in eligible_zones:
+        raise CloudWorkflowError(
+            "所选机型在指定可用区不可售",
+            status_code=409,
+            code="instance_type_zone_unavailable",
+        )
+
+    vpcs = sorted(provider.list_vpcs(request.region), key=lambda item: item.id)
+    if not vpcs:
+        raise CloudWorkflowError(
+            "当前地域没有 VPC，请先在云厂商控制台创建 VPC",
+            status_code=409,
+            code="vpc_missing",
+        )
+    vpc = next((item for item in vpcs if item.id == request.vpc_id), None)
+    if vpc is None:
+        vpc = next((item for item in vpcs if item.is_default), vpcs[0])
+
+    all_subnets = provider.list_vpc_subnets(request.region, vpc.id)
+    by_zone = {
+        zone: sorted(
+            [item for item in all_subnets if item.zone == zone and _usable_subnet(item)],
+            key=lambda item: _subnet_rank(item, request.subnet_id),
+        )
+        for zone in eligible_zones
+    }
+    if request.zone:
+        chosen_zone = request.zone
+    else:
+        with_subnets = [zone for zone in eligible_zones if by_zone.get(zone)]
+        chosen_zone = (with_subnets or eligible_zones)[0]
+
+    warnings: list[str] = []
+    if not request.zone:
+        warnings.append(f"已稳定选择可售可用区 {chosen_zone}")
+    subnet_options = by_zone.get(chosen_zone, [])
+    if subnet_options:
+        subnet = subnet_options[0]
+        action: Literal["reused", "created"] = "reused"
+    else:
+        cidr_block = _free_subnet_cidr(vpc, all_subnets)
+        token_digest = hashlib.sha256(idempotency_key.encode("utf-8")).hexdigest()
+        subnet_name = f"looper-{chosen_zone[-24:]}-{token_digest[:8]}"[:60]
+        try:
+            subnet = provider.create_managed_subnet(
+                region=request.region,
+                zone=chosen_zone,
+                vpc_id=vpc.id,
+                cidr_block=cidr_block,
+                name=subnet_name,
+                client_token=idempotency_key,
+            )
+        except CloudProviderError:
+            refreshed = provider.list_vpc_subnets(request.region, vpc.id)
+            recovered = sorted(
+                [
+                    item
+                    for item in refreshed
+                    if item.zone == chosen_zone
+                    and _usable_subnet(item)
+                    and (
+                        item.managed
+                        or item.tags.get("managedBy", "").casefold() == "looper"
+                        or item.name == subnet_name
+                    )
+                ],
+                key=lambda item: item.id,
+            )
+            if not recovered:
+                raise
+            subnet = recovered[0]
+            warnings.append("创建响应不明确，已通过云端目录核对并复用 Looper 子网")
+        action = "created"
+        session.execute(
+            delete(CloudCatalogCacheRecord).where(
+                CloudCatalogCacheRecord.provider == provider_id.value,
+                CloudCatalogCacheRecord.resource_type == "subnet",
+                CloudCatalogCacheRecord.region == request.region,
+            )
+        )
+
+    return InstanceNetworkResolution(
+        provider=provider_id,
+        region=request.region,
+        instanceType=instance.id,
+        zone=chosen_zone,
+        eligibleZones=eligible_zones,
+        vpc=vpc,
+        subnet=subnet,
+        zoneAutomaticallySelected=not bool(request.zone),
+        subnetAction=action,
+        warnings=warnings,
+    )
 
 
 def _public_spec(spec_json: dict[str, Any]) -> dict[str, Any]:
@@ -352,6 +772,41 @@ def _quote_view(record: CloudQuoteRecord) -> dict[str, Any]:
     }
 
 
+def _validate_image_compatibility(provider: Any, spec: CloudPurchaseSpec) -> None:
+    instance_rows = provider.search_instance_types(
+        CatalogFilters(region=spec.region, zone=spec.zone, query=spec.instance_type)
+    )
+    instance = next(
+        (item for item in instance_rows if item.id.casefold() == spec.instance_type.casefold()),
+        None,
+    )
+    if instance is None or instance.available is False:
+        raise CloudWorkflowError(
+            "所选机型在当前地域或可用区不可用",
+            code="instance_type_unavailable",
+        )
+    images = provider.search_images(
+        CatalogFilters(region=spec.region, instanceType=spec.instance_type)
+    )
+    image = next((item for item in images if item.id == spec.image_id), None)
+    if image is None or image.available is False:
+        raise CloudWorkflowError(
+            "所选镜像不支持当前机型",
+            code="image_instance_incompatible",
+        )
+    instance_architecture = _architecture_group(instance.architecture)
+    image_architecture = _architecture_group(image.architecture)
+    if (
+        instance_architecture
+        and image_architecture
+        and instance_architecture != image_architecture
+    ):
+        raise CloudWorkflowError(
+            "所选镜像架构与机型不兼容",
+            code="image_architecture_incompatible",
+        )
+
+
 def create_quote(
     session: Session,
     settings: Settings,
@@ -371,6 +826,7 @@ def create_quote(
             )
         return _quote_view(existing)
     provider = registry.get(spec.provider)
+    _validate_image_compatibility(provider, spec)
     try:
         quote = provider.quote(spec)
     except CloudProviderError:
@@ -767,7 +1223,82 @@ def renew_order_confirmation(
     )
 
 
-def _upsert_provisioned_target(session: Session, order: CloudOrderRecord, instance: Any) -> None:
+def _auto_connect_provisioned_target(
+    session: Session,
+    settings: Settings,
+    order: CloudOrderRecord,
+    instance: Any,
+    target: TargetRecord,
+    credentials: CloudSshCredentials,
+) -> None:
+    endpoint = instance.public_ip or instance.private_ip
+    if not endpoint:
+        target.inventory_json = {**target.inventory_json, "autoSsh": {"status": "waiting_endpoint"}}
+        return
+    request = ConnectExternalTargetRequest(
+        endpoint=endpoint,
+        port=credentials.port,
+        username=credentials.username,
+        auth_method=credentials.auth_method,
+        password=credentials.password,
+        private_key=credentials.private_key,
+        passphrase=credentials.passphrase,
+        deploy_worker=True,
+    )
+    try:
+        refreshed = connect_existing_target(session, target, request)
+        deployment = deploy_remote_worker(request, refreshed, settings)
+        host_key = str(refreshed.fingerprint_json.get("host_key_sha256") or "")
+        remembered = False
+        if credentials.remember_credentials:
+            remembered = EncryptedSshCredentialStore(settings).save(refreshed.id, request, host_key)
+        refreshed.status = "available"
+        refreshed.runnable = True
+        refreshed.inventory_json = {
+            **refreshed.inventory_json,
+            "autoSsh": {"status": "connected", "deployment": deployment.get("status", "deployed")},
+        }
+        refreshed.snapshot_digest = canonical_digest(
+            {"fingerprint": refreshed.fingerprint_json, "inventory": refreshed.inventory_json}
+        )
+        refreshed.updated_at = utc_now()
+        append_event(
+            session,
+            experiment_id=None,
+            event_type="cloud.target.auto_connected",
+            entity_type="target",
+            entity_id=refreshed.id,
+            idempotency_key=f"cloud-target-auto-connected:{order.id}:{refreshed.id}",
+            payload={"orderId": order.id, "credentialsRemembered": remembered},
+        )
+    except Exception as error:
+        target.inventory_json = {
+            **target.inventory_json,
+            "autoSsh": {"status": "failed", "message": str(error)},
+        }
+        target.snapshot_digest = canonical_digest(
+            {"fingerprint": target.fingerprint_json, "inventory": target.inventory_json}
+        )
+        target.updated_at = utc_now()
+        append_event(
+            session,
+            experiment_id=None,
+            event_type="cloud.target.auto_connect_failed",
+            entity_type="target",
+            entity_id=target.id,
+            idempotency_key=f"cloud-target-auto-connect-failed:{order.id}:{target.id}",
+            payload={"orderId": order.id, "message": str(error)},
+        )
+
+
+def _upsert_provisioned_target(
+    session: Session,
+    order: CloudOrderRecord,
+    instance: Any,
+    *,
+    settings: Settings | None = None,
+    credentials: CloudSshCredentials | None = None,
+) -> None:
     target_id = cloud_target_id(order.provider, instance.region, instance.id)
     record = session.get(TargetRecord, target_id)
     if record is None:
@@ -776,14 +1307,24 @@ def _upsert_provisioned_target(session: Session, order: CloudOrderRecord, instan
             if record is not None:
                 break
     now = utc_now()
+    # Use public_ip as endpoint if available, otherwise private_ip
+    endpoint = instance.public_ip or instance.private_ip
     inventory = {
         "source": "cloud-order",
         "order_id": order.id,
         "provider_instance_id": instance.id,
         "region": instance.region,
+        "instance_type": order.spec_json.get("instance_type"),
+        "image_id": order.spec_json.get("image_id"),
+        "cpu": order.spec_json.get("cpu"),
+        "memory_gib": order.spec_json.get("memory_gib"),
+        "key_pair_id": order.spec_json.get("key_pair_id"),
+        "public_ip_requested": order.spec_json.get("public_ip", False),
         "zone": instance.zone,
         "status": instance.status,
         "private_ip": instance.private_ip,
+        "public_ip": instance.public_ip,
+        "endpoint": endpoint,
         "public_ip_present": instance.public_ip_present,
     }
     fingerprint = {
@@ -792,6 +1333,8 @@ def _upsert_provisioned_target(session: Session, order: CloudOrderRecord, instan
         "zone": instance.zone,
         "instance_id": instance.id,
         "instance_type": order.spec_json["instance_type"],
+        "cpu": order.spec_json.get("cpu"),
+        "memory_gib": order.spec_json.get("memory_gib"),
         "image_id": order.spec_json["image_id"],
     }
     values = {
@@ -818,6 +1361,10 @@ def _upsert_provisioned_target(session: Session, order: CloudOrderRecord, instan
     else:
         for field, value in values.items():
             setattr(record, field, value)
+    session.flush()
+    record = session.get(TargetRecord, target_id)
+    if record is not None and settings is not None and credentials is not None:
+        _auto_connect_provisioned_target(session, settings, order, instance, record, credentials)
 
 
 def confirm_order(
@@ -826,6 +1373,7 @@ def confirm_order(
     registry: CloudProviderRegistry,
     order_id: str,
     request: OrderConfirmRequest,
+    ssh_credentials: CloudSshCredentials | None = None,
 ) -> dict[str, Any]:
     order = session.get(CloudOrderRecord, order_id)
     if order is None:
@@ -1023,7 +1571,9 @@ def confirm_order(
     order.error_message = None
     order.updated_at = utc_now()
     for instance in result.instances:
-        _upsert_provisioned_target(session, order, instance)
+        _upsert_provisioned_target(
+            session, order, instance, settings=settings, credentials=ssh_credentials
+        )
     append_event(
         session,
         experiment_id=None,
@@ -1038,6 +1588,48 @@ def confirm_order(
     )
     session.commit()
     return _order_view(order)
+
+
+def purchase_quote(
+    session: Session,
+    settings: Settings,
+    registry: CloudProviderRegistry,
+    quote_id: str,
+    idempotency_key: str,
+    ssh_credentials: CloudSshCredentials | None = None,
+) -> dict[str, Any]:
+    """Purchase an exact quote in one user action.
+
+    The former browser-visible confirmation token and acknowledgement phrase
+    remain internal implementation details so the existing immutable binding,
+    repricing, spend-limit, provider gate, and idempotency guarantees are kept.
+    """
+    prepared = prepare_order(session, settings, quote_id, idempotency_key)
+    if prepared["status"] != "awaiting_confirmation":
+        return prepared
+
+    request = OrderConfirmRequest(
+        confirmationToken=str(prepared["confirmationToken"]),
+        acknowledgement=str(prepared["acknowledgement"]),
+        expectedHourlyAmount=Decimal(str(prepared["hourlyAmount"])),
+    )
+    try:
+        return confirm_order(
+            session, settings, registry, str(prepared["id"]), request, ssh_credentials
+        )
+    except CloudWorkflowError:
+        # Once provider submission has been attempted, return the persisted
+        # order so the one-click flow always lands on an auditable result page.
+        order = session.get(CloudOrderRecord, str(prepared["id"]))
+        if order is not None and order.status in {
+            "failed",
+            "unknown",
+            "expired",
+            "submitted",
+            "succeeded",
+        }:
+            return _order_view(order)
+        raise
 
 
 def recover_interrupted_orders(session: Session) -> int:
@@ -1127,6 +1719,228 @@ def resolve_unknown_order(
     )
     session.flush()
     return _order_view(order)
+
+
+_PROVIDER_LABELS = {
+    "tencent": "腾讯云 CVM",
+    "alibaba": "阿里云 ECS",
+    "volcengine": "火山引擎 ECS",
+    "baidu": "百度智能云 BCC",
+}
+
+_CLOUD_PROVIDERS = {item.value for item in ProviderId}
+
+
+def _alibaba_instance_id_from_hostname(hostname: str) -> str | None:
+    """Derive an Alibaba ECS instance id from its default hostname (``iZ<id>Z``)."""
+    if not hostname or len(hostname) < 4:
+        return None
+    if hostname.startswith("iZ") and hostname.endswith("Z"):
+        return "i-" + hostname[2:-1]
+    return None
+
+
+def _destroy_identity(
+    session: Session, settings: Settings, target: TargetRecord
+) -> tuple[ProviderId, str, str]:
+    """Resolve the (provider, region, instance_id) to destroy for a target.
+
+    Cloud targets carry their provider/region/instance id in inventory. External
+    targets imported over SSH are recognised as Alibaba ECS when their hostname
+    matches the default ``iZ<id>Z`` shape, in which case the instance id is derived
+    and the region falls back to ``alibaba_default_region``.
+    """
+    inventory = target.inventory_json or {}
+    fingerprint = target.fingerprint_json or {}
+    provider_value = str(target.provider)
+    if provider_value in _CLOUD_PROVIDERS:
+        instance_id = inventory.get("instance_id") or inventory.get("provider_instance_id")
+        region = inventory.get("region") or fingerprint.get("region")
+        if not instance_id:
+            raise CloudWorkflowError(
+                "cloud target is missing an instance id",
+                status_code=422,
+                code="cloud_instance_missing",
+            )
+        if not region:
+            raise CloudWorkflowError(
+                "cloud target is missing a region", status_code=422, code="cloud_region_missing"
+            )
+        return ProviderId(provider_value), str(region), str(instance_id)
+    if provider_value == "external":
+        hostname = fingerprint.get("hostname") or target.name
+        instance_id = _alibaba_instance_id_from_hostname(str(hostname or ""))
+        if instance_id is None:
+            raise CloudWorkflowError(
+                "external target is not a recognised Alibaba ECS instance",
+                status_code=422,
+                code="not_a_destroyable_instance",
+            )
+        return ProviderId.ALIBABA, settings.alibaba_default_region, instance_id
+    raise CloudWorkflowError(
+        "target is not a destroyable cloud instance",
+        status_code=422,
+        code="not_a_cloud_instance",
+    )
+
+
+def _target_order(session: Session, target: TargetRecord) -> CloudOrderRecord | None:
+    order_id = (target.inventory_json or {}).get("order_id")
+    if not order_id:
+        return None
+    return session.get(CloudOrderRecord, order_id)
+
+
+def _destroy_acknowledgement(
+    provider_id: ProviderId, instance_name: str, instance_id: str
+) -> str:
+    provider_label = _PROVIDER_LABELS.get(provider_id.value, provider_id.value)
+    return (
+        f"确认销毁 {provider_label} 实例 {instance_name}（{instance_id}），"
+        f"并释放其系统盘、本地盘（含机械盘）、公网及 Looper 纳管的子网/安全组等随附资源"
+    )
+
+
+def _destroy_preview_resources(
+    session: Session, target: TargetRecord, instance_id: str
+) -> list[DestroyedResource]:
+    resources = [
+        DestroyedResource(kind="instance", id=instance_id, note="按量实例将被销毁"),
+        DestroyedResource(
+            kind="system-disk", id=f"{instance_id}:system-disk", note="系统盘随实例释放"
+        ),
+        DestroyedResource(
+            kind="local-disk",
+            id=f"{instance_id}:local-disk",
+            note="本地盘（含机械盘）随实例释放",
+        ),
+        DestroyedResource(
+            kind="public-ip",
+            id=f"{instance_id}:public-ip",
+            note="按量公网 IP 与带宽随实例释放",
+        ),
+    ]
+    order = _target_order(session, target)
+    if order is not None:
+        subnet_id = order.spec_json.get("subnet_id")
+        if subnet_id:
+            resources.append(
+                DestroyedResource(
+                    kind="subnet",
+                    id=str(subnet_id),
+                    note="仅当为 Looper 纳管子网时删除，否则保留",
+                )
+            )
+        for security_group_id in order.spec_json.get("security_group_ids") or []:
+            resources.append(
+                DestroyedResource(
+                    kind="security-group",
+                    id=str(security_group_id),
+                    note="仅当为 Looper 纳管安全组且不再被引用时删除，否则保留",
+                )
+            )
+    return resources
+
+
+def destroy_target_preview(
+    session: Session, settings: Settings, target_id: str
+) -> dict[str, Any]:
+    target = session.get(TargetRecord, target_id)
+    if target is None:
+        raise CloudWorkflowError("target not found", status_code=404, code="target_not_found")
+    provider_id, region, instance_id = _destroy_identity(session, settings, target)
+    preview = TargetDestroyPreview(
+        target_id=target.id,
+        provider=provider_id,
+        region=region,
+        instance_id=instance_id,
+        instance_name=target.name,
+        acknowledgement=_destroy_acknowledgement(provider_id, target.name, instance_id),
+        resources=_destroy_preview_resources(session, target, instance_id),
+    )
+    return preview.model_dump(mode="json", by_alias=True)
+
+
+def destroy_target(
+    session: Session,
+    settings: Settings,
+    registry: CloudProviderRegistry,
+    target_id: str,
+    request: TargetDestroyRequest,
+) -> dict[str, Any]:
+    target = session.get(TargetRecord, target_id)
+    if target is None:
+        raise CloudWorkflowError("target not found", status_code=404, code="target_not_found")
+    provider_id, region, instance_id = _destroy_identity(session, settings, target)
+
+    expected = _destroy_acknowledgement(provider_id, target.name, instance_id)
+    if _hash_phrase(request.acknowledgement) != _hash_phrase(expected):
+        raise CloudWorkflowError(
+            "销毁确认文本不匹配，请原样输入确认文本", code="acknowledgement_mismatch"
+        )
+    if target.lifecycle_status == "archived" and target.archive_reason == "destroyed":
+        raise CloudWorkflowError(
+            "target has already been destroyed", status_code=409, code="target_already_destroyed"
+        )
+
+    provider = registry.get(provider_id)
+    result = provider.destroy(region=region, instance_ids=[instance_id])
+
+    network_resources: list[DestroyedResource] = []
+    order = _target_order(session, target)
+    if order is not None:
+        network_resources = provider.cleanup_managed_network(
+            region=region,
+            vpc_id=order.spec_json.get("vpc_id"),
+            subnet_id=order.spec_json.get("subnet_id"),
+            security_group_ids=order.spec_json.get("security_group_ids") or [],
+        )
+
+    now = utc_now()
+    target.status = "offline"
+    target.runnable = False
+    target.lifecycle_status = "archived"
+    target.archived_at = now
+    target.archive_reason = "destroyed"
+    target.updated_at = now
+    target.inventory_json = {
+        **(target.inventory_json or {}),
+        "instance_state": "TERMINATED",
+        "destroyed_at": now.isoformat(),
+        "destroy_request_id": result.request_id,
+    }
+
+    released_resources = list(result.released_resources) + network_resources
+    append_event(
+        session,
+        experiment_id=None,
+        event_type="cloud.target.destroyed",
+        entity_type="target",
+        entity_id=target.id,
+        idempotency_key=f"cloud-target-destroyed:{target.id}:{instance_id}",
+        payload={
+            "provider": provider_id.value,
+            "targetProvider": target.provider,
+            "region": region,
+            "instanceId": instance_id,
+            "requestId": result.request_id,
+            "releasedResources": [
+                item.model_dump(mode="json", by_alias=True) for item in released_resources
+            ],
+        },
+    )
+    session.flush()
+    return {
+        "targetId": target.id,
+        "provider": provider_id.value,
+        "targetProvider": target.provider,
+        "instanceId": instance_id,
+        "requestId": result.request_id,
+        "status": "destroyed",
+        "resources": [
+            item.model_dump(mode="json", by_alias=True) for item in released_resources
+        ],
+    }
 
 
 def get_quote(session: Session, quote_id: str) -> dict[str, Any]:

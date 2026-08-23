@@ -77,8 +77,12 @@ def test_yaml_configuration_import_prefills_manifest_facts() -> None:
     assert draft.execution_model == "custom"
     assert draft.manifest is not None
     assert draft.retains_raw_evidence is True
-    assert draft.correctness_contract == ""
-    assert draft.cross_environment_audit is False
+    assert "p99-latency" in draft.correctness_contract
+    assert draft.repeats == 5
+    assert draft.has_reference is True
+    assert draft.cross_environment_audit is True
+    constraints, _ = evaluate_registration_constraints(draft)
+    assert registration_ready(constraints)
 
 
 def test_raw_result_is_a_first_class_raw_evidence_role() -> None:
@@ -115,7 +119,6 @@ def test_non_scenario_adapter_uses_declared_metric_and_required_checks() -> None
     )
     draft = draft_from_manifest_bytes(path.read_bytes(), filename=path.name).model_copy(
         update={
-            "decision_question": "Does the configured adapter execute correctly?",
             "correctness_contract": "native-result-valid must pass",
             "has_reference": True,
             "cross_environment_audit": True,
@@ -184,6 +187,25 @@ def test_registration_lifecycle_is_optimistically_locked_and_immutable(db_sessio
             record.id,
             BenchmarkRegistrationUpdate(expectedRevision=3, draft=changed),
         )
+
+
+def test_existing_version_is_reported_as_a_draft_constraint(db_session) -> None:
+    first = create_registration(db_session, _draft())
+    register_benchmark(
+        db_session,
+        first.id,
+        BenchmarkRegistrationRegister(expectedRevision=1),
+    )
+
+    duplicate = create_registration(db_session, _draft())
+    by_code = {item["code"]: item for item in duplicate.constraints_json}
+
+    assert by_code["identity.version-available"]["status"] == "fail"
+    assert "tc.smallbank.audit@0.1.0 已存在" in by_code[
+        "identity.version-available"
+    ]["detail"]
+    assert by_code["contract.digest-available"]["status"] == "fail"
+    assert not registration_ready(duplicate.constraints_json)
 
 
 def test_remote_registration_cannot_install_executable_bundle(db_session) -> None:
@@ -260,7 +282,9 @@ def test_generic_container_adapter_can_register_without_backend_plugin(db_sessio
         "canonicalOutputs": {"metrics": "metrics.jsonl", "result": "result.json"},
     }
     draft.manifest["spec"].pop("scenario", None)
+    draft.manifest["spec"].pop("infrastructure", None)
     draft.manifest["spec"]["x-extensions"]["executionStatus"] = "executable"
+    draft.manifest["spec"]["x-extensions"]["selectable"] = True
     record = create_registration(db_session, draft)
 
     assert record.constraints_json
@@ -285,3 +309,25 @@ def test_generic_container_adapter_can_register_without_backend_plugin(db_sessio
         )
     )
     assert events[-1].payload_json["runnable"] is True
+
+
+def test_adapter_managed_multi_node_requires_a_topology_input() -> None:
+    draft = _draft()
+    assert draft.manifest is not None
+    draft.manifest["spec"]["infrastructure"]["orchestration"] = "adapter"
+
+    constraints, _ = evaluate_registration_constraints(draft)
+    by_code = {item["code"]: item for item in constraints}
+
+    assert by_code["contract.infrastructure-consistency"]["status"] == "fail"
+    assert by_code["contract.infrastructure-consistency"]["blocking"] is True
+
+
+def test_looper_managed_multi_node_is_stage0_only() -> None:
+    draft = _draft()
+    draft.execution_status = "executable"
+
+    constraints, _ = evaluate_registration_constraints(draft)
+    by_code = {item["code"]: item for item in constraints}
+
+    assert by_code["execution.orchestration-support"]["status"] == "fail"

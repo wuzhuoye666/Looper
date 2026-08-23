@@ -9,7 +9,7 @@ export interface SourceDiscovery { id: string; archiveName: string; sourceDigest
 
 export interface Artifact { name: string; url: string; type?: string }
 export interface Metric { name: string; value: number; unit?: string; baseline?: number; direction?: 'min' | 'max' }
-export interface Evaluation { id: string; attemptId?: string; candidate: string; status: ExperimentStatus; score?: number; duration?: number; cost?: number; createdAt?: string; metrics?: Metric[]; artifacts?: Artifact[]; error?: string }
+export interface Evaluation { id: string; attemptId?: string; candidate: string; status: ExperimentStatus; phase?: string; phaseDetail?: string; score?: number; duration?: number; cost?: number; createdAt?: string; metrics?: Metric[]; artifacts?: Artifact[]; error?: string }
 export interface ScenarioContract {
   id: string; name: string; decision_question: string; user_value: string; workload_class: string;
   topology: 'single-node' | 'client-server' | 'multi-node' | 'closed-loop'; primary_metric: string;
@@ -35,7 +35,9 @@ export interface Experiment {
   benchmarkId?: string; benchmarkName?: string; progress?: number; bestScore?: number; baselineScore?: number;
   createdAt?: string; updatedAt?: string; owner?: string; attempts?: number; maxAttempts?: number;
   objective?: string; decisionQuestion?: string; scenario?: ScenarioContract; comparison?: SelectionComparison;
+  metricDefinitions?: Record<string, MetricDefinition>;
   config?: Record<string, unknown>; evaluations?: Evaluation[]; artifacts?: Artifact[];
+  activePhase?: string; activePhaseDetail?: string;
 }
 export interface PostOptimizationAction {
   id: string; label: string; description?: string; risk: 'low' | 'medium' | 'high'; applyMode: 'benchmark-parameter';
@@ -49,12 +51,44 @@ export interface PostOptimizationStatus {
   candidateParameters?: Record<string, unknown>; followUpExperiment?: Experiment;
 }
 export interface DashboardData { counts?: Partial<Record<ExperimentStatus, number>>; activeExperiments?: Experiment[]; recentExperiments?: Experiment[]; trend?: Array<{ time: string; score: number; baseline?: number }>; successRate?: number; totalExperiments?: number; computeHours?: number }
+export type MetricRole = 'primary_outcome' | 'hard_gate' | 'guardrail' | 'cost_efficiency' | 'stability' | 'diagnostic' | 'context';
+export type MetricVisibility = 'summary' | 'detail' | 'expert' | 'hidden';
+export type MetricDisplayFormat = 'number' | 'percent' | 'duration' | 'bytes' | 'throughput' | 'boolean';
+export interface MetricPresentation {
+  userLabel?: string;
+  userDescription?: string;
+  roles?: MetricRole[];
+  defaultVisibility?: MetricVisibility;
+  displayFormat?: MetricDisplayFormat;
+  displayPrecision?: number;
+  glossary?: string;
+}
+export interface MetricDefinition {
+  unit?: string;
+  direction?: 'minimize' | 'maximize' | 'none';
+  kind?: 'sample' | 'aggregate' | 'counter' | 'boolean';
+  required?: boolean;
+  minimumSamples?: number;
+  description?: string;
+  presentation?: MetricPresentation;
+}
+export interface BenchmarkWorkload {
+  id: string;
+  name: string;
+  metrics?: Record<string, MetricDefinition>;
+}
 export interface Benchmark {
   id: string; key?: string; name: string; description?: string; category?: string; version?: string; metrics?: string[];
+  metricDefinitions?: Record<string, MetricDefinition>;
+  workloads?: BenchmarkWorkload[];
   executionModel?: BenchmarkExecutionModel;
   inputs?: BenchmarkInputDeclaration[];
+  infrastructure?: Record<string, unknown>;
+  auditPolicy?: Record<string, unknown>;
   executionPolicy?: Record<string, unknown>;
-  cases?: number; updatedAt?: string; tags?: string[]; license?: string; runnable?: boolean; executionStatus?: string;
+  cases?: number; updatedAt?: string; tags?: string[]; license?: string; runnable?: boolean; selectable?: boolean; executionStatus?: string;
+  executionBlocker?: string; executionBlockerReason?: string;
+  deploymentRequirements?: string[]; provisionedCapabilities?: string[]; provisioning?: Record<string, unknown>; packageReady?: boolean; packageDigest?: string;
   decisionQuestion?: string; primaryMetric?: string; scenario?: ScenarioContract;
   selectionReady?: boolean;
   registrationId?: string; registrationStatus?: string;
@@ -80,25 +114,39 @@ export interface BenchmarkRegistrationConstraint {
 export interface BenchmarkRegistration {
   id: string; status: 'draft' | 'registered'; revision: number; draft: BenchmarkRegistrationDraft;
   constraints: BenchmarkRegistrationConstraint[]; readyToRegister: boolean; manifestDigest?: string;
-  benchmarkKey?: string; createdAt: string; updatedAt: string; registeredAt?: string;
+  packageDigest?: string; packageReady?: boolean; benchmarkKey?: string; createdAt: string; updatedAt: string; registeredAt?: string;
 }
 export interface Target {
-  id: string; name: string; type?: string; endpoint?: string;
+  id: string; name: string; type?: string; provider?: string; orderId?: string; endpoint?: string;
   status?: 'online' | 'offline' | 'degraded' | 'unknown' | 'inventory';
   lifecycleStatus?: 'active' | 'missing' | 'archived'; framework?: string; version?: string;
   hardware?: string; lastSeenAt?: string; lastInventorySeenAt?: string; missingSince?: string;
   inventoryMissCount?: number; archivedAt?: string; archiveReason?: string;
   tags?: string[]; runnable?: boolean;
   credentialsRemembered?: boolean;
-  deployment?: { status: string; workerId: string; remotePid: number; transport?: string; restartSafe?: boolean; deployedAt: string };
+  deployment?: { active?: boolean; status?: string; workerId?: string; remotePid?: number; remotePort?: number; transport?: string; restartSafe?: boolean; deployedAt?: string };
+  connectionTest?: { status: 'connected'; testedAt: string; hostKeySha256?: string };
   fingerprint?: {
-    processor?: string; logical_cpu_count?: number; memory_gib?: number; instance_type?: string;
+    processor?: string; logical_cpu_count?: number; memory_gib?: number; instance_type?: string; region?: string;
     system?: string; release?: string; architecture?: string; host_key_sha256?: string; host_key_type?: string;
   };
+}
+export type DestroyedResourceKind = 'instance' | 'system-disk' | 'local-disk' | 'public-ip' | 'subnet' | 'security-group';
+export interface DestroyedResource {
+  kind: DestroyedResourceKind; id: string; released: boolean; note?: string;
+}
+export interface TargetDestroyPreview {
+  targetId: string; provider: CloudProviderId; region: string; instanceId: string;
+  instanceName: string; acknowledgement: string; resources: DestroyedResource[];
+}
+export interface TargetDestroyResult {
+  targetId: string; provider: CloudProviderId; instanceId: string; requestId?: string;
+  status: string; resources: DestroyedResource[];
 }
 export interface AnalysisData {
   mode?: 'optimization' | 'selection'; targets?: SelectionTargetResult[]; comparisons?: SelectionComparison[];
   pareto?: Array<{ id?: string; candidate: string; score: number; cost: number; latency?: number; rank?: number | null; feasible?: boolean; objectives?: Record<string, number> }>;
+  benchtrust?: BenchTrustData;
   evidence?: Array<{ id: string; title: string; kind?: string; summary?: string; createdAt?: string; artifacts?: Artifact[] }>;
 }
 export interface ListResponse<T> { items: T[]; total?: number }
@@ -138,6 +186,67 @@ export interface VariabilityData {
   evidence?: { attempt_count?: number; run_group_count?: number; system_metric_names?: string[] };
 }
 
+export type BenchTrustStatus = 'available' | 'partial' | 'insufficient_evidence' | 'unavailable';
+export interface BenchTrustReferenceEnvironment {
+  environment_id: string;
+  environment_fingerprint?: Record<string, unknown> | null;
+  eligible: boolean;
+  excluded_reason?: string | null;
+  reference_value?: number | null;
+  baseline_value?: number | null;
+  benefit?: number | null;
+  benefit_lower?: number | null;
+  benefit_upper?: number | null;
+  repeat_count?: number | null;
+  valid?: boolean | null;
+  invalid_reason?: string | null;
+}
+export interface BenchTrustReferenceValidity {
+  status: BenchTrustStatus; method: string;
+  valid_environment_count: number; eligible_environment_count: number; excluded_environment_count: number;
+  rate: number | null; confidence_interval: [number, number] | null;
+  expected_direction: string; minimum_effect: number;
+  environment_results: BenchTrustReferenceEnvironment[];
+  criteria: string[]; limitations: string[];
+}
+export interface BenchTrustRankAxis {
+  axis: string; scoring_formula_ids?: string[] | null;
+  slice_count: number; candidate_count: number; comparison_count: number; method: string;
+  median_tau: number | null; minimum_tau: number | null; maximum_tau: number | null;
+  pairwise_flip_rate: number | null; tie_count: number; limitations: string[];
+}
+export interface BenchTrustRankStability {
+  status: BenchTrustStatus; axes: BenchTrustRankAxis[]; limitations: string[];
+}
+export interface BenchTrustTaskContributor {
+  task_id: string; weight: number; contribution: number; contribution_share: number;
+}
+export interface BenchTrustTaskLeverage {
+  status: BenchTrustStatus; scoring_formula: string | null; aggregation_method: string | null;
+  maximum_contribution_share: number | null; dominant_task: string | null;
+  top_contributors: BenchTrustTaskContributor[];
+  leave_one_out: { maximum_rank_shift: number | null; winner_changed: boolean | null; task_shifts: Record<string, number> };
+  limitations: string[];
+}
+export interface BenchTrustEnvironmentFactor {
+  factor: string; group_count: number; sample_count: number;
+  associated_variance_ratio: number | null; confidence_interval: [number, number] | null; missing_rate: number;
+}
+export interface BenchTrustEnvironmentSensitivity {
+  status: BenchTrustStatus; method: string; analysis_unit: string; sample_count?: number; controls?: string[];
+  total_explained_ratio: number | null; factors: BenchTrustEnvironmentFactor[]; residual_ratio: number | null;
+  warnings: string[]; limitations: string[]; association_only: boolean;
+}
+export interface BenchTrustData {
+  schemaVersion: string; methodVersion: string; status: BenchTrustStatus;
+  referenceValidityRate: BenchTrustReferenceValidity;
+  rankStability: BenchTrustRankStability;
+  taskLeverage: BenchTrustTaskLeverage;
+  environmentSensitivity: BenchTrustEnvironmentSensitivity;
+  evidence: { sample_count?: number; target_count?: number; distinct_dates?: number; distinct_workloads?: number };
+  limitations: string[]; inputDigest: string; policyDigest: string;
+}
+
 export type CloudProviderId = 'tencent' | 'alibaba' | 'volcengine' | 'baidu';
 export interface CloudReadinessCheck { code: string; label: string; ready: boolean; detail: string }
 export interface CloudProviderReadiness {
@@ -159,7 +268,15 @@ export interface CloudVpc {
 }
 export interface CloudSubnet {
   provider: CloudProviderId; region: string; zone: string; vpcId: string; id: string; name: string;
-  cidrBlock?: string; availableIpCount?: number; isDefault: boolean;
+  cidrBlock?: string; availableIpCount?: number; isDefault: boolean; tags: Record<string, string>; managed: boolean;
+}
+export interface InstanceNetworkResolveRequest {
+  region: string; instanceType: string; zone?: string; vpcId?: string; subnetId?: string;
+}
+export interface InstanceNetworkResolution {
+  provider: CloudProviderId; region: string; instanceType: string; zone: string; eligibleZones: string[];
+  vpc: CloudVpc; subnet: CloudSubnet; zoneAutomaticallySelected: boolean;
+  subnetAction: 'reused' | 'created'; warnings: string[];
 }
 export interface CloudSecurityGroup {
   provider: CloudProviderId; region: string; id: string; name: string; description?: string;
@@ -184,7 +301,7 @@ export interface SelectionAdvisorRequest {
   exactMemoryGib?: number; workloadScale?: string; minimumGpuCount: number;
   localStorage: 'required' | 'not-required' | 'unknown'; minimumNetworkBandwidthGbps?: number;
   minimumNetworkPps?: number; codeAvailability: 'available' | 'unavailable' | 'unknown';
-  architecture: 'x86' | 'arm' | 'unknown'; offset: number; limit: number;
+  architecture: 'x86' | 'arm' | 'unknown'; query?: string; offset: number; limit: number;
 }
 export interface SelectionExclusionStage {
   code: string; label: string; before: number; after: number; removed: number;
@@ -194,7 +311,7 @@ export interface AdvisedCloudInstanceType extends CloudInstanceType {
 }
 export interface SelectionAdvisorResponse {
   provider: 'alibaba' | 'tencent'; region: string; zone?: string; items: AdvisedCloudInstanceType[]; total: number;
-  offset: number; limit: number; nextOffset?: number; exclusionStages: SelectionExclusionStage[];
+  eligibleTotal: number; offset: number; limit: number; nextOffset?: number; exclusionStages: SelectionExclusionStage[];
   mostRestrictiveStage?: SelectionExclusionStage; source: 'live' | 'cache' | 'stale-cache';
   fetchedAt: string; expiresAt: string; stale: boolean; warning?: string;
 }
@@ -204,6 +321,7 @@ export interface CloudImage {
 }
 export interface CloudCatalogResponse<T> {
   provider: CloudProviderId; resourceType: string; items: T[]; total: number;
+  offset: number; limit: number; nextOffset?: number;
   source: 'live' | 'cache' | 'stale-cache'; fetchedAt: string; expiresAt: string; stale: boolean; warning?: string;
 }
 export interface CloudPurchaseSpec {

@@ -42,16 +42,32 @@ def test_demo_manifest_validates() -> None:
 @pytest.mark.parametrize(
     "path",
     [
-        "benchmarks/benchbase-smallbank/benchmark.yaml",
-        "benchmarks/dcperf-mediawiki/benchmark.yaml",
+        "docs/examples/benchmark-single-node.yaml",
+        "docs/examples/benchmark-multi-node.yaml",
     ],
 )
-def test_scenario_manifests_validate(path: str) -> None:
+def test_integration_templates_validate(path: str) -> None:
+    manifest, digest = load_and_validate_manifest(__import__("pathlib").Path(path))
+    infrastructure = manifest["spec"]["infrastructure"]
+
+    assert infrastructure["primaryNodeGroup"]
+    assert infrastructure["nodeGroups"]
+    assert digest.startswith("sha256:")
+
+
+@pytest.mark.parametrize(
+    ("path", "execution_status"),
+    [
+        ("benchmarks/benchbase-smallbank/benchmark.yaml", "stage0-adapter-only"),
+        ("benchmarks/dcperf-mediawiki/benchmark.yaml", "executable"),
+    ],
+)
+def test_scenario_manifests_validate(path: str, execution_status: str) -> None:
     manifest, digest = load_and_validate_manifest(__import__("pathlib").Path(path))
     scenario = ScenarioBenchmarkSpec.model_validate(manifest["spec"]["scenario"])
     assert scenario.primary_metric in manifest["spec"]["metrics"]
     assert digest.startswith("sha256:")
-    assert manifest["spec"]["x-extensions"]["executionStatus"] == "stage0-adapter-only"
+    assert manifest["spec"]["x-extensions"]["executionStatus"] == execution_status
 
 
 def test_client_load_accounting_closes_the_request_chain() -> None:
@@ -160,3 +176,97 @@ def test_state_transitions_are_explicit() -> None:
         require_experiment_transition(ExperimentStatus.COMPLETED, ExperimentStatus.RUNNING)
     with pytest.raises(InvalidTransition):
         require_attempt_transition(AttemptStatus.SUCCEEDED, AttemptStatus.RUNNING)
+
+
+def _minimal_presentation_manifest(presentation: dict | None = None) -> dict:
+    metric = {"unit": "score", "direction": "maximize", "kind": "sample"}
+    if presentation is not None:
+        metric["presentation"] = presentation
+    return {
+        "apiVersion": "looper.dev/v1alpha1",
+        "kind": "Benchmark",
+        "metadata": {
+            "id": "test.semantics",
+            "name": "test",
+            "version": "1",
+            "license": "INTERNAL",
+        },
+        "spec": {
+            "trust": "trusted",
+            "parameters": {},
+            "workloads": [{"id": "one", "name": "one"}],
+            "runtime": {
+                "type": "local-process",
+                "commands": {"run": {"argv": ["python", "bench.py"], "timeoutSeconds": 60}},
+            },
+            "metrics": {"score": metric},
+            "outputs": {"maxBytes": 1024, "artifacts": []},
+        },
+    }
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "benchmarks/demo/benchmark.yaml",
+        "benchmarks/sysbench/benchmark.yaml",
+        "benchmarks/benchbase-smallbank/benchmark.yaml",
+        "benchmarks/dcperf-mediawiki/benchmark.yaml",
+        "benchmarks/config-driven-fixture/benchmark.yaml",
+    ],
+)
+def test_all_benchmarks_declare_valid_presentation(path: str) -> None:
+    manifest, digest = load_and_validate_manifest(__import__("pathlib").Path(path))
+    assert digest.startswith("sha256:")
+    # Every benchmark relying on presentation must produce resolvable metric
+    # definitions that carry the controlled presentation vocabulary.
+    metrics = manifest["spec"]["metrics"]
+    assert metrics
+    for _name, declaration in metrics.items():
+        if "presentation" not in declaration:
+            continue
+        presentation = declaration["presentation"]
+        for role in presentation.get("roles", []):
+            assert role in {
+                "primary_outcome",
+                "hard_gate",
+                "guardrail",
+                "cost_efficiency",
+                "stability",
+                "diagnostic",
+                "context",
+            }
+        if "defaultVisibility" in presentation:
+            assert presentation["defaultVisibility"] in {"summary", "detail", "expert", "hidden"}
+        if "displayPrecision" in presentation:
+            assert presentation["displayPrecision"] >= 0
+
+
+def test_presentation_rejects_unknown_role() -> None:
+    with pytest.raises(ManifestError):
+        validate_document(
+            _minimal_presentation_manifest({"roles": ["primary_outcome", "bogus"]}),
+            "benchmark-manifest.schema.json",
+        )
+
+
+def test_presentation_rejects_duplicate_roles() -> None:
+    with pytest.raises(ManifestError):
+        validate_document(
+            _minimal_presentation_manifest({"roles": ["hard_gate", "hard_gate"]}),
+            "benchmark-manifest.schema.json",
+        )
+
+
+def test_presentation_rejects_negative_display_precision() -> None:
+    with pytest.raises(ManifestError):
+        validate_document(
+            _minimal_presentation_manifest({"displayPrecision": -1}),
+            "benchmark-manifest.schema.json",
+        )
+
+
+def test_metric_without_presentation_loads() -> None:
+    document = _minimal_presentation_manifest()
+    validate_document(document, "benchmark-manifest.schema.json")
+    assert "presentation" not in document["spec"]["metrics"]["score"]

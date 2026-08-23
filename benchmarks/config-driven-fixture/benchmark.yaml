@@ -3,23 +3,57 @@ kind: Benchmark
 metadata:
   id: looper.fixture.config-driven
   name: Config-driven adapter contract fixture
-  version: 1.0.0
-  description: Verifies that a suite-owned producer and normalizer run without worker changes.
+  version: 1.1.0
+  description: A self-contained contract workload that verifies package delivery, managed preparation, suite-owned production, normalization, evidence collection, and result presentation on a selected target.
   license: INTERNAL
+  source:
+    url: looper://workspace/benchmarks/config-driven-fixture
+    digest: sha256:63b7a26b1ff6bb4450fbf0c0173e1283faa3332139decd7675a873ebfb3d023c
 spec:
   trust: trusted
-  capabilities: [python, local-process]
+  capabilities: [python, local-process, config-driven-adapter]
   parameters:
     scale:
       type: integer
       minimum: 1
       maximum: 4
       default: 2
+      description: Multiplier applied to the fixture item count.
   workloads:
     - id: fixture-small
       name: Small contract fixture
+      weight: 1
       metadata:
         items: 64
+  scenario:
+    id: validation.config-driven-adapter
+    name: Config-driven package lifecycle validation
+    decision_question: Can the selected target receive and execute a complete suite-owned Looper Adapter package without preinstalled suite scripts or manual environment setup?
+    user_value: Validate package delivery and output contracts before onboarding production workloads to a target.
+    workload_class: integration-validation
+    topology: single-node
+    roles:
+      - id: target
+        kind: target
+        included_in_score: true
+        description: Worker host receiving and executing the complete package.
+    primary_metric: fixture_score
+  infrastructure:
+    orchestration: adapter
+    primaryNodeGroup: target
+    nodeGroups:
+      - id: target
+        role: target
+        count: {minimum: 1, default: 1, maximum: 1}
+        includedInScore: true
+        requirements:
+          osFamilies: [linux, windows]
+          capabilities: [python, local-process]
+          cpu: {minimumLogicalCpus: 1}
+          memory: {minimumGiB: 0.25}
+        placement:
+          sameZone: true
+          dedicated: false
   adapter:
     protocol: looper-adapter/v1
     executionModel: batch-suite
@@ -32,7 +66,20 @@ spec:
   runtime:
     type: local-process
     workingDirectory: .
+    dependencyLockDigest: sha256:bea0448bdbc381cb6fffc15deefce1288b91e0f7543e12cc430aa632101ce6da
+    dependencies: []
+    provisioning:
+      mode: managed
+      hostCapabilities: [python, local-process]
+      provides: [config-driven-adapter]
+      cacheKey: sha256:bea0448bdbc381cb6fffc15deefce1288b91e0f7543e12cc430aa632101ce6da
+      requiresNetwork: false
+      privilege: none
     commands:
+      prepare:
+        argv: ["{python}", "{benchmarkRoot}/prepare.py", "--benchmark-root", "{benchmarkRoot}", "--cache", "{cache}"]
+        timeoutSeconds: 30
+        allowedExitCodes: [0]
       run:
         argv: ["{python}", "{benchmarkRoot}/producer.py", "--envelope", "{envelope}", "--output", "{output}"]
         timeoutSeconds: 30
@@ -48,12 +95,20 @@ spec:
       kind: aggregate
       required: true
       minimumSamples: 1
+      description: Number of native fixture items accepted by the package normalizer.
+      presentation:
+        userLabel: 处理条目
+        userDescription: 套件 producer 生成且由套件 normalizer 校验通过的条目数，用于确认目标机器上的完整接入链路。
+        roles: [primary_outcome]
+        defaultVisibility: summary
+        displayFormat: number
+        displayPrecision: 0
   outputs:
     maxBytes: 1048576
     maxMetricLines: 10
     artifacts:
       - path: raw-result.json
-        role: result
+        role: raw-result
         mediaType: application/json
         required: true
       - path: result.json
@@ -64,6 +119,13 @@ spec:
         role: log
         mediaType: text/plain
         required: true
+  audit:
+    minimumRepeats: 3
+    referencePolicy: not-applicable
+    environmentAxes: [machine]
+    requiredEvidence: [system-fingerprint, raw-result, log]
   x-extensions:
+    bootstrapCatalog: true
     executionStatus: executable
     fixtureOnly: true
+    sourceLock: source-lock.json

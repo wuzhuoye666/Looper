@@ -114,6 +114,30 @@ def test_import_creates_external_target(external_db_session) -> None:
     assert view["hardware"] == "EPYC 7B13 · 16 vCPU · 64 GiB"
 
 
+def test_target_view_uses_nested_cpu_model_when_processor_is_architecture(
+    external_db_session,
+) -> None:
+    record = import_external_target(
+        external_db_session,
+        _request(
+            hardware={
+                "processor": "x86_64",
+                "logical_cpu_count": 8,
+                "memory_gib": 14.72,
+            }
+        ),
+    )
+    record.fingerprint_json = {
+        **record.fingerprint_json,
+        "architecture": "x86_64",
+        "cpu": {"model_name": "Intel(R) Xeon(R) Platinum"},
+    }
+
+    assert target_view(record)["hardware"] == (
+        "Intel(R) Xeon(R) Platinum · x86_64 · 8 vCPU · 14.72 GiB"
+    )
+
+
 def test_import_without_worker_claims_stays_inventory_only(external_db_session) -> None:
     record = import_external_target(external_db_session, _request(runnable=False))
     external_db_session.flush()
@@ -228,7 +252,7 @@ def test_connect_discovers_inventory_without_persisting_credentials(
     view = target_view(record)
     assert view["status"] == "inventory"
     assert view["framework"] == "Ubuntu 24.04.2 LTS"
-    assert view["hardware"] == "AMD EPYC 7B13 · 16 vCPU · 62.78 GiB"
+    assert view["hardware"] == "AMD EPYC 7B13 · x86_64 · 16 vCPU · 62.78 GiB"
 
 
 def test_connect_does_not_persist_failed_probe(external_db_session) -> None:

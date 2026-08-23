@@ -1,0 +1,28 @@
+[
+  {
+    "item_id": "io-nvme0n1-scheduler",
+    "domain": {
+      "minimum": null,
+      "maximum": null,
+      "step": null,
+      "choices": ["mq-deadline", "none"],
+      "log": false
+    },
+    "verified": true,
+    "source": "2026-08-23 direct read returned 'none [mq-deadline]' on Alibaba ECS /sys/block/nvme0n1/queue/scheduler",
+    "evidence_digest": "sha256:2bb5416230b0c3ad0b0ad99e37dcd208344d683e931d1036e538090f02fb2058"
+  },
+  {
+    "item_id": "io-nvme0n1-nomerges",
+    "domain": {
+      "minimum": 0,
+      "maximum": 2,
+      "step": 1,
+      "choices": null,
+      "log": false
+    },
+    "verified": true,
+    "source": "2026-08-23 direct read confirmed writable root-owned sysfs path with current value 0; values 0/1/2 come from Linux kernel queue sysfs documentation",
+    "evidence_digest": "sha256:fcab84a884f138fb084d1fc4f3db298b06345828b6157e319e90ad538f847272"
+  }
+]

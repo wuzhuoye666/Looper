@@ -1,6 +1,6 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { CheckCircle2, KeyRound, Server, X } from 'lucide-react';
-import { useState, type FormEvent } from 'react';
+import { CheckCircle2, KeyRound, Server, Upload, X } from 'lucide-react';
+import { useEffect, useState, type FormEvent } from 'react';
 import { api } from '../lib/api';
 import type { Target } from '../lib/types';
 
@@ -9,41 +9,53 @@ type AuthMethod = 'password' | 'private-key' | 'ssh-agent';
 const emptyDraft = {
   endpoint: '',
   port: '22',
-  username: '',
-  authMethod: 'password' as AuthMethod,
+  username: 'root',
+  authMethod: 'private-key' as AuthMethod,
   password: '',
   privateKey: '',
-  passphrase: '',
-  expectedHostKey: '',
+  rememberCredentials: true,
 };
 
-export function ImportTargetDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+export function ImportTargetDialog({
+  open,
+  onClose,
+  target = null,
+}: { open: boolean; onClose: () => void; target?: Target | null }) {
   const queryClient = useQueryClient();
   const [draft, setDraft] = useState(emptyDraft);
   const [connected, setConnected] = useState<Target | null>(null);
   const [error, setError] = useState('');
+  const [sshKeyFileName, setSshKeyFileName] = useState('');
   const set = (key: keyof typeof emptyDraft, value: string) => {
     setDraft(current => ({ ...current, [key]: value }));
   };
 
+  useEffect(() => {
+    if (!open) return;
+    setDraft(current => ({
+      ...emptyDraft,
+      endpoint: target?.endpoint && target.endpoint !== '—' ? target.endpoint : current.endpoint,
+    }));
+  }, [open, target]);
+
   const connect = useMutation({
     mutationFn: () => {
-      const fingerprint = draft.expectedHostKey.trim();
-      return api.connectExternalTarget({
-      endpoint: draft.endpoint.trim(),
-      port: Number(draft.port),
-      username: draft.username.trim(),
-      auth_method: draft.authMethod,
-      password: draft.authMethod === 'password' ? draft.password : undefined,
-      private_key: draft.authMethod === 'private-key' ? draft.privateKey : undefined,
-      passphrase: draft.authMethod === 'private-key' && draft.passphrase ? draft.passphrase : undefined,
-      expected_host_key_sha256: fingerprint ? (fingerprint.startsWith('SHA256:') ? fingerprint : `SHA256:${fingerprint}`) : undefined,
-    });
+      const payload = {
+        endpoint: draft.endpoint.trim(),
+        port: Number(draft.port),
+        username: draft.username.trim(),
+        auth_method: draft.authMethod,
+        password: draft.authMethod === 'password' ? draft.password : undefined,
+        private_key: draft.authMethod === 'private-key' ? draft.privateKey : undefined,
+        remember_credentials: draft.rememberCredentials,
+      };
+      return target ? api.connectTargetSsh(target.id, payload) : api.connectExternalTarget(payload);
     },
     onSuccess: target => {
       setConnected(target);
       setError('');
-      setDraft(current => ({ ...current, password: '', privateKey: '', passphrase: '' }));
+      setDraft(current => ({ ...current, password: '', privateKey: '' }));
+      setSshKeyFileName('');
       void queryClient.invalidateQueries({ queryKey: ['targets'] });
     },
     onError: nextError => {
@@ -54,6 +66,7 @@ export function ImportTargetDialog({ open, onClose }: { open: boolean; onClose: 
   const close = () => {
     if (connect.isPending) return;
     setDraft(emptyDraft);
+    setSshKeyFileName('');
     setConnected(null);
     setError('');
     connect.reset();
@@ -73,7 +86,7 @@ export function ImportTargetDialog({ open, onClose }: { open: boolean; onClose: 
         onMouseDown={event => event.stopPropagation()}
       >
         <div className="operator-dialog-heading">
-          <div><span className="eyebrow">EXTERNAL TARGET</span><h2 id="import-target-title">连接外部机器</h2></div>
+          <div><span className="eyebrow">{target ? 'PURCHASED TARGET' : 'EXTERNAL TARGET'}</span><h2 id="import-target-title">{target ? '配置并测试 SSH' : '连接外部机器'}</h2></div>
           <button className="icon-button" type="button" onClick={close} aria-label="关闭"><X size={18} /></button>
         </div>
 
@@ -99,24 +112,21 @@ export function ImportTargetDialog({ open, onClose }: { open: boolean; onClose: 
             <button className="button primary" type="button" onClick={close}>完成</button>
           </div>
         </> : <>
-          <p className="dialog-hint">输入 SSH 连接信息，Looper 会自动读取机器参数、部署测试 Worker，并通过加密隧道回传数据。</p>
+          <p className="dialog-hint">{target ? `为 ${target.name} 补充 SSH 凭据。连接成功后会读取机器参数、部署 Worker，并保存加密凭据供后续自动测试。` : '输入 SSH 连接信息，Looper 会自动读取机器参数、部署测试 Worker，并通过加密隧道回传数据。'}</p>
           <div className="import-form-grid connection-form-grid">
             <label className="import-span"><span>IP / 主机名 *</span><input required value={draft.endpoint} onChange={event => set('endpoint', event.target.value)} placeholder="如 10.0.0.7 或 db-01.internal" autoFocus /></label>
-            <label><span>连接方式 *</span><select value={draft.authMethod} onChange={event => set('authMethod', event.target.value as AuthMethod)}><option value="password">SSH 密码</option><option value="private-key">SSH 私钥</option><option value="ssh-agent">SSH Agent / 服务端密钥</option></select></label>
-            <label><span>用户名 *</span><input required value={draft.username} onChange={event => set('username', event.target.value)} placeholder="如 root 或 ubuntu" autoComplete="username" /></label>
+            <label><span>连接方式 *</span><select value={draft.authMethod} onChange={event => set('authMethod', event.target.value as AuthMethod)}><option value="private-key">SSH 私钥文件</option><option value="password">SSH 密码</option></select></label>
+            <label><span>用户名 *</span><input required value={draft.username} onChange={event => set('username', event.target.value)} placeholder="root" autoComplete="username" /></label>
             <label><span>SSH 端口 *</span><input required type="number" min="1" max="65535" value={draft.port} onChange={event => set('port', event.target.value)} /></label>
             {draft.authMethod === 'password' && <label><span>SSH 密码 *</span><input required type="password" value={draft.password} onChange={event => set('password', event.target.value)} autoComplete="current-password" /></label>}
-            {draft.authMethod === 'private-key' && <>
-              <label className="import-span"><span>SSH 私钥 *</span><textarea required value={draft.privateKey} onChange={event => set('privateKey', event.target.value)} placeholder="-----BEGIN OPENSSH PRIVATE KEY-----" autoComplete="off" /></label>
-              <label><span>私钥口令</span><input type="password" value={draft.passphrase} onChange={event => set('passphrase', event.target.value)} autoComplete="off" placeholder="没有则留空" /></label>
-            </>}
-            <label className="import-span"><span>预期主机指纹</span><input value={draft.expectedHostKey} onChange={event => set('expectedHostKey', event.target.value)} placeholder="可选，SHA256:…；填写后不匹配将拒绝连接" /></label>
+            {draft.authMethod === 'private-key' && <label className="import-span"><span>SSH 私钥文件 *</span><div className="ssh-key-file-picker"><input aria-label="SSH 私钥文件 *" required type="file" accept=".pem,.key,application/x-pem-file,text/plain" onChange={async event => { const file = event.target.files?.[0]; if (!file) return; const reader = new FileReader(); reader.onload = () => setDraft(current => ({ ...current, privateKey: String(reader.result || '') })); reader.readAsText(file); setSshKeyFileName(file.name); }} /><span>{sshKeyFileName || '请选择 .pem 或 .key 文件'}</span><Upload size={15} /></div><small>平台读取文件内容进行 SSH 连接，不上传本地路径。</small></label>}
+            <label className="checkbox-field ssh-save-field import-span"><input type="checkbox" checked={draft.rememberCredentials} onChange={event => setDraft(current => ({ ...current, rememberCredentials: event.target.checked }))} /><span>保存密钥 / 密码</span><small>{draft.rememberCredentials ? '连接成功后保存到本机加密凭据仓库。' : '仅本次连接使用，成功后不保存。'}</small></label>
           </div>
-          <p className="credential-note"><KeyRound size={14} />密码、私钥和口令不写入数据库；连接成功后会保存在本机加密凭据仓库，用于后端重启时自动恢复隧道。</p>
+          <p className="credential-note"><KeyRound size={14} />密码和私钥不会写入数据库；是否保存由上方开关决定。</p>
           {error && <div className="error-banner">{error}</div>}
           <div className="action-row">
             <button className="button" type="button" onClick={close} disabled={connect.isPending}>取消</button>
-            <button className="button primary" type="submit" disabled={connect.isPending}><Server size={16} />{connect.isPending ? '正在读取并部署…' : '连接并部署'}</button>
+            <button className="button primary" type="submit" disabled={connect.isPending || (draft.authMethod === 'private-key' && !draft.privateKey)}><Server size={16} />{connect.isPending ? '正在读取并部署…' : '连接并部署'}</button>
           </div>
         </>}
       </form>

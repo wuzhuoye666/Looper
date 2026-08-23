@@ -37,6 +37,7 @@ describe('外部机器 SSH 自动发现', () => {
 
     fireEvent.change(screen.getByLabelText('IP / 主机名 *'), { target: { value: '10.0.0.8' } });
     fireEvent.change(screen.getByLabelText('用户名 *'), { target: { value: 'ubuntu' } });
+    fireEvent.change(screen.getByLabelText('连接方式 *'), { target: { value: 'password' } });
     fireEvent.change(screen.getByLabelText('SSH 密码 *'), { target: { value: 'one-time-secret' } });
     fireEvent.click(screen.getByRole('button', { name: '连接并部署' }));
 
@@ -51,11 +52,31 @@ describe('外部机器 SSH 自动发现', () => {
       const call = vi.mocked(fetch).mock.calls.find(([input]) => String(input).endsWith('/targets/connect'));
       const body = JSON.parse(String(call?.[1]?.body));
       expect(body).toMatchObject({
-        endpoint: '10.0.0.8', port: 22, username: 'ubuntu',
         auth_method: 'password', password: 'one-time-secret',
       });
       expect(body).not.toHaveProperty('hardware');
       expect(body).not.toHaveProperty('name');
+    });
+  });
+
+  it('默认使用 root:22 并通过文件导入私钥，可关闭凭据保存', async () => {
+    renderDialog();
+
+    const keyFile = new File(['-----BEGIN OPENSSH PRIVATE KEY-----\nTEST\n-----END OPENSSH PRIVATE KEY-----'], 'Looper.pem', { type: 'application/x-pem-file' });
+    fireEvent.change(screen.getByLabelText('SSH 私钥文件 *'), { target: { files: [keyFile] } });
+    await waitFor(() => expect(screen.getByText('Looper.pem')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole('button', { name: '连接并部署' })).not.toBeDisabled());
+    fireEvent.click(screen.getByRole('checkbox', {
+      name: accessibleName => accessibleName.startsWith('保存密钥 / 密码'),
+    }));
+    fireEvent.change(screen.getByLabelText('IP / 主机名 *'), { target: { value: '10.0.0.9' } });
+    fireEvent.submit(screen.getByRole('dialog'));
+
+    await screen.findByText('连接成功，Worker 已部署');
+    await waitFor(() => {
+      const call = vi.mocked(fetch).mock.calls.find(([input]) => String(input).endsWith('/targets/connect'));
+      const body = JSON.parse(String(call?.[1]?.body));
+      expect(body).toMatchObject({ endpoint: '10.0.0.9', port: 22, username: 'root', auth_method: 'private-key', private_key: expect.stringContaining('BEGIN OPENSSH PRIVATE KEY'), remember_credentials: false });
     });
   });
 });

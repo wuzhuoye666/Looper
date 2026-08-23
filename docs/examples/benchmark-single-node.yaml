@@ -1,0 +1,124 @@
+apiVersion: looper.dev/v1alpha1
+kind: Benchmark
+metadata:
+  id: example.single-node
+  name: Example single-node benchmark
+  version: 0.1.0
+  description: Replace every example value with facts from the pinned upstream suite.
+  license: INTERNAL
+  source:
+    url: https://example.invalid/benchmark
+    commit: "0000000000000000000000000000000000000000"
+    digest: null
+  x-extensions:
+    category: cpu-iaas
+spec:
+  trust: untrusted
+  capabilities: [linux, container]
+  parameters:
+    threads:
+      type: integer
+      minimum: 1
+      maximum: 256
+      default: 8
+  workloads:
+    - id: default
+      name: Default workload
+      weight: 1
+  scenario:
+    id: example.single-node.selection
+    name: Example single-node selection
+    decision_question: Which target provides more valid work under the fixed workload?
+    user_value: Compare one concrete target at a time with identical workload semantics.
+    workload_class: single-node-example
+    topology: single-node
+    roles:
+      - id: target
+        kind: target
+        included_in_score: true
+    primary_metric: throughput
+    slo_gates:
+      - id: native-correctness
+        kind: correctness
+        scope: attempt
+        metric: valid
+        operator: "true"
+        threshold: true
+        hard: true
+  infrastructure:
+    orchestration: adapter
+    primaryNodeGroup: target
+    nodeGroups:
+      - id: target
+        role: target
+        count: {minimum: 1, default: 1, maximum: 1}
+        includedInScore: true
+        requirements:
+          osFamilies: [linux]
+          architectures: [x86_64, aarch64]
+          capabilities: [container]
+          cpu: {minimumLogicalCpus: 4}
+          memory: {minimumGiB: 8}
+        placement:
+          sameZone: true
+          dedicated: true
+  adapter:
+    protocol: looper-adapter/v1
+    executionModel: batch-suite
+    primaryMetric: throughput
+    requiredChecks: [native-correctness]
+    inputs: []
+    canonicalOutputs:
+      metrics: metrics.jsonl
+      result: result.json
+  runtime:
+    type: container
+    image: null
+    engine: docker
+    networkMode: none
+    workingDirectory: .
+    commands:
+      run:
+        argv: [benchmark-run, --envelope, "{envelope}", --output, "{output}"]
+        timeoutSeconds: 3600
+        allowedExitCodes: [0]
+      normalize:
+        argv: [benchmark-normalize, --envelope, "{envelope}", --output, "{output}"]
+        timeoutSeconds: 300
+        allowedExitCodes: [0]
+  metrics:
+    throughput:
+      unit: operations/second
+      direction: maximize
+      kind: aggregate
+      required: true
+      minimumSamples: 1
+    valid:
+      unit: bool
+      direction: none
+      kind: boolean
+      required: true
+      minimumSamples: 1
+  outputs:
+    maxBytes: 1073741824
+    maxMetricLines: 100000
+    artifacts:
+      - path: raw-result.json
+        role: raw-result
+        mediaType: application/json
+        required: true
+      - path: result.json
+        role: result
+        mediaType: application/json
+        required: true
+      - path: benchmark.log
+        role: log
+        mediaType: text/plain
+        required: true
+  audit:
+    minimumRepeats: 3
+    referencePolicy: required
+    environmentAxes: [machine, day]
+    requiredEvidence: [system-fingerprint, raw-result, log]
+  x-extensions:
+    executionStatus: stage0-adapter-only

@@ -10,7 +10,7 @@ def test_configuration_driven_package_creates_one_attempt_smoke_run(db_session) 
     experiment = create_benchmark_smoke_run(
         db_session,
         "looper.fixture.config-driven",
-        "1.0.0",
+        "1.1.0",
         BenchmarkSmokeRunRequest(parameters={"scale": 2}),
     )
     attempts = list(

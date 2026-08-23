@@ -1,0 +1,15 @@
+[
+  {
+    "item_id": "io-nvme0n1-scheduler",
+    "domain": {
+      "minimum": null,
+      "maximum": null,
+      "step": null,
+      "choices": ["mq-deadline", "none"],
+      "log": false
+    },
+    "verified": true,
+    "source": "2026-08-23 direct read of /sys/block/nvme0n1/queue/scheduler returned 'none [mq-deadline]'",
+    "evidence_digest": "sha256:d2467237f15141e4414e95a97ea3ce7cbbf5497f58ee3e8c539ff05d53c833ae"
+  }
+]

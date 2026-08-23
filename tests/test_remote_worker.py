@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from unittest.mock import Mock
 
 import httpx
@@ -36,6 +37,30 @@ def test_remote_worker_keeps_reverse_tunnel_as_compatible_fallback(tmp_path) -> 
     assert endpoint == "http://127.0.0.1:32123"
     assert remote_port == 32123
     assert mode == "reverse-tunnel"
+
+
+def test_empty_remote_worker_api_url_is_treated_as_unset(tmp_path) -> None:
+    settings = Settings(
+        _env_file=None,
+        data_dir=tmp_path,
+        remote_worker_api_url="   ",
+    )
+
+    assert settings.remote_worker_api_url is None
+
+
+def test_worker_loads_local_token_from_dotenv(tmp_path, monkeypatch) -> None:
+    (tmp_path / ".env").write_text(
+        "LOOPER_LOCAL_WORKER_TOKEN=shared-development-token\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("LOOPER_ENV_FILE", raising=False)
+    monkeypatch.delenv("LOOPER_LOCAL_WORKER_TOKEN", raising=False)
+
+    worker_main._load_worker_environment()
+
+    assert os.environ["LOOPER_LOCAL_WORKER_TOKEN"] == "shared-development-token"
 
 
 def test_worker_reregisters_after_control_plane_connection_loss(tmp_path, monkeypatch) -> None:

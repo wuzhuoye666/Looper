@@ -89,8 +89,11 @@ def _compression_measurement_runner(
 ):
     benchmark_root = repository_root / "benchmarks" / "demo"
     benchmark_script = benchmark_root / "compression_benchmark.py"
+    normalizer_script = benchmark_root / "normalizer.py"
     if not benchmark_script.is_file():
         raise FileNotFoundError(f"compression benchmark not found: {benchmark_script}")
+    if not normalizer_script.is_file():
+        raise FileNotFoundError(f"compression normalizer not found: {normalizer_script}")
 
     def measure(state: ActionState, repeat_index: int, phase: str) -> ActionMeasurement:
         run_root = evidence_root / f"{phase}-{repeat_index:02d}"
@@ -112,7 +115,7 @@ def _compression_measurement_runner(
         envelope_path.write_text(
             json.dumps(envelope, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
         )
-        completed = subprocess.run(
+        producer = subprocess.run(
             [
                 sys.executable,
                 str(benchmark_script),
@@ -129,14 +132,39 @@ def _compression_measurement_runner(
             timeout=timeout_seconds,
             check=False,
         )
-        (run_root / "process.stdout.log").write_text(completed.stdout, encoding="utf-8")
-        (run_root / "process.stderr.log").write_text(completed.stderr, encoding="utf-8")
+        (run_root / "producer.stdout.log").write_text(producer.stdout, encoding="utf-8")
+        (run_root / "producer.stderr.log").write_text(producer.stderr, encoding="utf-8")
+        normalizer = subprocess.run(
+            [
+                sys.executable,
+                str(normalizer_script),
+                "--envelope",
+                str(envelope_path),
+                "--output",
+                str(output_dir),
+            ],
+            cwd=benchmark_root,
+            env=_python_environment(repository_root),
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+            check=False,
+        )
+        (run_root / "normalizer.stdout.log").write_text(normalizer.stdout, encoding="utf-8")
+        (run_root / "normalizer.stderr.log").write_text(normalizer.stderr, encoding="utf-8")
         result_path = output_dir / "result.json"
         metrics_path = output_dir / "metrics.jsonl"
-        if completed.returncode != 0 or not result_path.is_file() or not metrics_path.is_file():
+        if (
+            producer.returncode != 0
+            or normalizer.returncode != 0
+            or not result_path.is_file()
+            or not metrics_path.is_file()
+        ):
             raise RuntimeError(
                 "compression benchmark failed "
-                f"(exit={completed.returncode}, result={result_path.is_file()}, "
+                f"(producer_exit={producer.returncode}, normalizer_exit={normalizer.returncode}, "
+                f"result={result_path.is_file()}, "
                 f"metrics={metrics_path.is_file()})"
             )
         result = json.loads(result_path.read_text(encoding="utf-8"))
@@ -158,7 +186,7 @@ def _compression_measurement_runner(
         if len(throughput) < samples or not ratios or not roundtrip_values:
             raise RuntimeError("compression benchmark emitted incomplete measurement evidence")
         gates = {
-            "process_exit": completed.returncode == 0,
+            "process_exit": producer.returncode == 0 and normalizer.returncode == 0,
             "result_status": result.get("status") == "succeeded",
             "roundtrip": all(roundtrip_values),
             "result_checks": bool(checks) and all(bool(item.get("passed")) for item in checks),

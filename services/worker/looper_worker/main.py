@@ -8,10 +8,17 @@ import time
 from pathlib import Path
 
 import httpx
+from dotenv import load_dotenv
 
 from looper_worker.client import ControlPlaneClient
 from looper_worker.fingerprint import worker_capabilities, worker_fingerprint
 from looper_worker.runner import LocalAttemptRunner, RunnerError, cleanup_orphan_processes
+
+
+def _load_worker_environment() -> None:
+    env_file = Path(os.environ.get("LOOPER_ENV_FILE", ".env"))
+    if env_file.is_file():
+        load_dotenv(env_file, override=False)
 
 
 def run_worker(
@@ -74,6 +81,7 @@ def run_worker(
 
 
 def cli() -> None:
+    _load_worker_environment()
     parser = argparse.ArgumentParser(description="Run a Looper benchmark worker")
     parser.add_argument("--api-url", default="http://127.0.0.1:8000")
     parser.add_argument(

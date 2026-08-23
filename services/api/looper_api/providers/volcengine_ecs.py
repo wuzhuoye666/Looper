@@ -7,6 +7,7 @@ from looper_api.cloud_contracts import (
     CloudPurchaseSpec,
     ImageInfo,
     InstanceTypeInfo,
+    ProviderDestroyResult,
     ProviderId,
     ProviderInfo,
     ProviderPurchaseResult,
@@ -23,8 +24,6 @@ from looper_api.providers.utils import (
     environment_credentials,
     filter_images,
     filter_instance_types,
-    image_scan_limit,
-    instance_scan_limit,
     optional_environment,
     parse_datetime,
     sdk_installed,
@@ -180,19 +179,24 @@ class VolcengineEcsProvider(CloudProvider):
         available = self._availability(filters)
         token: str | None = None
         rows: list[Any] = []
-        scan_limit = instance_scan_limit(filters)
-        while len(rows) < scan_limit:
+        seen_tokens: set[str] = set()
+        while True:
             response = self._call(
                 "describe_instance_types",
                 filters.region,
-                DescribeInstanceTypesRequest(
-                    max_results=min(100, scan_limit - len(rows)), next_token=token
-                ),
+                DescribeInstanceTypesRequest(max_results=100, next_token=token),
             )
-            rows.extend(as_list(attr(response, "instance_types", default=[])))
+            batch = as_list(attr(response, "instance_types", default=[]))
+            rows.extend(batch)
             token = attr(response, "next_token")
-            if not token:
+            if not token or not batch:
                 break
+            if token in seen_tokens:
+                raise CloudProviderError(
+                    "Volcengine instance type pagination repeated a token",
+                    code="pagination_stalled",
+                )
+            seen_tokens.add(token)
         items = []
         for item in rows:
             item_id = attr(item, "instance_type_id")
@@ -229,25 +233,32 @@ class VolcengineEcsProvider(CloudProvider):
 
         token: str | None = None
         rows: list[Any] = []
-        scan_limit = image_scan_limit(filters)
-        while len(rows) < scan_limit:
+        seen_tokens: set[str] = set()
+        while True:
             response = self._call(
                 "describe_images",
                 filters.region,
                 DescribeImagesRequest(
                     image_name=filters.query,
                     instance_type_id=None,
-                    max_results=min(100, scan_limit - len(rows)),
+                    max_results=100,
                     next_token=token,
                     os_type=filters.platform,
                     status=["available"],
                     visibility="public",
                 ),
             )
-            rows.extend(as_list(attr(response, "images", default=[])))
+            batch = as_list(attr(response, "images", default=[]))
+            rows.extend(batch)
             token = attr(response, "next_token")
-            if not token:
+            if not token or not batch:
                 break
+            if token in seen_tokens:
+                raise CloudProviderError(
+                    "Volcengine image pagination repeated a token",
+                    code="pagination_stalled",
+                )
+            seen_tokens.add(token)
         items = [
             ImageInfo(
                 provider=self.id,
@@ -351,4 +362,10 @@ class VolcengineEcsProvider(CloudProvider):
                 for instance_id in instance_ids
             ],
             details={"requestId": request_id},
+        )
+
+    def destroy(self, *, region: str, instance_ids: list[str]) -> ProviderDestroyResult:
+        raise CloudProviderError(
+            "instance destroy is not supported for Volcengine yet",
+            code="unsupported_operation",
         )

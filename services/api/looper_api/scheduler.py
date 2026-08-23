@@ -37,6 +37,7 @@ from looper_core.state import (
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from looper_api.benchmark_runtime import deployment_capabilities
 from looper_api.events import append_event
 from looper_api.models import (
     AnalysisSnapshotRecord,
@@ -77,7 +78,7 @@ def create_demo_request(name: str = "Compression Pareto study") -> ExperimentCre
         description="Local zlib search with correctness, throughput, latency, and ratio evidence.",
         spec=ExperimentSpec(
             benchmark_id="looper.demo.compression",
-            benchmark_version="1.0.0",
+            benchmark_version="1.1.0",
             target_ids=["local"],
             workload_ids=["medium"],
             baseline_parameters={"compression_level": 6, "chunk_size": 16384},
@@ -668,6 +669,12 @@ def _require_start_readiness(
         )
     runtime = benchmark.manifest_json["spec"]["runtime"]
     image = runtime.get("image")
+    if runtime.get("type") == "local-process" and (
+        not benchmark.trusted or not benchmark.manifest_path
+    ):
+        raise SchedulerError(
+            "local-process benchmark requires an explicitly approved deployable ZIP package"
+        )
     if runtime.get("type") == "container" and (
         not isinstance(image, str)
         or re.fullmatch(r"[a-z0-9](?:[a-z0-9._/-]*[a-z0-9])?@sha256:[0-9a-f]{64}", image) is None
@@ -680,7 +687,7 @@ def _require_start_readiness(
         and (spec.selection is None or spec.selection.reference_offered_load is None)
     ):
         raise SchedulerError("selection frontier requires a reference offered load")
-    required_capabilities = set(benchmark.manifest_json["spec"].get("capabilities", []))
+    required_capabilities = deployment_capabilities(benchmark.manifest_json)
     for target_id in spec.target_ids:
         target = session.get(TargetRecord, target_id)
         if target is None or not target.runnable:
@@ -688,7 +695,8 @@ def _require_start_readiness(
         missing_capabilities = sorted(required_capabilities - set(target.capabilities_json))
         if missing_capabilities:
             raise SchedulerError(
-                f"target {target_id!r} lacks benchmark capabilities: {missing_capabilities}"
+                f"target {target_id!r} cannot deploy this benchmark; "
+                f"missing host capabilities: {missing_capabilities}"
             )
 
 

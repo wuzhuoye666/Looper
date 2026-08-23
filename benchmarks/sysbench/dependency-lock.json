@@ -1,0 +1,15 @@
+{
+  "schemaVersion": "looper.dependency-lock/v1",
+  "benchmark": "looper.sysbench@1.0.1",
+  "systemPackages": [
+    {
+      "name": "sysbench",
+      "versionConstraint": ">=1.0,<1.1",
+      "installers": ["apt-get"]
+    }
+  ],
+  "source": {
+    "url": "https://github.com/akopytov/sysbench",
+    "commit": "3ceba0b1e115f8c50d1d045a4574d8ed643bd497"
+  }
+}

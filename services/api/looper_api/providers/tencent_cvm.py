@@ -11,9 +11,11 @@ from sqlalchemy.orm import Session
 from looper_api.cloud_contracts import (
     CatalogFilters,
     CloudPurchaseSpec,
+    DestroyedResource,
     ImageInfo,
     InstanceTypeInfo,
     KeyPairInfo,
+    ProviderDestroyResult,
     ProviderId,
     ProviderInfo,
     ProviderPurchaseResult,
@@ -35,7 +37,6 @@ from looper_api.providers.utils import (
     environment_credentials,
     filter_images,
     filter_instance_types,
-    image_scan_limit,
     legacy_cloud_target_ids,
     optional_environment,
     parse_datetime,
@@ -161,6 +162,7 @@ class TencentCvmProvider(CloudProvider):
                 "images",
                 "vpcs",
                 "subnets",
+                "managed-subnet",
                 "security-groups",
                 "key-pairs",
                 "managed-security-group",
@@ -293,12 +295,19 @@ class TencentCvmProvider(CloudProvider):
         return items
 
     def list_subnets(self, region: str, zone: str, vpc_id: str) -> list[SubnetInfo]:
+        return self._list_subnets(region, vpc_id=vpc_id, zone=zone)
+
+    def list_vpc_subnets(self, region: str, vpc_id: str) -> list[SubnetInfo]:
+        return self._list_subnets(region, vpc_id=vpc_id, zone=None)
+
+    def _list_subnets(
+        self, region: str, *, vpc_id: str, zone: str | None
+    ) -> list[SubnetInfo]:
         from tencentcloud.vpc.v20170312 import models
 
-        filters = [
-            {"Name": "vpc-id", "Values": [vpc_id]},
-            {"Name": "zone", "Values": [zone]},
-        ]
+        filters = [{"Name": "vpc-id", "Values": [vpc_id]}]
+        if zone:
+            filters.append({"Name": "zone", "Values": [zone]})
         items: list[SubnetInfo] = []
         offset = 0
         while True:
@@ -310,8 +319,9 @@ class TencentCvmProvider(CloudProvider):
             )
             response = self._vpc_call("DescribeSubnets", region, request)
             rows = list(response.SubnetSet or [])
-            items.extend(
-                SubnetInfo(
+            for item in rows:
+                tags = _tag_map(attr(item, "TagSet", default=[]))
+                items.append(SubnetInfo(
                     provider=self.id,
                     region=region,
                     zone=str(item.Zone),
@@ -321,14 +331,67 @@ class TencentCvmProvider(CloudProvider):
                     cidrBlock=attr(item, "CidrBlock"),
                     availableIpCount=attr(item, "AvailableIpAddressCount"),
                     isDefault=bool(attr(item, "IsDefault", default=False)),
-                )
-                for item in rows
-            )
+                    tags=tags,
+                    managed=tags.get("managedBy", "").casefold() == "looper",
+                ))
             offset += len(rows)
             total = attr(response, "TotalCount")
             if not rows or len(rows) < 100 or (total is not None and offset >= int(total)):
                 break
         return items
+
+    def create_managed_subnet(
+        self,
+        *,
+        region: str,
+        zone: str,
+        vpc_id: str,
+        cidr_block: str,
+        name: str,
+        client_token: str,
+    ) -> SubnetInfo:
+        del client_token
+        from tencentcloud.vpc.v20170312 import models
+
+        request = models.CreateSubnetRequest()
+        request.from_json_string(
+            canonical_json(
+                {
+                    "VpcId": vpc_id,
+                    "SubnetName": name,
+                    "CidrBlock": cidr_block,
+                    "Zone": zone,
+                    "Tags": [
+                        {"Key": "managedBy", "Value": "looper"},
+                        {"Key": "purpose", "Value": "cloud-purchase"},
+                    ],
+                }
+            )
+        )
+        response = self._vpc_call("CreateSubnet", region, request)
+        item = response.Subnet
+        if item is None or not attr(item, "SubnetId"):
+            raise CloudProviderError(
+                "Tencent Cloud created a subnet without returning its id",
+                code="ambiguous_response",
+                ambiguous=True,
+            )
+        tags = _tag_map(attr(item, "TagSet", default=[]))
+        tags.setdefault("managedBy", "looper")
+        tags.setdefault("purpose", "cloud-purchase")
+        return SubnetInfo(
+            provider=self.id,
+            region=region,
+            zone=str(attr(item, "Zone", default=zone)),
+            vpcId=str(attr(item, "VpcId", default=vpc_id)),
+            id=str(item.SubnetId),
+            name=str(attr(item, "SubnetName", default=name) or name),
+            cidrBlock=attr(item, "CidrBlock", default=cidr_block),
+            availableIpCount=attr(item, "AvailableIpAddressCount"),
+            isDefault=bool(attr(item, "IsDefault", default=False)),
+            tags=tags,
+            managed=True,
+        )
 
     def list_security_groups(self, region: str) -> list[SecurityGroupInfo]:
         from tencentcloud.vpc.v20170312 import models
@@ -545,13 +608,17 @@ class TencentCvmProvider(CloudProvider):
             provider_filters.append({"Name": "platform", "Values": [filters.platform]})
         items: list[ImageInfo] = []
         offset = 0
-        scan_limit = image_scan_limit(filters)
-        while len(items) < scan_limit:
-            page_size = min(100, scan_limit - len(items))
+        page_size = 100
+        while True:
             request = models.DescribeImagesRequest()
-            request.from_json_string(
-                canonical_json({"Filters": provider_filters, "Offset": offset, "Limit": page_size})
-            )
+            payload: dict[str, Any] = {
+                "Filters": provider_filters,
+                "Offset": offset,
+                "Limit": page_size,
+            }
+            if filters.instance_type:
+                payload["InstanceType"] = filters.instance_type
+            request.from_json_string(canonical_json(payload))
             response = self._call("DescribeImages", filters.region, request)
             rows = list(response.ImageSet or [])
             items.extend(
@@ -694,6 +761,143 @@ class TencentCvmProvider(CloudProvider):
             details=details,
         )
 
+    def destroy(self, *, region: str, instance_ids: list[str]) -> ProviderDestroyResult:
+        from tencentcloud.cvm.v20170312 import models
+
+        normalized = [value.strip() for value in instance_ids if value and value.strip()]
+        if not normalized or len(normalized) != len(set(normalized)):
+            raise CloudProviderError(
+                "instance ids must be non-empty and unique", code="invalid_request"
+            )
+        request = models.TerminateInstancesRequest()
+        request.from_json_string(canonical_json({"InstanceIds": normalized}))
+        response = self._call("TerminateInstances", region, request)
+        released: list[DestroyedResource] = []
+        for instance_id in normalized:
+            released.append(
+                DestroyedResource(kind="instance", id=instance_id, note="按量实例已销毁")
+            )
+            released.append(
+                DestroyedResource(
+                    kind="system-disk",
+                    id=f"{instance_id}:system-disk",
+                    note="系统盘随实例一并释放",
+                )
+            )
+            released.append(
+                DestroyedResource(
+                    kind="local-disk",
+                    id=f"{instance_id}:local-disk",
+                    note="挂载的本地盘（含机械盘/SSD）随实例一并释放",
+                )
+            )
+            released.append(
+                DestroyedResource(
+                    kind="public-ip",
+                    id=f"{instance_id}:public-ip",
+                    note="按量公网 IP 与带宽随实例释放",
+                )
+            )
+        return ProviderDestroyResult(
+            request_id=attr(response, "RequestId"),
+            instance_ids=normalized,
+            released_resources=released,
+            details={"requestId": attr(response, "RequestId")},
+        )
+
+    def cleanup_managed_network(
+        self,
+        *,
+        region: str,
+        vpc_id: str | None,
+        subnet_id: str | None,
+        security_group_ids: list[str],
+    ) -> list[DestroyedResource]:
+        from tencentcloud.vpc.v20170312 import models
+
+        released: list[DestroyedResource] = []
+        if subnet_id and vpc_id:
+            released.append(self._delete_managed_subnet(region, vpc_id, subnet_id, models))
+        for security_group_id in security_group_ids:
+            if security_group_id:
+                released.append(
+                    self._delete_managed_security_group(region, security_group_id, models)
+                )
+        return released
+
+    @staticmethod
+    def _delete_managed_subnet(
+        region: str, vpc_id: str, subnet_id: str, models: Any
+    ) -> DestroyedResource:
+        provider = TencentCvmProvider()
+        try:
+            describe = models.DescribeSubnetsRequest()
+            describe.from_json_string(
+                canonical_json({"Filters": [{"Name": "subnet-id", "Values": [subnet_id]}]})
+            )
+            response = provider._vpc_call("DescribeSubnets", region, describe)
+            rows = list(response.SubnetSet or [])
+            tags = _tag_map(attr(rows[0], "TagSet", default=[])) if rows else {}
+            if tags.get("managedBy", "").casefold() != "looper":
+                return DestroyedResource(
+                    kind="subnet",
+                    id=subnet_id,
+                    released=False,
+                    note="非 Looper 纳管子网，保留不动",
+                )
+            delete = models.DeleteSubnetRequest()
+            delete.from_json_string(
+                canonical_json({"SubnetId": subnet_id, "VpcId": vpc_id})
+            )
+            provider._vpc_call("DeleteSubnet", region, delete)
+            return DestroyedResource(kind="subnet", id=subnet_id, note="Looper 纳管子网已删除")
+        except CloudProviderError as error:
+            return DestroyedResource(
+                kind="subnet",
+                id=subnet_id,
+                released=False,
+                note=f"子网清理暂缓：{error}",
+            )
+
+    @staticmethod
+    def _delete_managed_security_group(
+        region: str, security_group_id: str, models: Any
+    ) -> DestroyedResource:
+        provider = TencentCvmProvider()
+        try:
+            describe = models.DescribeSecurityGroupsRequest()
+            describe.from_json_string(
+                canonical_json(
+                    {"Filters": [{"Name": "security-group-id", "Values": [security_group_id]}]}
+                )
+            )
+            response = provider._vpc_call("DescribeSecurityGroups", region, describe)
+            rows = list(response.SecurityGroupSet or [])
+            name = str(attr(rows[0], "SecurityGroupName", default="") or "") if rows else ""
+            tags = _tag_map(attr(rows[0], "TagSet", default=[])) if rows else {}
+            if tags.get("managedBy", "").casefold() != "looper" and not name.casefold().startswith(
+                "looper"
+            ):
+                return DestroyedResource(
+                    kind="security-group",
+                    id=security_group_id,
+                    released=False,
+                    note="非 Looper 纳管安全组，保留不动",
+                )
+            delete = models.DeleteSecurityGroupRequest()
+            delete.from_json_string(canonical_json({"SecurityGroupId": security_group_id}))
+            provider._vpc_call("DeleteSecurityGroup", region, delete)
+            return DestroyedResource(
+                kind="security-group", id=security_group_id, note="Looper 纳管安全组已删除"
+            )
+        except CloudProviderError as error:
+            return DestroyedResource(
+                kind="security-group",
+                id=security_group_id,
+                released=False,
+                note=f"安全组清理暂缓：{error}",
+            )
+
 
 def _provisioned_instance(
     region: str, instance: Any, fallback_name: str | None = None
@@ -707,6 +911,7 @@ def _provisioned_instance(
         zone=str(instance.Placement.Zone) if instance.Placement else None,
         status=str(instance.InstanceState or "PENDING"),
         privateIp=private_ips[0] if private_ips else None,
+        publicIp=public_ips[0] if public_ips else None,
         publicIpPresent=bool(public_ips),
     )
 

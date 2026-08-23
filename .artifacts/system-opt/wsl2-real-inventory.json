@@ -1,0 +1,225 @@
+{
+  "schema_version": "looper.system-config-inventory/v1alpha2",
+  "metadata": {
+    "collector_environment": {
+      "os_name": "linux",
+      "kernel_release": "6.18.33.2-microsoft-standard-WSL2",
+      "architecture": "x86_64",
+      "distribution_id": "ubuntu",
+      "distribution_version": "26.04",
+      "virtualization": "wsl2",
+      "host_identifier_sha256": "5ba27fa26c517b13a2cb885d00d011e8ba221cad08a3249e6dca823bdfdcc8b8",
+      "host_identifier_source": "/etc/machine-id (sha256; raw value not retained)"
+    },
+    "scope_limitations": [
+      "Evidence is specific to this target and collection environment; portability requires independent validation.",
+      "WSL2 uses a Microsoft-customized Linux kernel and permission model; these observations must not be extrapolated to a Tencent Cloud CVM guest."
+    ]
+  },
+  "target_id": "wsl2-ubuntu-local",
+  "target_os": "linux",
+  "manifest_id": "wsl2-ubuntu-observation-20260823",
+  "manifest_digest": "sha256:f8b4fb1f3e86d383dc66167426c7d5f216ddd73dd1ea2892217cfa2ff6a50e5b",
+  "counting_basis": "one record per Config Manifest item; no deduplication; declared=5, emitted=5",
+  "items": [
+    {
+      "item_id": "kernel-numa-balancing",
+      "parameter_id": "system.kernel-numa-balancing",
+      "target": "/proc/sys/kernel/numa_balancing",
+      "primary_component": "numa",
+      "related_components": [
+        "memory"
+      ],
+      "preflight": {
+        "status": "unavailable",
+        "value": null,
+        "source": "backend compatibility and capability preflight"
+      },
+      "current": {
+        "status": "unavailable",
+        "value": null,
+        "source": "backend readback"
+      },
+      "desired": {
+        "status": "unavailable",
+        "value": null,
+        "source": "explicit desired values"
+      },
+      "effective": {
+        "status": "unavailable",
+        "value": null,
+        "source": "same readback as current; no separate effective source declared"
+      },
+      "persistent": {
+        "status": "unavailable",
+        "value": null,
+        "source": "explicit persistent values"
+      },
+      "ownership": {
+        "status": "unavailable",
+        "value": null,
+        "source": "explicit ownership map"
+      },
+      "raw_readback": "",
+      "message": "[Errno 2] No such file or directory: '/proc/sys/kernel/numa_balancing'"
+    },
+    {
+      "item_id": "net-somaxconn",
+      "parameter_id": "system.net-somaxconn",
+      "target": "/proc/sys/net/core/somaxconn",
+      "primary_component": "network",
+      "related_components": [],
+      "preflight": {
+        "status": "succeeded",
+        "value": null,
+        "source": "backend compatibility and capability preflight"
+      },
+      "current": {
+        "status": "succeeded",
+        "value": 4096,
+        "source": "backend readback"
+      },
+      "desired": {
+        "status": "unavailable",
+        "value": null,
+        "source": "explicit desired values"
+      },
+      "effective": {
+        "status": "succeeded",
+        "value": 4096,
+        "source": "same readback as current; no separate effective source declared"
+      },
+      "persistent": {
+        "status": "unavailable",
+        "value": null,
+        "source": "explicit persistent values"
+      },
+      "ownership": {
+        "status": "unavailable",
+        "value": null,
+        "source": "explicit ownership map"
+      },
+      "raw_readback": "4096\n",
+      "message": null
+    },
+    {
+      "item_id": "storage-sda-scheduler",
+      "parameter_id": "system.storage-sda-scheduler",
+      "target": "/sys/block/sda/queue/scheduler",
+      "primary_component": "storage",
+      "related_components": [],
+      "preflight": {
+        "status": "succeeded",
+        "value": null,
+        "source": "backend compatibility and capability preflight"
+      },
+      "current": {
+        "status": "succeeded",
+        "value": "none",
+        "source": "backend readback"
+      },
+      "desired": {
+        "status": "unavailable",
+        "value": null,
+        "source": "explicit desired values"
+      },
+      "effective": {
+        "status": "succeeded",
+        "value": "none",
+        "source": "same readback as current; no separate effective source declared"
+      },
+      "persistent": {
+        "status": "unavailable",
+        "value": null,
+        "source": "explicit persistent values"
+      },
+      "ownership": {
+        "status": "unavailable",
+        "value": null,
+        "source": "explicit ownership map"
+      },
+      "raw_readback": "[none] mq-deadline kyber \n",
+      "message": null
+    },
+    {
+      "item_id": "thp-enabled",
+      "parameter_id": "system.thp-enabled",
+      "target": "/sys/kernel/mm/transparent_hugepage/enabled",
+      "primary_component": "memory",
+      "related_components": [
+        "numa"
+      ],
+      "preflight": {
+        "status": "succeeded",
+        "value": null,
+        "source": "backend compatibility and capability preflight"
+      },
+      "current": {
+        "status": "succeeded",
+        "value": "madvise",
+        "source": "backend readback"
+      },
+      "desired": {
+        "status": "unavailable",
+        "value": null,
+        "source": "explicit desired values"
+      },
+      "effective": {
+        "status": "succeeded",
+        "value": "madvise",
+        "source": "same readback as current; no separate effective source declared"
+      },
+      "persistent": {
+        "status": "unavailable",
+        "value": null,
+        "source": "explicit persistent values"
+      },
+      "ownership": {
+        "status": "unavailable",
+        "value": null,
+        "source": "explicit ownership map"
+      },
+      "raw_readback": "always [madvise] never\n",
+      "message": null
+    },
+    {
+      "item_id": "vm-swappiness",
+      "parameter_id": "system.vm-swappiness",
+      "target": "/proc/sys/vm/swappiness",
+      "primary_component": "memory",
+      "related_components": [],
+      "preflight": {
+        "status": "succeeded",
+        "value": null,
+        "source": "backend compatibility and capability preflight"
+      },
+      "current": {
+        "status": "succeeded",
+        "value": 60,
+        "source": "backend readback"
+      },
+      "desired": {
+        "status": "unavailable",
+        "value": null,
+        "source": "explicit desired values"
+      },
+      "effective": {
+        "status": "succeeded",
+        "value": 60,
+        "source": "same readback as current; no separate effective source declared"
+      },
+      "persistent": {
+        "status": "unavailable",
+        "value": null,
+        "source": "explicit persistent values"
+      },
+      "ownership": {
+        "status": "unavailable",
+        "value": null,
+        "source": "explicit ownership map"
+      },
+      "raw_readback": "60\n",
+      "message": null
+    }
+  ]
+}

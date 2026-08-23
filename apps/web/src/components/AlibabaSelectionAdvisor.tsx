@@ -76,7 +76,6 @@ function formatNumber(value: number) {
 function isStillEligible(
   item: CloudInstanceType,
   answers: Answers,
-  provider: 'alibaba' | 'tencent',
   zone: string,
 ) {
   if (item.available === false) return false;
@@ -90,7 +89,7 @@ function isStillEligible(
     : [];
   if (capabilities.length) {
     return capabilities.some(capability => {
-      if (provider === 'tencent' && !zone ? capability.available !== true : capability.available === false) return false;
+      if (!zone ? capability.available !== true : capability.available === false) return false;
       if (Number(capability.gpu || 0) < answers.minimumGpuCount) return false;
       if (answers.localStorage === 'required' && !capability.localStorageCategory && !capability.localStorageCapacityGib) return false;
       if (answers.minimumNetworkBandwidthGbps > 0 && Number(capability.networkBandwidthGbps || 0) < answers.minimumNetworkBandwidthGbps) return false;
@@ -144,6 +143,7 @@ export function CloudSelectionAdvisor({
   const [answers, setAnswers] = useState(initialAnswers);
   const [selectionNotice, setSelectionNotice] = useState('');
   const [candidateSearch, setCandidateSearch] = useState('');
+  const [candidateQuery, setCandidateQuery] = useState('');
   const gpuRelevant = answers.primaryScenario === 'ai' || answers.primaryScenario === 'video';
   const localStorageRelevant = ['database', 'search-logs', 'big-data-messaging'].some(value =>
     value === answers.primaryScenario || answers.coLocatedComponents.includes(value as SelectionScenario));
@@ -167,9 +167,10 @@ export function CloudSelectionAdvisor({
     minimumNetworkPps: networkRelevant && answers.minimumNetworkPps > 0 ? answers.minimumNetworkPps : undefined,
     codeAvailability: answers.codeAvailability,
     architecture: answers.architecture,
+    query: candidateQuery || undefined,
     offset: 0,
     limit: 20,
-  } : null, [answers, gpuRelevant, localStorageRelevant, networkRelevant, provider, region, zone]);
+  } : null, [answers, candidateQuery, gpuRelevant, localStorageRelevant, networkRelevant, provider, region, zone]);
 
   const recommendations = useInfiniteQuery({
     queryKey: ['cloud-selection-advisor', provider, request],
@@ -182,18 +183,19 @@ export function CloudSelectionAdvisor({
   const pages = recommendations.data?.pages || [];
   const result = pages[0];
   const candidates = pages.flatMap(page => page.items);
-  const filteredCandidates = useMemo(() => {
-    const needle = candidateSearch.trim().toLocaleLowerCase();
-    if (!needle) return candidates;
-    return candidates.filter(item => `${item.id} ${item.family || ''}`.toLocaleLowerCase().includes(needle));
-  }, [candidateSearch, candidates]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setCandidateQuery(candidateSearch.trim()), 300);
+    return () => window.clearTimeout(timer);
+  }, [candidateSearch]);
 
   useEffect(() => {
     setCandidateSearch('');
+    setCandidateQuery('');
   }, [answers, provider, region, zone]);
 
   useEffect(() => {
-    if (selected && !isStillEligible(selected, answers, provider, zone)) {
+    if (selected && !isStillEligible(selected, answers, zone)) {
       onSelect(null);
       setSelectionNotice(`已清除 ${selected.id}：修改后的硬约束不再匹配该机型。`);
     }
@@ -290,14 +292,14 @@ export function CloudSelectionAdvisor({
       {step === 6 && recommendations.isError && <div className="panel advisor-placeholder error"><AlertTriangle size={28} /><h2>候选读取失败</h2><p>{recommendations.error instanceof Error ? recommendations.error.message : '请稍后重试'}</p><button type="button" className="button secondary" onClick={() => recommendations.refetch()}>重试</button></div>}
       {step === 6 && result && <>
         <section className="panel advisor-result-summary">
-          <div><span className="eyebrow">FILTER RESULT</span><h2>{result.total ? `剩余 ${result.total} 个候选` : '没有满足全部硬约束的机型'}</h2><p>{result.stale ? result.warning : `目录来源：${result.source === 'live' ? '实时' : '缓存'} · 每次加载 20 个`}</p></div>
+          <div><span className="eyebrow">FILTER RESULT</span><h2>{result.total ? `${candidateQuery ? '匹配' : '剩余'} ${result.total} 个候选` : candidateQuery && result.eligibleTotal ? '全部候选中没有匹配项' : '没有满足全部硬约束的机型'}</h2><p>{result.stale ? result.warning : `目录来源：${result.source === 'live' ? '实时' : '缓存'} · 每次加载 20 个`}</p></div>
           <div className="advisor-elimination">{result.exclusionStages.map(stage => <span key={stage.code}><small>{stage.label}</small><strong>{stage.before} → {stage.after}</strong></span>)}</div>
-          {result.total > 0 && <div className="advisor-candidate-search-wrap"><label className="search-field advisor-candidate-search"><Search size={16} /><span className="sr-only">搜索候选机型</span><input aria-label="搜索候选机型" value={candidateSearch} onChange={event => setCandidateSearch(event.target.value)} placeholder="搜索已加载的机型 ID 或规格族" /></label><small>当前已加载 {candidates.length} 条，匹配 {filteredCandidates.length} 条</small></div>}
-          {!result.total && result.mostRestrictiveStage && <div className="advisor-zero-warning"><AlertTriangle size={15} /><span>限制最大的是“{result.mostRestrictiveStage.label}”，排除了 {result.mostRestrictiveStage.removed} 个机型。系统没有自动放宽条件。</span></div>}
+          {result.eligibleTotal > 0 && <div className="advisor-candidate-search-wrap"><label className="search-field advisor-candidate-search"><Search size={16} /><span className="sr-only">搜索候选机型</span><input aria-label="搜索候选机型" value={candidateSearch} onChange={event => setCandidateSearch(event.target.value)} placeholder="搜索全部候选的机型 ID 或规格族" /></label><small>{candidateQuery ? `从 ${result.eligibleTotal} 个候选中匹配 ${result.total} 条，已显示 ${candidates.length} 条` : `已显示 ${candidates.length} / ${result.total} 条`}</small></div>}
+          {!result.eligibleTotal && result.mostRestrictiveStage && <div className="advisor-zero-warning"><AlertTriangle size={15} /><span>限制最大的是“{result.mostRestrictiveStage.label}”，排除了 {result.mostRestrictiveStage.removed} 个机型。系统没有自动放宽条件。</span></div>}
           {selectionNotice && <div className="advisor-zero-warning"><AlertTriangle size={15} /><span>{selectionNotice}</span></div>}
         </section>
-        {filteredCandidates.length > 0 && <section className="advisor-candidate-list">{filteredCandidates.map(item => <CandidateCard key={item.id} item={item} selected={selected?.id === item.id} onSelect={() => { onSelect(item); setSelectionNotice(''); }} />)}</section>}
-        {candidateSearch.trim() && !filteredCandidates.length && <div className="panel advisor-search-empty"><Filter size={22} /><strong>当前已加载候选中没有匹配项</strong><span>{recommendations.hasNextPage ? '可以继续加载更多候选，新的结果会自动参与搜索。' : '请尝试其他机型 ID 或规格族。'}</span></div>}
+        {candidates.length > 0 && <section className="advisor-candidate-list">{candidates.map(item => <CandidateCard key={item.id} item={item} selected={selected?.id === item.id} onSelect={() => { onSelect(item); setSelectionNotice(''); }} />)}</section>}
+        {candidateQuery && result.eligibleTotal > 0 && !result.total && <div className="panel advisor-search-empty"><Filter size={22} /><strong>全部候选中没有匹配项</strong><span>请尝试其他机型 ID 或规格族。</span></div>}
         {recommendations.hasNextPage && <button type="button" className="button secondary advisor-load-more" disabled={recommendations.isFetchingNextPage} onClick={() => recommendations.fetchNextPage()}>{recommendations.isFetchingNextPage ? '加载中…' : `加载更多（已显示 ${candidates.length} / ${result.total}）`}</button>}
       </>}
     </div>

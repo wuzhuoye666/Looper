@@ -99,6 +99,37 @@ spec:
       minimum_effect_ratio: 0.05
       maximum_adaptive_points: 5
       expansion_factor: 1.25
+  infrastructure:
+    orchestration: looper
+    primaryNodeGroup: target
+    nodeGroups:
+      - id: target
+        role: database
+        count: {minimum: 1, default: 1, maximum: 1}
+        includedInScore: true
+        requirements:
+          osFamilies: [linux]
+          capabilities: [container, postgresql]
+        placement:
+          separateFrom: [load-generator]
+          sameZone: true
+          dedicated: true
+      - id: load-generator
+        role: load-generator
+        count: {minimum: 1, default: 1, maximum: 4}
+        includedInScore: false
+        requirements:
+          osFamilies: [linux]
+          capabilities: [container, benchbase]
+        placement:
+          separateFrom: [target]
+          sameZone: true
+          dedicated: true
+    links:
+      - source: load-generator
+        target: target
+        purpose: PostgreSQL transaction traffic
+        protocol: postgresql
   runtime:
     type: container
     image: null
@@ -122,120 +153,255 @@ spec:
       kind: aggregate
       required: true
       minimumSamples: 1
+      presentation:
+        userLabel: 施加负载
+        userDescription: 客户端计划施加的事务速率，是测试条件的上下文，不代表已完成的业务吞吐。
+        roles: [context]
+        defaultVisibility: detail
+        displayFormat: throughput
+        displayPrecision: 2
     attempted_tps:
       unit: transactions/second
       direction: none
       kind: aggregate
       required: true
       minimumSamples: 1
+      presentation:
+        userLabel: 尝试事务速率
+        userDescription: 客户端实际发起的事务速率，用于区分施加负载与成功提交。
+        roles: [context]
+        defaultVisibility: expert
+        displayFormat: throughput
+        displayPrecision: 2
     offered_requests:
       unit: transactions
       direction: none
       kind: counter
       required: true
       minimumSamples: 1
+      presentation:
+        userLabel: 施加请求数
+        userDescription: 测量窗口内计划施加的事务总数。
+        roles: [context]
+        defaultVisibility: expert
+        displayFormat: number
     started_requests:
       unit: transactions
       direction: none
       kind: counter
       required: true
       minimumSamples: 1
+      presentation:
+        userLabel: 已开始请求数
+        userDescription: 测量窗口内实际开始执行的事务总数。
+        roles: [context]
+        defaultVisibility: expert
+        displayFormat: number
     completed_requests:
       unit: transactions
       direction: none
       kind: counter
       required: true
       minimumSamples: 1
+      presentation:
+        userLabel: 已完成请求数
+        userDescription: 测量窗口内完成或超时的事务总数，用于闭合请求链路。
+        roles: [context]
+        defaultVisibility: expert
+        displayFormat: number
     offered_load_achieved_ratio:
       unit: ratio
       direction: none
       kind: aggregate
       required: true
       minimumSamples: 1
+      presentation:
+        userLabel: 负载达成率
+        userDescription: 实际达到的负载占计划负载的比例，用于判断测试是否按要求施压。
+        roles: [context]
+        defaultVisibility: detail
+        displayFormat: number
+        displayPrecision: 4
     rate_limiter_lag_ratio:
       unit: ratio
       direction: minimize
       kind: aggregate
       required: true
       minimumSamples: 1
+      presentation:
+        userLabel: 限流滞后率
+        userDescription: 客户端限流器滞后程度，仅用于诊断负载生成器本身是否健康。
+        roles: [diagnostic]
+        defaultVisibility: expert
+        displayFormat: number
+        displayPrecision: 4
     client_headroom_ratio:
       unit: ratio
       direction: maximize
       kind: aggregate
       required: true
       minimumSamples: 1
+      presentation:
+        userLabel: 客户端余量
+        userDescription: 客户端尚未用尽的能力余量，仅用于判断瓶颈是否在客户端而非目标。
+        roles: [diagnostic]
+        defaultVisibility: expert
+        displayFormat: number
+        displayPrecision: 4
     committed_tps:
       unit: transactions/second
       direction: maximize
       kind: aggregate
       required: true
       minimumSamples: 1
+      presentation:
+        userLabel: 提交吞吐量
+        userDescription: 每秒成功提交的事务数，是用户关心的主结果。
+        roles: [primary_outcome]
+        defaultVisibility: summary
+        displayFormat: throughput
+        displayPrecision: 2
     committed_transactions:
       unit: transactions
       direction: maximize
       kind: counter
       required: true
       minimumSamples: 1
+      presentation:
+        userLabel: 提交事务数
+        userDescription: 测量窗口内成功提交的事务总数，是主结果的累计口径。
+        roles: [diagnostic]
+        defaultVisibility: detail
+        displayFormat: number
     timeout_count:
       unit: transactions
       direction: minimize
       kind: counter
       required: true
       minimumSamples: 1
+      presentation:
+        userLabel: 超时事务数
+        userDescription: 超时事务总数，用于定位容量下降原因。
+        roles: [diagnostic]
+        defaultVisibility: detail
+        displayFormat: number
     timeout_ratio:
       unit: ratio
       direction: minimize
       kind: aggregate
       required: true
       minimumSamples: 1
+      presentation:
+        userLabel: 超时率
+        userDescription: 超时事务占比，超过门限即不可接受。
+        roles: [hard_gate]
+        defaultVisibility: detail
+        displayFormat: number
+        displayPrecision: 4
     latency_p50_ms:
       unit: ms
       direction: minimize
       kind: aggregate
       required: true
       minimumSamples: 100000
+      presentation:
+        userLabel: P50 延迟
+        userDescription: 事务延迟中位数，用于定位延迟分布。
+        roles: [diagnostic]
+        defaultVisibility: detail
+        displayFormat: duration
+        displayPrecision: 2
     latency_p95_ms:
       unit: ms
       direction: minimize
       kind: aggregate
       required: true
       minimumSamples: 100000
+      presentation:
+        userLabel: P95 延迟
+        userDescription: 事务延迟 P95，是尾延迟保护指标。
+        roles: [guardrail]
+        defaultVisibility: detail
+        displayFormat: duration
+        displayPrecision: 2
     latency_p99_ms:
       unit: ms
       direction: minimize
       kind: aggregate
       required: true
       minimumSamples: 100000
+      presentation:
+        userLabel: P99 延迟
+        userDescription: 事务延迟 P99，是 SLO 判定与尾延迟保护的关键指标。
+        roles: [hard_gate, guardrail]
+        defaultVisibility: detail
+        displayFormat: duration
+        displayPrecision: 2
     latency_p999_ms:
       unit: ms
       direction: minimize
       kind: aggregate
       required: true
       minimumSamples: 100000
+      presentation:
+        userLabel: P99.9 延迟
+        userDescription: 事务延迟 P99.9，仅用于定位极端尾延迟。
+        roles: [diagnostic]
+        defaultVisibility: expert
+        displayFormat: duration
+        displayPrecision: 2
     latency_max_ms:
       unit: ms
       direction: minimize
       kind: aggregate
       required: true
       minimumSamples: 100000
+      presentation:
+        userLabel: 最大延迟
+        userDescription: 事务最大延迟，仅用于问题定位。
+        roles: [diagnostic]
+        defaultVisibility: expert
+        displayFormat: duration
+        displayPrecision: 2
     abort_ratio:
       unit: ratio
       direction: minimize
       kind: aggregate
       required: true
       minimumSamples: 1
+      presentation:
+        userLabel: 中止率
+        userDescription: 事务中止占比，超过门限即不可接受。
+        roles: [hard_gate]
+        defaultVisibility: detail
+        displayFormat: number
+        displayPrecision: 4
     retry_ratio:
       unit: ratio
       direction: minimize
       kind: aggregate
       required: true
       minimumSamples: 1
+      presentation:
+        userLabel: 重试率
+        userDescription: 事务重试占比，用于定位冲突与回滚来源。
+        roles: [diagnostic]
+        defaultVisibility: detail
+        displayFormat: number
+        displayPrecision: 4
     error_ratio:
       unit: ratio
       direction: minimize
       kind: aggregate
       required: true
       minimumSamples: 1
+      presentation:
+        userLabel: 错误率
+        userDescription: 出错事务占比，超过门限即不可接受。
+        roles: [hard_gate]
+        defaultVisibility: detail
+        displayFormat: number
+        displayPrecision: 4
   outputs:
     maxBytes: 5368709120
     maxMetricLines: 1000000
@@ -260,8 +426,19 @@ spec:
         role: log
         mediaType: text/plain
         required: true
+  audit:
+    minimumRepeats: 5
+    referencePolicy: required
+    environmentAxes: [machine, day, placement]
+    requiredEvidence: [system-fingerprint, raw-result, histogram, topology, log]
   x-extensions:
+    bootstrapCatalog: true
     executionStatus: stage0-adapter-only
+    registrationStatus: blocked
+    selectable: false
+    executable: false
+    executionBlocker: client/server multi-machine orchestration is required, which current Looper does not support
+    executionBlockerReason: This paper suite requires separate client and server machines; current Looper supports no client/server multi-machine orchestration.
     adapterPath: adapters/benchbase-smallbank
     databaseVersion: "16"
     runtimeNormalizer:

@@ -1,0 +1,70 @@
+schema_version: looper.system-config-manifest/v1alpha1
+id: aliyun-ecs-nvme-multiround-validation-20260823
+version: "1"
+description: Task-specific scheduler and request-merge search on the observed root NVMe device.
+metadata:
+  target_os: linux
+  evidence_kind: empirical-aliyun-ecs
+  portability: not valid for Tencent Cloud CVM without independent capability validation
+  tuning_daemon_disposition: tuned virtual-guest remains active; its declared readahead, CPU and sysctl settings are excluded from this search
+items:
+  - id: io-nvme0n1-scheduler
+    category: io
+    primary_component: storage
+    related_components: []
+    target: /sys/block/nvme0n1/queue/scheduler
+    value_type: categorical
+    domain: {minimum: null, maximum: null, step: null, choices: [mq-deadline, none], log: false}
+    default: mq-deadline
+    read:
+      command: {argv: [read-file, "{target}"], timeout_seconds: 5}
+      parser: bracket-selected
+      true_values: []
+      false_values: []
+    apply: {argv: [write-file, "{target}", "{value}"], timeout_seconds: 5}
+    rollback: {mode: restore-snapshot, command: null}
+    activation: immediate
+    risk: medium
+    risk_reason: null
+    dependencies: []
+    preconditions:
+      - {kind: path, key: /sys/block/nvme0n1/queue/scheduler, operator: exists, value: null}
+    compatibility:
+      distributions: [ubuntu]
+      architectures: [x86_64]
+      required_paths: [/sys/block/nvme0n1/queue/scheduler]
+      required_commands: []
+    searchable: true
+    value_aliases: {}
+    description: Compare only the two scheduler values observed on this validation host.
+    source: https://docs.kernel.org/block/queue-sysfs.html#scheduler-rw
+  - id: io-nvme0n1-nomerges
+    category: io
+    primary_component: storage
+    related_components: []
+    target: /sys/block/nvme0n1/queue/nomerges
+    value_type: integer
+    domain: {minimum: 0, maximum: 2, step: 1, choices: null, log: false}
+    default: 0
+    read:
+      command: {argv: [read-file, "{target}"], timeout_seconds: 5}
+      parser: integer
+      true_values: []
+      false_values: []
+    apply: {argv: [write-file, "{target}", "{value}"], timeout_seconds: 5}
+    rollback: {mode: restore-snapshot, command: null}
+    activation: immediate
+    risk: medium
+    risk_reason: null
+    dependencies: []
+    preconditions:
+      - {kind: path, key: /sys/block/nvme0n1/queue/nomerges, operator: exists, value: null}
+    compatibility:
+      distributions: [ubuntu]
+      architectures: [x86_64]
+      required_paths: [/sys/block/nvme0n1/queue/nomerges]
+      required_commands: []
+    searchable: true
+    value_aliases: {}
+    description: Kernel-defined modes 0=all merges, 1=simple one-hit only, 2=no merge algorithms.
+    source: https://docs.kernel.org/block/queue-sysfs.html#nomerges-rw

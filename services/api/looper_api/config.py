@@ -4,7 +4,7 @@ from decimal import Decimal
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import AnyHttpUrl, Field
+from pydantic import AnyHttpUrl, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -49,6 +49,14 @@ class Settings(BaseSettings):
     source_discovery_max_files: int = Field(default=10_000, ge=1, le=100_000)
     source_discovery_max_tool_rounds: int = Field(default=32, ge=1, le=128)
     source_discovery_max_output_tokens: int = Field(default=16384, ge=1024, le=32768)
+    alibaba_default_region: str = "cn-hangzhou"
+
+    @field_validator("remote_worker_api_url", mode="before")
+    @classmethod
+    def empty_remote_worker_api_url_is_unset(cls, value: object) -> object:
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
 
     @property
     def database_uri(self) -> str:

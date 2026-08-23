@@ -1,0 +1,104 @@
+{
+  "baseline": {
+    "gate_values": {
+      "fio.success": true
+    },
+    "identity": {
+      "phase": "steady-state",
+      "statistics": "repeats=5;runtime=15s;ramp=3s;randseed=20260823",
+      "target": "sha256:9fb11d6a5ce5de3e7398a82e723dd6a73adf432939250f30baa80dc185683922",
+      "tool": "fio-3.36",
+      "workload": "fio-randread-4k-direct-numjobs2-iodepth16"
+    },
+    "metrics": {
+      "fio.read-clat-p99-us": {
+        "metric_id": "fio.read-clat-p99-us",
+        "values": [
+          31064.064,
+          30801.92,
+          31064.064,
+          31326.208,
+          30539.776
+        ]
+      },
+      "fio.read-iops": {
+        "metric_id": "fio.read-iops",
+        "values": [
+          4195.177489,
+          4197.761194000001,
+          4194.996793,
+          4197.914503,
+          4199.320272000001
+        ]
+      }
+    }
+  },
+  "candidates": [
+    {
+      "accepted": false,
+      "candidate_id": "sha256:df7f19fa077b14ae6de456489c9d1f8fbf3f96880c89b15e3ff1c81f5ff17433",
+      "change_count": 1,
+      "comparable": true,
+      "feasible": true,
+      "gates": [
+        {
+          "actual": true,
+          "gate_id": "fio-execution-success",
+          "metric": "fio.success",
+          "passed": true,
+          "reason": "every fio job must complete successfully and read data"
+        }
+      ],
+      "identity_mismatches": [],
+      "improvements": {
+        "fio.read-clat-p99-us": {
+          "accepted": false,
+          "baseline_digest": "sha256:ffbfb58ee901d4bf641fb72c62f5f3f583314de003847bd4b1c5f4d2e2b69afb",
+          "baseline_estimate": 31064.064,
+          "candidate_digest": "sha256:f7cf675d8da8468a1d537b232dcdc1f57bd5a4f7e951c1ee553cb8f9b060ec9c",
+          "candidate_estimate": 31326.208,
+          "estimate": -262.14400000000023,
+          "formula_id": "F-PROJECT-S6-S7/v1alpha1",
+          "lower": -786.4319999999971,
+          "metric_id": "fio.read-clat-p99-us",
+          "minimum_effect": 0.0,
+          "upper": 262.14400000000023
+        },
+        "fio.read-iops": {
+          "accepted": false,
+          "baseline_digest": "sha256:4f58d1d9672e50a124cd6295f2dd35c2121866ec918001ae2a537d2d868b4e52",
+          "baseline_estimate": 4197.761194000001,
+          "candidate_digest": "sha256:7ce1bcf49779ba6e7b6634019e41b58b78154db3f157d4e37734fb82b7d65ded",
+          "candidate_estimate": 4198.215045,
+          "estimate": 0.4538509999993039,
+          "formula_id": "F-PROJECT-S6-S7/v1alpha1",
+          "lower": -2.9501390000004903,
+          "metric_id": "fio.read-iops",
+          "minimum_effect": 0.0,
+          "upper": 3.3640809999997145
+        }
+      },
+      "measurement_digest": "sha256:d08516846ae746b658116dc3e56fb8f63531f81d7729affb0d4c768cade02db0",
+      "parameters": {
+        "system.io-nvme0n1-scheduler": "none"
+      },
+      "pareto_rank": 1,
+      "safety_reason": "default rollback after measurement",
+      "safety_state": "rolled_back"
+    }
+  ],
+  "diagnostic_priorities": [],
+  "diagnostic_reference": null,
+  "elapsed_seconds": 183.0957349820019,
+  "manifest_digest": "sha256:505f4b06a1ee15413ecac20e15b2fa2872bafdc84392de7641fac6facb658ba3",
+  "mode": "general",
+  "policy_digest": "sha256:bd1b576e8dbb8ee936a01a1e555792e0ddab84977519a92708a0e2a92059b7bd",
+  "policy_id": "aliyun-ecs-fio-randread-validation-20260823",
+  "recommended_candidate_id": null,
+  "routed_components": [
+    "storage"
+  ],
+  "schema_version": "looper.system-optimization-run/v1alpha1",
+  "stop_detail": "explicit consecutive no-improvement policy triggered",
+  "stop_reason": "no-improvement-policy"
+}

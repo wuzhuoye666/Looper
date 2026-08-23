@@ -12,12 +12,17 @@ function response(data: unknown) {
   });
 }
 
-function advisorResponse(offset: number, provider: 'alibaba' | 'tencent' = 'alibaba') {
+function advisorResponse(
+  offset: number,
+  provider: 'alibaba' | 'tencent' = 'alibaba',
+  query = '',
+  aggregate = false,
+) {
   const id = provider === 'tencent'
     ? (offset === 0 ? 'M8.LARGE32' : 'M7.LARGE32')
-    : (offset === 0 ? 'ecs.i9i.xlarge' : 'ecs.i8i.xlarge');
+    : (query.toLowerCase().includes('i8i') || offset > 0 ? 'ecs.i8i.xlarge' : 'ecs.i9i.xlarge');
   const region = provider === 'tencent' ? 'ap-test' : 'cn-test';
-  const zone = provider === 'tencent' ? undefined : 'cn-test-a';
+  const zone = provider === 'tencent' || aggregate ? undefined : 'cn-test-a';
   return {
     provider,
     region,
@@ -26,14 +31,15 @@ function advisorResponse(offset: number, provider: 'alibaba' | 'tencent' = 'alib
       provider, region, id, family: provider === 'tencent' ? id.split('.')[0] : id.split('.').slice(0, 2).join('.'),
       cpu: 8, memoryGib: 32, gpu: 0, architecture: 'X86', zones: zone ? [zone] : ['ap-test-1'], available: true,
       localStorageCount: 1, localStorageCapacityGib: 1900, localStorageCategory: 'local_ssd_pro',
-      attributes: provider === 'tencent' ? { zoneCapabilities: [{ zone: 'ap-test-1', available: true, localStorageCategory: 'LOCAL_SSD' }] } : {},
+      attributes: provider === 'tencent' || aggregate ? { zoneCapabilities: [{ zone: provider === 'tencent' ? 'ap-test-1' : 'cn-test-a', available: true, localStorageCategory: 'LOCAL_SSD' }] } : {},
       matchTier: 'preferred', reasons: ['规格族优先匹配数据库场景', '精确匹配 8 vCPU / 32 GiB'],
-      warnings: provider === 'tencent' ? ['地域聚合结果，需选择可用区确认；当前匹配：ap-test-1'] : [],
+      warnings: provider === 'tencent' || aggregate ? [`地域聚合结果，需选择可用区确认；当前匹配：${provider === 'tencent' ? 'ap-test-1' : 'cn-test-a'}`] : [],
     }],
-    total: 21,
+    total: query ? 1 : 21,
+    eligibleTotal: 21,
     offset,
     limit: 20,
-    nextOffset: offset === 0 ? 20 : null,
+    nextOffset: !query && offset === 0 ? 20 : null,
     exclusionStages: [
       { code: 'availability', label: '可用区库存', before: 30, after: 28, removed: 2 },
       { code: 'exact-spec', label: '精确 CPU / 内存', before: 28, after: 21, removed: 7 },
@@ -100,7 +106,7 @@ describe('阿里云 ECS 选型助手', () => {
     vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       const body = JSON.parse(String(init?.body || '{}')) as Record<string, unknown>;
       requests.push(body);
-      return response(advisorResponse(Number(body.offset || 0)));
+      return response(advisorResponse(Number(body.offset || 0), 'alibaba', String(body.query || '')));
     }));
     const view = renderAdvisor();
 
@@ -115,28 +121,22 @@ describe('阿里云 ECS 选型助手', () => {
       localStorage: 'required', codeAvailability: 'available', architecture: 'x86', offset: 0, limit: 20,
     });
 
-    fireEvent.change(screen.getByLabelText('搜索候选机型'), { target: { value: 'ECS.I9I' } });
-    expect(screen.getByText('ecs.i9i.xlarge')).toBeInTheDocument();
-    expect(requests).toHaveLength(1);
-
     fireEvent.change(screen.getByLabelText('搜索候选机型'), { target: { value: 'ecs.i8i' } });
-    expect(screen.queryByText('ecs.i9i.xlarge')).not.toBeInTheDocument();
-    expect(screen.getByText('当前已加载候选中没有匹配项')).toBeInTheDocument();
-    expect(requests).toHaveLength(1);
-
-    fireEvent.click(screen.getByRole('button', { name: /加载更多/ }));
     expect(await screen.findByText('ecs.i8i.xlarge')).toBeInTheDocument();
-    expect(requests[1]).toMatchObject({ offset: 20, limit: 20 });
+    await waitFor(() => expect(requests[requests.length - 1]).toMatchObject({ query: 'ecs.i8i', offset: 0, limit: 20 }));
+    expect(screen.getByRole('heading', { name: '匹配 1 个候选' })).toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText('搜索候选机型'), { target: { value: '' } });
-    expect(screen.getByText('ecs.i9i.xlarge')).toBeInTheDocument();
-    expect(screen.getByText('ecs.i8i.xlarge')).toBeInTheDocument();
+    expect(await screen.findByText('ecs.i9i.xlarge')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /加载更多/ }));
+    expect(await screen.findByText('ecs.i8i.xlarge')).toBeInTheDocument();
+    expect(requests[requests.length - 1]).toMatchObject({ offset: 20, limit: 20 });
   });
 
   it('选择机型后，修改硬约束会清除已选结果并解释原因', async () => {
     vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       const body = JSON.parse(String(init?.body || '{}')) as Record<string, unknown>;
-      return response(advisorResponse(Number(body.offset || 0)));
+      return response(advisorResponse(Number(body.offset || 0), 'alibaba', String(body.query || '')));
     }));
     renderAdvisor();
     await completeDatabaseQuestionnaire();
@@ -154,7 +154,7 @@ describe('阿里云 ECS 选型助手', () => {
     vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       const body = JSON.parse(String(init?.body || '{}')) as Record<string, unknown>;
       requests.push(body);
-      return response(advisorResponse(Number(body.offset || 0), 'tencent'));
+      return response(advisorResponse(Number(body.offset || 0), 'tencent', String(body.query || '')));
     }));
     renderAdvisor('tencent');
 
@@ -164,6 +164,30 @@ describe('阿里云 ECS 选型助手', () => {
     expect(await screen.findByText('M8.LARGE32')).toBeInTheDocument();
     expect(screen.getByText(/地域聚合结果，需选择可用区确认/)).toBeInTheDocument();
     expect(requests[0]).toMatchObject({ provider: 'tencent', region: 'ap-test', offset: 0 });
+    expect(requests[0].zone).toBeUndefined();
+  });
+
+  it('阿里云地域聚合候选在未选可用区时保持有效并可选择', async () => {
+    const requests: Array<Record<string, unknown>> = [];
+    vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body || '{}')) as Record<string, unknown>;
+      requests.push(body);
+      return response(advisorResponse(
+        Number(body.offset || 0),
+        'alibaba',
+        String(body.query || ''),
+        true,
+      ));
+    }));
+    renderAdvisor('alibaba');
+
+    await completeDatabaseQuestionnaire('cn-test', null);
+
+    expect(await screen.findByText('ecs.i9i.xlarge')).toBeInTheDocument();
+    expect(screen.getByText(/地域聚合结果，需选择可用区确认/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '选择此机型' }));
+    expect(screen.getByTestId('selected-instance')).toHaveTextContent('ecs.i9i.xlarge');
+    expect(requests[0]).toMatchObject({ provider: 'alibaba', region: 'cn-test', offset: 0 });
     expect(requests[0].zone).toBeUndefined();
   });
 });

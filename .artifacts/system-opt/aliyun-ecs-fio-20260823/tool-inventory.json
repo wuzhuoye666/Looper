@@ -1,0 +1,113 @@
+{
+  "counting_basis": "one record per explicit tool requirement; no inferred alternatives or package names; no automatic installation",
+  "critical_executables_resolved": true,
+  "critical_missing": [],
+  "items": [
+    {
+      "alternatives": [],
+      "criticality": "optional",
+      "executable": "stress-ng",
+      "message": null,
+      "purpose": "Candidate CPU and memory standard-pressure workload; critical only when selected.",
+      "requirement_id": "cpu-memory-pressure",
+      "resolved_path": "/usr/bin/stress-ng",
+      "selected_executable": "stress-ng",
+      "status": "succeeded"
+    },
+    {
+      "alternatives": [],
+      "criticality": "optional",
+      "executable": "perf",
+      "message": null,
+      "purpose": "Optional PMU-backed drill-down metrics; absence must not block software metrics.",
+      "requirement_id": "hardware-counters",
+      "resolved_path": "/usr/bin/perf",
+      "selected_executable": "perf",
+      "status": "succeeded"
+    },
+    {
+      "alternatives": [],
+      "criticality": "optional",
+      "executable": "iperf3",
+      "message": null,
+      "purpose": "Candidate network workload; critical only when selected.",
+      "requirement_id": "network-pressure",
+      "resolved_path": "/usr/bin/iperf3",
+      "selected_executable": "iperf3",
+      "status": "succeeded"
+    },
+    {
+      "alternatives": [],
+      "criticality": "optional",
+      "executable": "ethtool",
+      "message": null,
+      "purpose": "Optional NIC capability inspection on a selected CVM interface.",
+      "requirement_id": "nic-inspection",
+      "resolved_path": "/usr/sbin/ethtool",
+      "selected_executable": "ethtool",
+      "status": "succeeded"
+    },
+    {
+      "alternatives": [],
+      "criticality": "optional",
+      "executable": "numactl",
+      "message": null,
+      "purpose": "NUMA topology and process-policy control when a NUMA experiment is selected.",
+      "requirement_id": "numa-control",
+      "resolved_path": "/usr/bin/numactl",
+      "selected_executable": "numactl",
+      "status": "succeeded"
+    },
+    {
+      "alternatives": [],
+      "criticality": "critical",
+      "executable": "python3",
+      "message": null,
+      "purpose": "Run the System Optimizer core on the selected CVM.",
+      "requirement_id": "python-runtime",
+      "resolved_path": "/usr/bin/python3",
+      "selected_executable": "python3",
+      "status": "succeeded"
+    },
+    {
+      "alternatives": [],
+      "criticality": "optional",
+      "executable": "fio",
+      "message": null,
+      "purpose": "Candidate storage standard-pressure workload; critical only when selected.",
+      "requirement_id": "storage-pressure",
+      "resolved_path": "/usr/bin/fio",
+      "selected_executable": "fio",
+      "status": "succeeded"
+    },
+    {
+      "alternatives": [],
+      "criticality": "optional",
+      "executable": "sysctl",
+      "message": null,
+      "purpose": "Read or write sysctl names when a run explicitly selects the sysctl CLI path.",
+      "requirement_id": "sysctl-cli",
+      "resolved_path": "/usr/sbin/sysctl",
+      "selected_executable": "sysctl",
+      "status": "succeeded"
+    }
+  ],
+  "metadata": {
+    "collector_environment": {
+      "architecture": "x86_64",
+      "distribution_id": "ubuntu",
+      "distribution_version": "24.04",
+      "host_identifier_sha256": "9fb11d6a5ce5de3e7398a82e723dd6a73adf432939250f30baa80dc185683922",
+      "host_identifier_source": "/etc/machine-id (sha256; raw value not retained)",
+      "kernel_release": "6.8.0-137-generic",
+      "os_name": "linux",
+      "virtualization": "kvm"
+    },
+    "scope_limitations": [
+      "Evidence is specific to this target and collection environment; portability requires independent validation."
+    ]
+  },
+  "schema_version": "looper.local-tool-inventory/v1alpha1",
+  "target_os": "linux",
+  "verification_scope": "PATH resolution only; executable presence does not prove workload, kernel feature, PMU event, permission, or measurement usability"
+}

@@ -1,0 +1,102 @@
+{
+  "schemaVersion": "looper.dependency-lock/v1",
+  "benchmark": "dcperf.mediawiki.closed-loop",
+  "platform": {
+    "distribution": "ubuntu",
+    "release": "22.04",
+    "architecture": "x86_64",
+    "codename": "jammy"
+  },
+  "apt": {
+    "snapshot": "https://archive.ubuntu.com/ubuntu/dists/jammy",
+    "packages": [
+      "autoconf",
+      "automake",
+      "bc",
+      "build-essential",
+      "ca-certificates",
+      "curl",
+      "git",
+      "libevent-dev",
+      "libpcre2-dev",
+      "libssl-dev",
+      "libtool",
+      "linux-tools-common",
+      "linux-tools-generic",
+      "mariadb-server",
+      "nginx",
+      "pkg-config",
+      "php-cli",
+      "php-common",
+      "php-dev",
+      "php-curl",
+      "php-mbstring",
+      "php-xml",
+      "python3",
+      "python3-click",
+      "python3-psutil",
+      "python3-tabulate",
+      "python3-yaml",
+      "unzip",
+      "zlib1g",
+      "zlib1g-dev"
+    ]
+  },
+  "assets": [
+    {
+      "id": "dcperf-source",
+      "url": "https://api.github.com/repos/facebookresearch/DCPerf/tarball/9308c3e3c404e0466f0a2929f15ddcf62b2215f6",
+      "sha256": "sha256:acdc2ad0b0f03adf44bf6803abe9e7880be7c61847c7caa51c41d55a96a62371",
+      "bytes": 452649,
+      "license": "MIT"
+    },
+    {
+      "id": "oss-performance-source",
+      "url": "https://codeload.github.com/hhvm/oss-performance/tar.gz/1e0a98c987c73b4b70903469456aefdaec5ff96c",
+      "sha256": "sha256:7a2a4934b2cb56fb2827521241368734d155b7de91eced28d589fea41e532313",
+      "bytes": 111645721,
+      "license": "MIT"
+    },
+    {
+      "id": "hhvm-3.30",
+      "url": "https://github.com/facebookresearch/DCPerf/releases/download/hhvm/hhvm-3.30-multplatform-binary-ubuntu.tar.xz",
+      "sha256": "sha256:2159af71df4ffaf96b5d9f63d30fd6936685558ca9546c936ccb17ad86b9e0cb",
+      "bytes": 2081192140,
+      "license": "PHP-3.01"
+    },
+    {
+      "id": "wrk-4.2.0",
+      "url": "https://codeload.github.com/wg/wrk/tar.gz/a211dd5a7050b1f9e8a9870b95513060e72ac4a0",
+      "sha256": "sha256:172dd2788b22b210d37a68f11c91e82fdba6583d2a544f04b398a66507031229",
+      "bytes": 10973513,
+      "license": "Apache-2.0"
+    },
+    {
+      "id": "memcached-1.5.12",
+      "url": "https://codeload.github.com/memcached/memcached/tar.gz/4ba54fd8f81643ffc64bc5ba87ec5da42ea208cb",
+      "sha256": "sha256:61424866fa81e464c5652a80758c9be7311c12b88ccbc951f9b1c5be82dfc8b6",
+      "bytes": 339569,
+      "license": "BSD-3-Clause"
+    },
+    {
+      "id": "composer-2.2.24",
+      "url": "https://getcomposer.org/download/2.2.24/composer.phar",
+      "sha256": "sha256:b0c383b1f430a80a74c006f20199d1e0226848a0a90afa5c0a7d01fb90ee9075",
+      "bytes": 2417144,
+      "license": "MIT"
+    }
+  ],
+  "patches": {
+    "scaleOut": "packages/mediawiki/0001-oss-performance-scalable-hhvm.diff",
+    "memcachedCompat": "packages/mediawiki/0002-memcached-centos9-compat.diff",
+    "memcachedSignals": "packages/mediawiki/0003-memcached-signal.diff",
+    "wrk": "packages/mediawiki/0004-wrk.diff"
+  },
+  "selectedJob": {
+    "name": "oss_performance_mediawiki_mlp",
+    "loadGenerator": "wrk",
+    "topology": "single-node",
+    "clientIncludedInScore": true,
+    "siege": "not installed: the Looper package exposes only the pinned wrk workload"
+  }
+}

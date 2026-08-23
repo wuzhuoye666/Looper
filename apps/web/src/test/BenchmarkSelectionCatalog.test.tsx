@@ -21,7 +21,7 @@ describe('选型研究 Benchmark 目录', () => {
         {
           id: 'registered.adapter', key: 'registered.adapter@1.0.0',
           name: 'Registered Adapter', version: '1.0.0', category: 'database',
-          selectionReady: true, runnable: true, tags: ['python'],
+          selectionReady: true, runnable: true, packageReady: true, tags: ['python'],
           scenario: {
             id: 'registered.adapter', name: 'Registered Adapter',
             decision_question: 'Which target performs better?', user_value: 'Target selection',
@@ -41,12 +41,13 @@ describe('选型研究 Benchmark 目录', () => {
     }));
   });
 
-  it('显示新注册 Benchmark，并标记缺少选型合同的项目', async () => {
+  it('只显示具备完整部署包并可直接测试的 Benchmark', async () => {
     renderPage();
     fireEvent.change(screen.getByLabelText('研究名称 *'), { target: { value: '新套件选型' } });
     fireEvent.click(screen.getByRole('button', { name: /下一步/ }));
 
     expect(await screen.findByRole('option', { name: 'Registered Adapter · 1.0.0' })).toBeEnabled();
-    expect(screen.getByRole('option', { name: /Incomplete Adapter.*缺少选型合同/ })).toBeDisabled();
+    expect(screen.queryByRole('option', { name: /Incomplete Adapter/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: '选择场景' })).not.toBeInTheDocument();
   });
 });

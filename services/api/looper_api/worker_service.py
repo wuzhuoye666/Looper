@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import hmac
 from contextlib import suppress
@@ -15,6 +16,8 @@ from looper_core.state import AttemptStatus, CandidateStatus, ExperimentStatus
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from looper_api.benchmark_packages import BenchmarkPackageError, build_directory_package
+from looper_api.benchmark_runtime import deployment_capabilities
 from looper_api.config import Settings
 from looper_api.events import append_event
 from looper_api.models import (
@@ -348,7 +351,7 @@ def claim_attempt(
             continue
         if worker_targets and evaluation.target_id not in worker_targets:
             continue
-        required = set(benchmark.manifest_json["spec"].get("capabilities", []))
+        required = deployment_capabilities(benchmark.manifest_json)
         runtime = benchmark.manifest_json["spec"]["runtime"]
         required.add(str(runtime["type"]))
         policy = runtime.get("executionPolicy") or {}
@@ -372,6 +375,8 @@ def claim_attempt(
     attempt.status = AttemptStatus.LEASED
     attempt.fencing_token += 1
     attempt.worker_id = worker.id
+    attempt.phase = "deploying-package"
+    attempt.phase_detail = "正在向目标机器下发 Benchmark 脚本包"
     attempt.leased_at = now
     attempt.lease_expires_at = now + timedelta(seconds=settings.lease_seconds)
     candidate.status = CandidateStatus.RUNNING
@@ -388,6 +393,23 @@ def claim_attempt(
         payload={"worker_id": worker.id, "fencing_token": attempt.fencing_token},
     )
     session.flush()
+    benchmark_bundle: dict[str, Any] | None = None
+    if benchmark.manifest_path:
+        package_root = Path(benchmark.manifest_path).resolve().parent
+        try:
+            archive, package_digest = build_directory_package(package_root)
+        except BenchmarkPackageError as error:
+            raise WorkerError(f"Benchmark package cannot be delivered: {error}") from error
+        if benchmark.package_digest and package_digest != benchmark.package_digest:
+            raise WorkerError(
+                "Benchmark package digest changed after registration: "
+                f"expected {benchmark.package_digest}, built {package_digest}"
+            )
+        benchmark_bundle = {
+            "encoding": "base64+zip",
+            "digest": package_digest,
+            "data": base64.b64encode(archive).decode("ascii"),
+        }
     return {
         "attemptId": attempt.id,
         "fencingToken": attempt.fencing_token,
@@ -395,6 +417,7 @@ def claim_attempt(
         "maxOutputBytes": settings.max_output_bytes,
         "envelope": envelope,
         "manifest": benchmark.manifest_json,
+        "benchmarkBundle": benchmark_bundle,
         "benchmarkRoot": str(Path(benchmark.manifest_path or ".").resolve().parent),
         "benchmarkRelativeRoot": (
             (Path("benchmarks") / Path(benchmark.manifest_path).resolve().parent.name).as_posix()
@@ -435,6 +458,22 @@ def heartbeat_attempt(
         {AttemptStatus.LEASED, AttemptStatus.RUNNING, AttemptStatus.UPLOADING},
     )
     attempt.lease_expires_at = utc_now() + timedelta(seconds=settings.lease_seconds)
+    if request.phase and (
+        request.phase != attempt.phase or request.phase_detail != attempt.phase_detail
+    ):
+        attempt.phase = request.phase
+        attempt.phase_detail = request.phase_detail
+        append_event(
+            session,
+            experiment_id=attempt.experiment_id,
+            event_type="attempt.phase.changed",
+            entity_type="attempt",
+            entity_id=attempt.id,
+            idempotency_key=(
+                f"attempt.phase:{attempt.id}:{attempt.fencing_token}:{request.phase}"
+            ),
+            payload={"phase": request.phase, "detail": request.phase_detail},
+        )
     experiment = session.get(ExperimentRecord, attempt.experiment_id)
     return {
         "leaseExpiresAt": attempt.lease_expires_at.isoformat(),
@@ -460,6 +499,8 @@ def start_attempt(session: Session, attempt_id: str, request: AttemptStart) -> A
     attempt.envelope_json = request.envelope
     attempt.envelope_digest = canonical_digest(request.envelope)
     attempt.status = AttemptStatus.RUNNING
+    if attempt.phase is None:
+        attempt.phase = "preparing-environment"
     attempt.started_at = utc_now()
     append_event(
         session,

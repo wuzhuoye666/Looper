@@ -5,7 +5,7 @@ from decimal import Decimal
 from enum import StrEnum
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
 
 
 def _camel(value: str) -> str:
@@ -76,6 +76,8 @@ class SubnetInfo(ApiModel):
     cidr_block: str | None = None
     available_ip_count: int | None = None
     is_default: bool = False
+    tags: dict[str, str] = Field(default_factory=dict)
+    managed: bool = False
 
 
 class SecurityGroupInfo(ApiModel):
@@ -150,6 +152,9 @@ class CatalogResponse(ApiModel):
     ]
     items: list[dict[str, Any]]
     total: int
+    offset: int = 0
+    limit: int = 100
+    next_offset: int | None = None
     source: Literal["live", "cache", "stale-cache"]
     fetched_at: datetime
     expires_at: datetime
@@ -168,7 +173,30 @@ class CatalogFilters(ApiModel):
     max_memory_gib: float | None = Field(default=None, ge=0.25, le=65536)
     image_type: str | None = Field(default=None, max_length=60)
     platform: str | None = Field(default=None, max_length=80)
+    instance_type: str | None = Field(default=None, max_length=120)
+    offset: int = Field(default=0, ge=0)
     limit: int = Field(default=100, ge=1, le=500)
+
+
+class InstanceNetworkResolveRequest(ApiModel):
+    region: str = Field(min_length=2, max_length=64)
+    instance_type: str = Field(min_length=1, max_length=120)
+    zone: str | None = Field(default=None, max_length=64)
+    vpc_id: str | None = Field(default=None, max_length=120)
+    subnet_id: str | None = Field(default=None, max_length=120)
+
+
+class InstanceNetworkResolution(ApiModel):
+    provider: ProviderId
+    region: str
+    instance_type: str
+    zone: str
+    eligible_zones: list[str]
+    vpc: VpcInfo
+    subnet: SubnetInfo
+    zone_automatically_selected: bool = False
+    subnet_action: Literal["reused", "created"]
+    warnings: list[str] = Field(default_factory=list)
 
 
 class CloudPurchaseSpec(ApiModel):
@@ -228,6 +256,7 @@ class ProvisionedInstance(ApiModel):
     zone: str | None = None
     status: str
     private_ip: str | None = None
+    public_ip: str | None = None
     public_ip_present: bool = False
 
 
@@ -242,8 +271,27 @@ class QuoteCreateRequest(ApiModel):
     spec: CloudPurchaseSpec
 
 
+class CloudSshCredentials(ApiModel):
+    username: str = Field(min_length=1, max_length=128)
+    port: int = Field(default=22, ge=1, le=65535)
+    auth_method: Literal["password", "private-key"] = "private-key"
+    password: SecretStr | None = None
+    private_key: SecretStr | None = None
+    passphrase: SecretStr | None = None
+    remember_credentials: bool = True
+
+    @model_validator(mode="after")
+    def validate_credential(self) -> CloudSshCredentials:
+        if self.auth_method == "password" and not self.password:
+            raise ValueError("password authentication requires a password")
+        if self.auth_method == "private-key" and not self.private_key:
+            raise ValueError("private-key authentication requires a private key")
+        return self
+
+
 class OrderPrepareRequest(ApiModel):
     quote_id: str = Field(min_length=8, max_length=100)
+    ssh_credentials: CloudSshCredentials | None = None
 
 
 class OrderConfirmRequest(ApiModel):
@@ -285,3 +333,33 @@ class SearchResult(ApiModel):
     url: str
     updated_at: datetime | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class DestroyedResource(ApiModel):
+    kind: Literal[
+        "instance", "system-disk", "local-disk", "public-ip", "subnet", "security-group"
+    ]
+    id: str = Field(min_length=1, max_length=180)
+    released: bool = True
+    note: str | None = Field(default=None, max_length=500)
+
+
+class ProviderDestroyResult(ApiModel):
+    request_id: str | None = None
+    instance_ids: list[str] = Field(default_factory=list)
+    released_resources: list[DestroyedResource] = Field(default_factory=list)
+    details: dict[str, Any] = Field(default_factory=dict)
+
+
+class TargetDestroyRequest(ApiModel):
+    acknowledgement: str = Field(min_length=8, max_length=300)
+
+
+class TargetDestroyPreview(ApiModel):
+    target_id: str
+    provider: ProviderId
+    region: str
+    instance_id: str
+    instance_name: str
+    acknowledgement: str
+    resources: list[DestroyedResource]
