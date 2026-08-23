@@ -1,10 +1,10 @@
-import { AlertTriangle, Braces, CheckCircle2, Download, FileArchive, LoaderCircle, RefreshCw, ShieldCheck, Upload } from 'lucide-react';
+import { AlertTriangle, Braces, CheckCircle2, Download, FileArchive, KeyRound, LoaderCircle, RefreshCw, ShieldCheck, Trash2, Upload } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { PageHeader } from '../components/PageHeader';
 import { OPERATOR_ACCESS_CHANGED_EVENT } from '../components/OperatorAccess';
 import { EmptyState, ErrorState, LoadingState } from '../components/States';
 import { api } from '../lib/api';
-import type { SourceDiscovery, SourceDiscoveryReadiness } from '../lib/types';
+import type { SourceDiscovery, SourceDiscoveryProviderConfig, SourceDiscoveryReadiness } from '../lib/types';
 
 function bytes(value: number) { return value >= 1024 * 1024 ? `${(value / 1024 / 1024).toFixed(0)} MiB` : `${Math.ceil(value / 1024)} KiB`; }
 function downloadContract(item: SourceDiscovery) {
@@ -15,6 +15,7 @@ function downloadContract(item: SourceDiscovery) {
 
 export function SourceDiscoveryPage() {
   const [readiness, setReadiness] = useState<SourceDiscoveryReadiness | null>(null);
+  const [providerConfig, setProviderConfig] = useState<SourceDiscoveryProviderConfig | null>(null);
   const [items, setItems] = useState<SourceDiscovery[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<unknown>();
@@ -22,13 +23,38 @@ export function SourceDiscoveryPage() {
   const [consent, setConsent] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState('');
+  const [keyDraft, setKeyDraft] = useState('');
+  const [savingKey, setSavingKey] = useState(false);
+  const [keyMessage, setKeyMessage] = useState('');
   const input = useRef<HTMLInputElement>(null);
 
   async function load() {
     setLoading(true); setError(undefined);
-    try { const [ready, history] = await Promise.all([api.sourceDiscoveryReadiness(), api.sourceDiscoveries()]); setReadiness(ready); setItems(history.items); }
+    try { const [ready, history, config] = await Promise.all([api.sourceDiscoveryReadiness(), api.sourceDiscoveries(), api.sourceDiscoveryProviderConfig()]); setReadiness(ready); setItems(history.items); setProviderConfig(config); }
     catch (reason) { setError(reason); }
     finally { setLoading(false); }
+  }
+
+  async function saveKey() {
+    const value = keyDraft.trim();
+    if (value.length < 20) { setKeyMessage('Key 至少需要 20 个字符。'); return; }
+    setSavingKey(true); setKeyMessage('');
+    try {
+      const config = await api.updateSourceDiscoveryProviderConfig(value);
+      setProviderConfig(config); setReadiness(await api.sourceDiscoveryReadiness()); setKeyDraft('');
+      setKeyMessage('已由后端加密保存；浏览器中的输入已清除。');
+    } catch (reason) { setKeyMessage(reason instanceof Error ? reason.message : '保存失败'); }
+    finally { setSavingKey(false); }
+  }
+
+  async function deleteKey() {
+    setSavingKey(true); setKeyMessage('');
+    try {
+      const config = await api.deleteSourceDiscoveryProviderConfig();
+      setProviderConfig(config); setReadiness(await api.sourceDiscoveryReadiness()); setKeyDraft('');
+      setKeyMessage(config.configured ? '已删除后端保存的 Key，当前回退到环境变量。' : '已删除后端保存的 Key。');
+    } catch (reason) { setKeyMessage(reason instanceof Error ? reason.message : '删除失败'); }
+    finally { setSavingKey(false); }
   }
   useEffect(() => {
     void load();
@@ -55,7 +81,17 @@ export function SourceDiscoveryPage() {
   return <div className="page source-discovery-page">
     <PageHeader title="动态接口发现" description="DeepSeek Agent 通过只读文件工具理解源码，输出可追溯的统一接口合同；不执行用户代码，也不访问源码中的目标地址。" actions={<button className="button secondary" onClick={() => void load()} disabled={loading}><RefreshCw size={15}/>刷新</button>}/>
     {loading ? <LoadingState label="正在检查 DeepSeek 配置和发现历史"/> : error ? <ErrorState error={error} onRetry={() => void load()}/> : <>
-      {!readiness?.configured && <section className="notice warning" role="alert"><AlertTriangle size={19}/><div><strong>DeepSeek Harness 尚未配置</strong><p>在 API 服务环境设置 <code>LOOPER_DEEPSEEK_API_KEY</code> 后重启。密钥仅保存在后端环境变量中，前端不接收或保存密钥。</p></div></section>}
+      {!readiness?.configured && <section className="notice warning" role="alert"><AlertTriangle size={19}/><div><strong>DeepSeek Harness 尚未配置</strong><p>由操作员在下方提交并由后端加密保存，或在 API 服务环境设置 <code>LOOPER_DEEPSEEK_API_KEY</code> 后重启。</p></div></section>}
+      <section className="panel deepseek-config-panel">
+        <div className="panel-heading"><div><h2>DeepSeek 凭据</h2><p>仅操作员可更新；明文只在本次 HTTPS 请求中发送，浏览器不持久化。</p></div><span className={`discovery-readiness ${providerConfig?.configured ? 'ready' : ''}`}>{providerConfig?.configured ? <CheckCircle2 size={14}/> : <AlertTriangle size={14}/>} {providerConfig?.configured ? '已配置' : '未配置'}</span></div>
+        <div className="deepseek-config-body">
+          <div className="deepseek-config-state"><KeyRound size={18}/><div><small>当前凭据</small><strong>{providerConfig?.maskedKey || '尚未保存'}</strong><span>{providerConfig?.source === 'stored' ? '后端加密文件' : providerConfig?.source === 'environment' ? '服务器环境变量' : '无可用凭据'} · {providerConfig?.model}</span></div></div>
+          <label><span>新的 DeepSeek API Key</span><input type="password" value={keyDraft} onChange={event => { setKeyDraft(event.target.value); setKeyMessage(''); }} autoComplete="new-password" placeholder="输入后由后端加密保存"/></label>
+          <div className="deepseek-config-actions"><button className="button primary" type="button" disabled={savingKey || keyDraft.trim().length < 20} onClick={() => void saveKey()}><KeyRound size={15}/>{savingKey ? '处理中…' : '加密保存'}</button><button className="button secondary danger" type="button" disabled={savingKey || providerConfig?.source !== 'stored'} onClick={() => void deleteKey()}><Trash2 size={15}/>删除已保存 Key</button></div>
+          {keyMessage && <div className="deepseek-key-message" role="status">{keyMessage}</div>}
+          <small className="deepseek-config-note">Linux 使用 0600 权限的独立 Fernet 密钥与密文文件；Windows 额外用当前服务账户的 DPAPI 保护 Fernet 密钥。API 永不返回明文。</small>
+        </div>
+      </section>
       <section className="panel discovery-upload-panel">
         <div className="panel-heading"><div><h2>上传源码 ZIP</h2><p>限制 {bytes(readiness?.maxArchiveBytes || 0)} · 加密包、符号链接、越界路径会被拒绝 · 密钥文件和依赖目录会被排除</p></div><span className={`discovery-readiness ${readiness?.configured ? 'ready' : ''}`}>{readiness?.configured ? <CheckCircle2 size={14}/> : <AlertTriangle size={14}/>} {readiness?.configured ? `${readiness.model} 已就绪` : '未配置'}</span></div>
         <div className="discovery-upload-body">

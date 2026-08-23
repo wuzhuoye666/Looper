@@ -13,10 +13,12 @@ function renderPage() {
 }
 
 function mockApi(configured: boolean) {
-  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     const body = url.endsWith('/readiness')
       ? { configured, provider: 'deepseek', model: 'deepseek-v4-flash', baseUrl: 'https://api.deepseek.com', maxArchiveBytes: 20971520, acceptedMediaTypes: ['application/zip'], requiredEnvironment: configured ? [] : ['LOOPER_DEEPSEEK_API_KEY'], dataDisclosure: 'source snippets sent' }
+      : url.endsWith('/provider-config')
+        ? { configured: configured || init?.method === 'PUT', source: init?.method === 'PUT' ? 'stored' : configured ? 'environment' : null, maskedKey: configured || init?.method === 'PUT' ? '••••••••1234' : null, provider: 'deepseek', model: 'deepseek-v4-flash', baseUrl: 'https://api.deepseek.com', encryptedAtRest: init?.method === 'PUT' }
       : { items: [], total: 0 };
     return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
   }));
@@ -52,4 +54,18 @@ it('操作员认证变化后自动重新加载发现记录', async () => {
     const callsAfter = vi.mocked(fetch).mock.calls.filter(([input]) => String(input).endsWith('/source-discoveries')).length;
     expect(callsAfter).toBeGreaterThan(callsBefore);
   });
+});
+
+it('通过后端保存 DeepSeek Key 并立即清除前端明文', async () => {
+  mockApi(false);
+  renderPage();
+  const input = await screen.findByLabelText('新的 DeepSeek API Key');
+  const secret = 'sk-browser-only-secret-value-1234';
+  fireEvent.change(input, { target: { value: secret } });
+  fireEvent.click(screen.getByRole('button', { name: '加密保存' }));
+  expect(await screen.findByText(/浏览器中的输入已清除/)).toBeInTheDocument();
+  expect(input).toHaveValue('');
+  expect(window.sessionStorage.getItem('looper.deepseek-key')).toBeNull();
+  const request = vi.mocked(fetch).mock.calls.find(([url, init]) => String(url).endsWith('/provider-config') && init?.method === 'PUT');
+  expect(JSON.parse(String(request?.[1]?.body))).toEqual({ apiKey: secret });
 });

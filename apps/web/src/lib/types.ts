@@ -1,6 +1,7 @@
 export type ExperimentStatus = 'draft' | 'queued' | 'running' | 'paused' | 'completed' | 'failed' | 'cancelled';
 
 export interface SourceDiscoveryReadiness { configured: boolean; provider: string; model: string; baseUrl: string; maxArchiveBytes: number; acceptedMediaTypes: string[]; requiredEnvironment: string[]; dataDisclosure: string }
+export interface SourceDiscoveryProviderConfig { configured: boolean; source: 'stored' | 'environment' | null; maskedKey: string | null; provider: string; model: string; baseUrl: string; encryptedAtRest: boolean }
 export interface InterfaceEvidence { file: string; startLine: number; endLine: number; excerptDigest: string }
 export interface DiscoveredInterface { id: string; protocol: string; method: string; path: string; summary: string; handler: { symbol?: string | null }; parameters: Array<{ name: string; in: 'path' | 'query' | 'header' | 'cookie' | 'body' | 'form' | 'unknown'; required: boolean; schema: Record<string, unknown> }>; requestBody?: { required: boolean; contentTypes: string[]; schema: Record<string, unknown> } | null; responses: Array<{ statusCode: string; contentTypes: string[]; schema: Record<string, unknown> }>; authentication: string[]; sideEffect: string; confidence: number; evidence: InterfaceEvidence[]; unresolved: string[] }
 export interface InterfaceContract { apiVersion: 'looper.dev/interface-contract/v1'; kind: 'InterfaceContract'; metadata: { provider: string; model: string; harnessVersion: string; sourceDigest: string }; spec: { interfaces: DiscoveredInterface[]; unresolved: string[] } }

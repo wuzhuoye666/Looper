@@ -3,7 +3,7 @@ import type {
   CloudOrderEvent, CloudOrderEvidence, CloudProviderId, CloudProviderInfo, CloudPurchaseReadiness, CloudPurchaseSpec,
   CloudKeyPair, CloudQuote, CloudReconciliationContext, CloudRegion, CloudSecurityGroup, CloudSubnet, CloudVpc, CloudZone,
   DashboardData, Experiment, GlobalSearchResult, ListResponse, PostOptimizationStatus, SelectionAdvisorRequest,
-  SelectionAdvisorResponse, SourceDiscovery, SourceDiscoveryReadiness, Target, VariabilityData,
+  SelectionAdvisorResponse, SourceDiscovery, SourceDiscoveryProviderConfig, SourceDiscoveryReadiness, Target, VariabilityData,
 } from './types';
 
 export const API_BASE = (import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000/api/v1').replace(/\/$/, '');
@@ -73,6 +73,13 @@ function query(values: Record<string, string | number | undefined>) {
 
 export const api = {
   sourceDiscoveryReadiness: () => request<SourceDiscoveryReadiness>('/source-discoveries/readiness'),
+  sourceDiscoveryProviderConfig: () => request<SourceDiscoveryProviderConfig>('/source-discoveries/provider-config'),
+  updateSourceDiscoveryProviderConfig: (apiKey: string) => request<SourceDiscoveryProviderConfig>(
+    '/source-discoveries/provider-config', { method: 'PUT', body: JSON.stringify({ apiKey }) },
+  ),
+  deleteSourceDiscoveryProviderConfig: () => request<SourceDiscoveryProviderConfig>(
+    '/source-discoveries/provider-config', { method: 'DELETE' },
+  ),
   sourceDiscoveries: async () => list(await request<SourceDiscovery[] | ListResponse<SourceDiscovery>>('/source-discoveries')),
   discoverSource: (archive: File) => {
     const body = new FormData(); body.append('archive', archive);

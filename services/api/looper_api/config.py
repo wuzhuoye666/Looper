@@ -91,6 +91,14 @@ class Settings(BaseSettings):
     def remote_credential_store_path(self) -> Path:
         return self.data_dir / "remote-worker-credentials.json"
 
+    @property
+    def deepseek_credential_key_path(self) -> Path:
+        return self.data_dir / "deepseek-credential.key"
+
+    @property
+    def deepseek_credential_store_path(self) -> Path:
+        return self.data_dir / "deepseek-credential.enc"
+
     def ensure_directories(self) -> None:
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.artifact_dir.mkdir(parents=True, exist_ok=True)
