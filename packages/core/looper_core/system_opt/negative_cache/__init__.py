@@ -25,9 +25,11 @@ _DIGEST_PATTERN = r"^sha256:[0-9a-f]{64}$"
 
 
 class NegativeVerdict(StrEnum):
+    # Verdicts describe candidate effectiveness only. Measurement-quality failures
+    # (e.g. the S1.1 CV stability gate) are not candidate verdicts and are never
+    # cached here: caching them would conflate transient noise with a bad candidate.
     NO_IMPROVEMENT_LCB = "no-improvement-lcb"
     GATE_REJECTED = "gate-rejected"
-    STABILITY_REJECTED = "stability-rejected"
 
 
 class NegativeCacheIdentity(StrictModel):

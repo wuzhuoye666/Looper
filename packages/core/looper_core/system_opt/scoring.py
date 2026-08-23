@@ -139,8 +139,11 @@ def improvement_value(candidate: float, baseline: float, contract: MetricContrac
             )
         return (baseline - candidate) / contract.scale
     if contract.direction in {MetricDirection.TARGET, MetricDirection.RANGE}:
-        scale = contract.scale or 1.0
-        return (_distance(baseline, contract) - _distance(candidate, contract)) / scale
+        if contract.scale is None:
+            raise InsufficientEvidence(
+                f"{contract.id} target/range metric requires an explicit scale"
+            )
+        return (_distance(baseline, contract) - _distance(candidate, contract)) / contract.scale
     raise InsufficientEvidence("diagnostic-only metrics do not have candidate utility")
 
 
@@ -200,24 +203,29 @@ def pressure_value(value: float, contract: MetricContract) -> float:
     if contract.pressure_method == PressureMethod.UTILIZATION:
         if reference <= 0:
             raise InsufficientEvidence("utilization capacity must be positive")
-        return max(0.0, value / reference)
+        if value < 0:
+            raise InsufficientEvidence(
+                "negative utilization indicates counter wrap or a bad measurement"
+            )
+        return value / reference
     if contract.pressure_method == PressureMethod.UPPER_LIMIT_EXCESS:
-        scale = contract.scale or abs(reference)
-        if scale == 0:
-            raise InsufficientEvidence("upper-limit pressure scale is zero")
-        return max(0.0, value - reference) / scale
+        if contract.scale is None:
+            raise InsufficientEvidence("upper-limit pressure requires an explicit scale")
+        return max(0.0, value - reference) / contract.scale
     if contract.pressure_method == PressureMethod.LOWER_LIMIT_DEFICIT:
-        scale = contract.scale or abs(reference)
-        if scale == 0:
-            raise InsufficientEvidence("lower-limit pressure scale is zero")
-        return max(0.0, reference - value) / scale
+        if contract.scale is None:
+            raise InsufficientEvidence("lower-limit pressure requires an explicit scale")
+        return max(0.0, reference - value) / contract.scale
     if contract.pressure_method == PressureMethod.TARGET_DISTANCE:
-        scale = contract.scale or max(abs(reference), 1.0)
-        return abs(value - reference) / scale
+        if contract.scale is None:
+            raise InsufficientEvidence("target-distance pressure requires an explicit scale")
+        return abs(value - reference) / contract.scale
     if contract.pressure_method == PressureMethod.RANGE_EXCESS:
         if contract.lower_bound is None or contract.upper_bound is None:
             raise InsufficientEvidence("range pressure requires metric bounds")
-        return _distance(value, contract) / (contract.scale or 1.0)
+        if contract.scale is None:
+            raise InsufficientEvidence("range-excess pressure requires an explicit scale")
+        return _distance(value, contract) / contract.scale
     raise InsufficientEvidence(f"unsupported pressure method {contract.pressure_method}")
 
 
@@ -235,7 +243,11 @@ def adverse_change(current: float, baseline: float, contract: MetricContract) ->
             return (baseline - current) / contract.scale
         return (baseline - current) / abs(baseline)
     if contract.direction in {MetricDirection.TARGET, MetricDirection.RANGE}:
-        return _distance(current, contract) - _distance(baseline, contract)
+        if contract.scale is None:
+            raise InsufficientEvidence(
+                f"{contract.id} target/range adverse change requires an explicit scale"
+            )
+        return (_distance(current, contract) - _distance(baseline, contract)) / contract.scale
     if contract.scale is None:
         raise InsufficientEvidence("diagnostic-only adverse change requires an explicit scale")
     return (current - baseline) / contract.scale

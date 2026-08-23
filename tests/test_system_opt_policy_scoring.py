@@ -12,7 +12,10 @@ from looper_core.system_opt.demo import (
 from looper_core.system_opt.executor.simulated import SimulatedBackend
 from looper_core.system_opt.policy import (
     HardGateContract,
+    MetricContract,
+    MetricDirection,
     OptimizationMode,
+    PressureMethod,
     SystemOptimizationPolicy,
 )
 from looper_core.system_opt.scoring import (
@@ -21,6 +24,8 @@ from looper_core.system_opt.scoring import (
     comparable,
     diagnostic_priorities,
     evaluate_hard_gates,
+    improvement_value,
+    pressure_value,
 )
 from pydantic import ValidationError
 
@@ -105,3 +110,57 @@ def test_near_zero_diagnostic_change_requires_explicit_scale() -> None:
 
     with pytest.raises(InsufficientEvidence, match="explicit scale"):
         adverse_change(0.2, 0, unscaled)
+
+
+def _metric_with(
+    *,
+    direction: MetricDirection,
+    scale: float | None,
+    target: float | None = None,
+    lower_bound: float | None = None,
+    upper_bound: float | None = None,
+    pressure_method: PressureMethod = PressureMethod.NONE,
+    pressure_reference: float | None = None,
+) -> MetricContract:
+    payload = build_demo_policy(OptimizationMode.GENERAL).metric(
+        "workload.score"
+    ).model_dump(mode="python")
+    payload.update(
+        direction=direction,
+        scale=scale,
+        target=target,
+        lower_bound=lower_bound,
+        upper_bound=upper_bound,
+        pressure_method=pressure_method,
+        pressure_reference=pressure_reference,
+    )
+    return MetricContract.model_construct(**payload)
+
+
+def test_target_improvement_requires_explicit_scale() -> None:
+    contract = _metric_with(direction=MetricDirection.TARGET, scale=None, target=100.0)
+    with pytest.raises(InsufficientEvidence, match="explicit scale"):
+        improvement_value(120.0, 100.0, contract)
+
+
+def test_target_adverse_change_requires_explicit_scale() -> None:
+    contract = _metric_with(direction=MetricDirection.TARGET, scale=None, target=100.0)
+    with pytest.raises(InsufficientEvidence, match="explicit scale"):
+        adverse_change(120.0, 100.0, contract)
+
+
+def test_excess_pressure_requires_explicit_scale() -> None:
+    contract = _metric_with(
+        direction=MetricDirection.MINIMIZE,
+        scale=None,
+        pressure_method=PressureMethod.UPPER_LIMIT_EXCESS,
+        pressure_reference=0.5,
+    )
+    with pytest.raises(InsufficientEvidence, match="explicit scale"):
+        pressure_value(0.9, contract)
+
+
+def test_negative_utilization_fails_closed() -> None:
+    contract = build_demo_policy(OptimizationMode.WORKLOAD).metric("cpu.utilization")
+    with pytest.raises(InsufficientEvidence, match="negative utilization"):
+        pressure_value(-0.1, contract)
