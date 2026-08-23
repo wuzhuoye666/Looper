@@ -10,12 +10,16 @@ from looper_api.cloud_contracts import (
     CloudPurchaseSpec,
     ImageInfo,
     InstanceTypeInfo,
+    KeyPairInfo,
     ProviderId,
     ProviderInfo,
     ProviderPurchaseResult,
     ProviderQuote,
     ProvisionedInstance,
     RegionInfo,
+    SecurityGroupInfo,
+    SubnetInfo,
+    VpcInfo,
     ZoneInfo,
 )
 from looper_api.providers.base import CloudProvider, CloudProviderError
@@ -58,6 +62,10 @@ class AlibabaEcsProvider(CloudProvider):
                 "instance-types",
                 "images",
                 "stock-advisory",
+                "vpcs",
+                "subnets",
+                "security-groups",
+                "key-pairs",
                 "hourly-quote",
                 "postpaid-purchase",
                 "client-token",
@@ -274,6 +282,166 @@ class AlibabaEcsProvider(CloudProvider):
             if attr(item, "image_id")
         ]
         return filter_images(items, filters)
+
+    def list_vpcs(self, region: str) -> list[VpcInfo]:
+        from alibabacloud_ecs20140526 import models
+
+        items: list[VpcInfo] = []
+        page_number = 1
+        while True:
+            request = models.DescribeVpcsRequest(
+                region_id=region,
+                page_number=page_number,
+                page_size=50,
+            )
+            response = self._call("describe_vpcs", region, request)
+            rows = as_list(nested(response, ("body",), ("vpcs",), ("vpc",), default=[]))
+            items.extend(
+                VpcInfo(
+                    provider=self.id,
+                    region=region,
+                    id=str(attr(item, "vpc_id")),
+                    name=str(
+                        attr(item, "vpc_name", default=attr(item, "vpc_id"))
+                        or attr(item, "vpc_id")
+                    ),
+                    cidrBlock=attr(item, "cidr_block"),
+                    isDefault=bool(attr(item, "is_default", default=False)),
+                )
+                for item in rows
+                if attr(item, "vpc_id")
+            )
+            total = int(attr(nested(response, ("body",)), "total_count", default=0) or 0)
+            if not rows or len(items) >= total:
+                break
+            page_number += 1
+        return items
+
+    def list_subnets(self, region: str, zone: str, vpc_id: str) -> list[SubnetInfo]:
+        from alibabacloud_ecs20140526 import models
+
+        items: list[SubnetInfo] = []
+        page_number = 1
+        while True:
+            request = models.DescribeVSwitchesRequest(
+                region_id=region,
+                zone_id=zone,
+                vpc_id=vpc_id,
+                page_number=page_number,
+                page_size=50,
+            )
+            response = self._call("describe_vswitches", region, request)
+            rows = as_list(
+                nested(response, ("body",), ("v_switches",), ("v_switch",), default=[])
+            )
+            items.extend(
+                SubnetInfo(
+                    provider=self.id,
+                    region=region,
+                    zone=str(attr(item, "zone_id")),
+                    vpcId=str(attr(item, "vpc_id")),
+                    id=str(attr(item, "v_switch_id")),
+                    name=str(
+                        attr(item, "v_switch_name", default=attr(item, "v_switch_id"))
+                        or attr(item, "v_switch_id")
+                    ),
+                    cidrBlock=attr(item, "cidr_block"),
+                    availableIpCount=attr(item, "available_ip_address_count"),
+                    isDefault=bool(attr(item, "is_default", default=False)),
+                )
+                for item in rows
+                if attr(item, "v_switch_id")
+            )
+            total = int(attr(nested(response, ("body",)), "total_count", default=0) or 0)
+            if not rows or len(items) >= total:
+                break
+            page_number += 1
+        return items
+
+    def list_security_groups(self, region: str) -> list[SecurityGroupInfo]:
+        from alibabacloud_ecs20140526 import models
+
+        items: list[SecurityGroupInfo] = []
+        page_number = 1
+        while True:
+            request = models.DescribeSecurityGroupsRequest(
+                region_id=region,
+                page_number=page_number,
+                page_size=50,
+                network_type="vpc",
+            )
+            response = self._call("describe_security_groups", region, request)
+            rows = as_list(
+                nested(
+                    response,
+                    ("body",),
+                    ("security_groups",),
+                    ("security_group",),
+                    default=[],
+                )
+            )
+            for item in rows:
+                tag_rows = as_list(nested(item, ("tags",), ("tag",), default=[]))
+                tags = {
+                    str(attr(tag, "tag_key")): str(attr(tag, "tag_value", default=""))
+                    for tag in tag_rows
+                    if attr(tag, "tag_key")
+                }
+                group_id = attr(item, "security_group_id")
+                if not group_id:
+                    continue
+                name = str(attr(item, "security_group_name", default=group_id) or group_id)
+                items.append(
+                    SecurityGroupInfo(
+                        provider=self.id,
+                        region=region,
+                        id=str(group_id),
+                        name=name,
+                        description=attr(item, "description"),
+                        recommended=(
+                            tags.get("managedBy", "").casefold() == "looper"
+                            or name.casefold().startswith("looper")
+                        ),
+                        tags=tags,
+                    )
+                )
+            total = int(attr(nested(response, ("body",)), "total_count", default=0) or 0)
+            if not rows or len(items) >= total:
+                break
+            page_number += 1
+        return items
+
+    def list_key_pairs(self, region: str) -> list[KeyPairInfo]:
+        from alibabacloud_ecs20140526 import models
+
+        items: list[KeyPairInfo] = []
+        page_number = 1
+        while True:
+            request = models.DescribeKeyPairsRequest(
+                region_id=region,
+                page_number=page_number,
+                page_size=50,
+            )
+            response = self._call("describe_key_pairs", region, request)
+            rows = as_list(
+                nested(response, ("body",), ("key_pairs",), ("key_pair",), default=[])
+            )
+            items.extend(
+                KeyPairInfo(
+                    provider=self.id,
+                    region=region,
+                    id=str(attr(item, "key_pair_name")),
+                    name=str(attr(item, "key_pair_name")),
+                    createdAt=parse_datetime(attr(item, "creation_time")),
+                )
+                for item in rows
+                if attr(item, "key_pair_name")
+            )
+            total = int(attr(nested(response, ("body",)), "total_count", default=0) or 0)
+            if not rows or len(items) >= total:
+                break
+            page_number += 1
+        return items
 
     @staticmethod
     def _system_disk(models: Any, spec: CloudPurchaseSpec, *, quote: bool) -> Any:
