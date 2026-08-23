@@ -106,7 +106,7 @@ class InstanceTypeInfo(ApiModel):
     family: str | None = None
     cpu: int
     memory_gib: float
-    gpu: int | None = None
+    gpu: float | None = None
     gpu_model: str | None = None
     gpu_memory_gib: float | None = None
     architecture: str | None = None

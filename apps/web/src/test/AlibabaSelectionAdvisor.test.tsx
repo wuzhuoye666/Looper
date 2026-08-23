@@ -12,17 +12,23 @@ function response(data: unknown) {
   });
 }
 
-function advisorResponse(offset: number) {
-  const id = offset === 0 ? 'ecs.i9i.xlarge' : 'ecs.i8i.xlarge';
+function advisorResponse(offset: number, provider: 'alibaba' | 'tencent' = 'alibaba') {
+  const id = provider === 'tencent'
+    ? (offset === 0 ? 'M8.LARGE32' : 'M7.LARGE32')
+    : (offset === 0 ? 'ecs.i9i.xlarge' : 'ecs.i8i.xlarge');
+  const region = provider === 'tencent' ? 'ap-test' : 'cn-test';
+  const zone = provider === 'tencent' ? undefined : 'cn-test-a';
   return {
-    provider: 'alibaba',
-    region: 'cn-test',
-    zone: 'cn-test-a',
+    provider,
+    region,
+    zone,
     items: [{
-      provider: 'alibaba', region: 'cn-test', id, family: id.split('.').slice(0, 2).join('.'),
-      cpu: 8, memoryGib: 32, gpu: 0, architecture: 'X86', zones: ['cn-test-a'], available: true,
+      provider, region, id, family: provider === 'tencent' ? id.split('.')[0] : id.split('.').slice(0, 2).join('.'),
+      cpu: 8, memoryGib: 32, gpu: 0, architecture: 'X86', zones: zone ? [zone] : ['ap-test-1'], available: true,
       localStorageCount: 1, localStorageCapacityGib: 1900, localStorageCategory: 'local_ssd_pro',
-      matchTier: 'preferred', reasons: ['规格族优先匹配数据库场景', '精确匹配 8 vCPU / 32 GiB'], warnings: [],
+      attributes: provider === 'tencent' ? { zoneCapabilities: [{ zone: 'ap-test-1', available: true, localStorageCategory: 'LOCAL_SSD' }] } : {},
+      matchTier: 'preferred', reasons: ['规格族优先匹配数据库场景', '精确匹配 8 vCPU / 32 GiB'],
+      warnings: provider === 'tencent' ? ['地域聚合结果，需选择可用区确认；当前匹配：ap-test-1'] : [],
     }],
     total: 21,
     offset,
@@ -37,14 +43,17 @@ function advisorResponse(offset: number) {
   };
 }
 
-function Harness() {
+function Harness({ provider = 'alibaba' }: { provider?: 'alibaba' | 'tencent' }) {
   const [region, setRegion] = useState('');
   const [zone, setZone] = useState('');
   const [selected, setSelected] = useState<CloudInstanceType | null>(null);
+  const regionId = provider === 'tencent' ? 'ap-test' : 'cn-test';
+  const zoneId = provider === 'tencent' ? 'ap-test-1' : 'cn-test-a';
   return <>
     <AlibabaSelectionAdvisor
-      regions={[{ provider: 'alibaba', id: 'cn-test', name: '测试地域', available: true }]}
-      zones={[{ provider: 'alibaba', region: 'cn-test', id: 'cn-test-a', name: '测试一区', available: true }]}
+      provider={provider}
+      regions={[{ provider, id: regionId, name: '测试地域', available: true }]}
+      zones={[{ provider, region: regionId, id: zoneId, name: '测试一区', available: true }]}
       region={region}
       zone={zone}
       onRegionChange={value => { setRegion(value); setZone(''); setSelected(null); }}
@@ -56,12 +65,15 @@ function Harness() {
   </>;
 }
 
-function renderAdvisor() {
+function renderAdvisor(provider: 'alibaba' | 'tencent' = 'alibaba') {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(<QueryClientProvider client={client}><Harness /></QueryClientProvider>);
+  return render(<QueryClientProvider client={client}><Harness provider={provider} /></QueryClientProvider>);
 }
 
-async function completeDatabaseQuestionnaire() {
+async function completeDatabaseQuestionnaire(
+  region = 'cn-test',
+  zone: string | null = 'cn-test-a',
+) {
   fireEvent.click(screen.getByRole('button', { name: /数据库/ }));
   fireEvent.click(screen.getByRole('button', { name: /下一题/ }));
   fireEvent.click(screen.getByRole('button', { name: '知道配置' }));
@@ -72,8 +84,8 @@ async function completeDatabaseQuestionnaire() {
   fireEvent.click(screen.getByRole('button', { name: /下一题/ }));
   fireEvent.click(screen.getByRole('button', { name: /可以提供/ }));
   fireEvent.click(screen.getByRole('button', { name: 'x86' }));
-  fireEvent.change(screen.getByLabelText('助手地域'), { target: { value: 'cn-test' } });
-  fireEvent.change(screen.getByLabelText('助手可用区'), { target: { value: 'cn-test-a' } });
+  fireEvent.change(screen.getByLabelText('助手地域'), { target: { value: region } });
+  if (zone) fireEvent.change(screen.getByLabelText('助手可用区'), { target: { value: zone } });
   fireEvent.click(screen.getByRole('button', { name: /查看候选/ }));
 }
 
@@ -103,9 +115,22 @@ describe('阿里云 ECS 选型助手', () => {
       localStorage: 'required', codeAvailability: 'available', architecture: 'x86', offset: 0, limit: 20,
     });
 
+    fireEvent.change(screen.getByLabelText('搜索候选机型'), { target: { value: 'ECS.I9I' } });
+    expect(screen.getByText('ecs.i9i.xlarge')).toBeInTheDocument();
+    expect(requests).toHaveLength(1);
+
+    fireEvent.change(screen.getByLabelText('搜索候选机型'), { target: { value: 'ecs.i8i' } });
+    expect(screen.queryByText('ecs.i9i.xlarge')).not.toBeInTheDocument();
+    expect(screen.getByText('当前已加载候选中没有匹配项')).toBeInTheDocument();
+    expect(requests).toHaveLength(1);
+
     fireEvent.click(screen.getByRole('button', { name: /加载更多/ }));
     expect(await screen.findByText('ecs.i8i.xlarge')).toBeInTheDocument();
     expect(requests[1]).toMatchObject({ offset: 20, limit: 20 });
+
+    fireEvent.change(screen.getByLabelText('搜索候选机型'), { target: { value: '' } });
+    expect(screen.getByText('ecs.i9i.xlarge')).toBeInTheDocument();
+    expect(screen.getByText('ecs.i8i.xlarge')).toBeInTheDocument();
   });
 
   it('选择机型后，修改硬约束会清除已选结果并解释原因', async () => {
@@ -122,5 +147,23 @@ describe('阿里云 ECS 选型助手', () => {
     fireEvent.change(screen.getByLabelText('精确 vCPU'), { target: { value: '16' } });
 
     await waitFor(() => expect(screen.getByTestId('selected-instance')).toHaveTextContent(''));
+  });
+
+  it('腾讯云可在不选可用区时生成地域候选并发送正确厂商', async () => {
+    const requests: Array<Record<string, unknown>> = [];
+    vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body || '{}')) as Record<string, unknown>;
+      requests.push(body);
+      return response(advisorResponse(Number(body.offset || 0), 'tencent'));
+    }));
+    renderAdvisor('tencent');
+
+    expect(screen.getByLabelText('腾讯云 CVM 选型助手')).toBeInTheDocument();
+    await completeDatabaseQuestionnaire('ap-test', null);
+
+    expect(await screen.findByText('M8.LARGE32')).toBeInTheDocument();
+    expect(screen.getByText(/地域聚合结果，需选择可用区确认/)).toBeInTheDocument();
+    expect(requests[0]).toMatchObject({ provider: 'tencent', region: 'ap-test', offset: 0 });
+    expect(requests[0].zone).toBeUndefined();
   });
 });

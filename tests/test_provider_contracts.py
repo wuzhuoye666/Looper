@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from decimal import Decimal
 from types import SimpleNamespace
 
@@ -553,6 +554,99 @@ def test_tencent_image_search_scans_later_pages(monkeypatch) -> None:
     results = provider.search_images(CatalogFilters(region="ap-test", query="target", limit=10))
     assert [item.id for item in results] == ["img-target"]
     assert offsets == [0, 100]
+
+
+def test_tencent_instance_catalog_maps_zone_quota_capabilities(monkeypatch) -> None:
+    provider = TencentCvmProvider()
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    local_disk = SimpleNamespace(
+        Type="LOCAL_SSD", MinSize=100, MaxSize=1900, Required="OPTIONAL"
+    )
+    rows = [
+        SimpleNamespace(
+            Zone="ap-test-1",
+            InstanceType="GN7.TEST",
+            InstanceFamily="GN7",
+            TypeName="GPU 计算型 GN7",
+            CpuType="Intel",
+            Cpu=8,
+            Memory=32,
+            Status="SELL",
+            InstanceBandwidth=25,
+            InstancePps=300,
+            Gpu=16,
+            GpuCount=0.5,
+            GpuType="NVIDIA Test",
+            Fpga=0,
+            StorageBlockAmount=2,
+            StatusCategory="EnoughStock",
+            SoldOutReason=None,
+            LocalDiskTypeList=[local_disk],
+        ),
+        SimpleNamespace(
+            Zone="ap-test-2",
+            InstanceType="GN7.TEST",
+            InstanceFamily="GN7",
+            TypeName="GPU 计算型 GN7",
+            CpuType="Intel",
+            Cpu=8,
+            Memory=32,
+            Status="SOLD_OUT",
+            InstanceBandwidth=10,
+            InstancePps=100,
+            Gpu=16,
+            GpuCount=0.5,
+            Fpga=0,
+            StorageBlockAmount=0,
+            StatusCategory="WithoutStock",
+            SoldOutReason="quota",
+            LocalDiskTypeList=[],
+        ),
+        SimpleNamespace(
+            Zone="ap-test-1",
+            InstanceType="SR1.TEST",
+            InstanceFamily="SR1",
+            TypeName="标准型 SR1",
+            CpuType="ARM",
+            Cpu=4,
+            Memory=8,
+            Status="SELL",
+            InstanceBandwidth=5,
+            InstancePps=50,
+            Gpu=0,
+            GpuCount=0,
+            Fpga=0,
+            StorageBlockAmount=0,
+            StatusCategory="EnoughStock",
+            SoldOutReason=None,
+            LocalDiskTypeList=[],
+        ),
+    ]
+
+    def call(method: str, _region: str, request: object):
+        calls.append((method, json.loads(request.to_json_string())))
+        return SimpleNamespace(InstanceTypeQuotaSet=rows, TotalCount=len(rows))
+
+    monkeypatch.setattr(provider, "_call", call)
+    items = provider.search_instance_types(CatalogFilters(region="ap-test", limit=20))
+
+    assert calls[0][0] == "DescribeZoneInstanceConfigInfos"
+    assert calls[0][1]["Filters"] == [
+        {"Name": "instance-charge-type", "Values": ["POSTPAID_BY_HOUR"]}
+    ]
+    gpu = next(item for item in items if item.id == "GN7.TEST")
+    assert gpu.available is True
+    assert gpu.gpu == 0.5
+    assert gpu.gpu_model == "NVIDIA Test"
+    assert gpu.network_bandwidth_rx_gbps == 25
+    assert gpu.network_pps_rx == 3_000_000
+    assert gpu.local_storage_category == "LOCAL_SSD"
+    assert gpu.local_storage_capacity_gib == 1900
+    assert gpu.local_storage_count == 2
+    assert len(gpu.attributes["zoneCapabilities"]) == 2
+    arm = next(item for item in items if item.id == "SR1.TEST")
+    assert arm.architecture == "ARM"
 
 
 def test_volcengine_catalog_search_scans_later_pages(monkeypatch) -> None:

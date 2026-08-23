@@ -1,10 +1,11 @@
 import { useInfiniteQuery } from '@tanstack/react-query';
-import { AlertTriangle, Check, ChevronLeft, ChevronRight, Code2, Cpu, Filter, Server, Sparkles } from 'lucide-react';
+import { AlertTriangle, Check, ChevronLeft, ChevronRight, Code2, Cpu, Filter, Search, Server, Sparkles } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../lib/api';
 import type {
   AdvisedCloudInstanceType,
   CloudInstanceType,
+  CloudProviderId,
   CloudRegion,
   CloudZone,
   SelectionAdvisorRequest,
@@ -72,12 +73,31 @@ function formatNumber(value: number) {
   return Number.isInteger(value) ? String(value) : value.toFixed(2).replace(/0+$/, '').replace(/\.$/, '');
 }
 
-function isStillEligible(item: CloudInstanceType, answers: Answers) {
+function isStillEligible(
+  item: CloudInstanceType,
+  answers: Answers,
+  provider: 'alibaba' | 'tencent',
+  zone: string,
+) {
   if (item.available === false) return false;
   if (answers.sizingMode === 'exact' && (
     item.cpu !== answers.exactCpu || item.memoryGib !== answers.exactMemoryGib
   )) return false;
   if (answers.architecture !== 'unknown' && architectureKind(item.architecture) !== answers.architecture) return false;
+  const capabilities = Array.isArray(item.attributes?.zoneCapabilities)
+    ? item.attributes.zoneCapabilities.filter((value): value is Record<string, unknown> =>
+      Boolean(value) && typeof value === 'object')
+    : [];
+  if (capabilities.length) {
+    return capabilities.some(capability => {
+      if (provider === 'tencent' && !zone ? capability.available !== true : capability.available === false) return false;
+      if (Number(capability.gpu || 0) < answers.minimumGpuCount) return false;
+      if (answers.localStorage === 'required' && !capability.localStorageCategory && !capability.localStorageCapacityGib) return false;
+      if (answers.minimumNetworkBandwidthGbps > 0 && Number(capability.networkBandwidthGbps || 0) < answers.minimumNetworkBandwidthGbps) return false;
+      if (answers.minimumNetworkPps > 0 && Number(capability.networkPps || 0) < answers.minimumNetworkPps) return false;
+      return true;
+    });
+  }
   if ((item.gpu || 0) < answers.minimumGpuCount) return false;
   if (answers.localStorage === 'required' && !item.localStorageCount && !item.localStorageCategory) return false;
   if (answers.minimumNetworkBandwidthGbps > 0 && Math.min(
@@ -97,7 +117,9 @@ function workloadScalePrompt(scenario: SelectionScenario) {
   return '峰值 QPS、并发用户数或当前服务器配置';
 }
 
-export function AlibabaSelectionAdvisor({
+export function CloudSelectionAdvisor({
+  provider = 'alibaba',
+  catalogAvailable = true,
   regions,
   zones,
   region,
@@ -107,6 +129,8 @@ export function AlibabaSelectionAdvisor({
   selected,
   onSelect,
 }: {
+  provider?: Extract<CloudProviderId, 'alibaba' | 'tencent'>;
+  catalogAvailable?: boolean;
   regions: CloudRegion[];
   zones: CloudZone[];
   region: string;
@@ -119,13 +143,16 @@ export function AlibabaSelectionAdvisor({
   const [step, setStep] = useState(0);
   const [answers, setAnswers] = useState(initialAnswers);
   const [selectionNotice, setSelectionNotice] = useState('');
+  const [candidateSearch, setCandidateSearch] = useState('');
   const gpuRelevant = answers.primaryScenario === 'ai' || answers.primaryScenario === 'video';
   const localStorageRelevant = ['database', 'search-logs', 'big-data-messaging'].some(value =>
     value === answers.primaryScenario || answers.coLocatedComponents.includes(value as SelectionScenario));
   const networkRelevant = ['web-api', 'microservices-rpc', 'video'].includes(answers.primaryScenario);
+  const providerName = provider === 'tencent' ? '腾讯云 CVM' : '阿里云 ECS';
+  const providerEyebrow = provider === 'tencent' ? 'TENCENT CVM' : 'ALIYUN ECS';
 
   const request = useMemo<SelectionAdvisorRequest | null>(() => region ? {
-    provider: 'alibaba',
+    provider,
     region,
     zone: zone || undefined,
     primaryScenario: answers.primaryScenario,
@@ -142,26 +169,35 @@ export function AlibabaSelectionAdvisor({
     architecture: answers.architecture,
     offset: 0,
     limit: 20,
-  } : null, [answers, gpuRelevant, localStorageRelevant, networkRelevant, region, zone]);
+  } : null, [answers, gpuRelevant, localStorageRelevant, networkRelevant, provider, region, zone]);
 
   const recommendations = useInfiniteQuery({
-    queryKey: ['alibaba-selection-advisor', request],
+    queryKey: ['cloud-selection-advisor', provider, request],
     queryFn: ({ pageParam }) => api.selectionAdvisor({ ...request!, offset: pageParam, limit: 20 }),
     initialPageParam: 0,
     getNextPageParam: lastPage => lastPage.nextOffset ?? undefined,
-    enabled: step === 6 && request !== null,
+    enabled: catalogAvailable && step === 6 && request !== null,
     staleTime: 30_000,
   });
   const pages = recommendations.data?.pages || [];
   const result = pages[0];
   const candidates = pages.flatMap(page => page.items);
+  const filteredCandidates = useMemo(() => {
+    const needle = candidateSearch.trim().toLocaleLowerCase();
+    if (!needle) return candidates;
+    return candidates.filter(item => `${item.id} ${item.family || ''}`.toLocaleLowerCase().includes(needle));
+  }, [candidateSearch, candidates]);
 
   useEffect(() => {
-    if (selected && !isStillEligible(selected, answers)) {
+    setCandidateSearch('');
+  }, [answers, provider, region, zone]);
+
+  useEffect(() => {
+    if (selected && !isStillEligible(selected, answers, provider, zone)) {
       onSelect(null);
       setSelectionNotice(`已清除 ${selected.id}：修改后的硬约束不再匹配该机型。`);
     }
-  }, [answers, onSelect, selected]);
+  }, [answers, onSelect, provider, selected, zone]);
 
   const chooseScenario = (value: SelectionScenario) => {
     setAnswers(current => ({
@@ -186,16 +222,17 @@ export function AlibabaSelectionAdvisor({
       : [...answers.coLocatedComponents, value].slice(0, 5),
   );
 
-  return <section className="advisor-market-layout" aria-label="阿里云 ECS 选型助手">
+  return <section className="advisor-market-layout" aria-label={`${providerName} 选型助手`}>
     <aside className="panel selection-advisor">
       <div className="advisor-heading">
         <span><Sparkles size={17} /></span>
-        <div><small>ALIYUN ECS</small><h2>选型助手</h2><p>只用硬约束排除，场景用于排序。</p></div>
+        <div><small>{providerEyebrow}</small><h2>选型助手</h2><p>只用硬约束排除，场景用于排序。</p></div>
       </div>
       <div className="advisor-progress" aria-label={`选型进度 ${Math.min(step + 1, 7)} / 7`}><span style={{ width: `${((Math.min(step, 6) + 1) / 7) * 100}%` }} /></div>
       <nav className="advisor-step-nav" aria-label="问卷步骤">
         {stepLabels.map((label, index) => <button key={label} type="button" className={index === step ? 'active' : index < step ? 'done' : ''} disabled={index > step} onClick={() => setStep(index)}><span>{index < step ? <Check size={11} /> : index + 1}</span>{label}</button>)}
       </nav>
+      {!catalogAvailable && <div className="advisor-directory-warning" role="status"><AlertTriangle size={14} /><span>云厂商尚未连接。可以填写需求问卷，连接凭证后才能读取地域并生成候选。</span></div>}
       <div className="advisor-question">
         {step === 0 && <>
           <QuestionTitle title="主要使用场景是什么？" detail="选择最主要的工作负载，后续问题会随场景变化。" />
@@ -237,7 +274,7 @@ export function AlibabaSelectionAdvisor({
           <QuestionTitle title="选择地域与 CPU 架构" detail="不清楚架构时保留 ARM，但优先展示 x86。" />
           <div className="advisor-long-field"><span>CPU 架构</span><div className="advisor-segmented triple"><button type="button" className={answers.architecture === 'x86' ? 'active' : ''} onClick={() => update('architecture', 'x86')}>x86</button><button type="button" className={answers.architecture === 'arm' ? 'active' : ''} onClick={() => update('architecture', 'arm')}>ARM</button><button type="button" className={answers.architecture === 'unknown' ? 'active' : ''} onClick={() => update('architecture', 'unknown')}>不清楚</button></div></div>
           <div className="advisor-fields"><label><span>地域 *</span><select aria-label="助手地域" value={region} onChange={event => onRegionChange(event.target.value)}><option value="">选择地域</option>{regions.map(item => <option key={item.id} value={item.id}>{item.name} · {item.id}</option>)}</select></label><label><span>可用区</span><select aria-label="助手可用区" value={zone} disabled={!region} onChange={event => onZoneChange(event.target.value)}><option value="">不限可用区</option>{zones.map(item => <option key={item.id} value={item.id}>{item.name} · {item.id}</option>)}</select></label></div>
-          <QuestionActions back={() => setStep(4)} next={() => setStep(6)} disabled={!region} nextLabel="查看候选" />
+          <QuestionActions back={() => setStep(4)} next={() => setStep(6)} disabled={!catalogAvailable || !region} nextLabel="查看候选" />
         </>}
         {step === 6 && <>
           <QuestionTitle title="筛选已完成" detail="可返回任一步修改答案，候选列表会重新计算。" />
@@ -249,16 +286,18 @@ export function AlibabaSelectionAdvisor({
 
     <div className="advisor-results">
       {step < 6 && <div className="panel advisor-placeholder"><Filter size={28} /><h2>回答问题后生成候选</h2><p>场景只调整顺序；库存、精确规格、架构、GPU、本地盘和明确的网络阈值才会排除机型。</p></div>}
-      {step === 6 && recommendations.isLoading && <div className="panel advisor-placeholder"><Cpu className="spin" size={28} /><h2>正在读取阿里云规格目录</h2><p>筛选当前地域的可售规格并计算匹配顺序。</p></div>}
+      {step === 6 && recommendations.isLoading && <div className="panel advisor-placeholder"><Cpu className="spin" size={28} /><h2>正在读取{providerName}规格目录</h2><p>筛选当前地域的可售规格并计算匹配顺序。</p></div>}
       {step === 6 && recommendations.isError && <div className="panel advisor-placeholder error"><AlertTriangle size={28} /><h2>候选读取失败</h2><p>{recommendations.error instanceof Error ? recommendations.error.message : '请稍后重试'}</p><button type="button" className="button secondary" onClick={() => recommendations.refetch()}>重试</button></div>}
       {step === 6 && result && <>
         <section className="panel advisor-result-summary">
           <div><span className="eyebrow">FILTER RESULT</span><h2>{result.total ? `剩余 ${result.total} 个候选` : '没有满足全部硬约束的机型'}</h2><p>{result.stale ? result.warning : `目录来源：${result.source === 'live' ? '实时' : '缓存'} · 每次加载 20 个`}</p></div>
           <div className="advisor-elimination">{result.exclusionStages.map(stage => <span key={stage.code}><small>{stage.label}</small><strong>{stage.before} → {stage.after}</strong></span>)}</div>
+          {result.total > 0 && <div className="advisor-candidate-search-wrap"><label className="search-field advisor-candidate-search"><Search size={16} /><span className="sr-only">搜索候选机型</span><input aria-label="搜索候选机型" value={candidateSearch} onChange={event => setCandidateSearch(event.target.value)} placeholder="搜索已加载的机型 ID 或规格族" /></label><small>当前已加载 {candidates.length} 条，匹配 {filteredCandidates.length} 条</small></div>}
           {!result.total && result.mostRestrictiveStage && <div className="advisor-zero-warning"><AlertTriangle size={15} /><span>限制最大的是“{result.mostRestrictiveStage.label}”，排除了 {result.mostRestrictiveStage.removed} 个机型。系统没有自动放宽条件。</span></div>}
           {selectionNotice && <div className="advisor-zero-warning"><AlertTriangle size={15} /><span>{selectionNotice}</span></div>}
         </section>
-        {candidates.length > 0 && <section className="advisor-candidate-list">{candidates.map(item => <CandidateCard key={item.id} item={item} selected={selected?.id === item.id} onSelect={() => { onSelect(item); setSelectionNotice(''); }} />)}</section>}
+        {filteredCandidates.length > 0 && <section className="advisor-candidate-list">{filteredCandidates.map(item => <CandidateCard key={item.id} item={item} selected={selected?.id === item.id} onSelect={() => { onSelect(item); setSelectionNotice(''); }} />)}</section>}
+        {candidateSearch.trim() && !filteredCandidates.length && <div className="panel advisor-search-empty"><Filter size={22} /><strong>当前已加载候选中没有匹配项</strong><span>{recommendations.hasNextPage ? '可以继续加载更多候选，新的结果会自动参与搜索。' : '请尝试其他机型 ID 或规格族。'}</span></div>}
         {recommendations.hasNextPage && <button type="button" className="button secondary advisor-load-more" disabled={recommendations.isFetchingNextPage} onClick={() => recommendations.fetchNextPage()}>{recommendations.isFetchingNextPage ? '加载中…' : `加载更多（已显示 ${candidates.length} / ${result.total}）`}</button>}
       </>}
     </div>
@@ -279,9 +318,11 @@ function CandidateCard({ item, selected, onSelect }: { item: AdvisedCloudInstanc
   return <article className={`panel advisor-candidate ${selected ? 'selected' : ''}`}>
     <div className="candidate-heading"><span className={`match-tier ${item.matchTier}`}>{item.matchTier === 'preferred' ? '优先匹配' : item.matchTier === 'suitable' ? '适合' : '其他候选'}</span><span className={`stock-label ${item.available === true ? 'available' : 'unknown'}`}>{item.available === true ? '库存可用' : '库存未知'}</span></div>
     <h3>{item.id}</h3><p>{item.family || '未标注规格族'} · {item.architecture || '架构未知'}</p>
-    <div className="candidate-facts"><span><strong>{item.cpu}</strong>vCPU</span><span><strong>{formatNumber(item.memoryGib)}</strong>GiB 内存</span>{item.gpu ? <span><strong>{item.gpu}</strong>GPU</span> : null}{bandwidth ? <span><strong>{formatNumber(bandwidth)}</strong>Gbit/s</span> : null}{pps ? <span><strong>{pps.toLocaleString()}</strong>PPS</span> : null}</div>
+    <div className="candidate-facts"><span><strong>{item.cpu}</strong>vCPU</span><span><strong>{formatNumber(item.memoryGib)}</strong>GiB 内存</span>{item.gpu ? <span><strong>{formatNumber(item.gpu)}</strong>GPU</span> : null}{bandwidth ? <span><strong>{formatNumber(bandwidth)}</strong>Gbit/s</span> : null}{pps ? <span><strong>{pps.toLocaleString()}</strong>PPS</span> : null}</div>
     <ul className="candidate-reasons">{item.reasons.map(reason => <li key={reason}><Check size={12} />{reason}</li>)}</ul>
     {item.warnings.length > 0 && <ul className="candidate-warnings">{item.warnings.map(warning => <li key={warning}><AlertTriangle size={12} />{warning}</li>)}</ul>}
     <button type="button" className={`button ${selected ? 'primary' : 'secondary'}`} onClick={onSelect}>{selected ? <><Check size={14} />已选择</> : '选择此机型'}</button>
   </article>;
 }
+
+export { CloudSelectionAdvisor as AlibabaSelectionAdvisor };

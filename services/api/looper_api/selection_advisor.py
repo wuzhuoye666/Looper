@@ -38,7 +38,7 @@ SCENARIO_LABELS: dict[str, str] = {
 
 
 class SelectionAdvisorRequest(ApiModel):
-    provider: Literal["alibaba"] = "alibaba"
+    provider: Literal["alibaba", "tencent"] = "alibaba"
     region: str = Field(min_length=2, max_length=64)
     zone: str | None = Field(default=None, max_length=64)
     primary_scenario: ScenarioId
@@ -47,7 +47,7 @@ class SelectionAdvisorRequest(ApiModel):
     exact_cpu: int | None = Field(default=None, ge=1, le=1024)
     exact_memory_gib: float | None = Field(default=None, ge=0.25, le=65536)
     workload_scale: str | None = Field(default=None, max_length=160)
-    minimum_gpu_count: int = Field(default=0, ge=0, le=64)
+    minimum_gpu_count: float = Field(default=0, ge=0, le=64)
     local_storage: Literal["required", "not-required", "unknown"] = "unknown"
     minimum_network_bandwidth_gbps: float | None = Field(default=None, ge=0, le=10000)
     minimum_network_pps: int | None = Field(default=None, ge=0, le=2_000_000_000)
@@ -101,7 +101,7 @@ class SelectionAdvisorResponse(ApiModel):
     warning: str | None = None
 
 
-_FAMILY_ORDERS: dict[str, list[set[str]]] = {
+_ALIBABA_FAMILY_ORDERS: dict[str, list[set[str]]] = {
     "web-api": [{"g"}, {"c", "u"}],
     "microservices-rpc": [{"g", "network"}, {"c"}],
     "database": [{"i"}, {"r"}, {"g"}],
@@ -115,6 +115,20 @@ _FAMILY_ORDERS: dict[str, list[set[str]]] = {
     "other": [{"g", "u"}],
 }
 
+_TENCENT_FAMILY_ORDERS: dict[str, list[set[str]]] = {
+    "web-api": [{"standard"}, {"compute", "network"}],
+    "microservices-rpc": [{"standard", "network"}, {"compute"}],
+    "database": [{"storage", "memory"}, {"standard"}],
+    "cache": [{"memory"}, {"standard"}],
+    "search-logs": [{"storage", "big-data", "memory"}, {"standard"}],
+    "big-data-messaging": [{"big-data", "storage", "batch"}, {"standard"}],
+    "game": [{"compute", "network"}, {"standard"}],
+    "video": [{"compute", "network"}, {"heterogeneous"}, {"standard"}],
+    "ai": [{"heterogeneous"}, {"compute", "standard"}],
+    "development-test": [{"standard", "batch"}, {"compute"}],
+    "other": [{"standard"}, {"compute", "memory"}],
+}
+
 
 def _family_token(item: InstanceTypeInfo) -> str:
     source = (item.family or item.id).casefold()
@@ -123,11 +137,35 @@ def _family_token(item: InstanceTypeInfo) -> str:
     return source.split(".", 1)[0]
 
 
-def _family_kind(item: InstanceTypeInfo) -> str:
+def _alibaba_family_kind(item: InstanceTypeInfo) -> str:
     token = _family_token(item)
     for prefix in ("hfc", "gn", "g", "c", "u", "i", "r", "d", "e", "t"):
         if token.startswith(prefix):
             return prefix
+    return "other"
+
+
+def _tencent_family_kind(item: InstanceTypeInfo) -> str:
+    token = _family_token(item).upper()
+    type_name = str(item.attributes.get("typeName") or "").casefold()
+    if token.startswith(("GN", "GI", "GA", "GT", "PNV", "GPU")) or "gpu" in type_name:
+        return "heterogeneous"
+    if token.startswith(("IT", "IA")) or any(
+        marker in type_name for marker in ("高io", "高 io", "存储")
+    ):
+        return "storage"
+    if token.startswith(("MA", "M")) or "内存" in type_name:
+        return "memory"
+    if token.startswith("D") or "大数据" in type_name:
+        return "big-data"
+    if token.startswith(("CN", "C")) or "计算" in type_name:
+        return "compute"
+    if "NE" in token or "网络" in type_name:
+        return "network"
+    if token.startswith("B") or "批量" in type_name:
+        return "batch"
+    if token.startswith(("SA", "SR", "S")) or "标准" in type_name:
+        return "standard"
     return "other"
 
 
@@ -145,11 +183,19 @@ def _architecture_kind(value: str | None) -> str:
     return "unknown"
 
 
-def _scenario_family_rank(item: InstanceTypeInfo, scenario: str, *, gpu: bool) -> int:
-    kind = _family_kind(item)
-    order = _FAMILY_ORDERS[scenario]
-    if scenario in {"ai", "video"} and gpu:
-        order = [{"gn"}, {"c", "hfc", "g"}]
+def _scenario_family_rank(
+    item: InstanceTypeInfo, scenario: str, *, gpu: bool, provider: str
+) -> int:
+    if provider == "tencent":
+        kind = _tencent_family_kind(item)
+        order = _TENCENT_FAMILY_ORDERS[scenario]
+        if scenario in {"ai", "video", "game"} and gpu:
+            order = [{"heterogeneous"}, {"compute", "network", "standard"}]
+    else:
+        kind = _alibaba_family_kind(item)
+        order = _ALIBABA_FAMILY_ORDERS[scenario]
+        if scenario in {"ai", "video"} and gpu:
+            order = [{"gn"}, {"c", "hfc", "g"}]
     for index, group in enumerate(order):
         if kind in group:
             return index
@@ -160,12 +206,112 @@ def _scenario_family_rank(item: InstanceTypeInfo, scenario: str, *, gpu: bool) -
 
 def _combined_family_rank(item: InstanceTypeInfo, request: SelectionAdvisorRequest) -> int:
     gpu = request.minimum_gpu_count > 0
-    rank = _scenario_family_rank(item, request.primary_scenario, gpu=gpu) * 2
+    rank = _scenario_family_rank(
+        item, request.primary_scenario, gpu=gpu, provider=request.provider
+    ) * 2
     rank += sum(
-        _scenario_family_rank(item, component, gpu=gpu)
+        _scenario_family_rank(item, component, gpu=gpu, provider=request.provider)
         for component in request.co_located_components
     )
     return rank
+
+
+def _zone_capabilities(item: InstanceTypeInfo) -> list[dict[str, object]]:
+    value = item.attributes.get("zoneCapabilities")
+    if not isinstance(value, list):
+        return []
+    return [capability for capability in value if isinstance(capability, dict)]
+
+
+def _number(capability: dict[str, object], name: str) -> float:
+    value = capability.get(name)
+    return float(value) if isinstance(value, int | float) else 0
+
+
+def _capability_matches(
+    capability: dict[str, object],
+    request: SelectionAdvisorRequest,
+    *,
+    gpu: bool = False,
+    local_storage: bool = False,
+    bandwidth: bool = False,
+    pps: bool = False,
+) -> bool:
+    available = capability.get("available")
+    if request.provider == "tencent" and request.zone is None:
+        if available is not True:
+            return False
+    elif available is False:
+        return False
+    if gpu and _number(capability, "gpu") < request.minimum_gpu_count:
+        return False
+    if local_storage and not (
+        capability.get("localStorageCategory") or capability.get("localStorageCapacityGib")
+    ):
+        return False
+    if bandwidth and _number(capability, "networkBandwidthGbps") < (
+        request.minimum_network_bandwidth_gbps or 0
+    ):
+        return False
+    return not (
+        pps and _number(capability, "networkPps") < (request.minimum_network_pps or 0)
+    )
+
+
+def _matches_resources(
+    item: InstanceTypeInfo,
+    request: SelectionAdvisorRequest,
+    *,
+    gpu: bool = False,
+    local_storage: bool = False,
+    bandwidth: bool = False,
+    pps: bool = False,
+) -> bool:
+    capabilities = _zone_capabilities(item)
+    if capabilities:
+        return any(
+            _capability_matches(
+                capability,
+                request,
+                gpu=gpu,
+                local_storage=local_storage,
+                bandwidth=bandwidth,
+                pps=pps,
+            )
+            for capability in capabilities
+        )
+    if item.available is False:
+        return False
+    if gpu and (item.gpu or 0) < request.minimum_gpu_count:
+        return False
+    if local_storage and not (item.local_storage_count or item.local_storage_category):
+        return False
+    if bandwidth and min(
+        item.network_bandwidth_rx_gbps or 0,
+        item.network_bandwidth_tx_gbps or 0,
+    ) < (request.minimum_network_bandwidth_gbps or 0):
+        return False
+    return not (
+        pps
+        and min(item.network_pps_rx or 0, item.network_pps_tx or 0)
+        < (request.minimum_network_pps or 0)
+    )
+
+
+def _eligible_zones(item: InstanceTypeInfo, request: SelectionAdvisorRequest) -> list[str]:
+    return sorted(
+        str(capability["zone"])
+        for capability in _zone_capabilities(item)
+        if capability.get("zone")
+        and _capability_matches(
+            capability,
+            request,
+            gpu=request.minimum_gpu_count > 0,
+            local_storage=request.local_storage == "required",
+            bandwidth=request.minimum_network_bandwidth_gbps is not None,
+            pps=request.minimum_network_pps is not None,
+        )
+    )
 
 
 def _filter_stage(
@@ -203,13 +349,25 @@ def _reasons_and_warnings(
     if request.sizing_mode == "exact":
         reasons.append(f"精确匹配 {item.cpu} vCPU / {item.memory_gib:g} GiB")
     if request.minimum_gpu_count:
-        reasons.append(f"提供 {item.gpu or 0} 块 GPU")
+        reasons.append(f"提供 {item.gpu or 0:g} 块 GPU")
     if request.local_storage == "required":
         reasons.append("提供本地盘")
-    if item.available is True:
+    eligible_zones = _eligible_zones(item, request)
+    if request.provider == "tencent" and request.zone is None and eligible_zones:
+        reasons.append(f"地域内 {len(eligible_zones)} 个可用区满足硬约束")
+        warnings.append(
+            f"地域聚合结果，需选择可用区确认；当前匹配：{'、'.join(eligible_zones)}"
+        )
+    elif item.available is True:
         reasons.append("当前可用区库存可用")
     elif item.available is None:
         warnings.append("库存状态未知，选择后仍需实时确认")
+    if any(
+        str(capability.get("statusCategory") or "").casefold() == "understock"
+        for capability in _zone_capabilities(item)
+        if str(capability.get("zone") or "") in eligible_zones
+    ):
+        warnings.append("部分匹配可用区库存即将售罄")
     if request.architecture == "unknown" and _architecture_kind(item.architecture) == "arm":
         warnings.append("ARM 兼容性未经代码分析验证")
     if request.code_availability != "available":
@@ -233,7 +391,10 @@ def advise_instance_types(
     stages: list[ExclusionStage] = []
 
     remaining, stage = _filter_stage(
-        remaining, "availability", "可用区库存", lambda item: item.available is not False
+        remaining,
+        "availability",
+        "可用区库存",
+        lambda item: _matches_resources(item, request),
     )
     stages.append(stage)
     if request.sizing_mode == "exact":
@@ -258,7 +419,7 @@ def advise_instance_types(
             remaining,
             "gpu",
             "GPU 数量",
-            lambda item: (item.gpu or 0) >= request.minimum_gpu_count,
+            lambda item: _matches_resources(item, request, gpu=True),
         )
         stages.append(stage)
     if request.local_storage == "required":
@@ -266,8 +427,12 @@ def advise_instance_types(
             remaining,
             "local-storage",
             "本地盘",
-            lambda item: bool(item.local_storage_count)
-            or bool(item.local_storage_category),
+            lambda item: _matches_resources(
+                item,
+                request,
+                gpu=request.minimum_gpu_count > 0,
+                local_storage=True,
+            ),
         )
         stages.append(stage)
     if request.minimum_network_bandwidth_gbps is not None:
@@ -275,11 +440,13 @@ def advise_instance_types(
             remaining,
             "network-bandwidth",
             "内网带宽",
-            lambda item: min(
-                item.network_bandwidth_rx_gbps or 0,
-                item.network_bandwidth_tx_gbps or 0,
-            )
-            >= request.minimum_network_bandwidth_gbps,
+            lambda item: _matches_resources(
+                item,
+                request,
+                gpu=request.minimum_gpu_count > 0,
+                local_storage=request.local_storage == "required",
+                bandwidth=True,
+            ),
         )
         stages.append(stage)
     if request.minimum_network_pps is not None:
@@ -287,8 +454,14 @@ def advise_instance_types(
             remaining,
             "network-pps",
             "网络 PPS",
-            lambda item: min(item.network_pps_rx or 0, item.network_pps_tx or 0)
-            >= request.minimum_network_pps,
+            lambda item: _matches_resources(
+                item,
+                request,
+                gpu=request.minimum_gpu_count > 0,
+                local_storage=request.local_storage == "required",
+                bandwidth=request.minimum_network_bandwidth_gbps is not None,
+                pps=True,
+            ),
         )
         stages.append(stage)
 
@@ -316,7 +489,7 @@ def advise_instance_types(
     next_offset = request.offset + request.limit
     most_restrictive = max(stages, key=lambda item: item.removed, default=None)
     return SelectionAdvisorResponse(
-        provider=ProviderId.ALIBABA,
+        provider=ProviderId(request.provider),
         region=request.region,
         zone=request.zone,
         items=advised,
