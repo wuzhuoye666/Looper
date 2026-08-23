@@ -111,10 +111,12 @@ def comparable(
 
 def _distance(value: float, contract: MetricContract) -> float:
     if contract.direction == MetricDirection.TARGET:
-        assert contract.target is not None
+        if contract.target is None:
+            raise InsufficientEvidence("target metric requires an explicit target")
         return abs(value - contract.target)
     if contract.direction == MetricDirection.RANGE:
-        assert contract.lower_bound is not None and contract.upper_bound is not None
+        if contract.lower_bound is None or contract.upper_bound is None:
+            raise InsufficientEvidence("range metric requires lower_bound and upper_bound")
         if value < contract.lower_bound:
             return contract.lower_bound - value
         if value > contract.upper_bound:
@@ -125,10 +127,16 @@ def _distance(value: float, contract: MetricContract) -> float:
 
 def improvement_value(candidate: float, baseline: float, contract: MetricContract) -> float:
     if contract.direction == MetricDirection.MAXIMIZE:
-        assert contract.scale is not None
+        if contract.scale is None:
+            raise InsufficientEvidence(
+                f"{contract.id} maximize metric requires an explicit scale"
+            )
         return (candidate - baseline) / contract.scale
     if contract.direction == MetricDirection.MINIMIZE:
-        assert contract.scale is not None
+        if contract.scale is None:
+            raise InsufficientEvidence(
+                f"{contract.id} minimize metric requires an explicit scale"
+            )
         return (baseline - candidate) / contract.scale
     if contract.direction in {MetricDirection.TARGET, MetricDirection.RANGE}:
         scale = contract.scale or 1.0
@@ -351,7 +359,7 @@ def summarize_priority_by_component(
         grouped.setdefault(priority.component, []).append(priority)
     return {
         component: {
-            "best_pareto_rank": min(item.pareto_rank or 10**9 for item in items),
+            "best_pareto_rank": min(item.pareto_rank or math.inf for item in items),
             "max_pressure": max(item.pressure for item in items),
             "max_adverse_change": max(item.adverse_change for item in items),
             "mean_persistence": mean(item.persistence for item in items),

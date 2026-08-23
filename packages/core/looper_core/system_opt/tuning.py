@@ -9,7 +9,7 @@
 from __future__ import annotations
 
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from enum import StrEnum
 from typing import Any
 
@@ -46,6 +46,19 @@ from looper_core.system_opt.scoring import (
 )
 
 MeasurementAdapter = Callable[[int], MeasurementBatch]
+
+
+def _improvement_directions(metrics: list[Any]) -> list[Direction]:
+    """Direction for search/Pareto over improvement estimates.
+
+    ``scoring.improvement_value`` already folds each metric's own direction
+    (maximize/minimize/target/range) into the estimate sign, so every estimate
+    means "positive = better". The search generator and the Pareto ranking must
+    therefore treat the estimate itself as a single maximize objective; applying
+    the per-metric direction again would double-count it.
+    """
+
+    return [Direction.MAXIMIZE for _ in metrics]
 
 
 class StopReason(StrEnum):
@@ -294,7 +307,7 @@ class SystemOptimizationEngine:
                 MetricRole.RISK,
             }
         ]
-        objective_directions = [Direction.MAXIMIZE for _ in scored_metrics]
+        objective_directions = _improvement_directions(scored_metrics)
         existing: list[dict[str, Any]] = [
             {"parameters": {name: baseline_parameters[name] for name in search_space}}
         ]
@@ -549,6 +562,8 @@ class SystemOptimizationEngine:
             }
             for candidate in candidates
         ]
+        # Improvement estimates are direction-normalized (positive = better), so
+        # every scored metric is a maximize objective (see _improvement_directions).
         ranks = pareto_ranks(
             points,
             {metric.id: Direction.MAXIMIZE for metric in metrics},
