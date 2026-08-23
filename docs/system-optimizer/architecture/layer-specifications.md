@@ -44,7 +44,7 @@ packages/core/looper_core/system_opt/
 | 序 | 层 | 模块 | 验收门禁（全部满足才进下一层） |
 |---|---|---|---|
 | 0 | L0–L2 | 现有 | 现有 101 个 system_opt 测试全绿（已满足） |
-| 1 | L4 采集器 | collector.py | ✅ 2026-08-23 通过（13 测试：读写约束/fixture 采集/PMU 盲区/不可读非崩溃/digest 稳定） |
+| 1 | L4 采集器 | collector.py | ✅ 2026-08-23 修复后通过（42 项 L4 测试；原 13 项仅为基础基线，不代表压/采解耦合同完整） |
 | 2 | L6 回退器 | rollback.py | ✅ 2026-08-23 通过（14 测试：四级记录模型/相位恢复三态判定/退化级 S8 占位 fail-closed） |
 | 3 | L7 负缓存 | negative_cache.py | ✅ 2026-08-23 通过（17 测试：四分量身份敏感/无证据拒收/JSONL 追加/坏行报错） |
 | 4 | L8 引擎 | engine/ | ✅ 2026-08-23 通过（11 测试：打分排序/判断器否定理由完整/调度器缓存跳过与显式耗尽） |
@@ -61,44 +61,78 @@ packages/core/looper_core/system_opt/
 ## 3. L4 采集器规范（collector.py）
 
 职责：在 L3 构建的负载下按组件采集指标快照，为 S1 基线校准、S4 组件优先级、
-S6 改善量供数。不做判定、不评价收益。
+S6 改善量供数。不做加压、不做判定、不评价收益。
 
-### 3.1 Guest 盲区契约（CVM 内不可读指标，必须显式处理）
+### 3.1 层边界与依赖
+
+- L4 只依赖标准库、Pydantic、`StrictModel`、`canonical_digest` 与现有 L2
+  `MeasurementBatch` / `MetricEvidence`；禁止反向依赖 L3、L5、L8、数据库或执行后端。
+- `ComponentCollector` 是可替换采集边界；同一 `ComponentCollectionRequest` 可注入不同
+  collector。`run_component_collection(..., enabled=False)` 必须不调用 collector，作为采集
+  开销 A/B 的关闭组。
+- 不修改 L2 schema。L4 用 `CollectionMeasurementEnvelope` 同时封装 collection run、原样的
+  `MeasurementBatch` 及其 digest，并在 envelope 中原样保留 unavailable 证据。
+- `CollectionOverheadABEvidence` 只保存等长配对的开/关原始耗时；L4 不内置接受阈值、权重
+  或收益公式。
+
+### 3.2 Guest 盲区与模型合同
 
 - 每个指标条目必须携带 `availability`：
-  - `readable`：值必须为有限正/负数（按指标语义），来源路径必须记录；
-  - `unavailable`：值必须为 `null`，必须携带 `unavailable_reason`（如
-    "guest 无 /sys/bus/event_source/devices 条目（PMU 未透传）"）。
+  - `readable`：值必须是有限标量或非空有限序列，来源必须记录；序列用于保留主指标的
+    原始多次观测/分布，不允许只留下派生均值；
+  - `unavailable`：值必须为 `null`，并携带 `unavailable_reason`。
 - **禁止把不可读当 0、当缺失、当猜测值**；不可读本身是有效证据。
-- PMU/硬件计数器：默认探测 `/sys/bus/event_source/devices/` 与
-  `/proc/sys/kernel/perf_event_paranoid`；guest 未透传时该类指标整体标记
-  `unavailable` 并注明探测依据。
-- 快照记录 `counting_basis`（采集口径）与探测过的不可读项清单。
+- `ComponentMetricSnapshot` 继续使用既有 v1alpha1 字段形状和摘要序列化口径，同时强制：
+  组件只能是 cpu / memory / storage / network / numa；时间戳带时区；字典键等于
+  `metric.name`；指标名前缀属于快照组件。
+- `ComponentCollectionRequest` 显式绑定 target、environment、工作负载阶段/来源、collector
+  身份、请求指标列表、采集窗口、测量身份和资源范围。network 必须给出准确接口列表；
+  storage 必须给出准确设备列表；缺少范围时 fail-closed，禁止隐式整机聚合。
+- 压力工具原始输出通过 `CollectionInputArtifact` 交给 L4：只登记 artifact_id、source、
+  media_type 与 sha256 digest，不在合同里预设 iperf3/fio/sysbench 等格式。指定 collector 负责
+  解析并按 `requested_metrics` 精确交付；实际 collector 身份或返回指标集合不一致即拒绝。
 
-### 3.2 数据模型
+### 3.3 内置 Linux guest collector
 
-- `MetricAvailability`、`CollectedMetric`（name/unit/value/availability/
-  unavailable_reason/source，读写约束见上）、`ComponentMetricSnapshot`
-  （component/target_id/environment_digest/collected_at/metrics/
-  counting_basis + digest）。
-- 组件枚举与 L5 一致：cpu / memory / storage / network / numa。
+- 根目录、sleep 与 wall clock 均可注入，允许在 Windows fixture 上验证。
+- cpu：两次 `/proc/stat` 采样；总 tick 计 user 到 steal，guest/guest_nice 因已包含于
+  user/nice 而不重复计数。CPU PMU 可用性只认 canonical
+  `/sys/bus/event_source/devices/cpu`；`perf_event_paranoid` 作为独立事实报告。
+- memory：读取 `MemAvailable / MemTotal`，并验证
+  `0 <= MemAvailable <= MemTotal` 且 total > 0。
+- network：只聚合调用方明确列出的 `/proc/net/dev` 接口（`lo` 可被明确选择）。保留窗口
+  结束时累计 total，同时给出窗口 delta 和 rate。
+- storage：只聚合调用方明确列出的 `/proc/diskstats` 设备；不自动添加分区，因此不会把
+  整盘与分区重复相加。保留窗口结束时累计 total，同时给出窗口 delta 和 rate。
+- network/storage 任一计数器下降时，保留可读的结束累计值，但对应 delta/rate 标为
+  unavailable；L4 不猜测 reset 或 wrap 规则。
+- numa：只报告 guest 可见节点数；节点目录数量不能证明当前 workload 的绑核/绑内存状态，
+  所以未提供实际绑定测量时 `numa.binding` 必须 unavailable。
 
-### 3.3 采集函数（根目录可注入，Windows 可测）
+### 3.4 L2 绑定合同
 
-- `collect_component_snapshot(component, ..., proc_root, sys_root, interval_seconds)`。
-- cpu：两次 `/proc/stat` 采样算 busy-ratio；附 PMU 可用性探测。
-- memory：`/proc/meminfo` 的可用比。
-- network：`/proc/net/dev` 聚合收发计数器。
-- storage：`/proc/diskstats` 聚合 I/O 计数器。
-- numa：`/sys/devices/system/node/` 节点计数（0 → unavailable 证据）。
+`bind_collection_to_measurement_batch(...)` 把 readable L4 指标转换为单值
+`MetricEvidence`（标量成为单值列表，序列完整保留），并可合并到已有 L2 batch（压力工具
+主指标、gate、阶段/稳定性证据原样保留）；
+不可读证据留在 L4 envelope。`collection_metric_names` 明确标识 L4 注入的指标子集。
+envelope 必须校验：
 
-### 3.4 验收门禁
+1. collection run 已启用，snapshot 与 request 的 component/target/environment 一致；
+2. L2 identity 精确绑定 component、target、environment、collection run digest；
+3. `measurement_batch_digest` 与实际 batch 一致；
+4. 已有 L2 主指标不得被覆盖；L4 readable 指标子集和 unavailable 指标的集合与值均不得
+   被静默删改。
 
-1. 读写约束双向测试（readable 带值 / unavailable 带理由，违反即拒）；
-2. fixture procfs/sysfs 树上各组件采集正确性；
-3. PMU 未透传 fixture → hardware 指标 unavailable 且带探测依据；
-4. 不可读文件 → unavailable（不是异常崩溃、不是 0）；
-5. digest 稳定性（同输入同摘要）。
+### 3.5 验收门禁
+
+1. readable/unavailable 双向约束、组件/指标身份、时区和旧摘要稳定性；
+2. CPU 完整字段算法、畸形输入、canonical PMU 识别与 perf 权限事实；
+3. memory 边界；network 显式接口（含 loopback）；storage 精确设备与分区不重复；
+4. 网络/存储窗口 total/delta/rate、缺对象和计数器 reset 均 fail-closed；
+5. NUMA 不从拓扑推断 workload binding；
+6. collector 可替换、关闭开关不调用 collector、run/collector/请求指标身份不匹配拒绝；
+7. L2 envelope digest/身份/指标绑定及 unavailable 原样保留；
+8. 开销 A/B 原始观察必须成对、有限、非负，不在 L4 设阈值。
 
 ## 4. L6 回退器规范（rollback.py）
 
