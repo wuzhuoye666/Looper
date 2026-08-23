@@ -40,8 +40,11 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const body = response.status === 204 ? undefined : await response.json().catch(() => undefined);
   if (!response.ok) {
     const message = body && typeof body === 'object' && 'message' in body ? String(body.message) : `请求失败 (${response.status})`;
-    if (response.status === 401 && operatorToken) {
-      setOperatorToken('');
+    const operatorAuthRequired = response.status === 401
+      && body && typeof body === 'object' && 'code' in body
+      && body.code === 'operator_auth_required';
+    if (operatorAuthRequired) {
+      if (operatorToken) setOperatorToken('');
       window.dispatchEvent(new CustomEvent(OPERATOR_AUTH_INVALID_EVENT, { detail: { message } }));
     }
     throw new ApiError(message, response.status, body);
