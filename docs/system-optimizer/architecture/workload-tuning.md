@@ -233,7 +233,7 @@ VerificationWindow（复验窗口）:
 | 开销 A/B | `build_collection_overhead_evidence`（L4 合同） | 动态相位把它接进观察窗口的 overhead_digest |
 | 假设路由 | S4 `diagnostic_priorities`（静态侧） | ComponentHypothesis 记录、竞争假设登记、L7 第二条目类型（open） |
 | S9 复验生产者 | `PromotionContract`/`evaluate_promotion`（合同齐） | VerificationWindow 执行器 + passed 由重测 S7 产生 |
-| 结束门禁合同 | S10 `StopReason` 枚举 + 静态相位门禁 | DynamicPhaseGateContract 模型与校验 |
+| 结束门禁合同 | ✅ M3-3 完成 2026-08-23：`phase_gate.py`（DynamicPhaseGateContract 五类停止全字段化 + PhaseGateState + `evaluate_phase_gate` 固定判定顺序：安全→身份→预算→目标→收敛；GateDecision 必须引用触发字段+证据 digest；防振荡字段 reactivation_holdout_windows/single_change_per_window）| 接入动态循环（M3-4/5）与 D5 重激活资格判定 |
 | 重激活 | 无 | 全新；等 A/B 案确认 |
 | workload 合同 | ✅ M3-1 完成 2026-08-23：`workload.py`（schema + YAML 解析器 + `load_argv_digest`/`same_load`）+ stress-ng 示例合同（argv digest 绑定自验证）+ 7 测试。SO-D020 代码化：`load_provider=external-test` 唯一枚举、argv 只存摘要、身份 digest 不含 prose | 剩余：O0 解析器（stress-ng/sysbench/fio/iperf3 输出产物 → O0 指标），引擎只解析不启动 |
 
