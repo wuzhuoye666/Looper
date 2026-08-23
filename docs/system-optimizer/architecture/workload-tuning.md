@@ -70,6 +70,46 @@
 > 实现；全部数值为占位符（待校准）；标 open 的条目按提案制等用户确认后才可
 > 进入公式登记表与代码。
 
+## D0. 负载供给边界：基础套件的双重角色（用户定位 2026-08-23，SO-D020）
+
+M3 阶段没有真实业务应用，用 stress-ng / sysbench / fio / iperf3 等基础套件充当
+workload（业务负载替身）。**同一批工具在两条相位里角色不同，边界写死**：
+
+| 相位 | 谁启动压力工具 | 工具角色 | 引擎行为 |
+|---|---|---|---|
+| 静态（M2，已实现） | **优化器主动调用**——L3 压力器按 StandardPressureProtocol 的 prepare/warmup/measure/verify/cleanup 阶段合同驱动 | 受控探测负载 | 引擎经 L3 加压后由 L4 采集 |
+| 动态（M3，本设计） | **测试/操作侧外部启动**并维持（测试 harness 或操作者按 workload 合同起压） | 业务负载替身——"测试给的压力" | 引擎**永不主动调用**压力工具；只观测（O0/O1）→ 打分 → 小步干预系统配置 → 复验 |
+
+为什么必须这样切：
+
+1. **可比性（S0 的动态版）**：负载由外部按合同提供，基线窗、观察窗、复验窗
+   看到的是同一 `workload_identity_digest` 的负载；若引擎自己起压，任何配置
+   干预都可能同时改变负载本身，改善量归因被污染。
+2. **防自证**：引擎若既能造负载又能评收益，等于自己出题自己改卷。负载外置后
+   引擎唯一能动的只剩系统配置，收益只能来自配置。
+3. **生产语义对齐**：真实场景里业务方拥有 workload，优化器只能在业务之下调
+   系统。stress-ng 替身保持这个方向：负载生命周期归"业务方"（测试侧）。
+4. **观察者效应隔离**：O1 常态采集与配置施加都不触碰负载进程；负载的
+   启动/停止/重启是外部事件，各自带测试侧证据记录。
+5. **审计两侧分账**：负载启停属测试侧台账；引擎台账只含观测窗口与配置干预；
+   两侧证据在 `workload_identity_digest` 上汇合。
+
+**workload 合同相应新增字段（提案）**：
+
+- `load_provider: external-test`——第一版只有这一种；**不提供**引擎自起压的
+  模式（`load_provider=optimizer` 不进合同枚举）。
+- `load_command_identity`——工具+参数+时长的身份摘要，由测试侧声明、观察窗
+  核对；引擎持有它只为验身份，不因此获得执行权。
+- O0 业务指标 = **读取外部负载自身的产出**（如 stress-ng 的 bogo-ops 统计、
+  sysbench 的 tx 计数、fio 的 iops/lat 输出），引擎只解析产物，不启动进程。
+
+对 D3（S9 复验窗）的影响：复验窗要求测试侧**重新提供同一身份的负载**——引擎
+发出"复验窗请求"（附 `load_command_identity`），由测试侧起压；测试侧无法重供
+（身份漂移/负载消失）→ 走 D4 `identity_drift_policy`，晋升 fail-closed。
+
+对 D6 的影响：**动态引擎循环中不存在任何 L3 调用路径**；L3 压力器仍是静态相位
+专用（PKG-B 压/采解耦同样只服务静态相位）。
+
 ## D1. 观测合同（O0–O3）与采集开销 A/B
 
 **观察窗口（ObservationWindow）**：动态相位的基本观测单位。字段提案：
@@ -145,7 +185,8 @@ VerificationWindow（复验窗口）:
   不够，必须等动态复验窗口补足——这一约束已实现（PromotionContract），本设计
   只补生产者，不改合同。
 - **动态相位**：晋升候选进入"保留观察"状态，其后每个验证窗口对同一
-  workload_identity 重测；`passed` 由重测批次的 S7 裁决产生（可为 false），
+  `workload_identity` 重测（负载由测试侧按 D0 重新提供，引擎只发复验窗请求）；
+  `passed` 由重测批次的 S7 裁决产生（可为 false），
   失败观测走 `evaluate_promotion` fail-closed → 不晋升 + 触发 L6 候选级回退。
 - 复验窗口计入结束门禁预算（防"无限复验"）：复验窗口数 ≤ 任务输入上限，
   超限走 S10 收敛停止，best-observed 以未晋升状态如实报告。
@@ -194,7 +235,7 @@ VerificationWindow（复验窗口）:
 | S9 复验生产者 | `PromotionContract`/`evaluate_promotion`（合同齐） | VerificationWindow 执行器 + passed 由重测 S7 产生 |
 | 结束门禁合同 | S10 `StopReason` 枚举 + 静态相位门禁 | DynamicPhaseGateContract 模型与校验 |
 | 重激活 | 无 | 全新；等 A/B 案确认 |
-| workload 合同 | `OptimizationMode.WORKLOAD` + diagnostic-reference 入口 | 业务目标/SLO/阶段/输入身份的显式合同 schema |
+| workload 合同 | `OptimizationMode.WORKLOAD` + diagnostic-reference 入口 | 业务目标/SLO/阶段/输入身份的显式合同 schema + D0 负载供给字段（load_provider=external-test、load_command_identity）；O0 解析器读外部负载产物（stress-ng/sysbench/fio/iperf3 输出，引擎只解析不启动） |
 
 依赖顺序建议：workload 合同 → O0/O1 观察窗口 → 门禁合同 → 假设路由 →
 复验窗口 → 重激活。前四项不依赖 GPT PKG-B（L4 解耦）落地；复验窗口的
