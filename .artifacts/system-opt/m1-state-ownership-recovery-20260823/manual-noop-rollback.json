@@ -1,0 +1,127 @@
+{
+  "applied_items": [],
+  "events": [
+    {
+      "item_id": null,
+      "old_value": null,
+      "operation": "preflight",
+      "readback_value": null,
+      "reason": null,
+      "requested_value": null,
+      "round_trip_digest": null,
+      "sequence": 0,
+      "snapshot_digest": null,
+      "state": "preflight",
+      "status": "succeeded"
+    },
+    {
+      "item_id": null,
+      "old_value": null,
+      "operation": "snapshot",
+      "readback_value": null,
+      "reason": null,
+      "requested_value": null,
+      "round_trip_digest": null,
+      "sequence": 1,
+      "snapshot_digest": "sha256:b8430e9c3eca945e9b06c81b773778f405215b6cfd3685e087a617d24594c6a5",
+      "state": "snapshot",
+      "status": "succeeded"
+    },
+    {
+      "item_id": "io-nvme0n1-nomerges",
+      "old_value": 0,
+      "operation": "apply",
+      "readback_value": 0,
+      "reason": null,
+      "requested_value": 0,
+      "round_trip_digest": null,
+      "sequence": 2,
+      "snapshot_digest": null,
+      "state": "apply",
+      "status": "unchanged"
+    },
+    {
+      "item_id": "io-nvme0n1-scheduler",
+      "old_value": "mq-deadline",
+      "operation": "apply",
+      "readback_value": "mq-deadline",
+      "reason": null,
+      "requested_value": "mq-deadline",
+      "round_trip_digest": null,
+      "sequence": 3,
+      "snapshot_digest": null,
+      "state": "apply",
+      "status": "unchanged"
+    },
+    {
+      "item_id": null,
+      "old_value": null,
+      "operation": "measure",
+      "readback_value": null,
+      "reason": null,
+      "requested_value": null,
+      "round_trip_digest": null,
+      "sequence": 4,
+      "snapshot_digest": null,
+      "state": "measure",
+      "status": "succeeded"
+    },
+    {
+      "item_id": null,
+      "old_value": null,
+      "operation": "rollback-complete",
+      "readback_value": null,
+      "reason": "default rollback after measurement",
+      "requested_value": null,
+      "round_trip_digest": "sha256:b8430e9c3eca945e9b06c81b773778f405215b6cfd3685e087a617d24594c6a5",
+      "sequence": 5,
+      "snapshot_digest": "sha256:b8430e9c3eca945e9b06c81b773778f405215b6cfd3685e087a617d24594c6a5",
+      "state": "rolled_back",
+      "status": "succeeded"
+    }
+  ],
+  "final_snapshot": {
+    "entries": {
+      "io-nvme0n1-nomerges": {
+        "item_id": "io-nvme0n1-nomerges",
+        "message": null,
+        "raw_output": "0\n",
+        "status": "succeeded",
+        "target": "/sys/block/nvme0n1/queue/nomerges",
+        "value": 0
+      },
+      "io-nvme0n1-scheduler": {
+        "item_id": "io-nvme0n1-scheduler",
+        "message": null,
+        "raw_output": "none [mq-deadline] \n",
+        "status": "succeeded",
+        "target": "/sys/block/nvme0n1/queue/scheduler",
+        "value": "mq-deadline"
+      }
+    },
+    "target_id": "aliyun-ecs-8.138.5.244"
+  },
+  "reason": "default rollback after measurement",
+  "snapshot": {
+    "entries": {
+      "io-nvme0n1-nomerges": {
+        "item_id": "io-nvme0n1-nomerges",
+        "message": null,
+        "raw_output": "0\n",
+        "status": "succeeded",
+        "target": "/sys/block/nvme0n1/queue/nomerges",
+        "value": 0
+      },
+      "io-nvme0n1-scheduler": {
+        "item_id": "io-nvme0n1-scheduler",
+        "message": null,
+        "raw_output": "none [mq-deadline] \n",
+        "status": "succeeded",
+        "target": "/sys/block/nvme0n1/queue/scheduler",
+        "value": "mq-deadline"
+      }
+    },
+    "target_id": "aliyun-ecs-8.138.5.244"
+  },
+  "state": "rolled_back"
+}

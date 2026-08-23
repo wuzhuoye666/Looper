@@ -1,0 +1,39 @@
+schema_version: looper.system-config-manifest/v1alpha1
+id: aliyun-ecs-nvme-scheduler-validation-20260823
+version: "1"
+description: One-item, task-specific search over the observed root NVMe scheduler.
+metadata:
+  target_os: linux
+  evidence_kind: empirical-aliyun-ecs
+  portability: not valid for Tencent Cloud CVM without independent capability validation
+items:
+  - id: io-nvme0n1-scheduler
+    category: io
+    primary_component: storage
+    related_components: []
+    target: /sys/block/nvme0n1/queue/scheduler
+    value_type: categorical
+    domain: {minimum: null, maximum: null, step: null, choices: [mq-deadline, none], log: false}
+    default: mq-deadline
+    read:
+      command: {argv: [read-file, "{target}"], timeout_seconds: 5}
+      parser: bracket-selected
+      true_values: []
+      false_values: []
+    apply: {argv: [write-file, "{target}", "{value}"], timeout_seconds: 5}
+    rollback: {mode: restore-snapshot, command: null}
+    activation: immediate
+    risk: medium
+    risk_reason: null
+    dependencies: []
+    preconditions:
+      - {kind: path, key: /sys/block/nvme0n1/queue/scheduler, operator: exists, value: null}
+    compatibility:
+      distributions: [ubuntu]
+      architectures: [x86_64]
+      required_paths: [/sys/block/nvme0n1/queue/scheduler]
+      required_commands: []
+    searchable: true
+    value_aliases: {}
+    description: Compare only the two scheduler values observed on this validation host.
+    source: https://docs.kernel.org/block/queue-sysfs.html#scheduler-rw

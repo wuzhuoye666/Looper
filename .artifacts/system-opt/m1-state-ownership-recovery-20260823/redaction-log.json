@@ -1,0 +1,20 @@
+{
+  "schema_version": "looper.evidence-redaction/v1alpha1",
+  "source_artifact": "raw-inventory.json",
+  "redaction_count": 1,
+  "redactions": [
+    {
+      "record_path": "/proc/sys/net/ipv4/tcp_fastopen_key",
+      "fields_removed": [
+        "byte_length",
+        "sha256",
+        "raw_base64",
+        "raw_text"
+      ],
+      "delivered_status": "unavailable",
+      "reason": "sensitive per-host key must not be committed to Git",
+      "unredacted_retention": "authorized ECS evidence directory only"
+    }
+  ],
+  "other_records_modified": 0
+}

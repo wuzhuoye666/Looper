@@ -1,0 +1,91 @@
+{
+  "schema_version": "looper.system-opt-cvm-readonly-probe/v1alpha1",
+  "collected_at": "2026-08-23T09:52:15.766853+08:00",
+  "scope": "Read-only Alibaba Cloud ECS preflight; no configuration writes, package installation, or stress workload.",
+  "collector": "Python 3 standard-library probe, not the Looper system-opt CLI",
+  "metadata": {
+    "target_os": "linux",
+    "provider_observed": "Alibaba Cloud ECS",
+    "kernel": "6.8.0-137-generic",
+    "architecture": "x86_64",
+    "distribution_id": "ubuntu",
+    "distribution_version": "24.04",
+    "distribution_pretty_name": "Ubuntu 24.04.4 LTS",
+    "virtualization": "kvm",
+    "host_identifier": "sha256:9fb11d6a5ce5de3e7398a82e723dd6a73adf432939250f30baa80dc185683922",
+    "host_identifier_source": "/etc/machine-id",
+    "cpu_count": 8,
+    "memory_total_observed": "14GiB",
+    "root_filesystem": "/dev/nvme0n1p3 ext4 rw,relatime",
+    "numa_nodes": 1,
+    "network_interface": "eth0",
+    "scope_limitations": [
+      "Facts apply only to this Alibaba Cloud ECS instance at collection time.",
+      "This evidence must not be labeled as Tencent Cloud CVM evidence.",
+      "No configuration write safety, persistence, rollback, workload stability, or benefit was verified.",
+      "The WSL manifest selectors were retained without silent remapping."
+    ]
+  },
+  "runtime_modules": {
+    "pydantic": "unavailable",
+    "yaml": "succeeded",
+    "typer": "unavailable"
+  },
+  "tool_inventory": [
+    {"name": "python3", "status": "succeeded", "resolved_path": "/usr/bin/python3"},
+    {"name": "sysctl", "status": "succeeded", "resolved_path": "/usr/sbin/sysctl"},
+    {"name": "perf", "status": "succeeded", "resolved_path": "/usr/bin/perf"},
+    {"name": "numactl", "status": "succeeded", "resolved_path": "/usr/bin/numactl"},
+    {"name": "ethtool", "status": "succeeded", "resolved_path": "/usr/sbin/ethtool"},
+    {"name": "stress-ng", "status": "unavailable", "resolved_path": null},
+    {"name": "fio", "status": "unavailable", "resolved_path": null},
+    {"name": "iperf3", "status": "unavailable", "resolved_path": null}
+  ],
+  "operational_checks": {
+    "perf_cycles": {
+      "status": "succeeded",
+      "command": ["perf", "stat", "-e", "cycles", "--", "true"],
+      "observed_cycles": 804722,
+      "note": "A second interactive probe also succeeded; installed and operational were checked separately."
+    },
+    "system_state": {
+      "systemd": "running",
+      "load_average": [0.0, 0.0, 0.0],
+      "root_path_readable": true,
+      "swappiness_path_writable_as_root": true,
+      "note": "Writable does not imply authorized or safe to change."
+    }
+  },
+  "config_inventory": {
+    "counting_basis": "6 categories x 3 items + IRQ affinity + MTU; no deduplication",
+    "total": 20,
+    "status_counts": {
+      "succeeded": 15,
+      "unavailable": 5,
+      "permission-denied": 0,
+      "failed": 0
+    },
+    "records": [
+      {"id": "vm-swappiness", "category": "sysctl", "target": "/proc/sys/vm/swappiness", "status": "succeeded", "raw_value": "0"},
+      {"id": "vm-dirty-ratio", "category": "sysctl", "target": "/proc/sys/vm/dirty_ratio", "status": "succeeded", "raw_value": "30"},
+      {"id": "vm-dirty-background-ratio", "category": "sysctl", "target": "/proc/sys/vm/dirty_background_ratio", "status": "succeeded", "raw_value": "10"},
+      {"id": "cpufreq-governor-policy0", "category": "cpufreq", "target": "/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor", "status": "succeeded", "raw_value": "performance"},
+      {"id": "cpufreq-min-policy0", "category": "cpufreq", "target": "/sys/devices/system/cpu/cpu0/cpufreq/scaling_min_freq", "status": "succeeded", "raw_value": "3900000"},
+      {"id": "cpufreq-max-policy0", "category": "cpufreq", "target": "/sys/devices/system/cpu/cpu0/cpufreq/scaling_max_freq", "status": "succeeded", "raw_value": "3900000"},
+      {"id": "thp-enabled", "category": "thp", "target": "/sys/kernel/mm/transparent_hugepage/enabled", "status": "succeeded", "raw_value": "always [madvise] never"},
+      {"id": "thp-defrag", "category": "thp", "target": "/sys/kernel/mm/transparent_hugepage/defrag", "status": "succeeded", "raw_value": "always defer defer+madvise [madvise] never"},
+      {"id": "thp-shmem-enabled", "category": "thp", "target": "/sys/kernel/mm/transparent_hugepage/shmem_enabled", "status": "succeeded", "raw_value": "always within_size advise [never] deny force"},
+      {"id": "io-sda-scheduler", "category": "io", "target": "/sys/block/sda/queue/scheduler", "status": "unavailable", "raw_value": null, "message": "path does not exist; CVM root disk is nvme0n1"},
+      {"id": "io-sda-nr-requests", "category": "io", "target": "/sys/block/sda/queue/nr_requests", "status": "unavailable", "raw_value": null, "message": "path does not exist; CVM root disk is nvme0n1"},
+      {"id": "io-sda-read-ahead-kb", "category": "io", "target": "/sys/block/sda/queue/read_ahead_kb", "status": "unavailable", "raw_value": null, "message": "path does not exist; CVM root disk is nvme0n1"},
+      {"id": "numa-balancing", "category": "numa", "target": "/proc/sys/kernel/numa_balancing", "status": "succeeded", "raw_value": "0"},
+      {"id": "numa-scan-period-min-ms", "category": "numa", "target": "/proc/sys/kernel/numa_balancing_scan_period_min_ms", "status": "unavailable", "raw_value": null, "message": "path does not exist on this kernel"},
+      {"id": "numa-scan-period-max-ms", "category": "numa", "target": "/proc/sys/kernel/numa_balancing_scan_period_max_ms", "status": "unavailable", "raw_value": null, "message": "path does not exist on this kernel"},
+      {"id": "net-somaxconn", "category": "net", "target": "/proc/sys/net/core/somaxconn", "status": "succeeded", "raw_value": "4096"},
+      {"id": "net-tcp-max-syn-backlog", "category": "net", "target": "/proc/sys/net/ipv4/tcp_max_syn_backlog", "status": "succeeded", "raw_value": "1024"},
+      {"id": "net-tcp-congestion-control", "category": "net", "target": "/proc/sys/net/ipv4/tcp_congestion_control", "status": "succeeded", "raw_value": "cubic"},
+      {"id": "irq0-smp-affinity-list", "category": "irq", "target": "/proc/irq/0/smp_affinity_list", "status": "succeeded", "raw_value": "0-7"},
+      {"id": "net-eth0-mtu", "category": "other", "target": "/sys/class/net/eth0/mtu", "status": "succeeded", "raw_value": "8500"}
+    ]
+  }
+}

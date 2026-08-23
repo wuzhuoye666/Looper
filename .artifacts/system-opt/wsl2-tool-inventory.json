@@ -1,0 +1,114 @@
+{
+  "schema_version": "looper.local-tool-inventory/v1alpha1",
+  "metadata": {
+    "collector_environment": {
+      "os_name": "linux",
+      "kernel_release": "6.18.33.2-microsoft-standard-WSL2",
+      "architecture": "x86_64",
+      "distribution_id": "ubuntu",
+      "distribution_version": "26.04",
+      "virtualization": "wsl2",
+      "host_identifier_sha256": "5ba27fa26c517b13a2cb885d00d011e8ba221cad08a3249e6dca823bdfdcc8b8",
+      "host_identifier_source": "/etc/machine-id (sha256; raw value not retained)"
+    },
+    "scope_limitations": [
+      "Evidence is specific to this target and collection environment; portability requires independent validation.",
+      "WSL2 uses a Microsoft-customized Linux kernel and permission model; these observations must not be extrapolated to a Tencent Cloud CVM guest."
+    ]
+  },
+  "target_os": "linux",
+  "counting_basis": "one record per explicit tool requirement; no inferred alternatives or package names; no automatic installation",
+  "items": [
+    {
+      "requirement_id": "cpu-memory-pressure",
+      "executable": "stress-ng",
+      "criticality": "optional",
+      "purpose": "Candidate CPU and memory standard-pressure workload; critical only when selected.",
+      "alternatives": [],
+      "status": "unavailable",
+      "selected_executable": null,
+      "resolved_path": null,
+      "message": "no declared executable or explicit alternative is installed"
+    },
+    {
+      "requirement_id": "hardware-counters",
+      "executable": "perf",
+      "criticality": "optional",
+      "purpose": "Optional PMU-backed drill-down metrics; absence must not block software metrics.",
+      "alternatives": [],
+      "status": "succeeded",
+      "selected_executable": "perf",
+      "resolved_path": "/usr/bin/perf",
+      "message": null
+    },
+    {
+      "requirement_id": "network-pressure",
+      "executable": "iperf3",
+      "criticality": "optional",
+      "purpose": "Candidate network workload; critical only when selected.",
+      "alternatives": [],
+      "status": "unavailable",
+      "selected_executable": null,
+      "resolved_path": null,
+      "message": "no declared executable or explicit alternative is installed"
+    },
+    {
+      "requirement_id": "nic-inspection",
+      "executable": "ethtool",
+      "criticality": "optional",
+      "purpose": "Optional NIC capability inspection on a selected CVM interface.",
+      "alternatives": [],
+      "status": "succeeded",
+      "selected_executable": "ethtool",
+      "resolved_path": "/usr/sbin/ethtool",
+      "message": null
+    },
+    {
+      "requirement_id": "numa-control",
+      "executable": "numactl",
+      "criticality": "optional",
+      "purpose": "NUMA topology and process-policy control when a NUMA experiment is selected.",
+      "alternatives": [],
+      "status": "succeeded",
+      "selected_executable": "numactl",
+      "resolved_path": "/usr/bin/numactl",
+      "message": null
+    },
+    {
+      "requirement_id": "python-runtime",
+      "executable": "python3",
+      "criticality": "critical",
+      "purpose": "Run the System Optimizer core on the selected CVM.",
+      "alternatives": [],
+      "status": "succeeded",
+      "selected_executable": "python3",
+      "resolved_path": "/usr/bin/python3",
+      "message": null
+    },
+    {
+      "requirement_id": "storage-pressure",
+      "executable": "fio",
+      "criticality": "optional",
+      "purpose": "Candidate storage standard-pressure workload; critical only when selected.",
+      "alternatives": [],
+      "status": "unavailable",
+      "selected_executable": null,
+      "resolved_path": null,
+      "message": "no declared executable or explicit alternative is installed"
+    },
+    {
+      "requirement_id": "sysctl-cli",
+      "executable": "sysctl",
+      "criticality": "optional",
+      "purpose": "Read or write sysctl names when a run explicitly selects the sysctl CLI path.",
+      "alternatives": [],
+      "status": "succeeded",
+      "selected_executable": "sysctl",
+      "resolved_path": "/usr/sbin/sysctl",
+      "message": null
+    }
+  ],
+  "critical_missing": [],
+  "critical_executables_resolved": true,
+  "verification_scope": "PATH resolution only; executable presence does not prove workload, kernel feature, PMU event, permission, or measurement usability"
+}

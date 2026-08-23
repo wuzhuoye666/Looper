@@ -1,0 +1,212 @@
+schema_version: looper.system-config-manifest/v1alpha1
+id: wsl2-ubuntu-observation-20260823
+version: "1"
+description: >-
+  Read-only manifest derived from the 2026-08-23 WSL2 Ubuntu capability probe.
+  Every item is observation-only because the current user did not have write access.
+metadata:
+  target_os: linux
+  virtualization: wsl2
+  evidence_date: "2026-08-23"
+  evidence_scope: current local Ubuntu WSL instance only
+items:
+  - id: vm-swappiness
+    category: sysctl
+    primary_component: memory
+    related_components: []
+    target: /proc/sys/vm/swappiness
+    value_type: integer
+    domain:
+      minimum: 0
+      maximum: 200
+      step: 1
+      choices: null
+      log: false
+    default: 60
+    read:
+      command:
+        argv: [read-file, "{target}"]
+        timeout_seconds: 5
+      parser: integer
+      true_values: []
+      false_values: []
+    apply: null
+    rollback:
+      mode: restore-snapshot
+      command: null
+    activation: immediate
+    risk: low
+    risk_reason: null
+    dependencies: []
+    preconditions: []
+    compatibility:
+      kernel_min: null
+      kernel_max: null
+      distributions: []
+      architectures: []
+      required_paths: [/proc/sys/vm/swappiness]
+      required_commands: []
+    searchable: false
+    value_aliases: {}
+    description: Current guest swappiness; read-only in the probed WSL user context.
+    source: 2026-08-23 local WSL byte-level read and test -w probe
+  - id: net-somaxconn
+    category: net
+    primary_component: network
+    related_components: []
+    target: /proc/sys/net/core/somaxconn
+    value_type: integer
+    domain:
+      minimum: 128
+      maximum: 65535
+      step: 1
+      choices: null
+      log: false
+    default: 4096
+    read:
+      command:
+        argv: [read-file, "{target}"]
+        timeout_seconds: 5
+      parser: integer
+      true_values: []
+      false_values: []
+    apply: null
+    rollback:
+      mode: restore-snapshot
+      command: null
+    activation: immediate
+    risk: low
+    risk_reason: null
+    dependencies: []
+    preconditions: []
+    compatibility:
+      kernel_min: null
+      kernel_max: null
+      distributions: []
+      architectures: []
+      required_paths: [/proc/sys/net/core/somaxconn]
+      required_commands: []
+    searchable: false
+    value_aliases: {}
+    description: Current listen backlog limit; observation-only in this WSL probe.
+    source: 2026-08-23 local WSL byte-level read
+  - id: thp-enabled
+    category: thp
+    primary_component: memory
+    related_components: [numa]
+    target: /sys/kernel/mm/transparent_hugepage/enabled
+    value_type: categorical
+    domain:
+      minimum: null
+      maximum: null
+      step: null
+      choices: [always, madvise, never]
+      log: false
+    default: madvise
+    read:
+      command:
+        argv: [read-file, "{target}"]
+        timeout_seconds: 5
+      parser: bracket-selected
+      true_values: []
+      false_values: []
+    apply: null
+    rollback:
+      mode: restore-snapshot
+      command: null
+    activation: immediate
+    risk: medium
+    risk_reason: null
+    dependencies: []
+    preconditions: []
+    compatibility:
+      kernel_min: null
+      kernel_max: null
+      distributions: []
+      architectures: []
+      required_paths: [/sys/kernel/mm/transparent_hugepage/enabled]
+      required_commands: []
+    searchable: false
+    value_aliases: {}
+    description: WSL THP mode; current selected value was madvise and path was not writable.
+    source: 2026-08-23 local WSL byte-level read and test -w probe
+  - id: storage-sda-scheduler
+    category: io
+    primary_component: storage
+    related_components: []
+    target: /sys/block/sda/queue/scheduler
+    value_type: categorical
+    domain:
+      minimum: null
+      maximum: null
+      step: null
+      choices: [none, mq-deadline, kyber]
+      log: false
+    default: none
+    read:
+      command:
+        argv: [read-file, "{target}"]
+        timeout_seconds: 5
+      parser: bracket-selected
+      true_values: []
+      false_values: []
+    apply: null
+    rollback:
+      mode: restore-snapshot
+      command: null
+    activation: immediate
+    risk: medium
+    risk_reason: null
+    dependencies: []
+    preconditions: []
+    compatibility:
+      kernel_min: null
+      kernel_max: null
+      distributions: []
+      architectures: []
+      required_paths: [/sys/block/sda/queue/scheduler]
+      required_commands: []
+    searchable: false
+    value_aliases: {}
+    description: Scheduler list for the observed WSL sda device; selected value was none.
+    source: 2026-08-23 local WSL byte-level read
+  - id: kernel-numa-balancing
+    category: numa
+    primary_component: numa
+    related_components: [memory]
+    target: /proc/sys/kernel/numa_balancing
+    value_type: boolean
+    domain:
+      minimum: null
+      maximum: null
+      step: null
+      choices: null
+      log: false
+    default: false
+    read:
+      command:
+        argv: [read-file, "{target}"]
+        timeout_seconds: 5
+      parser: boolean
+      true_values: ["1"]
+      false_values: ["0"]
+    apply: null
+    rollback:
+      mode: restore-snapshot
+      command: null
+    activation: immediate
+    risk: low
+    risk_reason: null
+    dependencies: []
+    preconditions: []
+    compatibility:
+      kernel_min: null
+      kernel_max: null
+      distributions: []
+      architectures: []
+      required_paths: [/proc/sys/kernel/numa_balancing]
+      required_commands: []
+    searchable: false
+    value_aliases: {}
+    description: Explicit unavailable record; the path did not exist in the probed WSL kernel.
+    source: placeholder value is not observed; 2026-08-23 path read failed as unavailable

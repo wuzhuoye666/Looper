@@ -1,0 +1,33 @@
+{
+  "actual_snapshot": {
+    "entries": {
+      "io-nvme0n1-nomerges": {
+        "item_id": "io-nvme0n1-nomerges",
+        "message": null,
+        "raw_output": "0\n",
+        "status": "succeeded",
+        "target": "/sys/block/nvme0n1/queue/nomerges",
+        "value": 0
+      }
+    },
+    "target_id": "aliyun-ecs-8.138.5.244"
+  },
+  "expected_snapshot": {
+    "entries": {
+      "io-nvme0n1-nomerges": {
+        "item_id": "io-nvme0n1-nomerges",
+        "message": null,
+        "raw_output": "0\n",
+        "status": "succeeded",
+        "target": "/sys/block/nvme0n1/queue/nomerges",
+        "value": 0
+      }
+    },
+    "target_id": "aliyun-ecs-8.138.5.244"
+  },
+  "outcome": "matched-snapshot",
+  "previous_lease_digest": "sha256:a5f9fb0fde8958b5e05ecfe6dc6bfd2c132640337202abe98ff8034e549c1e91",
+  "reason": "actual target snapshot matches the expected recovery snapshot",
+  "recorded_at": "2026-08-23T04:30:03.596943Z",
+  "target_id": "aliyun-ecs-8.138.5.244"
+}

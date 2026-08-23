@@ -1,0 +1,825 @@
+{
+  "schema_version": "looper.system-config-inventory/v1alpha2",
+  "metadata": {
+    "collector_environment": {
+      "os_name": "linux",
+      "kernel_release": "6.18.33.2-microsoft-standard-WSL2",
+      "architecture": "x86_64",
+      "distribution_id": "ubuntu",
+      "distribution_version": "26.04",
+      "virtualization": "wsl2",
+      "host_identifier_sha256": "5ba27fa26c517b13a2cb885d00d011e8ba221cad08a3249e6dca823bdfdcc8b8",
+      "host_identifier_source": "/etc/machine-id (sha256; raw value not retained)"
+    },
+    "scope_limitations": [
+      "Evidence is specific to this target and collection environment; portability requires independent validation.",
+      "WSL2 uses a Microsoft-customized Linux kernel and permission model; these observations must not be extrapolated to a Tencent Cloud CVM guest."
+    ]
+  },
+  "target_id": "wsl2-ubuntu-local",
+  "target_os": "linux",
+  "manifest_id": "wsl2-m1-documented-20-observation-20260823",
+  "manifest_digest": "sha256:ea1bbdc120eb9f0e5368b582817c8706784e60934b5f340d582bd11e6d8ec79b",
+  "counting_basis": "one record per Config Manifest item; no deduplication; declared=20, emitted=20",
+  "items": [
+    {
+      "item_id": "cpufreq-governor-policy0",
+      "parameter_id": "system.cpufreq-governor-policy0",
+      "target": "/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor",
+      "primary_component": "cpu",
+      "related_components": [],
+      "preflight": {
+        "status": "unavailable",
+        "value": null,
+        "source": "backend compatibility and capability preflight"
+      },
+      "current": {
+        "status": "unavailable",
+        "value": null,
+        "source": "backend readback"
+      },
+      "desired": {
+        "status": "unavailable",
+        "value": null,
+        "source": "explicit desired values"
+      },
+      "effective": {
+        "status": "unavailable",
+        "value": null,
+        "source": "same readback as current; no separate effective source declared"
+      },
+      "persistent": {
+        "status": "unavailable",
+        "value": null,
+        "source": "explicit persistent values"
+      },
+      "ownership": {
+        "status": "unavailable",
+        "value": null,
+        "source": "explicit ownership map"
+      },
+      "raw_readback": "",
+      "message": "[Errno 2] No such file or directory: '/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor'"
+    },
+    {
+      "item_id": "cpufreq-max-policy0",
+      "parameter_id": "system.cpufreq-max-policy0",
+      "target": "/sys/devices/system/cpu/cpu0/cpufreq/scaling_max_freq",
+      "primary_component": "cpu",
+      "related_components": [],
+      "preflight": {
+        "status": "unavailable",
+        "value": null,
+        "source": "backend compatibility and capability preflight"
+      },
+      "current": {
+        "status": "unavailable",
+        "value": null,
+        "source": "backend readback"
+      },
+      "desired": {
+        "status": "unavailable",
+        "value": null,
+        "source": "explicit desired values"
+      },
+      "effective": {
+        "status": "unavailable",
+        "value": null,
+        "source": "same readback as current; no separate effective source declared"
+      },
+      "persistent": {
+        "status": "unavailable",
+        "value": null,
+        "source": "explicit persistent values"
+      },
+      "ownership": {
+        "status": "unavailable",
+        "value": null,
+        "source": "explicit ownership map"
+      },
+      "raw_readback": "",
+      "message": "[Errno 2] No such file or directory: '/sys/devices/system/cpu/cpu0/cpufreq/scaling_max_freq'"
+    },
+    {
+      "item_id": "cpufreq-min-policy0",
+      "parameter_id": "system.cpufreq-min-policy0",
+      "target": "/sys/devices/system/cpu/cpu0/cpufreq/scaling_min_freq",
+      "primary_component": "cpu",
+      "related_components": [],
+      "preflight": {
+        "status": "unavailable",
+        "value": null,
+        "source": "backend compatibility and capability preflight"
+      },
+      "current": {
+        "status": "unavailable",
+        "value": null,
+        "source": "backend readback"
+      },
+      "desired": {
+        "status": "unavailable",
+        "value": null,
+        "source": "explicit desired values"
+      },
+      "effective": {
+        "status": "unavailable",
+        "value": null,
+        "source": "same readback as current; no separate effective source declared"
+      },
+      "persistent": {
+        "status": "unavailable",
+        "value": null,
+        "source": "explicit persistent values"
+      },
+      "ownership": {
+        "status": "unavailable",
+        "value": null,
+        "source": "explicit ownership map"
+      },
+      "raw_readback": "",
+      "message": "[Errno 2] No such file or directory: '/sys/devices/system/cpu/cpu0/cpufreq/scaling_min_freq'"
+    },
+    {
+      "item_id": "io-sda-nr-requests",
+      "parameter_id": "system.io-sda-nr-requests",
+      "target": "/sys/block/sda/queue/nr_requests",
+      "primary_component": "storage",
+      "related_components": [],
+      "preflight": {
+        "status": "succeeded",
+        "value": null,
+        "source": "backend compatibility and capability preflight"
+      },
+      "current": {
+        "status": "succeeded",
+        "value": 633,
+        "source": "backend readback"
+      },
+      "desired": {
+        "status": "unavailable",
+        "value": null,
+        "source": "explicit desired values"
+      },
+      "effective": {
+        "status": "succeeded",
+        "value": 633,
+        "source": "same readback as current; no separate effective source declared"
+      },
+      "persistent": {
+        "status": "unavailable",
+        "value": null,
+        "source": "explicit persistent values"
+      },
+      "ownership": {
+        "status": "unavailable",
+        "value": null,
+        "source": "explicit ownership map"
+      },
+      "raw_readback": "633\n",
+      "message": null
+    },
+    {
+      "item_id": "io-sda-read-ahead-kb",
+      "parameter_id": "system.io-sda-read-ahead-kb",
+      "target": "/sys/block/sda/queue/read_ahead_kb",
+      "primary_component": "storage",
+      "related_components": [
+        "memory"
+      ],
+      "preflight": {
+        "status": "succeeded",
+        "value": null,
+        "source": "backend compatibility and capability preflight"
+      },
+      "current": {
+        "status": "succeeded",
+        "value": 8192,
+        "source": "backend readback"
+      },
+      "desired": {
+        "status": "unavailable",
+        "value": null,
+        "source": "explicit desired values"
+      },
+      "effective": {
+        "status": "succeeded",
+        "value": 8192,
+        "source": "same readback as current; no separate effective source declared"
+      },
+      "persistent": {
+        "status": "unavailable",
+        "value": null,
+        "source": "explicit persistent values"
+      },
+      "ownership": {
+        "status": "unavailable",
+        "value": null,
+        "source": "explicit ownership map"
+      },
+      "raw_readback": "8192\n",
+      "message": null
+    },
+    {
+      "item_id": "io-sda-scheduler",
+      "parameter_id": "system.io-sda-scheduler",
+      "target": "/sys/block/sda/queue/scheduler",
+      "primary_component": "storage",
+      "related_components": [],
+      "preflight": {
+        "status": "succeeded",
+        "value": null,
+        "source": "backend compatibility and capability preflight"
+      },
+      "current": {
+        "status": "succeeded",
+        "value": "none",
+        "source": "backend readback"
+      },
+      "desired": {
+        "status": "unavailable",
+        "value": null,
+        "source": "explicit desired values"
+      },
+      "effective": {
+        "status": "succeeded",
+        "value": "none",
+        "source": "same readback as current; no separate effective source declared"
+      },
+      "persistent": {
+        "status": "unavailable",
+        "value": null,
+        "source": "explicit persistent values"
+      },
+      "ownership": {
+        "status": "unavailable",
+        "value": null,
+        "source": "explicit ownership map"
+      },
+      "raw_readback": "[none] mq-deadline kyber \n",
+      "message": null
+    },
+    {
+      "item_id": "irq0-smp-affinity-list",
+      "parameter_id": "system.irq0-smp-affinity-list",
+      "target": "/proc/irq/0/smp_affinity_list",
+      "primary_component": "cpu",
+      "related_components": [
+        "network",
+        "storage"
+      ],
+      "preflight": {
+        "status": "succeeded",
+        "value": null,
+        "source": "backend compatibility and capability preflight"
+      },
+      "current": {
+        "status": "succeeded",
+        "value": "0-7",
+        "source": "backend readback"
+      },
+      "desired": {
+        "status": "unavailable",
+        "value": null,
+        "source": "explicit desired values"
+      },
+      "effective": {
+        "status": "succeeded",
+        "value": "0-7",
+        "source": "same readback as current; no separate effective source declared"
+      },
+      "persistent": {
+        "status": "unavailable",
+        "value": null,
+        "source": "explicit persistent values"
+      },
+      "ownership": {
+        "status": "unavailable",
+        "value": null,
+        "source": "explicit ownership map"
+      },
+      "raw_readback": "0-7\n",
+      "message": null
+    },
+    {
+      "item_id": "net-eth0-mtu",
+      "parameter_id": "system.net-eth0-mtu",
+      "target": "/sys/class/net/eth0/mtu",
+      "primary_component": "network",
+      "related_components": [],
+      "preflight": {
+        "status": "succeeded",
+        "value": null,
+        "source": "backend compatibility and capability preflight"
+      },
+      "current": {
+        "status": "succeeded",
+        "value": 1500,
+        "source": "backend readback"
+      },
+      "desired": {
+        "status": "unavailable",
+        "value": null,
+        "source": "explicit desired values"
+      },
+      "effective": {
+        "status": "succeeded",
+        "value": 1500,
+        "source": "same readback as current; no separate effective source declared"
+      },
+      "persistent": {
+        "status": "unavailable",
+        "value": null,
+        "source": "explicit persistent values"
+      },
+      "ownership": {
+        "status": "unavailable",
+        "value": null,
+        "source": "explicit ownership map"
+      },
+      "raw_readback": "1500\n",
+      "message": null
+    },
+    {
+      "item_id": "net-somaxconn",
+      "parameter_id": "system.net-somaxconn",
+      "target": "/proc/sys/net/core/somaxconn",
+      "primary_component": "network",
+      "related_components": [],
+      "preflight": {
+        "status": "succeeded",
+        "value": null,
+        "source": "backend compatibility and capability preflight"
+      },
+      "current": {
+        "status": "succeeded",
+        "value": 4096,
+        "source": "backend readback"
+      },
+      "desired": {
+        "status": "unavailable",
+        "value": null,
+        "source": "explicit desired values"
+      },
+      "effective": {
+        "status": "succeeded",
+        "value": 4096,
+        "source": "same readback as current; no separate effective source declared"
+      },
+      "persistent": {
+        "status": "unavailable",
+        "value": null,
+        "source": "explicit persistent values"
+      },
+      "ownership": {
+        "status": "unavailable",
+        "value": null,
+        "source": "explicit ownership map"
+      },
+      "raw_readback": "4096\n",
+      "message": null
+    },
+    {
+      "item_id": "net-tcp-congestion-control",
+      "parameter_id": "system.net-tcp-congestion-control",
+      "target": "/proc/sys/net/ipv4/tcp_congestion_control",
+      "primary_component": "network",
+      "related_components": [],
+      "preflight": {
+        "status": "succeeded",
+        "value": null,
+        "source": "backend compatibility and capability preflight"
+      },
+      "current": {
+        "status": "succeeded",
+        "value": "cubic",
+        "source": "backend readback"
+      },
+      "desired": {
+        "status": "unavailable",
+        "value": null,
+        "source": "explicit desired values"
+      },
+      "effective": {
+        "status": "succeeded",
+        "value": "cubic",
+        "source": "same readback as current; no separate effective source declared"
+      },
+      "persistent": {
+        "status": "unavailable",
+        "value": null,
+        "source": "explicit persistent values"
+      },
+      "ownership": {
+        "status": "unavailable",
+        "value": null,
+        "source": "explicit ownership map"
+      },
+      "raw_readback": "cubic\n",
+      "message": null
+    },
+    {
+      "item_id": "net-tcp-max-syn-backlog",
+      "parameter_id": "system.net-tcp-max-syn-backlog",
+      "target": "/proc/sys/net/ipv4/tcp_max_syn_backlog",
+      "primary_component": "network",
+      "related_components": [],
+      "preflight": {
+        "status": "succeeded",
+        "value": null,
+        "source": "backend compatibility and capability preflight"
+      },
+      "current": {
+        "status": "succeeded",
+        "value": 512,
+        "source": "backend readback"
+      },
+      "desired": {
+        "status": "unavailable",
+        "value": null,
+        "source": "explicit desired values"
+      },
+      "effective": {
+        "status": "succeeded",
+        "value": 512,
+        "source": "same readback as current; no separate effective source declared"
+      },
+      "persistent": {
+        "status": "unavailable",
+        "value": null,
+        "source": "explicit persistent values"
+      },
+      "ownership": {
+        "status": "unavailable",
+        "value": null,
+        "source": "explicit ownership map"
+      },
+      "raw_readback": "512\n",
+      "message": null
+    },
+    {
+      "item_id": "numa-balancing",
+      "parameter_id": "system.numa-balancing",
+      "target": "/proc/sys/kernel/numa_balancing",
+      "primary_component": "numa",
+      "related_components": [
+        "memory"
+      ],
+      "preflight": {
+        "status": "unavailable",
+        "value": null,
+        "source": "backend compatibility and capability preflight"
+      },
+      "current": {
+        "status": "unavailable",
+        "value": null,
+        "source": "backend readback"
+      },
+      "desired": {
+        "status": "unavailable",
+        "value": null,
+        "source": "explicit desired values"
+      },
+      "effective": {
+        "status": "unavailable",
+        "value": null,
+        "source": "same readback as current; no separate effective source declared"
+      },
+      "persistent": {
+        "status": "unavailable",
+        "value": null,
+        "source": "explicit persistent values"
+      },
+      "ownership": {
+        "status": "unavailable",
+        "value": null,
+        "source": "explicit ownership map"
+      },
+      "raw_readback": "",
+      "message": "[Errno 2] No such file or directory: '/proc/sys/kernel/numa_balancing'"
+    },
+    {
+      "item_id": "numa-scan-period-max-ms",
+      "parameter_id": "system.numa-scan-period-max-ms",
+      "target": "/proc/sys/kernel/numa_balancing_scan_period_max_ms",
+      "primary_component": "numa",
+      "related_components": [
+        "memory"
+      ],
+      "preflight": {
+        "status": "unavailable",
+        "value": null,
+        "source": "backend compatibility and capability preflight"
+      },
+      "current": {
+        "status": "unavailable",
+        "value": null,
+        "source": "backend readback"
+      },
+      "desired": {
+        "status": "unavailable",
+        "value": null,
+        "source": "explicit desired values"
+      },
+      "effective": {
+        "status": "unavailable",
+        "value": null,
+        "source": "same readback as current; no separate effective source declared"
+      },
+      "persistent": {
+        "status": "unavailable",
+        "value": null,
+        "source": "explicit persistent values"
+      },
+      "ownership": {
+        "status": "unavailable",
+        "value": null,
+        "source": "explicit ownership map"
+      },
+      "raw_readback": "",
+      "message": "[Errno 2] No such file or directory: '/proc/sys/kernel/numa_balancing_scan_period_max_ms'"
+    },
+    {
+      "item_id": "numa-scan-period-min-ms",
+      "parameter_id": "system.numa-scan-period-min-ms",
+      "target": "/proc/sys/kernel/numa_balancing_scan_period_min_ms",
+      "primary_component": "numa",
+      "related_components": [
+        "memory"
+      ],
+      "preflight": {
+        "status": "unavailable",
+        "value": null,
+        "source": "backend compatibility and capability preflight"
+      },
+      "current": {
+        "status": "unavailable",
+        "value": null,
+        "source": "backend readback"
+      },
+      "desired": {
+        "status": "unavailable",
+        "value": null,
+        "source": "explicit desired values"
+      },
+      "effective": {
+        "status": "unavailable",
+        "value": null,
+        "source": "same readback as current; no separate effective source declared"
+      },
+      "persistent": {
+        "status": "unavailable",
+        "value": null,
+        "source": "explicit persistent values"
+      },
+      "ownership": {
+        "status": "unavailable",
+        "value": null,
+        "source": "explicit ownership map"
+      },
+      "raw_readback": "",
+      "message": "[Errno 2] No such file or directory: '/proc/sys/kernel/numa_balancing_scan_period_min_ms'"
+    },
+    {
+      "item_id": "thp-defrag",
+      "parameter_id": "system.thp-defrag",
+      "target": "/sys/kernel/mm/transparent_hugepage/defrag",
+      "primary_component": "memory",
+      "related_components": [
+        "numa"
+      ],
+      "preflight": {
+        "status": "succeeded",
+        "value": null,
+        "source": "backend compatibility and capability preflight"
+      },
+      "current": {
+        "status": "succeeded",
+        "value": "madvise",
+        "source": "backend readback"
+      },
+      "desired": {
+        "status": "unavailable",
+        "value": null,
+        "source": "explicit desired values"
+      },
+      "effective": {
+        "status": "succeeded",
+        "value": "madvise",
+        "source": "same readback as current; no separate effective source declared"
+      },
+      "persistent": {
+        "status": "unavailable",
+        "value": null,
+        "source": "explicit persistent values"
+      },
+      "ownership": {
+        "status": "unavailable",
+        "value": null,
+        "source": "explicit ownership map"
+      },
+      "raw_readback": "always defer defer+madvise [madvise] never\n",
+      "message": null
+    },
+    {
+      "item_id": "thp-enabled",
+      "parameter_id": "system.thp-enabled",
+      "target": "/sys/kernel/mm/transparent_hugepage/enabled",
+      "primary_component": "memory",
+      "related_components": [
+        "numa"
+      ],
+      "preflight": {
+        "status": "succeeded",
+        "value": null,
+        "source": "backend compatibility and capability preflight"
+      },
+      "current": {
+        "status": "succeeded",
+        "value": "madvise",
+        "source": "backend readback"
+      },
+      "desired": {
+        "status": "unavailable",
+        "value": null,
+        "source": "explicit desired values"
+      },
+      "effective": {
+        "status": "succeeded",
+        "value": "madvise",
+        "source": "same readback as current; no separate effective source declared"
+      },
+      "persistent": {
+        "status": "unavailable",
+        "value": null,
+        "source": "explicit persistent values"
+      },
+      "ownership": {
+        "status": "unavailable",
+        "value": null,
+        "source": "explicit ownership map"
+      },
+      "raw_readback": "always [madvise] never\n",
+      "message": null
+    },
+    {
+      "item_id": "thp-shmem-enabled",
+      "parameter_id": "system.thp-shmem-enabled",
+      "target": "/sys/kernel/mm/transparent_hugepage/shmem_enabled",
+      "primary_component": "memory",
+      "related_components": [],
+      "preflight": {
+        "status": "succeeded",
+        "value": null,
+        "source": "backend compatibility and capability preflight"
+      },
+      "current": {
+        "status": "succeeded",
+        "value": "never",
+        "source": "backend readback"
+      },
+      "desired": {
+        "status": "unavailable",
+        "value": null,
+        "source": "explicit desired values"
+      },
+      "effective": {
+        "status": "succeeded",
+        "value": "never",
+        "source": "same readback as current; no separate effective source declared"
+      },
+      "persistent": {
+        "status": "unavailable",
+        "value": null,
+        "source": "explicit persistent values"
+      },
+      "ownership": {
+        "status": "unavailable",
+        "value": null,
+        "source": "explicit ownership map"
+      },
+      "raw_readback": "always within_size advise [never] deny force\n",
+      "message": null
+    },
+    {
+      "item_id": "vm-dirty-background-ratio",
+      "parameter_id": "system.vm-dirty-background-ratio",
+      "target": "/proc/sys/vm/dirty_background_ratio",
+      "primary_component": "memory",
+      "related_components": [
+        "storage"
+      ],
+      "preflight": {
+        "status": "succeeded",
+        "value": null,
+        "source": "backend compatibility and capability preflight"
+      },
+      "current": {
+        "status": "succeeded",
+        "value": 10,
+        "source": "backend readback"
+      },
+      "desired": {
+        "status": "unavailable",
+        "value": null,
+        "source": "explicit desired values"
+      },
+      "effective": {
+        "status": "succeeded",
+        "value": 10,
+        "source": "same readback as current; no separate effective source declared"
+      },
+      "persistent": {
+        "status": "unavailable",
+        "value": null,
+        "source": "explicit persistent values"
+      },
+      "ownership": {
+        "status": "unavailable",
+        "value": null,
+        "source": "explicit ownership map"
+      },
+      "raw_readback": "10\n",
+      "message": null
+    },
+    {
+      "item_id": "vm-dirty-ratio",
+      "parameter_id": "system.vm-dirty-ratio",
+      "target": "/proc/sys/vm/dirty_ratio",
+      "primary_component": "memory",
+      "related_components": [
+        "storage"
+      ],
+      "preflight": {
+        "status": "succeeded",
+        "value": null,
+        "source": "backend compatibility and capability preflight"
+      },
+      "current": {
+        "status": "succeeded",
+        "value": 20,
+        "source": "backend readback"
+      },
+      "desired": {
+        "status": "unavailable",
+        "value": null,
+        "source": "explicit desired values"
+      },
+      "effective": {
+        "status": "succeeded",
+        "value": 20,
+        "source": "same readback as current; no separate effective source declared"
+      },
+      "persistent": {
+        "status": "unavailable",
+        "value": null,
+        "source": "explicit persistent values"
+      },
+      "ownership": {
+        "status": "unavailable",
+        "value": null,
+        "source": "explicit ownership map"
+      },
+      "raw_readback": "20\n",
+      "message": null
+    },
+    {
+      "item_id": "vm-swappiness",
+      "parameter_id": "system.vm-swappiness",
+      "target": "/proc/sys/vm/swappiness",
+      "primary_component": "memory",
+      "related_components": [],
+      "preflight": {
+        "status": "succeeded",
+        "value": null,
+        "source": "backend compatibility and capability preflight"
+      },
+      "current": {
+        "status": "succeeded",
+        "value": 60,
+        "source": "backend readback"
+      },
+      "desired": {
+        "status": "unavailable",
+        "value": null,
+        "source": "explicit desired values"
+      },
+      "effective": {
+        "status": "succeeded",
+        "value": 60,
+        "source": "same readback as current; no separate effective source declared"
+      },
+      "persistent": {
+        "status": "unavailable",
+        "value": null,
+        "source": "explicit persistent values"
+      },
+      "ownership": {
+        "status": "unavailable",
+        "value": null,
+        "source": "explicit ownership map"
+      },
+      "raw_readback": "60\n",
+      "message": null
+    }
+  ]
+}

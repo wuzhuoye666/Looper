@@ -1,0 +1,77 @@
+{
+  "schema_version": "looper.system-opt-m1-acceptance/v1alpha1",
+  "evidence_kind": "empirical-alibaba-ecs-kvm",
+  "code_commit": "a8c88fbcd5c131148c9ccabbfea0e7cc951c35a2",
+  "environment": {
+    "os": "Ubuntu 24.04",
+    "kernel": "6.8.0-137-generic",
+    "architecture": "x86_64",
+    "virtualization": "kvm",
+    "portability": "not transferable to Tencent Cloud CVM without independent validation"
+  },
+  "raw_inventory": {
+    "record_count": 2274,
+    "enumeration_complete": true,
+    "all_values_readable": false,
+    "counting_basis": "one record per non-symlink entry visited under six explicit roots; no deduplication",
+    "portable_redactions": 1,
+    "redaction_log": "redaction-log.json"
+  },
+  "documented_20": {
+    "counting_basis": "6 categories x 3 items + IRQ + MTU; no deduplication",
+    "declared": 20,
+    "succeeded": 18,
+    "unavailable": 2,
+    "unavailable_item_ids": [
+      "numa-scan-period-min-ms",
+      "numa-scan-period-max-ms"
+    ]
+  },
+  "configuration_sources": {
+    "source_count": 73,
+    "assignment_count": 497,
+    "persistence": {"conflict": 5, "declared": 1, "unknown": 14},
+    "ownership": {"conflict": 5, "external-writer": 1, "unknown": 14},
+    "precedence_inferred": false
+  },
+  "manual_transaction": {
+    "item_id": "io-nvme0n1-nomerges",
+    "snapshot_value": 0,
+    "applied_value": 1,
+    "final_value": 0,
+    "state": "rolled_back"
+  },
+  "expired_lease_reconciliation": {
+    "initial_scope_mismatch": "needs-attention",
+    "operator_recovery": "attention-cleared",
+    "corrected_outcome": "matched-snapshot",
+    "takeover_completed": true
+  },
+  "rollback_failure_drill": {
+    "applied_value": 1,
+    "rollback_outcome": "failed",
+    "transaction_state": "needs-attention",
+    "operator_restored_value": 0,
+    "attention_cleared_after_verified_recovery": true
+  },
+  "final_target_state": {
+    "scheduler": "mq-deadline",
+    "nomerges": 0,
+    "existing_looper_worker_preserved": true
+  },
+  "tests": {
+    "system_optimizer": {"passed": 72, "collected": 72},
+    "repository_excluding_known_flaky": {"passed": 292, "collected": 292},
+    "repository_total_collected": 293,
+    "known_flaky_repeat": {"passed": 5, "failed": 5, "runs": 10}
+  },
+  "artifact_sha256": {
+    "raw-inventory.json": "a1edf17ede2662dde801b130a99930361208c2352e9a811b702f6ed26520aa35",
+    "cvm-m1-20-inventory-with-state.json": "c61d92750e6e9d452ed7666367f7adcd902e4d81e8036e313c7171f579d72487",
+    "cvm-m1-state-evidence.json": "0f77829f9986719467425b6d44bd67f7e6bf9e8002a215d52a5d17215febf211",
+    "manual-change-rollback.json": "01592972936d28d5f621047ba93da38624db88225da85e20ae2ba8b360857166",
+    "reconciliation-matched.json": "50e6cbc988c388866ac316e70bb26274d1a2ea84ec021965c79579a81d11298b",
+    "rollback-failure-result.json": "e45de3043f57eb0fc7320c0b4597141e01e7f8501a6ed5022964ea372afc8260",
+    "rollback-failure-recovery.json": "9db163e7e56a7a707ddebfe4e070212c2ea6b59011d65140b85451f071db20b4"
+  }
+}
