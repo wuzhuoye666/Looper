@@ -120,6 +120,13 @@ class ComponentOptimizer:
         self._formula_suggestions = list(self.formula_mapping.suggest(snapshot, baseline))
         return list(self._formula_suggestions)
 
+    def retain_formula_suggestions(
+        self, suggestions: Sequence[CandidateSuggestion]
+    ) -> None:
+        """Keep only domain-validated suggestions in the eventual L5 report."""
+
+        self._formula_suggestions = list(suggestions)
+
     def candidate_pool(self) -> list[dict[str, Any]]:
         """Enumerate this component's grid candidates for cache consultation.
 
@@ -141,6 +148,7 @@ class ComponentOptimizer:
         fencing_token: int,
         diagnostic_reference: MeasurementBatch | None = None,
         preexisting: Sequence[Mapping[str, Any]] | None = None,
+        selected_parameters: Mapping[str, Any] | None = None,
     ) -> ComponentReport:
         run: OptimizationRun = self.engine.run(
             baseline_parameters=baseline_parameters,
@@ -148,6 +156,7 @@ class ComponentOptimizer:
             fencing_token=fencing_token,
             diagnostic_reference=diagnostic_reference,
             preexisting=preexisting,
+            selected_parameters=selected_parameters,
         )
         return self.report(run)
 

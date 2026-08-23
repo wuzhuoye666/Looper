@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import math
 import time
 from collections.abc import Callable, Mapping, Sequence
 from enum import StrEnum
@@ -230,6 +231,7 @@ class SystemOptimizationEngine:
         fencing_token: int,
         diagnostic_reference: MeasurementBatch | None = None,
         preexisting: Sequence[Mapping[str, Any]] | None = None,
+        selected_parameters: Mapping[str, Any] | None = None,
     ) -> OptimizationRun:
         started = time.monotonic()
         baseline = measure(self.policy.statistics.baseline_repeats)
@@ -291,6 +293,16 @@ class SystemOptimizationEngine:
         missing_baseline = sorted(set(search_space) - set(baseline_parameters))
         if missing_baseline:
             raise ValueError(f"baseline parameters are missing: {missing_baseline}")
+        selected = dict(selected_parameters) if selected_parameters is not None else None
+        if selected is not None:
+            self._validate_selected_parameters(selected, search_space)
+            if all(
+                canonical_json(value) == canonical_json(baseline_parameters.get(name))
+                for name, value in selected.items()
+            ):
+                raise ValueError("selected candidate is identical to the baseline parameters")
+            if any(dict(item) == selected for item in preexisting or ()):
+                raise ValueError("selected candidate is blocked by the preexisting exclusion set")
 
         optimizer = OptimizerSpec(
             type=self.policy.search.generator,
@@ -356,19 +368,22 @@ class SystemOptimizationEngine:
                 stop_reason = StopReason.WALL_TIME_BUDGET
                 stop_detail = "explicit wall-time budget reached"
                 break
-            try:
-                parameters = suggest_candidate(
-                    search_space,
-                    optimizer,
-                    sequence=attempts,
-                    existing=existing,
-                    objective_directions=objective_directions,
-                    history=history,
-                )
-            except SearchSpaceExhausted as error:
-                stop_reason = StopReason.SEARCH_SPACE_EXHAUSTED
-                stop_detail = str(error)
-                break
+            if selected is not None:
+                parameters = dict(selected)
+            else:
+                try:
+                    parameters = suggest_candidate(
+                        search_space,
+                        optimizer,
+                        sequence=attempts,
+                        existing=existing,
+                        objective_directions=objective_directions,
+                        history=history,
+                    )
+                except SearchSpaceExhausted as error:
+                    stop_reason = StopReason.SEARCH_SPACE_EXHAUSTED
+                    stop_detail = str(error)
+                    break
             attempts += 1
             existing.append({"parameters": parameters})
             evaluation = self._evaluate(
@@ -398,6 +413,10 @@ class SystemOptimizationEngine:
             if evaluation.safety_state == SafetyState.NEEDS_ATTENTION:
                 stop_reason = StopReason.SAFETY_STOP
                 stop_detail = evaluation.safety_reason or "target needs attention"
+                break
+            if selected is not None:
+                stop_reason = StopReason.COMPLETED
+                stop_detail = "the scheduler-selected candidate completed one evaluation"
                 break
             primary = evaluation.improvements.get(self.policy.primary_metric.id)
             if primary is not None and primary.accepted and primary.lower > best_lower:
@@ -433,6 +452,46 @@ class SystemOptimizationEngine:
             recommended.candidate_id if recommended else None,
             attempts,
         )
+
+    @staticmethod
+    def _validate_selected_parameters(
+        selected: Mapping[str, Any], search_space: Mapping[str, Any]
+    ) -> None:
+        if not selected:
+            raise ValueError("selected candidate parameters cannot be empty")
+        unknown = sorted(set(selected) - set(search_space))
+        if unknown:
+            raise ValueError(
+                f"selected candidate parameters are outside the search space: {unknown}"
+            )
+        for name, value in selected.items():
+            parameter = search_space[name]
+            if parameter.type == "boolean":
+                valid = type(value) is bool
+            elif parameter.type == "categorical":
+                valid = value in list(parameter.choices or [])
+            elif parameter.type == "integer":
+                valid = type(value) is int
+            else:
+                valid = not isinstance(value, bool) and isinstance(value, (int, float))
+            if not valid:
+                raise ValueError(f"selected value {value!r} is invalid for parameter '{name}'")
+            if parameter.type not in {"integer", "number"}:
+                continue
+            numeric = float(value)
+            assert parameter.minimum is not None and parameter.maximum is not None
+            if numeric < parameter.minimum or numeric > parameter.maximum:
+                raise ValueError(
+                    f"selected value {value!r} for '{name}' is outside "
+                    f"[{parameter.minimum}, {parameter.maximum}]"
+                )
+            if parameter.step is not None:
+                steps = (numeric - parameter.minimum) / parameter.step
+                if not math.isclose(steps, round(steps), abs_tol=1e-9):
+                    raise ValueError(
+                        f"selected value {value!r} for '{name}' is not aligned "
+                        f"to step {parameter.step}"
+                    )
 
     def search_space(self, components: set[str] | None = None) -> dict[str, Any]:
         """Public search-space view for the L8 engine loop and candidate pools."""

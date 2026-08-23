@@ -264,9 +264,8 @@ class TestOptimizations:
         backend = SimulatedBackend(initial, target_id="exclusion-test")
         optimizers, manifest = _optimizers(["cpu"], backend)
         cached_params = optimizers[0].candidate_pool()[0]
-        from looper_core.canonical import canonical_digest
-
-        cached_candidate_id = canonical_digest({"parameters": cached_params})
+        # The only non-baseline candidate is cached. The baseline must not be
+        # disguised as a new candidate measurement.
         cache = NegativeCache([self._cache_entry_for(cached_params)])
         result = run_engine_loop(
             optimizers,
@@ -276,11 +275,8 @@ class TestOptimizations:
             config=_config(),
             fencing_token=3,
         )
-        record = result.rounds[0]
-        assert record.cached_exclusion_count == 1
-        judged_ids = {verdict.candidate_id for verdict in record.verdicts}
-        assert cached_candidate_id not in judged_ids
-        assert result.stop_reason is EngineStopReason.COMPLETED
+        assert result.rounds == []
+        assert result.stop_reason is EngineStopReason.ALL_CACHED
 
     def test_pool_cap_exceeded_fails_closed(self):
         manifest = build_demo_manifest()
