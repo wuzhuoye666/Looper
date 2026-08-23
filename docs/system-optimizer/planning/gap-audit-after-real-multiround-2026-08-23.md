@@ -11,11 +11,11 @@
 
 | 里程碑 | 已经满足 | 仍有差距 | 当前定性 |
 |---|---|---|---|
-| M1 配置层 | Config Manifest、动态域、授权域、安全链、租约；阿里云 ECS 对 scheduler/nomerges 完成真实 apply/verify/rollback；逐项持久化/ownership 状态证据、显式 actor 授权及完整快照崩溃对账已实现 | 腾讯云 CVM 未测；20 项只完成候选目录而非逐项目标验证；跨配置系统的最终优先级不推断；真实 crash/rollback failure 演练未完成；本轮全量回归待完成 | 部分完成 |
+| M1 配置层 | Config Manifest、动态域、授权域、安全链、租约；阿里云 ECS 20 项实测 18 succeeded/2 unavailable；逐项持久化/ownership 证据、显式 actor 授权、真实修改/回滚、过期租约对账、rollback failure、needs-attention 与 operator recovery 均有实录 | 腾讯云 CVM 未测；跨配置系统的最终优先级不推断；crash 采用过期租约构造而非真实进程 kill；已知仓库级 cloud confirmation flaky 未修 | Alibaba ECS M1 accepted；腾讯云待复验 |
 | M2 通用调优 | 真实存储组件完成 5 候选、3 基线、8 attempts；预算和停止条件生效 | CPU、内存/NUMA、网络尚无真实组件协议；没有跨组件组合复验、通用 Profile、人可读报告；五个候选均无显著收益 | 存储纵向切片跑通 |
 | M3 workload 调优 | synthetic 组件路由、二维优先级和 workload 闭环存在 | 没有真实业务 workload；L0/L1 低开销采集、L2/L3 触发下钻、开销 A/B、干预后业务复验均未实现 | 未验收 |
 | M4 平台集成 | Typer CLI 和 local-linux backend 在 ECS 真实执行 | 本次是部署后本机执行，不是 ssh-remote backend 验收；HTTP API、事件流、权限审批、EnvironmentSnapshot schema 双写、UI 和多节点协议未完成 | CLI 切片 |
-| M5 交付 | simulated、WSL2、单候选和五候选实录；本地和云端 283 测试全绿 | raw→candidate 绑定缺失；无离线 replay/证据验证器、完整 failure drill、迁移说明、schema 稳定承诺和三命令最终用户验收 | 未完成 |
+| M5 交付 | simulated、WSL2、单候选、五候选和 M1 failure/recovery 实录；System Optimizer 72/72，排除已知 flaky 后仓库 292/292 | raw→candidate 绑定缺失；无离线 replay/证据验证器、迁移说明、schema 稳定承诺和三命令最终用户验收；不能报告仓库 293/293 | 未完成 |
 
 ## 优先级最高的实现问题
 

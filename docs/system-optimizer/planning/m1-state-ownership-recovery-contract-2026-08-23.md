@@ -1,6 +1,6 @@
 # M1 配置状态、所有权与崩溃恢复合同（2026-08-23）
 
-> 状态：implemented locally, CVM acceptance pending
+> 状态：implemented + Alibaba ECS KVM accepted；腾讯云 CVM 仍待独立复验
 > 范围：离线或受控 Linux guest；不代表生产常驻控制器。
 
 ## 本次关闭的两个实现缺口
@@ -56,7 +56,9 @@ manifest。这样既不遗漏历史事务实际修改的项目，也不会因为
 - 不自动推断 sysctl.d、tuned、systemd、发行版脚本之间的最终优先级或语义等价关系。
 - M1 官方候选的 `6 × 3 + IRQ + MTU = 20` 是文档计数；CVM 逐项存在性、权限、
   可写性、动态合法域和回滚仍必须重新实测。
-- 真实进程 crash、部分 apply 与 rollback failure 的 CVM 演练尚未完成。
-- 本地全量 291 case 中出现一次与本次变更无关的 cloud confirmation token 测试失败；
+- Alibaba ECS 已完成过期租约、快照集合不一致 fail-closed、attention 恢复、匹配后接管、
+  真实 apply、故意 rollback failure、needs-attention 和 operator recovery 演练。这里模拟的
+  crash 是遗留过期租约，不是向真实优化器进程发送 kill 信号；腾讯云 CVM 仍需独立复验。
+- 本地全量 293 case 中出现与本次变更无关的 cloud confirmation token 测试失败；
   它在独立 basetemp 下发生，因此不能再只归因于共享 pytest 临时根目录。根因未分析，
   不在本 M1 修改中静默修复。

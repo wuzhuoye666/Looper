@@ -1,0 +1,41 @@
+{
+  "actual_snapshot": {
+    "entries": {
+      "io-nvme0n1-nomerges": {
+        "item_id": "io-nvme0n1-nomerges",
+        "message": null,
+        "raw_output": "0\n",
+        "status": "succeeded",
+        "target": "/sys/block/nvme0n1/queue/nomerges",
+        "value": 0
+      },
+      "io-nvme0n1-scheduler": {
+        "item_id": "io-nvme0n1-scheduler",
+        "message": null,
+        "raw_output": "none [mq-deadline] \n",
+        "status": "succeeded",
+        "target": "/sys/block/nvme0n1/queue/scheduler",
+        "value": "mq-deadline"
+      }
+    },
+    "target_id": "aliyun-ecs-8.138.5.244"
+  },
+  "expected_snapshot": {
+    "entries": {
+      "io-nvme0n1-nomerges": {
+        "item_id": "io-nvme0n1-nomerges",
+        "message": null,
+        "raw_output": "0\n",
+        "status": "succeeded",
+        "target": "/sys/block/nvme0n1/queue/nomerges",
+        "value": 0
+      }
+    },
+    "target_id": "aliyun-ecs-8.138.5.244"
+  },
+  "outcome": "needs-attention",
+  "previous_lease_digest": "sha256:a5f9fb0fde8958b5e05ecfe6dc6bfd2c132640337202abe98ff8034e549c1e91",
+  "reason": "actual target snapshot is incomplete or differs from expected recovery state",
+  "recorded_at": "2026-08-23T04:27:17.820527Z",
+  "target_id": "aliyun-ecs-8.138.5.244"
+}

@@ -58,6 +58,7 @@ System Optimizer 是一个操作系统配置采集、人工管理和有限闭环
 - research/source-metric-inventory-2026-08-22.md：论文与当前套件的原始指标全量盘点，未筛选、未做语义合并。
 - research/kernel-official-config-catalog-2026-08-23.md：按原验收口径核对的 20 个官方候选。
 - research/wsl2-capability-probe-2026-08-23.md：WSL2 代码能力、缺接口与工具缺口实录。
+- research/aliyun-ecs-m1-state-recovery-acceptance-2026-08-23.md：M1 20 项采集、状态归属、人工修改、崩溃对账与 rollback failure 恢复实测。
 - legacy/system-optimizer-m0-m1-2026-08-22.md：迁移前的 M0/M1 主方案，仅供追溯，不再是当前合同。
 
 ## 当前实施状态
@@ -65,7 +66,7 @@ System Optimizer 是一个操作系统配置采集、人工管理和有限闭环
 | 范围 | 状态 | 说明 |
 |---|---|---|
 | 新架构与规范 | draft | 已确认核心方向，仍有明确 open decisions |
-| 配置模型、inventory、Profile、安全执行 | runnable simulated + WSL read-only | CVM 写入和恢复演练未验证 |
+| 配置模型、inventory、Profile、安全执行 | Alibaba ECS KVM accepted | 腾讯云 CVM 仍须独立复验 |
 | 通用标准压力闭环 | simulated vertical slice | 真实组件压力、稳定性和区分度未验证 |
 | workload 动态下钻闭环 | simulated vertical slice | 真实低开销采集、下钻和业务复验未验证 |
 | 真实 local Linux/CVM | unverified | 默认不得宣称可用 |
