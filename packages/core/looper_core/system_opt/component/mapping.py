@@ -23,13 +23,14 @@ from typing import Any
 
 from pydantic import Field, model_validator
 
+from looper_core.analysis import quantile
 from looper_core.canonical import canonical_digest
 from looper_core.contracts import StrictModel
 from looper_core.system_opt.collector import ComponentMetricSnapshot
 from looper_core.system_opt.component import CandidateSuggestion
 from looper_core.system_opt.scoring import MeasurementBatch
 
-CONDITION_BOOTSTRAP_FORMULA = "F-PROJECT-CONDITION-BOOTSTRAP/v1"
+CONDITION_BOOTSTRAP_FORMULA = "F-PROJECT-CONDITION-BOOTSTRAP/v2"
 
 
 class ConditionOperator(StrEnum):
@@ -52,21 +53,13 @@ class ConfidenceMode(StrEnum):
     UCB95 = "ucb95"
 
 
-def _percentile(sorted_values: list[float], fraction: float) -> float:
-    index = min(
-        len(sorted_values) - 1, max(0, int(round(fraction * (len(sorted_values) - 1))))
-    )
-    return sorted_values[index]
-
-
 def _statistic(values: list[float], statistic: ConditionStatistic) -> float:
     if statistic is ConditionStatistic.MEDIAN:
         return float(median(values))
     if statistic is ConditionStatistic.MEAN:
         return float(fmean(values))
-    ordered = sorted(values)
     if statistic is ConditionStatistic.P95:
-        return _percentile(ordered, 0.95)
+        return quantile(values, 0.95)
     if len(values) < 2:
         raise ValueError("cv requires at least two samples")
     mean = fmean(values)
@@ -77,17 +70,20 @@ def _statistic(values: list[float], statistic: ConditionStatistic) -> float:
 
 
 def _bootstrap_bound(
-    values: list[float], statistic: ConditionStatistic, mode: ConfidenceMode, seed: int
+    values: list[float],
+    statistic: ConditionStatistic,
+    mode: ConfidenceMode,
+    seed: int,
+    resamples: int,
 ) -> float:
     generator = random.Random(seed)
     bounds: list[float] = []
-    for _ in range(2000):
+    for _ in range(resamples):
         sample = [values[generator.randrange(len(values))] for _ in values]
         bounds.append(_statistic(sample, statistic))
-    bounds.sort()
     if mode is ConfidenceMode.LCB95:
-        return _percentile(bounds, 0.05)
-    return _percentile(bounds, 0.95)
+        return quantile(bounds, 0.05)
+    return quantile(bounds, 0.95)
 
 
 class EvidenceCondition(StrictModel):
@@ -144,12 +140,19 @@ class _NotMet(Exception):
 class StrategyFormulaMapping:
     """Evaluate strategy rules against evidence; validate suggestions in-domain."""
 
-    def __init__(self, rules: list[CandidateRule], *, bootstrap_seed: int = 20260823) -> None:
+    def __init__(
+        self,
+        rules: list[CandidateRule],
+        *,
+        bootstrap_seed: int = 20260823,
+        bootstrap_resamples: int = 2000,
+    ) -> None:
         priorities = [rule.priority for rule in rules]
         if len(priorities) != len(set(priorities)):
             raise ValueError("rule priorities must be unique for a deterministic order")
         self._rules = sorted(rules, key=lambda rule: (rule.priority, rule.rule_id))
         self._seed = bootstrap_seed
+        self._resamples = bootstrap_resamples
         self.last_rejections: list[RuleRejection] = []
 
     def _compare(self, value: float, condition: EvidenceCondition) -> bool:
@@ -183,7 +186,7 @@ class StrategyFormulaMapping:
                     )
                 return True
             bound = _bootstrap_bound(
-                values, condition.statistic, condition.confidence, self._seed
+                values, condition.statistic, condition.confidence, self._seed, self._resamples
             )
             if not self._compare(bound, condition):
                 raise _NotMet(

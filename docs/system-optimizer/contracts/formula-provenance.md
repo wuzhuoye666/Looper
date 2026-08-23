@@ -585,13 +585,16 @@ U_{workload}(x)=(U_{primary},U_{secondary},Cost,Risk,EvidenceCoverage)
 
 ### F-PROJECT-006：L5 条件判定分布统计量与置信界
 
-来源类型：PROJECT-CONTRACT；formula id：`F-PROJECT-CONDITION-BOOTSTRAP/v1`。
+来源类型：PROJECT-CONTRACT；formula id：`F-PROJECT-CONDITION-BOOTSTRAP/v2`。
 
 L5 公式映射的 `when` 条件可声明分布统计量（median / mean / p95 / cv）与置信模式
 （point / lcb95 / ucb95）。置信模式为 lcb95/ucb95 时，用 bootstrap 有放回重采样该统计量，
 取 5%/95% 分位作为下/上界；样本数低于规则的 `minimum_samples`，或置信模式/分布统计量
 缺乏分布证据（collector 快照只有点值）时，条件判为“未决”且规则不触发（fail-closed，不猜）。
 该公式只用于 L5 内部的条件触发判定，不进入整体业务得分，也不替代 S7 的 LCB 接受判据。
+
+v2 变更（2026-08-23）：分位数由最近邻取整改为 `analysis.quantile` 的线性插值口径；
+bootstrap 重采样次数由固定 2000 改为由调用方显式提供（`bootstrap_resamples`，任务合同来源）。
 
 ## 7. 来源纠错与禁止表述
 
