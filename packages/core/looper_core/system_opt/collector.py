@@ -1790,7 +1790,12 @@ def collect_component_snapshot(
 
 __all__ = [
     "BuiltinLinuxGuestCollector",
+    "COLLECTION_BUNDLE_MANIFEST_NAME",
+    "COLLECTION_BUNDLE_MANIFEST_SCHEMA",
+    "COLLECTION_BUNDLE_MEDIA_TYPE",
     "CollectedMetric",
+    "CollectionArtifactBundleManifest",
+    "CollectionArtifactBundleMember",
     "CollectionInputArtifact",
     "ComponentCollectionPlan",
     "ComponentCollectionWindow",
@@ -1803,9 +1808,12 @@ __all__ = [
     "ComponentCollectorSession",
     "ComponentMetricSnapshot",
     "MetricAvailability",
+    "VerifiedCollectionArtifactBundle",
     "WindowedComponentCollector",
     "begin_component_collection",
     "bind_collection_to_measurement_batch",
     "collect_component_snapshot",
+    "parse_collection_artifact_bundle_metrics",
     "run_component_collection",
+    "verify_collection_artifact_bundle",
 ]

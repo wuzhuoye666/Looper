@@ -22,6 +22,14 @@ from looper_core.system_opt.collector import (
     begin_component_collection,
 )
 from looper_core.system_opt.executor import CommandResult, OperationStatus
+from looper_core.system_opt.negative_cache import (
+    NegativeCache,
+    NegativeCacheEntry,
+    NegativeCacheIdentity,
+    NegativeVerdict,
+    candidate_parameters_digest,
+    formula_versions_digest,
+)
 from looper_core.system_opt.pressure import (
     PhasedPressureCollectionAdapter,
     PressureProtocolError,
@@ -29,6 +37,7 @@ from looper_core.system_opt.pressure import (
     build_collection_overhead_evidence,
     parse_standard_pressure_protocol_yaml,
 )
+from looper_core.system_opt.tuning import LegacyOptimizationRun, load_optimization_run
 from pydantic import ValidationError
 
 _RAW_MEMBER = b'{"fixture":"cpu-pressure","samples":[100.0,101.0,99.0]}'
@@ -312,6 +321,97 @@ def test_collection_schema_is_additive_and_keeps_legacy_protocol_digest() -> Non
         )
         assert protocol.collection is None
         assert protocol.digest == digest
+
+
+def test_historical_fio_optimization_evidence_remains_loadable() -> None:
+    evidence_path = (
+        __import__("pathlib").Path(__file__).parents[1]
+        / ".artifacts"
+        / "system-opt"
+        / "aliyun-ecs-fio-20260823"
+        / "optimization-run.json"
+    )
+
+    run = load_optimization_run(json.loads(evidence_path.read_text(encoding="utf-8")))
+
+    assert isinstance(run, LegacyOptimizationRun)
+    assert set(run.baseline.metrics) >= {
+        "fio.read-iops",
+        "fio.read-clat-p99-us",
+    }
+    assert run.baseline.gate_values["fio.success"] is True
+    assert not hasattr(run, "baseline_history")
+    assert not hasattr(run.candidates[0], "round_index")
+
+
+def test_storage_metric_rename_changes_protocol_digest_and_misses_legacy_negative_cache() -> None:
+    legacy_payload = _collection_payload()
+    legacy_payload.update(
+        {
+            "id": "fio-storage-legacy-v1",
+            "component": "storage",
+            "metric_ids": ["fio.read-iops", "fio.read-clat-p99-us", "fio.success"],
+            "gate_metric_ids": ["fio.success"],
+            "collection": None,
+        }
+    )
+    legacy_payload["stability"]["metric_id"] = "fio.read-iops"
+    legacy = StandardPressureProtocol.model_validate(legacy_payload)
+
+    storage_payload = _collection_payload()
+    storage_payload.update(
+        {
+            "id": "storage-decoupled-v1",
+            "component": "storage",
+            "metric_ids": [
+                "storage.read-iops",
+                "storage.read-clat-p99-us",
+                "storage.success",
+            ],
+            "gate_metric_ids": ["storage.success"],
+        }
+    )
+    storage_payload["stability"]["metric_id"] = "storage.read-iops"
+    storage_payload["collection"]["requested_metrics"] = [
+        "storage.read-iops",
+        "storage.read-clat-p99-us",
+        "storage.success",
+    ]
+    storage_payload["collection"]["scope"] = {"storage_devices": ["vda"]}
+    storage = StandardPressureProtocol.model_validate(storage_payload)
+
+    assert legacy.digest != storage.digest
+    identity = NegativeCacheIdentity(
+        environment_digest=_ENVIRONMENT_DIGEST,
+        candidate_parameters_digest=candidate_parameters_digest({"storage.scheduler": "none"}),
+        pressure_protocol_digest=legacy.digest,
+        formula_versions_digest=formula_versions_digest({"F-PROJECT-S6-S7": "v1"}),
+    )
+    cache = NegativeCache(
+        [
+            NegativeCacheEntry(
+                identity=identity,
+                metric_id="fio.read-iops",
+                verdict=NegativeVerdict.NO_IMPROVEMENT_LCB,
+                evidence_digests=["sha256:" + "e" * 64],
+                detail="historical fio identity fixture",
+                recorded_at=datetime(2026, 8, 23, 12, 0, tzinfo=UTC),
+            )
+        ]
+    )
+
+    assert cache.lookup(
+        environment_digest=_ENVIRONMENT_DIGEST,
+        candidate_parameters={"storage.scheduler": "none"},
+        pressure_protocol_digest=legacy.digest,
+        formula_versions={"F-PROJECT-S6-S7": "v1"},
+    )
+    assert not cache.lookup(
+        environment_digest=_ENVIRONMENT_DIGEST,
+        candidate_parameters={"storage.scheduler": "none"},
+        pressure_protocol_digest=storage.digest,
+        formula_versions={"F-PROJECT-S6-S7": "v1"},
+    )
 
 
 def test_collection_contract_requires_explicit_component_metrics_and_artifacts() -> None:
