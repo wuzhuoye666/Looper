@@ -31,7 +31,7 @@ System Optimizer 是一个操作系统配置采集、人工管理和有限闭环
 
 ### 架构
 
-- architecture/overall.md：共同底座、两条闭环、任务生命周期和模块边界。
+- architecture/overall.md：**总体架构 v2（权威）**——组件化分层（独立组件优化器 ×N + 总引擎调度/判断/打分 + 九层：压力器/采集器/组件优化器/回退器/负缓存/引擎），静态与动态两种运行情境、结束门禁、S0–S10 公式总线映射与实现状态、建议实现顺序。
 - architecture/configuration-plane.md：配置发现、采集、人工修改、Profile 和动态合法域。
 - architecture/general-tuning.md：无业务载荷的标准压力调优。
 - architecture/workload-tuning.md：workload 动态观测与有限闭环。
