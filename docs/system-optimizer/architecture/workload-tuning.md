@@ -235,7 +235,7 @@ VerificationWindow（复验窗口）:
 | S9 复验生产者 | `PromotionContract`/`evaluate_promotion`（合同齐） | VerificationWindow 执行器 + passed 由重测 S7 产生 |
 | 结束门禁合同 | S10 `StopReason` 枚举 + 静态相位门禁 | DynamicPhaseGateContract 模型与校验 |
 | 重激活 | 无 | 全新；等 A/B 案确认 |
-| workload 合同 | `OptimizationMode.WORKLOAD` + diagnostic-reference 入口 | 业务目标/SLO/阶段/输入身份的显式合同 schema + D0 负载供给字段（load_provider=external-test、load_command_identity）；O0 解析器读外部负载产物（stress-ng/sysbench/fio/iperf3 输出，引擎只解析不启动） |
+| workload 合同 | ✅ M3-1 完成 2026-08-23：`workload.py`（schema + YAML 解析器 + `load_argv_digest`/`same_load`）+ stress-ng 示例合同（argv digest 绑定自验证）+ 7 测试。SO-D020 代码化：`load_provider=external-test` 唯一枚举、argv 只存摘要、身份 digest 不含 prose | 剩余：O0 解析器（stress-ng/sysbench/fio/iperf3 输出产物 → O0 指标），引擎只解析不启动 |
 
 依赖顺序建议：workload 合同 → O0/O1 观察窗口 → 门禁合同 → 假设路由 →
 复验窗口 → 重激活。前四项不依赖 GPT PKG-B（L4 解耦）落地；复验窗口的
