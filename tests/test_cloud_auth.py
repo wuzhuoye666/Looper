@@ -108,8 +108,9 @@ def test_order_http_routes_enforce_operator_bearer(db_session, tmp_path) -> None
                 "/api/v1/targets/tencent-cvm/sync?instance_id=ins-test"
             )
             denied_evidence = await client.get("/api/v1/cloud/orders/missing/evidence")
-            denied_renewal = await client.post(
-                "/api/v1/cloud/orders/missing/renew-confirmation"
+            denied_purchase = await client.post(
+                "/api/v1/cloud/orders/purchase",
+                json={"quoteId": "missing-quote"},
             )
             allowed_evidence = await client.get(
                 "/api/v1/cloud/orders/missing/evidence",
@@ -125,7 +126,7 @@ def test_order_http_routes_enforce_operator_bearer(db_session, tmp_path) -> None
                 denied_managed_group,
                 denied_sync,
                 denied_evidence,
-                denied_renewal,
+                denied_purchase,
                 allowed_evidence,
             )
 
@@ -140,7 +141,7 @@ def test_order_http_routes_enforce_operator_bearer(db_session, tmp_path) -> None
             denied_managed_group,
             denied_sync,
             denied_evidence,
-            denied_renewal,
+            denied_purchase,
             allowed_evidence,
         ) = asyncio.run(exercise_routes())
         assert operator_session.json()["authenticated"] is False
@@ -160,7 +161,7 @@ def test_order_http_routes_enforce_operator_bearer(db_session, tmp_path) -> None
         assert denied_managed_group.status_code == 401
         assert denied_sync.status_code == 401
         assert denied_evidence.status_code == 401
-        assert denied_renewal.status_code == 401
+        assert denied_purchase.status_code == 401
         assert allowed_evidence.status_code == 404
         assert allowed_evidence.json()["code"] == "order_not_found"
     finally:

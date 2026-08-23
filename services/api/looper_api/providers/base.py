@@ -6,9 +6,11 @@ from typing import Any
 from looper_api.cloud_contracts import (
     CatalogFilters,
     CloudPurchaseSpec,
+    DestroyedResource,
     ImageInfo,
     InstanceTypeInfo,
     KeyPairInfo,
+    ProviderDestroyResult,
     ProviderId,
     ProviderInfo,
     ProviderPurchaseResult,
@@ -89,3 +91,24 @@ class CloudProvider(ABC):
     @abstractmethod
     def purchase(self, spec: CloudPurchaseSpec, *, client_token: str) -> ProviderPurchaseResult:
         raise NotImplementedError
+
+    def destroy(self, *, region: str, instance_ids: list[str]) -> ProviderDestroyResult:
+        """Terminate postpaid instances, releasing their system disk, local disks and public IP."""
+        raise CloudProviderError("destroy is not supported", code="unsupported_operation")
+
+    def cleanup_managed_network(
+        self,
+        *,
+        region: str,
+        vpc_id: str | None,
+        subnet_id: str | None,
+        security_group_ids: list[str],
+    ) -> list[DestroyedResource]:
+        """Best-effort removal of Looper-managed subnet/security-group resources.
+
+        Providers that cannot inspect ownership tags leave these resources in place
+        by returning an empty list. Implementations must fail closed: never delete a
+        resource that is not verifiably Looper-managed and not still referenced by
+        other instances.
+        """
+        return []

@@ -169,14 +169,42 @@ def target_view(record: TargetRecord) -> dict[str, Any]:
     elif record.status == "inventory-only" and provider_state in {"STOPPED", "TERMINATED"}:
         status = "offline"
     fingerprint = record.fingerprint_json
+
+    # Architecture-like strings that are not real processor names
+    _ARCH_LIKE = {
+        "x86_64", "amd64", "AMD64", "aarch64", "arm64",
+        "armv7l", "armv8l", "i386", "i686",
+    }
+    processor = fingerprint.get("processor")
+    if processor and str(processor).strip() in _ARCH_LIKE:
+        processor = None
+
+    # CPU: real processor name, or cloud instance type
+    cpu = processor or fingerprint.get("instance_type") or ""
+
+    # Architecture: from fingerprint, or machine, or platform
+    arch = (
+        fingerprint.get("architecture")
+        or fingerprint.get("machine")
+        or fingerprint.get("platform")
+        or ""
+    )
+
+    # Cores
+    cores = fingerprint.get("logical_cpu_count")
+
+    # Memory: prefer memory_gib, fallback to memory_bytes
+    memory_gib = fingerprint.get("memory_gib")
+    if memory_gib is None:
+        memory_bytes = fingerprint.get("memory_bytes")
+        if memory_bytes:
+            memory_gib = round(memory_bytes / (1024 ** 3), 1)
+
     hardware_parts = [
-        fingerprint.get("processor") or fingerprint.get("instance_type"),
-        f"{fingerprint.get('logical_cpu_count')} vCPU"
-        if fingerprint.get("logical_cpu_count")
-        else None,
-        f"{fingerprint.get('memory_gib'):g} GiB"
-        if fingerprint.get("memory_gib")
-        else None,
+        cpu if cpu else None,
+        arch if arch else None,
+        f"{cores} vCPU" if cores else None,
+        f"{memory_gib:g} GiB" if memory_gib else None,
     ]
     return {
         "id": record.id,

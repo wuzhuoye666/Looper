@@ -12,6 +12,7 @@ from looper_api.cloud_contracts import (
     CloudPurchaseSpec,
     ImageInfo,
     InstanceTypeInfo,
+    ProviderDestroyResult,
     ProviderId,
     ProviderInfo,
     ProviderPurchaseResult,
@@ -349,4 +350,10 @@ class BaiduBccProvider(CloudProvider):
                 for item in as_list(ids)
             ],
             details={"requestId": request_id},
+        )
+
+    def destroy(self, *, region: str, instance_ids: list[str]) -> ProviderDestroyResult:
+        raise CloudProviderError(
+            "instance destroy is not supported for Baidu BCC yet",
+            code="unsupported_operation",
         )

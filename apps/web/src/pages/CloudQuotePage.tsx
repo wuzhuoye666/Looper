@@ -15,8 +15,8 @@ export function CloudQuotePage() {
   const navigate = useNavigate();
   const orderKey = useRef(idempotencyKey());
   const query = useQuery({ queryKey: ['cloud-quote', id], queryFn: () => api.quoteById(id), enabled: Boolean(id) });
-  const prepare = useMutation({
-    mutationFn: () => api.prepareOrder(id, orderKey.current),
+  const purchase = useMutation({
+    mutationFn: () => api.purchaseQuote(id, orderKey.current),
     onSuccess: order => navigate(`/cloud/orders/${order.id}`, { state: order }),
   });
   if (query.isLoading) return <div className="page narrow-page"><LoadingState /></div>;
@@ -40,7 +40,7 @@ export function CloudQuotePage() {
       </div>
     </section>
     {typeof quote.details.warning === 'string' && <div className="notice warning"><div><strong>供应商报价说明</strong><p>{quote.details.warning}</p></div></div>}
-    <div className="detail-actions"><button className="button primary" disabled={!purchasable || prepare.isPending} onClick={() => prepare.mutate()}><ShoppingCart size={16} />{quote.estimated ? '估算价不可购买' : quote.status !== 'valid' ? '报价已失效' : prepare.isPending ? '准备订单...' : '进入订单确认'}</button></div>
-    {prepare.isError && <div className="inline-error">{prepare.error instanceof Error ? prepare.error.message : '订单准备失败'}</div>}
+    <div className="detail-actions"><button className="button primary" disabled={!purchasable || purchase.isPending} onClick={() => purchase.mutate()}><ShoppingCart size={16} />{quote.estimated ? '估算价不可购买' : quote.status !== 'valid' ? '报价已失效' : purchase.isPending ? '正在购买...' : '立即购买'}</button></div>
+    {purchase.isError && <div className="inline-error">{purchase.error instanceof Error ? purchase.error.message : '购买失败'}</div>}
   </div>;
 }

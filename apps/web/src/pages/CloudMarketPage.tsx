@@ -175,8 +175,8 @@ export function CloudMarketPage() {
       }
     },
   });
-  const prepareMutation = useMutation({
-    mutationFn: (quoteId: string) => api.prepareOrder(quoteId, orderKey.current),
+  const purchaseMutation = useMutation({
+    mutationFn: (quoteId: string) => api.purchaseQuote(quoteId, orderKey.current),
     onSuccess: order => navigate(`/cloud/orders/${order.id}`, { state: order }),
   });
   const managedGroupMutation = useMutation({
@@ -264,6 +264,11 @@ export function CloudMarketPage() {
     const options = keyPairs.data?.items;
     if (keyPairId && options && !options.some(item => item.id === keyPairId)) setKeyPairId('');
   }, [keyPairs.data?.items, keyPairId]);
+
+  const minimumSystemDiskGib = Math.max(20, Math.ceil(selectedImage?.sizeGib || 20));
+  useEffect(() => {
+    if (disk < minimumSystemDiskGib) setDisk(minimumSystemDiskGib);
+  }, [disk, minimumSystemDiskGib]);
 
   const effectiveVpcId = networkMode === 'catalog' ? vpcId : manualVpcId.trim();
   const effectiveSubnetId = networkMode === 'catalog' ? subnetId : manualSubnetId.trim();
@@ -370,7 +375,7 @@ export function CloudMarketPage() {
     {providerInfo?.credentialsConfigured && !(selectionAdvisorSupported && advisorOpen && kind === 'instance-type') && (catalog.isLoading ? <LoadingState /> : catalog.isError ? <ErrorState error={catalog.error} onRetry={() => catalog.refetch()} /> : items.length ? <section className="panel cloud-results"><div className="panel-heading"><div><h2>{providerLabels[provider]} · {kindLabels[kind]}</h2><p>{catalog.data?.source === 'stale-cache' ? `${catalog.data.warning} · 已显示 ${displayedCatalogCount} / ${items.length}` : `已显示 ${displayedCatalogCount} / ${items.length} 个结果`}</p></div><span className="cache-state">{catalog.data?.source === 'live' ? '实时' : '缓存'}</span></div>{kind === 'instance-type' ? <InstanceTypeTable items={visibleItems as CloudInstanceType[]} selected={selectedType} onSelect={value => setSelectedType(value)} /> : <ImageTable items={visibleItems as CloudImage[]} selected={selectedImage} onSelect={value => setSelectedImage(value)} />}{displayedCatalogCount < items.length && <button type="button" className="button secondary catalog-load-more" onClick={() => setVisibleCatalogCount(count => Math.min(count + CATALOG_PAGE_SIZE, items.length))}>加载更多（已显示 {displayedCatalogCount} / {items.length}）</button>}</section> : <EmptyState title="没有匹配的云资源" />)}
 
     <section className="panel launch-panel">
-      <div className="panel-heading"><div><h2>购买草稿</h2><p>仅按量付费；报价不锁定库存，创建前仍需服务端确认。</p></div><ShieldCheck size={20} /></div>
+      <div className="panel-heading"><div><h2>购买草稿</h2><p>仅按量付费；点击购买后，服务端会自动重验价格、库存和金额上限。</p></div><ShieldCheck size={20} /></div>
       <div className="form-grid cloud-form">
         <label><span>实例名称 *</span><input value={name} onChange={event => setName(event.target.value)} /></label>
         <div className="network-mode-row full">
@@ -405,14 +410,14 @@ export function CloudMarketPage() {
           <label><span>SSH 密钥 ID</span><input value={manualKeyPairId} onChange={event => setManualKeyPairId(event.target.value)} placeholder="可选" /></label>
         </>}
 
-        <label><span>系统盘 GB</span><input type="number" min={20} max={2048} value={disk} onChange={event => setDisk(Number(event.target.value))} /></label>
+        <label><span>系统盘 GB</span><input type="number" min={minimumSystemDiskGib} max={2048} value={disk} onChange={event => setDisk(Math.max(minimumSystemDiskGib, Number(event.target.value)))} /><small>所选镜像至少需要 {minimumSystemDiskGib} GiB</small></label>
         <label className="checkbox-field"><input type="checkbox" checked={publicIp} disabled={!publicIpSupported} onChange={event => setPublicIp(event.target.checked)} /><span>{publicIpSupported ? '分配固定带宽公网 IP' : '公网 IP 需独立定价流程'}</span></label>
         <label><span>公网带宽 Mbps</span><input type="number" min={0} max={1000} disabled={!publicIp} value={bandwidth} onChange={event => setBandwidth(Number(event.target.value))} /></label>
       </div>
       <div className="launch-summary"><div><span>已选机型</span><strong>{selectedType ? `${selectedType.id} · ${selectedType.cpu} vCPU / ${selectedType.memoryGib} GiB` : '未选择'}</strong></div><div><span>已选镜像</span><strong>{selectedImage ? selectedImage.name : '未选择'}</strong></div><button className="button primary" disabled={!spec || !quoteSupported || quoteMutation.isPending || !operatorAccessReady} onClick={() => spec && quoteMutation.mutate({ spec, key: quoteKey.current, signature: specSignature })}><Calculator size={16} />{!operatorAccessReady ? '需要操作员认证' : !quoteSupported ? '报价配置未完成' : quoteMutation.isPending ? '询价中...' : '获取小时报价'}</button></div>
       {quoteMutation.isError && <div className="inline-error">{quoteMutation.error instanceof Error ? quoteMutation.error.message : '询价失败'}</div>}
-      {quote && quoteMatchesCurrentSpec && <div className="quote-card"><div><span>报价快照</span><strong>{quote.hourlyAmount} {quote.currency}<small> / 小时{quote.estimated ? ' · 预计' : ''}</small></strong><em>{providerLabels[quote.provider]} · {quote.spec.region} · {quote.spec.instanceType} · {quote.spec.imageId} · {quote.spec.count} 台</em><em>有效至 {new Date(quote.expiresAt).toLocaleString()}</em></div><button className="button primary" disabled={prepareMutation.isPending || quote.estimated || !quoteMatchesCurrentSpec || !purchaseReady} onClick={() => quoteMatchesCurrentSpec && purchaseReady && prepareMutation.mutate(quote.id)}><ShoppingCart size={16} />{quote.estimated ? '估算价不可购买' : !purchaseReady ? '购买门禁未就绪' : prepareMutation.isPending ? '准备订单...' : '进入确认'}</button></div>}
-      {prepareMutation.isError && <div className="inline-error">{prepareMutation.error instanceof Error ? prepareMutation.error.message : '订单准备失败'}</div>}
+      {quote && quoteMatchesCurrentSpec && <div className="quote-card"><div><span>报价快照</span><strong>{quote.hourlyAmount} {quote.currency}<small> / 小时{quote.estimated ? ' · 预计' : ''}</small></strong><em>{providerLabels[quote.provider]} · {quote.spec.region} · {quote.spec.instanceType} · {quote.spec.imageId} · {quote.spec.count} 台</em><em>有效至 {new Date(quote.expiresAt).toLocaleString()}</em></div><button className="button primary" disabled={purchaseMutation.isPending || quote.estimated || !quoteMatchesCurrentSpec || !purchaseReady} onClick={() => quoteMatchesCurrentSpec && purchaseReady && purchaseMutation.mutate(quote.id)}><ShoppingCart size={16} />{quote.estimated ? '估算价不可购买' : !purchaseReady ? '购买门禁未就绪' : purchaseMutation.isPending ? '正在购买...' : '立即购买'}</button></div>}
+      {purchaseMutation.isError && <div className="inline-error">{purchaseMutation.error instanceof Error ? purchaseMutation.error.message : '购买失败'}</div>}
     </section>
   </div>;
 }
@@ -430,7 +435,7 @@ function PurchaseReadiness({ provider, maxHourlyAmount, authRequired, authentica
 }
 
 function InstanceTypeTable({ items, selected, onSelect }: { items: CloudInstanceType[]; selected: CloudInstanceType | null; onSelect: (value: CloudInstanceType) => void }) {
-  return <div className="table-wrap"><table><thead><tr><th>机型</th><th>规格</th><th>架构</th><th>库存提示</th><th /></tr></thead><tbody>{items.map(item => <tr key={item.id} className={selected?.id === item.id ? 'selected-row' : ''}><td><strong>{item.id}</strong><span className="cell-meta">{item.family || '通用型'}</span></td><td>{item.cpu} vCPU · {item.memoryGib} GiB</td><td>{item.architecture || '—'}</td><td><span className={`stock-label ${item.available === true ? 'available' : item.available === false ? 'unavailable' : 'unknown'}`}>{item.available === true ? '可用' : item.available === false ? '不足' : '未知'}</span></td><td><button className="button secondary compact-button" disabled={item.available === false} onClick={() => onSelect(item)}>{item.available === false ? '不可用' : selected?.id === item.id ? <><Check size={14} />已选</> : '选择'}</button></td></tr>)}</tbody></table></div>;
+  return <div className="table-wrap"><table><thead><tr><th>机型</th><th>规格</th><th>架构</th><th>库存提示</th><th /></tr></thead><tbody>{items.map(item => { const purchaseCompatible = item.attributes?.purchaseCompatible !== false; const blockedReason = typeof item.attributes?.purchaseBlockReason === 'string' ? item.attributes.purchaseBlockReason : ''; return <tr key={item.id} className={selected?.id === item.id ? 'selected-row' : ''}><td><strong>{item.id}</strong><span className="cell-meta">{item.family || '通用型'}</span>{blockedReason && <span className="cell-meta">{blockedReason}</span>}</td><td>{item.cpu} vCPU · {item.memoryGib} GiB</td><td>{item.architecture || '—'}</td><td><span className={`stock-label ${item.available === true && purchaseCompatible ? 'available' : item.available === false ? 'unavailable' : 'unknown'}`}>{!purchaseCompatible ? '不兼容 VPC' : item.available === true ? '可用' : item.available === false ? '不足' : '未知'}</span></td><td><button className="button secondary compact-button" disabled={item.available === false || !purchaseCompatible} onClick={() => onSelect(item)}>{!purchaseCompatible ? '不可购买' : item.available === false ? '不可用' : selected?.id === item.id ? <><Check size={14} />已选</> : '选择'}</button></td></tr>; })}</tbody></table></div>;
 }
 
 function ImageTable({ items, selected, onSelect }: { items: CloudImage[]; selected: CloudImage | null; onSelect: (value: CloudImage) => void }) {

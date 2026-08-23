@@ -401,7 +401,10 @@ def claim_attempt(
         except BenchmarkPackageError as error:
             raise WorkerError(f"Benchmark package cannot be delivered: {error}") from error
         if benchmark.package_digest and package_digest != benchmark.package_digest:
-            raise WorkerError("Benchmark package digest changed after registration")
+            raise WorkerError(
+                "Benchmark package digest changed after registration: "
+                f"expected {benchmark.package_digest}, built {package_digest}"
+            )
         benchmark_bundle = {
             "encoding": "base64+zip",
             "digest": package_digest,

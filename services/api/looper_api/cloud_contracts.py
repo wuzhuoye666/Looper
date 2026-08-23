@@ -228,6 +228,7 @@ class ProvisionedInstance(ApiModel):
     zone: str | None = None
     status: str
     private_ip: str | None = None
+    public_ip: str | None = None
     public_ip_present: bool = False
 
 
@@ -285,3 +286,33 @@ class SearchResult(ApiModel):
     url: str
     updated_at: datetime | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class DestroyedResource(ApiModel):
+    kind: Literal[
+        "instance", "system-disk", "local-disk", "public-ip", "subnet", "security-group"
+    ]
+    id: str = Field(min_length=1, max_length=180)
+    released: bool = True
+    note: str | None = Field(default=None, max_length=500)
+
+
+class ProviderDestroyResult(ApiModel):
+    request_id: str | None = None
+    instance_ids: list[str] = Field(default_factory=list)
+    released_resources: list[DestroyedResource] = Field(default_factory=list)
+    details: dict[str, Any] = Field(default_factory=dict)
+
+
+class TargetDestroyRequest(ApiModel):
+    acknowledgement: str = Field(min_length=8, max_length=300)
+
+
+class TargetDestroyPreview(ApiModel):
+    target_id: str
+    provider: ProviderId
+    region: str
+    instance_id: str
+    instance_name: str
+    acknowledgement: str
+    resources: list[DestroyedResource]

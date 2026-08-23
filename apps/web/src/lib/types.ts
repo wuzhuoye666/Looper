@@ -122,9 +122,22 @@ export interface Target {
     system?: string; release?: string; architecture?: string; host_key_sha256?: string; host_key_type?: string;
   };
 }
+export type DestroyedResourceKind = 'instance' | 'system-disk' | 'local-disk' | 'public-ip' | 'subnet' | 'security-group';
+export interface DestroyedResource {
+  kind: DestroyedResourceKind; id: string; released: boolean; note?: string;
+}
+export interface TargetDestroyPreview {
+  targetId: string; provider: CloudProviderId; region: string; instanceId: string;
+  instanceName: string; acknowledgement: string; resources: DestroyedResource[];
+}
+export interface TargetDestroyResult {
+  targetId: string; provider: CloudProviderId; instanceId: string; requestId?: string;
+  status: string; resources: DestroyedResource[];
+}
 export interface AnalysisData {
   mode?: 'optimization' | 'selection'; targets?: SelectionTargetResult[]; comparisons?: SelectionComparison[];
   pareto?: Array<{ id?: string; candidate: string; score: number; cost: number; latency?: number; rank?: number | null; feasible?: boolean; objectives?: Record<string, number> }>;
+  benchtrust?: BenchTrustData;
   evidence?: Array<{ id: string; title: string; kind?: string; summary?: string; createdAt?: string; artifacts?: Artifact[] }>;
 }
 export interface ListResponse<T> { items: T[]; total?: number }
@@ -162,6 +175,67 @@ export interface VariabilityData {
   status: string; group_statuses?: string[]; groups: VariabilityGroupReport[]; comparisons: VariabilityComparison[];
   policy?: Record<string, unknown>; input_digest?: string; policy_digest?: string;
   evidence?: { attempt_count?: number; run_group_count?: number; system_metric_names?: string[] };
+}
+
+export type BenchTrustStatus = 'available' | 'partial' | 'insufficient_evidence' | 'unavailable';
+export interface BenchTrustReferenceEnvironment {
+  environment_id: string;
+  environment_fingerprint?: Record<string, unknown> | null;
+  eligible: boolean;
+  excluded_reason?: string | null;
+  reference_value?: number | null;
+  baseline_value?: number | null;
+  benefit?: number | null;
+  benefit_lower?: number | null;
+  benefit_upper?: number | null;
+  repeat_count?: number | null;
+  valid?: boolean | null;
+  invalid_reason?: string | null;
+}
+export interface BenchTrustReferenceValidity {
+  status: BenchTrustStatus; method: string;
+  valid_environment_count: number; eligible_environment_count: number; excluded_environment_count: number;
+  rate: number | null; confidence_interval: [number, number] | null;
+  expected_direction: string; minimum_effect: number;
+  environment_results: BenchTrustReferenceEnvironment[];
+  criteria: string[]; limitations: string[];
+}
+export interface BenchTrustRankAxis {
+  axis: string; scoring_formula_ids?: string[] | null;
+  slice_count: number; candidate_count: number; comparison_count: number; method: string;
+  median_tau: number | null; minimum_tau: number | null; maximum_tau: number | null;
+  pairwise_flip_rate: number | null; tie_count: number; limitations: string[];
+}
+export interface BenchTrustRankStability {
+  status: BenchTrustStatus; axes: BenchTrustRankAxis[]; limitations: string[];
+}
+export interface BenchTrustTaskContributor {
+  task_id: string; weight: number; contribution: number; contribution_share: number;
+}
+export interface BenchTrustTaskLeverage {
+  status: BenchTrustStatus; scoring_formula: string | null; aggregation_method: string | null;
+  maximum_contribution_share: number | null; dominant_task: string | null;
+  top_contributors: BenchTrustTaskContributor[];
+  leave_one_out: { maximum_rank_shift: number | null; winner_changed: boolean | null; task_shifts: Record<string, number> };
+  limitations: string[];
+}
+export interface BenchTrustEnvironmentFactor {
+  factor: string; group_count: number; sample_count: number;
+  associated_variance_ratio: number | null; confidence_interval: [number, number] | null; missing_rate: number;
+}
+export interface BenchTrustEnvironmentSensitivity {
+  status: BenchTrustStatus; method: string; analysis_unit: string; sample_count?: number; controls?: string[];
+  total_explained_ratio: number | null; factors: BenchTrustEnvironmentFactor[]; residual_ratio: number | null;
+  warnings: string[]; limitations: string[]; association_only: boolean;
+}
+export interface BenchTrustData {
+  schemaVersion: string; methodVersion: string; status: BenchTrustStatus;
+  referenceValidityRate: BenchTrustReferenceValidity;
+  rankStability: BenchTrustRankStability;
+  taskLeverage: BenchTrustTaskLeverage;
+  environmentSensitivity: BenchTrustEnvironmentSensitivity;
+  evidence: { sample_count?: number; target_count?: number; distinct_dates?: number; distinct_workloads?: number };
+  limitations: string[]; inputDigest: string; policyDigest: string;
 }
 
 export type CloudProviderId = 'tencent' | 'alibaba' | 'volcengine' | 'baidu';

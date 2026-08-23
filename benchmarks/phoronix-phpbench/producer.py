@@ -57,7 +57,16 @@ def resolve_pts_command() -> list[str]:
     if php_explicit:
         php_bin = _resolve_executable("php", php_explicit)
         assert php_bin is not None
-        return [php_bin, pts_bin]
+        pts_path = Path(pts_bin)
+        if pts_path.suffix.casefold() == ".php":
+            core_entrypoint = pts_path
+        else:
+            core_entrypoint = pts_path.parent / "pts-core" / "phoronix-test-suite.php"
+        if not core_entrypoint.is_file():
+            raise PhoronixError(
+                "configured PTS source checkout is missing pts-core/phoronix-test-suite.php"
+            )
+        return [php_bin, str(core_entrypoint.resolve())]
     return [pts_bin]
 
 
@@ -104,6 +113,9 @@ def _subprocess_environment(
         {
             "PTS_USER_PATH_OVERRIDE": str(pts_user_path),
             "PTS_SILENT_MODE": "1",
+            "PHP_BIN": os.environ.get("LOOPER_PHP_BIN")
+            or shutil.which("php")
+            or "php",
             "TEST_RESULTS_NAME": RESULT_NAME,
             "TEST_RESULTS_IDENTIFIER": RESULT_IDENTIFIER,
             "TEST_RESULTS_DESCRIPTION": "Looper PTS PHPBench adapter run",

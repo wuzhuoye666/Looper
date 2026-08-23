@@ -21,7 +21,7 @@ The normalizer only emits a score when the result identifier, `Score` scale,
 `HIB` direction, finite aggregate, and finite raw samples all match the package
 contract. Raw PTS JSON is kept as `pts-result.json`.
 
-Version `looper2` is executable through Looper's managed local-process
+Version `looper5` is executable through Looper's managed local-process
 provisioning contract. A clean Linux Worker only needs Python, the Worker
 runtime, network access during first preparation, and root/passwordless sudo.
 After the user selects a target and starts the experiment, Looper delivers this

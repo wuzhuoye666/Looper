@@ -7,10 +7,12 @@ import pytest
 from looper_api.cloud_contracts import (
     CatalogFilters,
     CloudPurchaseSpec,
+    DestroyedResource,
     ImageInfo,
     InstanceTypeInfo,
     OrderConfirmRequest,
     OrderResolveRequest,
+    ProviderDestroyResult,
     ProviderId,
     ProviderInfo,
     ProviderPurchaseResult,
@@ -30,6 +32,7 @@ from looper_api.cloud_service import (
     global_search,
     list_order_events,
     prepare_order,
+    purchase_quote,
     recover_interrupted_orders,
     renew_order_confirmation,
     resolve_unknown_order,
@@ -56,6 +59,7 @@ class FakeProvider(CloudProvider):
     def __init__(self, *, ambiguous: bool = False) -> None:
         self.catalog_calls = 0
         self.purchase_calls: list[str] = []
+        self.destroy_calls: list[str] = []
         self.ambiguous = ambiguous
         self.fail_catalog = False
         self.quote_amount = Decimal("0.42")
@@ -144,6 +148,17 @@ class FakeProvider(CloudProvider):
                     zone=spec.zone,
                     status="PENDING",
                 )
+            ],
+        )
+
+    def destroy(self, *, region: str, instance_ids: list[str]) -> ProviderDestroyResult:
+        self.destroy_calls.extend(instance_ids)
+        return ProviderDestroyResult(
+            request_id="fake-destroy-request-1",
+            instance_ids=list(instance_ids),
+            released_resources=[
+                DestroyedResource(kind="instance", id=instance_id, note="fake destroyed")
+                for instance_id in instance_ids
             ],
         )
 
@@ -317,6 +332,33 @@ def test_confirm_purchase_is_idempotent_and_naturalizes_target(db_session, tmp_p
         text("select count(*) from targets where id='cloud:tencent:ap-test:ins-fake-1'")
     ).scalar_one()
     assert target_count == 1
+
+
+def test_purchase_quote_completes_order_without_browser_confirmation(db_session, tmp_path) -> None:
+    fake = FakeProvider()
+    reg = registry(fake)
+    app_settings = settings(tmp_path, live=True)
+    quote = create_quote(db_session, app_settings, reg, spec(), "quote-key-one-click")
+
+    result = purchase_quote(
+        db_session,
+        app_settings,
+        reg,
+        quote["id"],
+        "order-key-one-click",
+    )
+    replay = purchase_quote(
+        db_session,
+        app_settings,
+        reg,
+        quote["id"],
+        "order-key-one-click",
+    )
+
+    assert result["status"] == "submitted"
+    assert result["instanceIds"] == ["ins-fake-1"]
+    assert replay["id"] == result["id"]
+    assert len(fake.purchase_calls) == 1
 
 
 def test_ambiguous_provider_result_is_not_automatically_retried(db_session, tmp_path) -> None:

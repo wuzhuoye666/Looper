@@ -92,6 +92,14 @@ def test_fixture_parser_preserves_score_and_samples() -> None:
     assert parsed.raw_scores == (410000.0, 420000.0, 430000.0)
 
 
+def test_fixture_parser_accepts_single_trial_export_without_raw_values() -> None:
+    document = json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
+    candidate = next(iter(next(iter(document["results"].values()))["results"].values()))
+    candidate.pop("raw_values")
+    parsed = normalizer.parse_pts_result(document)
+    assert parsed.raw_scores == (420000.0,)
+
+
 @pytest.mark.parametrize(
     ("field", "value", "message"),
     [
@@ -122,6 +130,22 @@ def test_resolve_pts_missing_fails_closed(monkeypatch: pytest.MonkeyPatch) -> No
     monkeypatch.setattr(producer.shutil, "which", lambda _name: None)
     with pytest.raises(producer.PhoronixError, match="was not found"):
         producer.resolve_pts_command()
+
+
+def test_resolve_pts_source_checkout_uses_core_php_entrypoint(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    checkout = tmp_path / "pts-source"
+    launcher = checkout / "phoronix-test-suite"
+    core = checkout / "pts-core" / "phoronix-test-suite.php"
+    core.parent.mkdir(parents=True)
+    launcher.write_text("#!/bin/sh\n", encoding="utf-8")
+    core.write_text("<?php\n", encoding="utf-8")
+    php = tmp_path / "php"
+    php.write_text("", encoding="utf-8")
+    monkeypatch.setenv("LOOPER_PTS_BIN", str(launcher))
+    monkeypatch.setenv("LOOPER_PHP_BIN", str(php))
+    assert producer.resolve_pts_command() == [str(php.resolve()), str(core.resolve())]
 
 
 def test_run_contract_rejects_arbitrary_profile(tmp_path: Path) -> None:
@@ -155,6 +179,7 @@ def test_producer_and_normalizer_fixture_chain(
     assert producer.main(["--envelope", str(envelope), "--output", str(output)]) == 0
     assert calls[0][0][-2:] == ["default-benchmark", "pts/phpbench-1.1.6"]
     assert calls[0][1]["FORCE_TIMES_TO_RUN"] == "3"
+    assert calls[0][1]["PHP_BIN"]
     assert calls[0][1]["TEST_RESULTS_NAME"] == "looper-phpbench"
     assert "OUTPUT_FILE" not in calls[0][1]
     assert calls[1][0][-2:] == ["result-file-to-json", "looper-phpbench"]

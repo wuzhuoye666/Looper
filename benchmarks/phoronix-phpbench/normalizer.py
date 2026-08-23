@@ -71,6 +71,11 @@ def parse_pts_result(document: dict[str, Any]) -> PhpBenchResult:
         raise NormalizationError("candidate result must be an object")
     score = _finite_number(candidate.get("value"), "aggregate score")
     raw_values = candidate.get("raw_values")
+    # PTS omits raw_values for a single requested trial and only exports value.
+    # Treat that aggregate as the sole raw score; multi-trial exports still keep
+    # every upstream raw score for evidence and sample accounting.
+    if raw_values is None:
+        raw_values = [score]
     if not isinstance(raw_values, list) or not raw_values:
         raise NormalizationError("raw_values must contain at least one score")
     raw_scores = tuple(
@@ -227,4 +232,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

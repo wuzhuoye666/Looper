@@ -41,6 +41,7 @@ class Settings(BaseSettings):
     )
     operator_token: str = Field(default="", repr=False)
     max_live_hourly_amount: Decimal = Field(default=Decimal("10"), gt=0)
+    alibaba_default_region: str = "cn-hangzhou"
 
     @property
     def database_uri(self) -> str:

@@ -144,12 +144,20 @@ def main(argv: list[str] | None = None) -> int:
     php_link = bin_dir / "php"
     php_link.unlink(missing_ok=True)
     php_link.symlink_to(Path(php).resolve())
+    core_entrypoint = launcher.parent / "pts-core" / "phoronix-test-suite.php"
+    if not core_entrypoint.is_file():
+        raise PreparationError("prepared PTS core PHP entrypoint is missing")
     completed = subprocess.run(
-        [str(php_link), str(launcher), "version"],
+        [str(php_link), str(core_entrypoint), "version"],
         check=False,
         capture_output=True,
         text=True,
         timeout=30,
+        env={
+            **os.environ,
+            "PTS_SILENT_MODE": "1",
+            "PTS_USER_PATH_OVERRIDE": str((cache / "version-check-user").resolve()),
+        },
     )
     if completed.returncode != 0 or PTS_VERSION not in completed.stdout + completed.stderr:
         raise PreparationError("prepared PTS launcher did not report the pinned version")

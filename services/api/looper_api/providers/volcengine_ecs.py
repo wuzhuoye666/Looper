@@ -7,6 +7,7 @@ from looper_api.cloud_contracts import (
     CloudPurchaseSpec,
     ImageInfo,
     InstanceTypeInfo,
+    ProviderDestroyResult,
     ProviderId,
     ProviderInfo,
     ProviderPurchaseResult,
@@ -351,4 +352,10 @@ class VolcengineEcsProvider(CloudProvider):
                 for instance_id in instance_ids
             ],
             details={"requestId": request_id},
+        )
+
+    def destroy(self, *, region: str, instance_ids: list[str]) -> ProviderDestroyResult:
+        raise CloudProviderError(
+            "instance destroy is not supported for Volcengine yet",
+            code="unsupported_operation",
         )
