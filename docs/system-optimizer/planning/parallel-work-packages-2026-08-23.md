@@ -121,7 +121,7 @@
 | PKG-A | ✅ 完成 2026-08-23 | 主 agent（zcode） | component.py + 语义标注 + 6 测试；全仓 167 绿 |
 | PKG-B | 待领 | — | |
 | PKG-C | 待领 | — | |
-| PKG-D | 进行中 | 主 agent（zcode） | 依赖 PKG-A 已满足，开工 |
+| PKG-D | ✅ 完成 2026-08-23 | 主 agent（zcode） | engine/loop.py 主循环（调度→组件执行→终裁→负缓存→S10 停止→相位门禁）+ 6 测试 |
 | PKG-E | 待领 | — | 服务器凭证由用户提供，不落盘 |
 | PKG-F | 待领（等 PKG-D） | — | |
 | PKG-G | 待领（低优先） | — | |

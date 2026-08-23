@@ -10,6 +10,13 @@ docs/system-optimizer/contracts/formula-provenance.md（S0–S10）。
 """
 
 from looper_core.system_opt.engine.judge import CandidateVerdict, evaluate_candidate
+from looper_core.system_opt.engine.loop import (
+    EngineLoopConfig,
+    EngineLoopResult,
+    EngineRoundRecord,
+    EngineStopReason,
+    run_engine_loop,
+)
 from looper_core.system_opt.engine.scheduler import (
     SchedulerDecision,
     SchedulerSelection,
@@ -25,11 +32,16 @@ from looper_core.system_opt.engine.scorer import (
 __all__ = [
     "CandidateVerdict",
     "ComponentScore",
+    "EngineLoopConfig",
+    "EngineLoopResult",
+    "EngineRoundRecord",
+    "EngineStopReason",
     "SchedulerDecision",
     "SchedulerSelection",
     "SkippedCandidate",
     "evaluate_candidate",
     "rank_components",
+    "run_engine_loop",
     "score_components",
     "select_next_candidate",
 ]

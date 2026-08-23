@@ -1,0 +1,207 @@
+from __future__ import annotations
+
+import pytest
+
+from looper_core.system_opt.component import ComponentOptimizer
+from looper_core.system_opt.demo import (
+    SyntheticMeasurementAdapter,
+    build_demo_manifest,
+    build_demo_policy,
+    resolve_demo_domains,
+)
+from looper_core.system_opt.engine import (
+    EngineLoopConfig,
+    EngineStopReason,
+    run_engine_loop,
+)
+from looper_core.system_opt.engine.loop import EngineRoundRecord
+from looper_core.system_opt.executor.simulated import SimulatedBackend
+from looper_core.system_opt.negative_cache import (
+    NegativeCache,
+    NegativeCacheEntry,
+    NegativeCacheIdentity,
+    NegativeVerdict,
+    candidate_parameters_digest,
+    formula_versions_digest,
+)
+from looper_core.system_opt.policy import OptimizationMode
+from looper_core.system_opt.rollback import RestorationStatus
+from looper_core.system_opt.tuning import SystemOptimizationEngine
+
+ENV = "sha256:" + "5" * 64
+FORMULAS = {"F-DEMO-LOOP": "v0"}
+FIXED_PROTOCOL = "sha256:" + "6" * 64
+
+
+def _optimizers(components: list[str], backend: SimulatedBackend):
+    manifest = build_demo_manifest()
+    result = []
+    for component in components:
+        policy = build_demo_policy(OptimizationMode.GENERAL)
+        policy.authorized_components = [component]
+        policy.search.max_candidates = 2
+        policy.search.max_attempts = 4
+        policy.search.no_improvement_limit = 3
+        policy.search.target_improvement = None
+        engine = SystemOptimizationEngine(policy, manifest, resolve_demo_domains(manifest), backend)
+        result.append(ComponentOptimizer(engine))
+    return result, manifest
+
+
+def _config(max_rounds: int = 10) -> EngineLoopConfig:
+    return EngineLoopConfig(
+        environment_digest=ENV,
+        formula_versions=FORMULAS,
+        pressure_protocol_digests={"cpu": FIXED_PROTOCOL, "memory": FIXED_PROTOCOL},
+        max_rounds=max_rounds,
+    )
+
+
+def _baseline_parameters(manifest) -> dict[str, dict]:
+    defaults = {item.parameter_id: item.default for item in manifest.items}
+    return {"cpu": defaults, "memory": defaults}
+
+
+class TestEngineLoop:
+    def test_completes_all_components_with_verdicts_and_cache_writes(self):
+        manifest = build_demo_manifest()
+        initial = {item.id: item.default for item in manifest.items}
+        backend = SimulatedBackend(initial, target_id="engine-loop-test")
+        optimizers, manifest = _optimizers(["cpu", "memory"], backend)
+        cache = NegativeCache()
+        result = run_engine_loop(
+            optimizers,
+            baseline_parameters=_baseline_parameters(manifest),
+            measures={
+                "cpu": SyntheticMeasurementAdapter(backend, mode=OptimizationMode.GENERAL),
+                "memory": SyntheticMeasurementAdapter(backend, mode=OptimizationMode.GENERAL),
+            },
+            negative_cache=cache,
+            config=_config(),
+            fencing_token=3,
+        )
+        assert result.stop_reason is EngineStopReason.COMPLETED
+        assert [record.component for record in result.rounds] == ["cpu", "memory"]
+        for record in result.rounds:
+            assert record.verdicts, "every round must judge its candidates"
+            assert all(v.candidate_id for v in record.verdicts)
+        rejected = sum(
+            1
+            for record in result.rounds
+            for verdict in record.verdicts
+            if not verdict.accepted
+        )
+        assert len(cache) == rejected
+        assert result.phase_restoration is None
+        assert "skipped" in result.phase_verification_note
+
+    def test_round_budget_stops_explicitly(self):
+        manifest = build_demo_manifest()
+        initial = {item.id: item.default for item in manifest.items}
+        backend = SimulatedBackend(initial, target_id="round-budget-test")
+        optimizers, manifest = _optimizers(["cpu", "memory"], backend)
+        result = run_engine_loop(
+            optimizers,
+            baseline_parameters=_baseline_parameters(manifest),
+            measures={
+                "cpu": SyntheticMeasurementAdapter(backend, mode=OptimizationMode.GENERAL),
+                "memory": SyntheticMeasurementAdapter(backend, mode=OptimizationMode.GENERAL),
+            },
+            negative_cache=NegativeCache(),
+            config=_config(max_rounds=1),
+            fencing_token=3,
+        )
+        assert result.stop_reason is EngineStopReason.ROUND_BUDGET
+        assert len(result.rounds) == 1
+
+    def test_fully_cached_pools_stop_before_any_round(self):
+        manifest = build_demo_manifest()
+        initial = {item.id: item.default for item in manifest.items}
+        backend = SimulatedBackend(initial, target_id="all-cached-test")
+        optimizers, manifest = _optimizers(["cpu", "memory"], backend)
+        cache = NegativeCache()
+        from datetime import UTC, datetime
+
+        fixed_at = datetime(2026, 8, 23, 12, 0, 0, tzinfo=UTC)
+        for optimizer in optimizers:
+            protocol = FIXED_PROTOCOL
+            for parameters in optimizer.candidate_pool():
+                cache.add(
+                    NegativeCacheEntry(
+                        identity=NegativeCacheIdentity(
+                            environment_digest=ENV,
+                            candidate_parameters_digest=candidate_parameters_digest(parameters),
+                            pressure_protocol_digest=protocol,
+                            formula_versions_digest=formula_versions_digest(FORMULAS),
+                        ),
+                        metric_id="demo.metric",
+                        verdict=NegativeVerdict.NO_IMPROVEMENT_LCB,
+                        evidence_digests=["sha256:" + "7" * 64],
+                        detail="previously disproven",
+                        recorded_at=fixed_at,
+                    )
+                )
+        result = run_engine_loop(
+            optimizers,
+            baseline_parameters=_baseline_parameters(manifest),
+            measures={
+                "cpu": SyntheticMeasurementAdapter(backend, mode=OptimizationMode.GENERAL),
+                "memory": SyntheticMeasurementAdapter(backend, mode=OptimizationMode.GENERAL),
+            },
+            negative_cache=cache,
+            config=_config(),
+            fencing_token=3,
+        )
+        assert result.stop_reason is EngineStopReason.ALL_CACHED
+        assert result.rounds == []
+
+    def test_phase_ending_gate_verifies_restoration(self):
+        manifest = build_demo_manifest()
+        initial = {item.id: item.default for item in manifest.items}
+        backend = SimulatedBackend(initial, target_id="phase-gate-test")
+        optimizers, manifest = _optimizers(["cpu"], backend)
+        baseline_snapshot = backend.snapshot(manifest.items, fencing_token=3)
+        result = run_engine_loop(
+            optimizers,
+            baseline_parameters=_baseline_parameters(manifest),
+            measures={"cpu": SyntheticMeasurementAdapter(backend, mode=OptimizationMode.GENERAL)},
+            negative_cache=NegativeCache(),
+            config=EngineLoopConfig(
+                environment_digest=ENV,
+                formula_versions=FORMULAS,
+                pressure_protocol_digests={"cpu": FIXED_PROTOCOL},
+                max_rounds=5,
+            ),
+            fencing_token=3,
+            phase_baseline_snapshot=baseline_snapshot,
+            current_snapshot=lambda: backend.snapshot(manifest.items, fencing_token=3),
+        )
+        assert result.phase_restoration is not None
+        assert result.phase_restoration.status is RestorationStatus.RESTORED
+
+    def test_duplicate_components_rejected(self):
+        manifest = build_demo_manifest()
+        initial = {item.id: item.default for item in manifest.items}
+        backend = SimulatedBackend(initial, target_id="dup-test")
+        optimizers, manifest = _optimizers(["cpu", "cpu"], backend)
+        with pytest.raises(ValueError, match="duplicate components"):
+            run_engine_loop(
+                optimizers,
+                baseline_parameters=_baseline_parameters(manifest),
+                measures={"cpu": object()},
+                negative_cache=NegativeCache(),
+                config=_config(),
+                fencing_token=3,
+            )
+
+    def test_round_record_round_trips_through_digest(self):
+        record = EngineRoundRecord(
+            round_index=1,
+            component="cpu",
+            report_digest="sha256:" + "8" * 64,
+            selected_parameters={"k": "v"},
+            skipped=[],
+            verdicts=[],
+            cache_entry_digests=[],
+        )
+        assert EngineRoundRecord.model_validate_json(record.model_dump_json()) == record

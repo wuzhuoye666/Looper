@@ -116,6 +116,19 @@ class ComponentOptimizer:
         self._formula_suggestions = list(self.formula_mapping.suggest(snapshot, baseline))
         return list(self._formula_suggestions)
 
+    def candidate_pool(self) -> list[dict[str, Any]]:
+        """Enumerate this component's grid candidates for cache consultation.
+
+        The pool is the deterministic grid over the resolved search space; it
+        exists so the L8 scheduler can recognize a fully negative-cached
+        component before spending measurement budget on it.
+        """
+
+        from looper_core.optimizer import grid_candidates
+
+        space = self.engine.search_space({self.component})
+        return grid_candidates(space)
+
     def run(
         self,
         *,

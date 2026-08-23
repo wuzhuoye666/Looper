@@ -338,6 +338,13 @@ class SystemOptimizationEngine:
             attempts,
         )
 
+    def search_space(self, components: set[str] | None = None) -> dict[str, Any]:
+        """Public search-space view for the L8 engine loop and candidate pools."""
+
+        return self._search_space(
+            components if components is not None else set(self.policy.authorized_components)
+        )
+
     def _search_space(self, components: set[str]) -> dict[str, Any]:
         result: dict[str, Any] = {}
         for parameter_id, domain in sorted(self.domains.items()):
