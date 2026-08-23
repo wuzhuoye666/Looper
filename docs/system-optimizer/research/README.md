@@ -5,5 +5,6 @@
 - source-metric-inventory-2026-08-22.md：按来源全量保留的论文、benchmark 和 adapter 指标盘点。
 - [Linux 官方配置候选目录（M1，20 项）](kernel-official-config-catalog-2026-08-23.md)
 - [WSL2 能力探测记录](wsl2-capability-probe-2026-08-23.md)
+- [CVM 首轮只读实测记录](cvm-readonly-probe-2026-08-23.md)
 
 筛选、字段映射、语义等价和阈值必须另经用户确认。原始计数口径不得在迁移中静默改变。
