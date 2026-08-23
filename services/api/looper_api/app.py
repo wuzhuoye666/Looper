@@ -109,6 +109,7 @@ from looper_api.external_targets import (
     ConnectExternalTargetRequest,
     ExternalTargetError,
     ImportExternalTargetRequest,
+    connect_existing_target,
     connect_external_target,
     import_external_target,
 )
@@ -123,6 +124,7 @@ from looper_api.models import (
     TargetRecord,
 )
 from looper_api.post_optimization import post_optimization_view, start_post_optimization
+from looper_api.providers.alibaba_ecs import AlibabaInventoryError, sync_ecs_inventory
 from looper_api.providers.base import CloudProviderError
 from looper_api.providers.registry import CloudProviderRegistry, get_provider_registry
 from looper_api.providers.tencent_cvm import TencentInventoryError, sync_cvm_inventory
@@ -310,6 +312,7 @@ async def origin_guard(request: Request, call_next: Any) -> Any:
 @app.exception_handler(WorkerError)
 @app.exception_handler(InvalidTransition)
 @app.exception_handler(TencentInventoryError)
+@app.exception_handler(AlibabaInventoryError)
 @app.exception_handler(CloudProviderError)
 @app.exception_handler(CloudWorkflowError)
 @app.exception_handler(RegistrationError)
@@ -589,6 +592,7 @@ def cloud_order_purchase(
         registry,
         request.quote_id,
         idempotency_key,
+        request.ssh_credentials,
     )
 
 
@@ -870,6 +874,18 @@ def sync_tencent_targets(
     return {"items": [target_view(item) for item in records], "total": len(records)}
 
 
+@app.post("/api/v1/targets/alibaba-ecs/sync")
+def sync_alibaba_targets(
+    session: SessionDependency,
+    _operator: OperatorDependency,
+    region: str = Query(default="cn-hangzhou", min_length=3, max_length=40),
+    instance_id: list[str] | None = Query(default=None),
+) -> dict[str, Any]:
+    records = sync_ecs_inventory(session, region, instance_ids=instance_id)
+    session.commit()
+    return {"items": [target_view(item) for item in records], "total": len(records)}
+
+
 @app.post("/api/v1/targets/import", status_code=201)
 def import_target(
     payload: ImportExternalTargetRequest,
@@ -929,17 +945,60 @@ def test_target_ssh_connection(
     if target is None:
         raise HTTPException(status_code=404, detail="target not found")
     request = remembered_target_request(target, app_settings)
-    refreshed = connect_external_target(session, request)
+    refreshed = (
+        connect_external_target(session, request)
+        if target.provider == "external"
+        else connect_existing_target(session, target, request)
+    )
     if refreshed.id != target_id:
         raise ExternalTargetError("SSH endpoint no longer resolves to the selected target")
     session.commit()
     deployment = deploy_remote_worker(request, refreshed, app_settings)
+    if target.provider != "external":
+        refreshed.status = "available"
+        refreshed.runnable = True
+        session.commit()
     result = target_view(refreshed)
     result["credentialsRemembered"] = True
     result["connectionTest"] = {
         "status": "connected",
         "testedAt": utc_now().isoformat(),
         "hostKeySha256": refreshed.fingerprint_json.get("host_key_sha256"),
+    }
+    result["deployment"] = deployment
+    return result
+
+
+@app.post("/api/v1/targets/{target_id}/ssh-connect", status_code=200)
+def connect_existing_target_ssh(
+    target_id: str,
+    payload: ConnectExternalTargetRequest,
+    session: SessionDependency,
+    app_settings: SettingsDependency,
+    _operator: OperatorDependency,
+) -> dict[str, Any]:
+    """Verify SSH and bind encrypted credentials to a purchased target."""
+
+    target = session.get(TargetRecord, target_id)
+    if target is None:
+        raise HTTPException(status_code=404, detail="target not found")
+    if target.provider == "external":
+        raise HTTPException(status_code=400, detail="use the external target connect endpoint")
+    refreshed = connect_existing_target(session, target, payload)
+    deployment = deploy_remote_worker(payload, refreshed, app_settings)
+    host_key = str(refreshed.fingerprint_json.get("host_key_sha256") or "")
+    remembered = EncryptedSshCredentialStore(app_settings).save(
+        refreshed.id, payload, host_key
+    )
+    refreshed.status = "available"
+    refreshed.runnable = True
+    session.commit()
+    result = target_view(refreshed)
+    result["credentialsRemembered"] = remembered
+    result["connectionTest"] = {
+        "status": "connected",
+        "testedAt": utc_now().isoformat(),
+        "hostKeySha256": host_key,
     }
     result["deployment"] = deployment
     return result
@@ -1086,7 +1145,7 @@ def _normalize_create_request(payload: dict[str, Any], session: Session) -> Expe
     benchmark_id = payload.get("benchmarkId")
     if benchmark_id and benchmark_id not in {
         "looper.demo.compression",
-        "looper.demo.compression@1.0.0",
+        "looper.demo.compression@1.1.0",
     }:
         raise SchedulerError("the selected benchmark has no executable adapter installed")
     objective = payload.get("objective")

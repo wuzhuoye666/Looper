@@ -4,7 +4,9 @@ import re
 from datetime import timedelta
 from typing import Any
 
-from looper_core.canonical import utc_now
+from looper_core.canonical import canonical_digest, utc_now
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from looper_api.cloud_contracts import (
     CatalogFilters,
@@ -25,15 +27,18 @@ from looper_api.cloud_contracts import (
     VpcInfo,
     ZoneInfo,
 )
+from looper_api.models import TargetRecord
 from looper_api.providers.base import CloudProvider, CloudProviderError
 from looper_api.providers.utils import (
     ambiguous_create_error,
     as_list,
     attr,
+    cloud_target_id,
     decimal_value,
     environment_credentials,
     filter_images,
     filter_instance_types,
+    legacy_cloud_target_ids,
     nested,
     optional_environment,
     parse_datetime,
@@ -43,6 +48,10 @@ from looper_api.providers.utils import (
 
 _REQUIRED_ENV = ["ALIBABA_CLOUD_ACCESS_KEY_ID", "ALIBABA_CLOUD_ACCESS_KEY_SECRET"]
 
+
+class AlibabaInventoryError(CloudProviderError):
+    pass
+
 _SYSTEM_DISK_CATEGORY_PREFERENCE = (
     "cloud_essd",
     "cloud_essd_entry",
@@ -51,6 +60,30 @@ _SYSTEM_DISK_CATEGORY_PREFERENCE = (
     "cloud_ssd",
     "cloud",
 )
+
+
+def _first_ip(value: Any) -> str | None:
+    """Read an IP from SDK objects returned with snake/camel case fields."""
+
+    plain = to_plain(value)
+    if isinstance(plain, str) and ("." in plain or ":" in plain):
+        return plain.strip() or None
+    if isinstance(plain, list):
+        for item in plain:
+            found = _first_ip(item)
+            if found:
+                return found
+    if isinstance(plain, dict):
+        for key in ("ip_address", "ipAddress", "ip", "address"):
+            if key in plain:
+                found = _first_ip(plain[key])
+                if found:
+                    return found
+        for item in plain.values():
+            found = _first_ip(item)
+            if found:
+                return found
+    return None
 
 # Alibaba Cloud generation-I families cannot be launched into a VPC because
 # they do not support ENIs.  Looper's purchase contract always requires a
@@ -99,6 +132,7 @@ class AlibabaEcsProvider(CloudProvider):
                 "postpaid-purchase",
                 "client-token",
                 "dry-run",
+                "inventory",
             ],
             livePurchaseEnabled=live_purchase_enabled and installed and not missing,
             message=None if installed and not missing else "安装 SDK 并配置显式环境变量后可用",
@@ -817,30 +851,22 @@ class AlibabaEcsProvider(CloudProvider):
                 )
                 if instances:
                     inst = instances[0]
-                    # Get public IP
-                    public_ip_attr = nested(
-                        inst, ("public_ip_address",), ("ip_address",), default=[]
+                    # Alibaba SDK versions expose these fields with both
+                    # snake_case and camelCase names, and may wrap addresses in
+                    # one or more model objects.
+                    public_ip_attr = attr(
+                        inst, "public_ip_address", "publicIpAddress", "eip_address",
+                        "eipAddress", default=None
                     )
-                    if public_ip_attr:
-                        public_ip = (
-                            str(public_ip_attr[0])
-                            if isinstance(public_ip_attr, list)
-                            else str(public_ip_attr)
-                        )
-                    # Get private IP
-                    vpc_attr = nested(
-                        inst,
-                        ("vpc_attributes",),
-                        ("private_ip_address",),
-                        ("ip_address",),
-                        default=[],
+                    public_ip = _first_ip(public_ip_attr)
+                    vpc_attributes = attr(
+                        inst, "vpc_attributes", "vpcAttributes", default=None
                     )
-                    if vpc_attr:
-                        private_ip = (
-                            str(vpc_attr[0])
-                            if isinstance(vpc_attr, list)
-                            else str(vpc_attr)
-                        )
+                    private_ip_attr = attr(
+                        vpc_attributes, "private_ip_address", "privateIpAddress",
+                        default=None
+                    )
+                    private_ip = _first_ip(private_ip_attr)
             except Exception:
                 pass
 
@@ -904,3 +930,160 @@ class AlibabaEcsProvider(CloudProvider):
             released_resources=released,
             details={"requestId": request_id},
         )
+
+
+_ARCHIVE_AFTER_AUTHORITATIVE_MISSES = 3
+
+
+def sync_ecs_inventory(
+    session: Session, region: str, instance_ids: list[str] | None = None
+) -> list[TargetRecord]:
+    """Sync Alibaba Cloud ECS instances for a region into the target inventory."""
+    if not region:
+        raise AlibabaInventoryError("a valid Alibaba Cloud region is required")
+    provider = AlibabaEcsProvider()
+    from alibabacloud_ecs20140526 import models
+
+    if instance_ids:
+        normalized_ids = [value.strip() for value in instance_ids if value and value.strip()]
+        if len(normalized_ids) > 100 or len(normalized_ids) != len(set(normalized_ids)):
+            raise AlibabaInventoryError(
+                "instance ids must be unique and contain at most 100 values"
+            )
+        if any(not value.startswith("i-") or len(value) > 64 for value in normalized_ids):
+            raise AlibabaInventoryError("invalid Alibaba Cloud instance id")
+        request = models.DescribeInstancesRequest(
+            region_id=region, instance_ids=normalized_ids, page_size=len(normalized_ids)
+        )
+        response = provider._call("describe_instances", region, request)
+        instances = as_list(
+            nested(response, ("body",), ("instances",), ("instance",), default=[])
+        )
+        return [_upsert_instance(session, region, item) for item in instances]
+
+    page_number = 1
+    page_size = 100
+    imported: list[TargetRecord] = []
+    while True:
+        request = models.DescribeInstancesRequest(
+            region_id=region, page_number=page_number, page_size=page_size
+        )
+        response = provider._call("describe_instances", region, request)
+        body = nested(response, ("body",))
+        instances = as_list(
+            nested(body, ("instances",), ("instance",), default=[])
+        )
+        for instance in instances:
+            imported.append(_upsert_instance(session, region, instance))
+        total = int(attr(body, "total_count", default=0) or 0)
+        if not instances or len(imported) >= total:
+            break
+        page_number += 1
+    _reconcile_missing_inventory(session, region, {record.id for record in imported})
+    return imported
+
+
+def _reconcile_missing_inventory(
+    session: Session, region: str, seen_target_ids: set[str]
+) -> None:
+    """Retain historical targets while removing absent instances from the active pool."""
+    now = utc_now()
+    records = list(
+        session.scalars(select(TargetRecord).where(TargetRecord.provider == "alibaba"))
+    )
+    for record in records:
+        inventory = record.inventory_json or {}
+        if inventory.get("region") != region or record.id in seen_target_ids:
+            continue
+        misses = record.inventory_miss_count + 1
+        record.lifecycle_status = (
+            "archived"
+            if misses >= _ARCHIVE_AFTER_AUTHORITATIVE_MISSES
+            else "missing"
+        )
+        record.inventory_missing_since = record.inventory_missing_since or now
+        record.inventory_miss_count = misses
+        record.runnable = False
+        record.updated_at = now
+        if record.lifecycle_status == "archived":
+            record.archived_at = record.archived_at or now
+            record.archive_reason = "absent-after-authoritative-inventory-syncs"
+
+
+def _upsert_instance(session: Session, region: str, instance: Any) -> TargetRecord:
+    now = utc_now()
+    instance_id = str(attr(instance, "instance_id") or "")
+    target_id = cloud_target_id("alibaba", region, instance_id)
+    public_ips = as_list(
+        nested(instance, ("public_ip_address",), ("ip_address",), default=[])
+    )
+    private_ips = as_list(
+        nested(
+            instance,
+            ("vpc_attributes",),
+            ("private_ip_address",),
+            ("ip_address",),
+            default=[],
+        )
+    )
+    vpc = nested(instance, ("vpc_attributes",), default=None)
+    inventory = {
+        "region": region,
+        "zone": attr(instance, "zone_id"),
+        "instance_id": instance_id,
+        "instance_name": attr(instance, "instance_name"),
+        "instance_state": attr(instance, "status"),
+        "image_id": attr(instance, "image_id"),
+        "vpc_id": attr(vpc, "vpc_id") if vpc else None,
+        "subnet_id": attr(vpc, "vswitch_id") if vpc else None,
+        "private_ip": private_ips[0] if private_ips else None,
+        "public_ip_present": bool(public_ips),
+    }
+    memory_mib = attr(instance, "memory", default=0) or 0
+    memory_gib = (float(memory_mib) / 1024) if memory_mib else None
+    fingerprint = {
+        "provider": "alibaba",
+        "region": region,
+        "zone": inventory["zone"],
+        "instance_type": attr(instance, "instance_type"),
+        "cpu": attr(instance, "cpu"),
+        "memory_gib": memory_gib,
+        "image_id": attr(instance, "image_id"),
+        "os_name": attr(instance, "os_name"),
+    }
+    capabilities = ["alibaba-ecs", "inventory"]
+    snapshot = {
+        "provider": "alibaba",
+        "capabilities": capabilities,
+        "fingerprint": fingerprint,
+    }
+    record = session.get(TargetRecord, target_id)
+    if record is None:
+        for legacy_id in legacy_cloud_target_ids("alibaba", region, instance_id):
+            record = session.get(TargetRecord, legacy_id)
+            if record is not None:
+                break
+    values: dict[str, Any] = {
+        "name": attr(instance, "instance_name") or instance_id,
+        "provider": "alibaba",
+        "status": "inventory-only",
+        "capabilities_json": capabilities,
+        "inventory_json": inventory,
+        "fingerprint_json": fingerprint,
+        "snapshot_digest": canonical_digest(snapshot),
+        "runnable": False,
+        "lifecycle_status": "active",
+        "last_inventory_seen_at": now,
+        "inventory_missing_since": None,
+        "inventory_miss_count": 0,
+        "archived_at": None,
+        "archive_reason": None,
+        "updated_at": now,
+    }
+    if record is None:
+        record = TargetRecord(id=target_id, created_at=now, **values)
+        session.add(record)
+    else:
+        for field, value in values.items():
+            setattr(record, field, value)
+    return record

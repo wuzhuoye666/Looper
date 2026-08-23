@@ -119,7 +119,6 @@ def test_non_scenario_adapter_uses_declared_metric_and_required_checks() -> None
     )
     draft = draft_from_manifest_bytes(path.read_bytes(), filename=path.name).model_copy(
         update={
-            "decision_question": "Does the configured adapter execute correctly?",
             "correctness_contract": "native-result-valid must pass",
             "has_reference": True,
             "cross_environment_audit": True,

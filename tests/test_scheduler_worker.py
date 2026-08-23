@@ -178,6 +178,9 @@ def test_worker_claim_requires_implicit_runtime_capability(
     ).one()
     benchmark.manifest_json["spec"]["runtime"]["type"] = "container"
     benchmark.manifest_json["spec"]["capabilities"] = ["python"]
+    benchmark.manifest_json["spec"]["runtime"]["provisioning"]["hostCapabilities"] = [
+        "python"
+    ]
     local_worker = register_worker(
         session,
         settings,

@@ -29,8 +29,24 @@ export function TargetsPage() {
   const [status, setStatus] = useState('active');
   const [importOpen, setImportOpen] = useState(false);
   const [destroyTarget, setDestroyTarget] = useState<Target | null>(null);
+  const [sshTarget, setSshTarget] = useState<Target | null>(null);
   const query = useQuery({ queryKey: ['targets', 'all'], queryFn: () => api.targets(true), refetchInterval: 30_000 });
   const sync = useMutation({ mutationFn: () => api.syncTencentTargets(), onSuccess: () => query.refetch() });
+  const syncAlibaba = useMutation({
+    mutationFn: async () => {
+      const regions = new Set(
+        (query.data?.items || [])
+          .filter(item => item.provider === "alibaba" && item.lifecycleStatus === "active")
+          .map(item => item.fingerprint?.region)
+          .filter((region): region is string => Boolean(region)),
+      );
+      if (!regions.size) regions.add("cn-hangzhou");
+      let result;
+      for (const region of regions) result = await api.syncAlibabaTargets(region);
+      return result;
+    },
+    onSuccess: () => query.refetch(),
+  });
   const items = useMemo(() => query.data?.items.filter(x => {
     if (x.type === 'local' || x.id === 'local') return false;
     const statusMatches = status === 'all'
@@ -45,9 +61,11 @@ export function TargetsPage() {
     <div className="page">
       <PageHeader title="候选资源" description="查看服务器规格、环境指纹和执行就绪状态。" actions={<>
         <button className="button secondary" disabled={sync.isPending} onClick={() => sync.mutate()}><RefreshCw size={15} />{sync.isPending ? '同步中…' : '同步腾讯云库存'}</button>
+        <button className="button secondary" disabled={syncAlibaba.isPending} onClick={() => syncAlibaba.mutate()}><RefreshCw size={15} />{syncAlibaba.isPending ? '同步中…' : '同步阿里云库存'}</button>
         <button className="button primary" onClick={() => setImportOpen(true)}><Download size={15} />连接外部机器</button>
       </>} />
       {sync.isError && <div className="inline-alert"><AlertTriangle size={16} />{sync.error.message}</div>}
+      {syncAlibaba.isError && <div className="inline-alert"><AlertTriangle size={16} />{syncAlibaba.error.message}</div>}
       <div className="toolbar">
         <label className="search-field"><Search size={16} /><span className="sr-only">搜索目标</span><input value={search} onChange={e => setSearch(e.target.value)} placeholder="搜索名称、框架或硬件" /></label>
         <label className="select-field"><Filter size={15} /><select aria-label="资源状态" value={status} onChange={e => setStatus(e.target.value)}>
@@ -67,7 +85,7 @@ export function TargetsPage() {
               <td><span className="inline-icon"><Cpu size={14} />{x.hardware || '—'}</span></td>
               <td>{formatDate(x.lastInventorySeenAt || x.lastSeenAt)}</td>
               <td>{x.endpoint?.startsWith('http') ? <a className="text-link" href={x.endpoint} target="_blank" rel="noreferrer">打开<ExternalLink size={14} /></a> : x.endpoint ? <code>{x.endpoint}</code> : '—'}</td>
-              <td><TargetSshButton target={x} /></td>
+              <td><TargetSshButton target={x} onConfigure={() => setSshTarget(x)} /></td>
               <td>{(CLOUD_PROVIDERS.has(x.type || '') || x.type === 'external') && x.lifecycleStatus === 'active'
                 ? <button className="button danger-ghost compact-button" onClick={() => setDestroyTarget(x)} aria-label={`销毁 ${x.name}`}><Trash2 size={14} />销毁</button>
                 : null}</td>
@@ -76,6 +94,7 @@ export function TargetsPage() {
         </table></div></section>
       ) : <EmptyState title="没有匹配的候选资源" description={status === 'active' ? '同步云库存后，云端不可见的资源会移入历史筛选。' : undefined} />}
       <ImportTargetDialog open={importOpen} onClose={() => setImportOpen(false)} />
+      <ImportTargetDialog target={sshTarget} open={Boolean(sshTarget)} onClose={() => setSshTarget(null)} />
       <TargetDestroyDialog target={destroyTarget} onClose={() => setDestroyTarget(null)} />
     </div>
   );

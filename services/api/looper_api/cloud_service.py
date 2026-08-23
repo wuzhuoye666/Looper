@@ -20,6 +20,7 @@ from looper_api.cloud_contracts import (
     CatalogFilters,
     CatalogResponse,
     CloudPurchaseSpec,
+    CloudSshCredentials,
     DestroyedResource,
     ImageInfo,
     InstanceTypeInfo,
@@ -33,6 +34,7 @@ from looper_api.cloud_contracts import (
 )
 from looper_api.config import Settings
 from looper_api.events import append_event
+from looper_api.external_targets import ConnectExternalTargetRequest, connect_existing_target
 from looper_api.models import (
     BenchmarkRecord,
     CloudCatalogCacheRecord,
@@ -51,6 +53,8 @@ from looper_api.providers.utils import (
     legacy_cloud_target_ids,
     to_plain,
 )
+from looper_api.remote_credentials import EncryptedSshCredentialStore
+from looper_api.remote_worker import deploy_remote_worker
 
 CatalogKind = Literal[
     "region",
@@ -926,7 +930,82 @@ def renew_order_confirmation(
     )
 
 
-def _upsert_provisioned_target(session: Session, order: CloudOrderRecord, instance: Any) -> None:
+def _auto_connect_provisioned_target(
+    session: Session,
+    settings: Settings,
+    order: CloudOrderRecord,
+    instance: Any,
+    target: TargetRecord,
+    credentials: CloudSshCredentials,
+) -> None:
+    endpoint = instance.public_ip or instance.private_ip
+    if not endpoint:
+        target.inventory_json = {**target.inventory_json, "autoSsh": {"status": "waiting_endpoint"}}
+        return
+    request = ConnectExternalTargetRequest(
+        endpoint=endpoint,
+        port=credentials.port,
+        username=credentials.username,
+        auth_method=credentials.auth_method,
+        password=credentials.password,
+        private_key=credentials.private_key,
+        passphrase=credentials.passphrase,
+        deploy_worker=True,
+    )
+    try:
+        refreshed = connect_existing_target(session, target, request)
+        deployment = deploy_remote_worker(request, refreshed, settings)
+        host_key = str(refreshed.fingerprint_json.get("host_key_sha256") or "")
+        remembered = False
+        if credentials.remember_credentials:
+            remembered = EncryptedSshCredentialStore(settings).save(refreshed.id, request, host_key)
+        refreshed.status = "available"
+        refreshed.runnable = True
+        refreshed.inventory_json = {
+            **refreshed.inventory_json,
+            "autoSsh": {"status": "connected", "deployment": deployment.get("status", "deployed")},
+        }
+        refreshed.snapshot_digest = canonical_digest(
+            {"fingerprint": refreshed.fingerprint_json, "inventory": refreshed.inventory_json}
+        )
+        refreshed.updated_at = utc_now()
+        append_event(
+            session,
+            experiment_id=None,
+            event_type="cloud.target.auto_connected",
+            entity_type="target",
+            entity_id=refreshed.id,
+            idempotency_key=f"cloud-target-auto-connected:{order.id}:{refreshed.id}",
+            payload={"orderId": order.id, "credentialsRemembered": remembered},
+        )
+    except Exception as error:
+        target.inventory_json = {
+            **target.inventory_json,
+            "autoSsh": {"status": "failed", "message": str(error)},
+        }
+        target.snapshot_digest = canonical_digest(
+            {"fingerprint": target.fingerprint_json, "inventory": target.inventory_json}
+        )
+        target.updated_at = utc_now()
+        append_event(
+            session,
+            experiment_id=None,
+            event_type="cloud.target.auto_connect_failed",
+            entity_type="target",
+            entity_id=target.id,
+            idempotency_key=f"cloud-target-auto-connect-failed:{order.id}:{target.id}",
+            payload={"orderId": order.id, "message": str(error)},
+        )
+
+
+def _upsert_provisioned_target(
+    session: Session,
+    order: CloudOrderRecord,
+    instance: Any,
+    *,
+    settings: Settings | None = None,
+    credentials: CloudSshCredentials | None = None,
+) -> None:
     target_id = cloud_target_id(order.provider, instance.region, instance.id)
     record = session.get(TargetRecord, target_id)
     if record is None:
@@ -942,6 +1021,12 @@ def _upsert_provisioned_target(session: Session, order: CloudOrderRecord, instan
         "order_id": order.id,
         "provider_instance_id": instance.id,
         "region": instance.region,
+        "instance_type": order.spec_json.get("instance_type"),
+        "image_id": order.spec_json.get("image_id"),
+        "cpu": order.spec_json.get("cpu"),
+        "memory_gib": order.spec_json.get("memory_gib"),
+        "key_pair_id": order.spec_json.get("key_pair_id"),
+        "public_ip_requested": order.spec_json.get("public_ip", False),
         "zone": instance.zone,
         "status": instance.status,
         "private_ip": instance.private_ip,
@@ -955,6 +1040,8 @@ def _upsert_provisioned_target(session: Session, order: CloudOrderRecord, instan
         "zone": instance.zone,
         "instance_id": instance.id,
         "instance_type": order.spec_json["instance_type"],
+        "cpu": order.spec_json.get("cpu"),
+        "memory_gib": order.spec_json.get("memory_gib"),
         "image_id": order.spec_json["image_id"],
     }
     values = {
@@ -981,6 +1068,10 @@ def _upsert_provisioned_target(session: Session, order: CloudOrderRecord, instan
     else:
         for field, value in values.items():
             setattr(record, field, value)
+    session.flush()
+    record = session.get(TargetRecord, target_id)
+    if record is not None and settings is not None and credentials is not None:
+        _auto_connect_provisioned_target(session, settings, order, instance, record, credentials)
 
 
 def confirm_order(
@@ -989,6 +1080,7 @@ def confirm_order(
     registry: CloudProviderRegistry,
     order_id: str,
     request: OrderConfirmRequest,
+    ssh_credentials: CloudSshCredentials | None = None,
 ) -> dict[str, Any]:
     order = session.get(CloudOrderRecord, order_id)
     if order is None:
@@ -1186,7 +1278,9 @@ def confirm_order(
     order.error_message = None
     order.updated_at = utc_now()
     for instance in result.instances:
-        _upsert_provisioned_target(session, order, instance)
+        _upsert_provisioned_target(
+            session, order, instance, settings=settings, credentials=ssh_credentials
+        )
     append_event(
         session,
         experiment_id=None,
@@ -1209,6 +1303,7 @@ def purchase_quote(
     registry: CloudProviderRegistry,
     quote_id: str,
     idempotency_key: str,
+    ssh_credentials: CloudSshCredentials | None = None,
 ) -> dict[str, Any]:
     """Purchase an exact quote in one user action.
 
@@ -1226,7 +1321,9 @@ def purchase_quote(
         expectedHourlyAmount=Decimal(str(prepared["hourlyAmount"])),
     )
     try:
-        return confirm_order(session, settings, registry, str(prepared["id"]), request)
+        return confirm_order(
+            session, settings, registry, str(prepared["id"]), request, ssh_credentials
+        )
     except CloudWorkflowError:
         # Once provider submission has been attempted, return the persisted
         # order so the one-click flow always lands on an auditable result page.

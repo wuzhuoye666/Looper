@@ -513,6 +513,62 @@ def connect_external_target(
     return record
 
 
+def connect_existing_target(
+    session: Session,
+    target: TargetRecord,
+    request: ConnectExternalTargetRequest,
+    probe: Callable[[ConnectExternalTargetRequest], DiscoveredExternalTarget] = probe_ssh_target,
+) -> TargetRecord:
+    """Probe SSH and merge verified machine facts into an existing target."""
+
+    endpoint = validate_endpoint(request.endpoint)
+    if endpoint is None:
+        raise ExternalTargetError("endpoint must be a valid IPv4, IPv6 address or hostname")
+    if target.lifecycle_status != "active":
+        raise ExternalTargetError("target is not active")
+
+    discovered = probe(request)
+    now = utc_now()
+    target.inventory_json = {
+        **target.inventory_json,
+        "source": "ssh-discovery",
+        "endpoint": endpoint,
+        "port": request.port,
+        "username": request.username.strip(),
+        "auth_method": request.auth_method,
+        "architecture": discovered.architecture,
+        "host_key_sha256": discovered.host_key_sha256,
+        "host_key_type": discovered.host_key_type,
+        "instance_state": "RUNNING",
+    }
+    target.fingerprint_json = {
+        **target.fingerprint_json,
+        "system": discovered.operating_system,
+        "release": discovered.kernel,
+        "processor": discovered.processor,
+        "logical_cpu_count": discovered.logical_cpu_count,
+        "memory_gib": discovered.memory_gib,
+        "architecture": discovered.architecture,
+        "host_key_sha256": discovered.host_key_sha256,
+        "host_key_type": discovered.host_key_type,
+    }
+    target.snapshot_digest = canonical_digest(
+        {
+            "provider": target.provider,
+            "capabilities": target.capabilities_json,
+            "fingerprint": target.fingerprint_json,
+            "inventory": target.inventory_json,
+        }
+    )
+    target.status = "inventory-only"
+    target.runnable = False
+    target.last_inventory_seen_at = now
+    target.inventory_missing_since = None
+    target.inventory_miss_count = 0
+    target.updated_at = now
+    return target
+
+
 def external_targets(session: Session) -> list[TargetRecord]:
     return list(
         session.scalars(

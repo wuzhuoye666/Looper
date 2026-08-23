@@ -3,22 +3,48 @@ kind: Benchmark
 metadata:
   id: dcperf.mediawiki.closed-loop
   name: DCPerf MediaWiki Closed-Loop
-  version: 2026.08-pilot1
-  description: Single-VM closed-loop full-stack capacity for concrete server SKU comparison.
+  version: 2026.08-pilot2
+  description: Pinned single-node DCPerf MediaWiki closed-loop capacity workload with managed Ubuntu 22.04 provisioning and native Benchpress evidence.
   license: MIT
   source:
     url: https://github.com/facebookresearch/DCPerf
     commit: 9308c3e3c404e0466f0a2929f15ddcf62b2215f6
-    digest: null
 spec:
-  trust: untrusted
-  capabilities:
-    - linux
-    - x86_64
-    - container
-    - dcperf
-    - systemd
-  parameters: {}
+  trust: trusted
+  capabilities: [linux, x86_64, python, local-process, dcperf-mediawiki, systemd, ubuntu-22.04, root, perf]
+  parameters:
+    duration_seconds:
+      type: integer
+      minimum: 45
+      maximum: 3600
+      step: 15
+      default: 600
+      description: Native wrk measurement duration in seconds.
+    timeout_seconds:
+      type: integer
+      minimum: 46
+      maximum: 7200
+      step: 15
+      default: 660
+      description: Client deadline passed to the patched oss-performance workload.
+    scale_out:
+      type: integer
+      minimum: 1
+      maximum: 8
+      step: 1
+      default: 1
+      description: Number of co-located HHVM instances.
+    client_threads:
+      type: integer
+      minimum: 1
+      maximum: 4096
+      step: 1
+      default: 16
+      description: wrk client threads; default follows the pinned 2x logical-CPU rule for the registered target.
+    profile:
+      type: boolean
+      default: true
+      description: Enable the pinned DCPerf perf-record hook.
   workloads:
     - id: oss_performance_mediawiki_mlp
       name: MediaWiki MLP with wrk
@@ -28,29 +54,34 @@ spec:
         duration: 10m
         scale_out: 1
         client_threads_formula: 2x-logical-cpus
+        native_reporter: Benchpress JSON reporter
   scenario:
     id: web.mediawiki.closed-loop
-    name: MediaWiki single-VM closed-loop capacity
+    name: MediaWiki single-node closed-loop capacity
     decision_question: How many successful full-stack MediaWiki requests can each concrete target SKU complete when every workload component shares one VM?
-    user_value: Check whether a target remains competitive under a production-inspired Web stack while disclosing that client work is included.
+    user_value: Compare target SKUs under a production-inspired Web stack while disclosing that the load generator and services share one host.
     workload_class: web-full-stack
     topology: closed-loop
     roles:
       - id: target
         kind: target
         included_in_score: true
+        description: Host CPU and memory under test.
       - id: load-generator
         kind: load-generator
         co_located_with: target
         included_in_score: true
+        description: Pinned wrk client included in the closed-loop score.
       - id: web-service
         kind: service
         co_located_with: target
         included_in_score: true
+        description: nginx and HHVM serving the bundled MediaWiki workload.
       - id: database
         kind: database
         co_located_with: target
         included_in_score: true
+        description: MariaDB and memcached state.
     primary_metric: closed_loop_successful_rps
     slo_gates:
       - id: request-accounting
@@ -60,6 +91,15 @@ spec:
         operator: lt
         threshold: 0.01
         hard: true
+        message: Failed requests must stay below one percent.
+      - id: timeout-budget
+        kind: slo
+        scope: block
+        metric: timeout_ratio
+        operator: lte
+        threshold: 0.001
+        hard: true
+        message: Timeout requests must remain within the closed-loop budget.
       - id: cpu-saturation
         kind: resource
         scope: block
@@ -67,6 +107,7 @@ spec:
         operator: gte
         threshold: 90
         hard: true
+        message: The target must reach the DCPerf saturation floor.
     goodput:
       metric: closed_loop_successful_rps
       unit: requests/second
@@ -93,29 +134,79 @@ spec:
         requirements:
           osFamilies: [linux]
           architectures: [x86_64]
-          capabilities: [dcperf, systemd]
+          capabilities: [dcperf-mediawiki, systemd, ubuntu-22.04]
           privileges: [root, perf, systemd]
           software:
             - name: python
-              versionConstraint: ">=3.7"
+              versionConstraint: ">=3.10"
         placement:
           sameZone: true
           dedicated: true
+  adapter:
+    protocol: looper-adapter/v1
+    executionModel: service-stack
+    primaryMetric: closed_loop_successful_rps
+    requiredChecks: [native-identity, request-accounting, failure-budget, timeout-budget, tail-sample-count, cpu-saturation]
+    inputs: []
+    canonicalOutputs:
+      metrics: metrics.jsonl
+      result: result.json
   runtime:
-    type: container
-    image: null
-    engine: docker
-    networkMode: none
+    type: local-process
     workingDirectory: .
+    dependencyLockDigest: sha256:de5b6216a2a3896f288d4a5d4426ceeda8546cfed4e220f7753d7d8c0a31e4c2
+    dependencies:
+      - id: dcperf-source
+        source: https://api.github.com/repos/facebookresearch/DCPerf/tarball/9308c3e3c404e0466f0a2929f15ddcf62b2215f6
+        digest: sha256:acdc2ad0b0f03adf44bf6803abe9e7880be7c61847c7caa51c41d55a96a62371
+        license: MIT
+      - id: oss-performance-source
+        source: https://codeload.github.com/hhvm/oss-performance/tar.gz/1e0a98c987c73b4b70903469456aefdaec5ff96c
+        digest: sha256:7a2a4934b2cb56fb2827521241368734d155b7de91eced28d589fea41e532313
+        license: MIT
+      - id: hhvm-3.30
+        source: https://github.com/facebookresearch/DCPerf/releases/download/hhvm/hhvm-3.30-multplatform-binary-ubuntu.tar.xz
+        digest: sha256:2159af71df4ffaf96b5d9f63d30fd6936685558ca9546c936ccb17ad86b9e0cb
+        license: PHP-3.01
+      - id: wrk-4.2.0
+        source: https://codeload.github.com/wg/wrk/tar.gz/a211dd5a7050b1f9e8a9870b95513060e72ac4a0
+        digest: sha256:172dd2788b22b210d37a68f11c91e82fdba6583d2a544f04b398a66507031229
+        license: Apache-2.0
+      - id: memcached-1.5.12
+        source: https://codeload.github.com/memcached/memcached/tar.gz/4ba54fd8f81643ffc64bc5ba87ec5da42ea208cb
+        digest: sha256:61424866fa81e464c5652a80758c9be7311c12b88ccbc951f9b1c5be82dfc8b6
+        license: BSD-3-Clause
+      - id: composer-2.2.24
+        source: https://getcomposer.org/download/2.2.24/composer.phar
+        digest: sha256:b0c383b1f430a80a74c006f20199d1e0226848a0a90afa5c0a7d01fb90ee9075
+        license: MIT
+    provisioning:
+      mode: managed
+      hostCapabilities: [linux, x86_64, python, local-process, systemd, ubuntu-22.04, root, perf]
+      provides: [dcperf-mediawiki, hhvm-3.30, mediawiki-1.28, wrk-4.2.0, memcached-1.5.12]
+      cacheKey: sha256:de5b6216a2a3896f288d4a5d4426ceeda8546cfed4e220f7753d7d8c0a31e4c2
+      requiresNetwork: true
+      privilege: sudo
     commands:
+      prepare:
+        argv: ["{python}", "{benchmarkRoot}/prepare.py", "--benchmark-root", "{benchmarkRoot}", "--cache", "{cache}"]
+        timeoutSeconds: 21600
+        allowedExitCodes: [0]
       run:
-        argv:
-          - looper-dcperf-mediawiki
-          - --envelope
-          - "{envelope}"
-          - --output
-          - "{output}"
-        timeoutSeconds: 86400
+        argv: ["{python}", "{benchmarkRoot}/producer.py", "--envelope", "{envelope}", "--output", "{output}", "--cache", "{cache}"]
+        timeoutSeconds: 7500
+        allowedExitCodes: [0]
+      normalize:
+        argv: ["{python}", "{benchmarkRoot}/normalizer.py", "--envelope", "{envelope}", "--output", "{output}"]
+        timeoutSeconds: 120
+        allowedExitCodes: [0]
+      validate:
+        argv: ["{python}", "{benchmarkRoot}/validate.py", "--output", "{output}"]
+        timeoutSeconds: 120
+        allowedExitCodes: [0]
+      cleanup:
+        argv: ["{python}", "{benchmarkRoot}/cleanup.py", "--cache", "{cache}", "--output", "{output}"]
+        timeoutSeconds: 300
         allowedExitCodes: [0]
   metrics:
     closed_loop_successful_rps:
@@ -124,9 +215,10 @@ spec:
       kind: aggregate
       required: true
       minimumSamples: 1
+      description: Successful full-stack requests per second, excluding failed and timed-out requests.
       presentation:
         userLabel: 成功请求率
-        userDescription: 每秒成功完成的全栈请求数，是用户关心的主结果，仅计入 committed goodput。
+        userDescription: 每秒成功完成的全栈 MediaWiki 请求数，是本套件的主结果。
         roles: [primary_outcome]
         defaultVisibility: summary
         displayFormat: throughput
@@ -137,9 +229,10 @@ spec:
       kind: aggregate
       required: true
       minimumSamples: 1
+      description: Request rate reported by the native wrk reporter.
       presentation:
         userLabel: 客户端施加速率
-        userDescription: 负载生成器 wrk 实际发出的请求速率，是测试条件的上下文，不代表已完成业务。
+        userDescription: wrk 实际施加的请求速率，用于解释负载条件。
         roles: [context]
         defaultVisibility: detail
         displayFormat: throughput
@@ -150,21 +243,24 @@ spec:
       kind: counter
       required: true
       minimumSamples: 1
+      description: Successful requests committed during the native measurement window.
       presentation:
         userLabel: 成功请求数
-        userDescription: 测量窗口内成功完成的请求总数，是主结果的累计口径。
+        userDescription: 测量窗口内成功完成的请求总数。
         roles: [context]
         defaultVisibility: expert
         displayFormat: number
+        displayPrecision: 0
     failed_request_ratio:
       unit: ratio
       direction: minimize
       kind: aggregate
       required: true
       minimumSamples: 1
+      description: Failed requests divided by all wrk requests.
       presentation:
         userLabel: 失败请求率
-        userDescription: 失败请求占比，超过请求结算门限即不可接受。
+        userDescription: 失败请求占比，超过百分之一即使本次结果无效。
         roles: [hard_gate]
         defaultVisibility: detail
         displayFormat: number
@@ -175,10 +271,11 @@ spec:
       kind: aggregate
       required: true
       minimumSamples: 1
+      description: Non-timeout errors divided by all wrk requests.
       presentation:
         userLabel: 错误率
-        userDescription: 出错请求占比，超过门限即不可接受。
-        roles: [hard_gate]
+        userDescription: 排除超时后的错误请求占比。
+        roles: [diagnostic]
         defaultVisibility: detail
         displayFormat: number
         displayPrecision: 4
@@ -188,21 +285,24 @@ spec:
       kind: counter
       required: true
       minimumSamples: 1
+      description: Timeout requests accounted for through native Nginx 499 metrics.
       presentation:
         userLabel: 超时请求数
-        userDescription: 超时请求总数，用于定位容量下降原因。
+        userDescription: 超时请求总数。
         roles: [diagnostic]
         defaultVisibility: expert
         displayFormat: number
+        displayPrecision: 0
     timeout_ratio:
       unit: ratio
       direction: minimize
       kind: aggregate
       required: true
       minimumSamples: 1
+      description: Timeout requests divided by all wrk requests.
       presentation:
         userLabel: 超时率
-        userDescription: 超时请求占比，超过门限即不可接受。
+        userDescription: 超时请求占比。
         roles: [hard_gate]
         defaultVisibility: detail
         displayFormat: number
@@ -213,9 +313,10 @@ spec:
       kind: aggregate
       required: true
       minimumSamples: 100000
+      description: Native Nginx request latency P50 in milliseconds.
       presentation:
         userLabel: P50 延迟
-        userDescription: 请求延迟中位数，用于定位延迟分布。
+        userDescription: 请求延迟中位数。
         roles: [diagnostic]
         defaultVisibility: detail
         displayFormat: duration
@@ -226,9 +327,10 @@ spec:
       kind: aggregate
       required: true
       minimumSamples: 100000
+      description: Native Nginx request latency P95 in milliseconds.
       presentation:
         userLabel: P95 延迟
-        userDescription: 请求延迟 P95，是尾延迟保护指标。
+        userDescription: 请求尾延迟 P95。
         roles: [guardrail]
         defaultVisibility: detail
         displayFormat: duration
@@ -239,9 +341,10 @@ spec:
       kind: aggregate
       required: true
       minimumSamples: 100000
+      description: Native Nginx request latency P99 in milliseconds.
       presentation:
         userLabel: P99 延迟
-        userDescription: 请求延迟 P99，是尾延迟保护与 SLO 判定关键指标。
+        userDescription: 请求尾延迟 P99。
         roles: [guardrail]
         defaultVisibility: detail
         displayFormat: duration
@@ -252,41 +355,64 @@ spec:
       kind: aggregate
       required: true
       minimumSamples: 1
+      description: Host aggregate CPU utilization P95 during the native run.
       presentation:
         userLabel: CPU 利用率 P95
-        userDescription: 目标机 CPU 利用率 P95，用于诊断是否资源饱和，也是资源门禁的观察对象。
-        roles: [diagnostic]
+        userDescription: 确认测试达到 DCPerf 资源饱和条件。
+        roles: [hard_gate]
         defaultVisibility: detail
         displayFormat: percent
         displayPrecision: 1
   outputs:
     maxBytes: 5368709120
-    maxMetricLines: 1000000
+    maxMetricLines: 100
     artifacts:
-      - path: normalized-result.json
-        role: result
+      - path: benchpress-result.json
+        role: raw-result
         mediaType: application/json
         required: true
-      - path: benchpress-result.json
-        role: result
+      - path: native-result-enriched.json
+        role: raw-result
+        mediaType: application/json
+        required: true
+      - path: native-system-specs.json
+        role: raw-result
+        mediaType: application/json
+        required: true
+      - path: native-run.json
+        role: raw-result
         mediaType: application/json
         required: true
       - path: benchmark.log
         role: log
         mediaType: text/plain
         required: true
+      - path: profile-status.txt
+        role: profile
+        mediaType: text/plain
+        required: true
+      - path: perf-record.log
+        role: profile
+        mediaType: text/plain
+        required: false
+      - path: perf.data
+        role: profile
+        mediaType: application/octet-stream
+        required: false
+      - path: result.json
+        role: result
+        mediaType: application/json
+        required: true
   audit:
     minimumRepeats: 5
-    referencePolicy: required
-    environmentAxes: [machine, day]
+    referencePolicy: recommended
+    environmentAxes: [machine, day, runtime]
     requiredEvidence: [system-fingerprint, raw-result, profile, log]
   x-extensions:
     bootstrapCatalog: true
-    executionStatus: stage0-adapter-only
-    adapterPath: adapters/dcperf-mediawiki
+    executionStatus: executable
+    sourceLock: source-lock.json
     includesClientWork: true
-    runtimeNormalizer:
-      type: built-in
-      id: dcperf-mediawiki-v1
-    runtimeImageLock: runtimes/images.lock.yaml
-    executionBlocker: target-host appliance with systemd and audited install state required
+    supportedHost: Ubuntu 22.04 x86_64 with systemd and root privileges
+    unsupportedHostReason: The pinned HHVM 3.30 appliance is not supported on Ubuntu 24.04 or other distributions; prepare.py rejects them before installation.
+    nativeSourceArchive: dependency-lock.json

@@ -28,6 +28,7 @@ export interface Experiment {
   benchmarkId?: string; benchmarkName?: string; progress?: number; bestScore?: number; baselineScore?: number;
   createdAt?: string; updatedAt?: string; owner?: string; attempts?: number; maxAttempts?: number;
   objective?: string; decisionQuestion?: string; scenario?: ScenarioContract; comparison?: SelectionComparison;
+  metricDefinitions?: Record<string, MetricDefinition>;
   config?: Record<string, unknown>; evaluations?: Evaluation[]; artifacts?: Artifact[];
   activePhase?: string; activePhaseDetail?: string;
 }
@@ -108,7 +109,7 @@ export interface BenchmarkRegistration {
   packageDigest?: string; packageReady?: boolean; benchmarkKey?: string; createdAt: string; updatedAt: string; registeredAt?: string;
 }
 export interface Target {
-  id: string; name: string; type?: string; endpoint?: string;
+  id: string; name: string; type?: string; provider?: string; orderId?: string; endpoint?: string;
   status?: 'online' | 'offline' | 'degraded' | 'unknown' | 'inventory';
   lifecycleStatus?: 'active' | 'missing' | 'archived'; framework?: string; version?: string;
   hardware?: string; lastSeenAt?: string; lastInventorySeenAt?: string; missingSince?: string;
@@ -118,7 +119,7 @@ export interface Target {
   deployment?: { active?: boolean; status?: string; workerId?: string; remotePid?: number; remotePort?: number; transport?: string; restartSafe?: boolean; deployedAt?: string };
   connectionTest?: { status: 'connected'; testedAt: string; hostKeySha256?: string };
   fingerprint?: {
-    processor?: string; logical_cpu_count?: number; memory_gib?: number; instance_type?: string;
+    processor?: string; logical_cpu_count?: number; memory_gib?: number; instance_type?: string; region?: string;
     system?: string; release?: string; architecture?: string; host_key_sha256?: string; host_key_type?: string;
   };
 }

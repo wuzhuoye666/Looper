@@ -4,21 +4,28 @@ import argparse
 import json
 from pathlib import Path
 
-from looper_benchmark_sdk import load_envelope
-
 
 def main() -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--envelope", required=True)
-    parser.add_argument("--output", required=True)
+    parser = argparse.ArgumentParser(description="Produce the native config-driven fixture result")
+    parser.add_argument("--envelope", required=True, type=Path)
+    parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()
-    envelope = load_envelope(args.envelope)
-    scale = int(envelope["candidate"]["parameters"].get("scale", 1))
-    items = int(envelope["workload"]["metadata"]["items"])
-    output = Path(args.output)
-    output.mkdir(parents=True, exist_ok=True)
-    (output / "raw-result.json").write_text(
-        json.dumps({"processedItems": items * scale, "valid": True}),
+
+    envelope = json.loads(args.envelope.read_text(encoding="utf-8"))
+    workload = envelope["workload"]
+    items = int(workload["metadata"]["items"])
+    scale = int(envelope["candidate"]["parameters"]["scale"])
+    native = {
+        "schemaVersion": "looper.fixture-native/v1",
+        "workload": workload["id"],
+        "processedItems": items * scale,
+        "scale": scale,
+        "valid": True,
+    }
+
+    args.output.mkdir(parents=True, exist_ok=True)
+    (args.output / "raw-result.json").write_text(
+        json.dumps(native, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
     return 0

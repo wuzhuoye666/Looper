@@ -1,0 +1,8 @@
+{
+  "schemaVersion": "looper.dependency-lock/v1",
+  "runtime": {
+    "python": ">=3.11",
+    "standardLibrary": ["argparse", "hashlib", "json", "pathlib", "random", "statistics", "time", "zlib"]
+  },
+  "dependencies": []
+}

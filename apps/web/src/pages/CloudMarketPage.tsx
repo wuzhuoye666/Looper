@@ -20,6 +20,7 @@ import {
   Sparkles,
   Terminal,
   XCircle,
+  Upload,
 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -45,7 +46,11 @@ const providerLabels: Record<CloudProviderId, string> = {
 const kindLabels = { 'instance-type': '机型', image: '镜像' } as const;
 type CatalogKind = keyof typeof kindLabels;
 type NetworkMode = 'catalog' | 'manual';
+type PurchaseAuthMethod = 'password' | 'private-key';
 const CATALOG_PAGE_SIZE = 20;
+const DEFAULT_INSTANCE_NAME = 'looper-instance';
+const DEFAULT_SYSTEM_DISK_GIB = 50;
+const DEFAULT_PUBLIC_BANDWIDTH_MBPS = 1;
 
 function key() {
   return `looper-${Date.now()}-${window.crypto?.randomUUID?.() || Math.random().toString(36).slice(2)}`;
@@ -73,7 +78,10 @@ export function CloudMarketPage() {
   const [minMemory, setMinMemory] = useState(0);
   const [selectedType, setSelectedType] = useState<CloudInstanceType | null>(null);
   const [selectedImage, setSelectedImage] = useState<CloudImage | null>(null);
-  const [name, setName] = useState('looper-instance');
+  const [defaultTypeId, setDefaultTypeId] = useState('');
+  const [defaultImageId, setDefaultImageId] = useState('');
+  const [suppressTypeDefault, setSuppressTypeDefault] = useState(false);
+  const [name, setName] = useState(DEFAULT_INSTANCE_NAME);
   const [networkMode, setNetworkMode] = useState<NetworkMode>('catalog');
   const [vpcId, setVpcId] = useState('');
   const [subnetId, setSubnetId] = useState('');
@@ -83,9 +91,16 @@ export function CloudMarketPage() {
   const [manualSubnetId, setManualSubnetId] = useState('');
   const [manualSecurityGroups, setManualSecurityGroups] = useState('');
   const [manualKeyPairId, setManualKeyPairId] = useState('');
-  const [disk, setDisk] = useState(50);
+  const [disk, setDisk] = useState(DEFAULT_SYSTEM_DISK_GIB);
   const [publicIp, setPublicIp] = useState(false);
   const [bandwidth, setBandwidth] = useState(0);
+  const [sshUsername, setSshUsername] = useState('root');
+  const [sshAuthMethod, setSshAuthMethod] = useState<PurchaseAuthMethod>('private-key');
+  const [sshPassword, setSshPassword] = useState('');
+  const [sshPrivateKey, setSshPrivateKey] = useState('');
+  const [sshPassphrase, setSshPassphrase] = useState('');
+  const [rememberSshCredentials, setRememberSshCredentials] = useState(true);
+  const [sshKeyFileName, setSshKeyFileName] = useState('');
   const [quote, setQuote] = useState<CloudQuote | null>(null);
   const [quoteSignature, setQuoteSignature] = useState('');
   const currentSpecSignature = useRef('');
@@ -134,6 +149,12 @@ export function CloudMarketPage() {
     enabled: !!region && !!providerInfo?.credentialsConfigured && !(selectionAdvisorSupported && advisorOpen && kind === 'instance-type'),
     staleTime: 30_000,
   });
+  const defaultImages = useQuery({
+    queryKey: ['cloud-default-images', provider, region],
+    queryFn: () => api.images(provider, { region, limit: 80 }),
+    enabled: !!region && !!providerInfo?.credentialsConfigured,
+    staleTime: 30_000,
+  });
   const vpcs = useQuery({
     queryKey: ['cloud-vpcs', provider, region],
     queryFn: () => api.vpcs(provider, region),
@@ -179,8 +200,11 @@ export function CloudMarketPage() {
     },
   });
   const purchaseMutation = useMutation({
-    mutationFn: (quoteId: string) => api.purchaseQuote(quoteId, orderKey.current),
-    onSuccess: order => navigate(`/cloud/orders/${order.id}`, { state: order }),
+    mutationFn: (request: { quoteId: string; credentials: { username: string; port: number; authMethod: PurchaseAuthMethod; password?: string; privateKey?: string; passphrase?: string; rememberCredentials: boolean } }) => api.purchaseQuote(request.quoteId, orderKey.current, { sshCredentials: request.credentials }),
+    onSuccess: order => {
+      void queryClient.invalidateQueries({ queryKey: ['targets'] });
+      navigate(`/cloud/orders/${order.id}`, { state: order });
+    },
   });
   const managedGroupMutation = useMutation({
     mutationFn: () => api.ensureManagedSecurityGroup(provider, region),
@@ -200,21 +224,29 @@ export function CloudMarketPage() {
     setZone('');
     setSelectedType(null);
     setSelectedImage(null);
+    setDefaultTypeId('');
+    setDefaultImageId('');
+    setSuppressTypeDefault(false);
     setNetworkMode(provider === 'tencent' ? 'catalog' : 'manual');
     setVpcId('');
     setSubnetId('');
     setSecurityGroupIds([]);
     setKeyPairId('');
-    setPublicIp(false);
+    setPublicIp(publicIpSupported);
+    setDisk(DEFAULT_SYSTEM_DISK_GIB);
+    setBandwidth(DEFAULT_PUBLIC_BANDWIDTH_MBPS);
     setQuote(null);
     setQuoteSignature('');
     quoteKey.current = key();
     orderKey.current = key();
-  }, [provider]);
+  }, [provider, publicIpSupported]);
   useEffect(() => {
     setZone('');
     setSelectedType(null);
     setSelectedImage(null);
+    setDefaultTypeId('');
+    setDefaultImageId('');
+    setSuppressTypeDefault(false);
     setVpcId('');
     setSubnetId('');
     setSecurityGroupIds([]);
@@ -227,10 +259,45 @@ export function CloudMarketPage() {
   useEffect(() => {
     setSubnetId('');
     setSelectedType(null);
+    setDefaultTypeId('');
+    setSuppressTypeDefault(false);
   }, [zone]);
   useEffect(() => {
     setSubnetId('');
   }, [vpcId]);
+
+  useEffect(() => {
+    const options = regions.data?.items;
+    if (!options || region) return;
+    const preferred = options.find(item => item.available !== false) || options[0];
+    if (preferred) setRegion(preferred.id);
+  }, [regions.data?.items, region]);
+
+  useEffect(() => {
+    const options = zones.data?.items;
+    if (!options || zone) return;
+    const preferred = options.find(item => item.available !== false) || options[0];
+    if (preferred) setZone(preferred.id);
+  }, [zones.data?.items, zone]);
+
+  useEffect(() => {
+    if (kind !== 'instance-type' || advisorOpen || suppressTypeDefault || selectedType || !items.length) return;
+    const preferred = (items as CloudInstanceType[]).find(item => item.available !== false && item.attributes?.purchaseCompatible !== false);
+    if (preferred) {
+      setSelectedType(preferred);
+      setDefaultTypeId(preferred.id);
+    }
+  }, [advisorOpen, items, kind, selectedType, suppressTypeDefault]);
+
+  useEffect(() => {
+    const imageItems = kind === 'image' ? (items as CloudImage[]) : defaultImages.data?.items || [];
+    if (selectedImage || !imageItems.length) return;
+    const preferred = imageItems.find(item => item.available !== false);
+    if (preferred) {
+      setSelectedImage(preferred);
+      setDefaultImageId(preferred.id);
+    }
+  }, [defaultImages.data?.items, items, kind, selectedImage]);
 
   useEffect(() => {
     const options = vpcs.data?.items;
@@ -262,7 +329,9 @@ export function CloudMarketPage() {
   }, [securityGroups.data?.items, securityGroupIds]);
   useEffect(() => {
     const options = keyPairs.data?.items;
-    if (keyPairId && options && !options.some(item => item.id === keyPairId)) setKeyPairId('');
+    if (!options) return;
+    if (keyPairId && options.some(item => item.id === keyPairId)) return;
+    setKeyPairId(options[0]?.id || '');
   }, [keyPairs.data?.items, keyPairId]);
 
   const minimumSystemDiskGib = Math.max(20, Math.ceil(selectedImage?.sizeGib || 20));
@@ -277,7 +346,7 @@ export function CloudMarketPage() {
     : parseIds(manualSecurityGroups);
   const effectiveKeyPairId = networkMode === 'catalog' ? keyPairId : manualKeyPairId.trim();
   const spec = useMemo<CloudPurchaseSpec | null>(() => {
-    if (!selectedType || !selectedImage || !region || !zone || !effectiveVpcId || !effectiveSubnetId || !effectiveSecurityGroups.length) return null;
+    if (!selectedType || !selectedImage || !region || !zone || !effectiveVpcId || !effectiveSubnetId || !effectiveSecurityGroups.length || !effectiveKeyPairId) return null;
     return {
       provider,
       region,
@@ -334,14 +403,39 @@ export function CloudMarketPage() {
   }, [items, kind, selectedType, selectedImage]);
 
   const catalogError = vpcs.error || subnets.error || securityGroups.error || keyPairs.error;
+  const sshCredentialsReady = Boolean(sshUsername.trim()) && (sshAuthMethod === 'password' ? Boolean(sshPassword) : Boolean(sshPrivateKey.trim()));
+  const purchaseCredentials = {
+    username: sshUsername.trim(),
+    port: 22,
+    authMethod: sshAuthMethod,
+    ...(sshAuthMethod === 'password' ? { password: sshPassword } : { privateKey: sshPrivateKey, ...(sshPassphrase ? { passphrase: sshPassphrase } : {}) }),
+    rememberCredentials: rememberSshCredentials,
+  };
   const hasRecommendedGroup = securityGroupItems.some(item => item.recommended);
+  const applyRecommendedDefaults = () => {
+    setName(DEFAULT_INSTANCE_NAME);
+    setNetworkMode(networkCatalogSupported ? 'catalog' : 'manual');
+    setSuppressTypeDefault(false);
+    setDisk(Math.max(DEFAULT_SYSTEM_DISK_GIB, minimumSystemDiskGib));
+    setPublicIp(publicIpSupported);
+    setBandwidth(DEFAULT_PUBLIC_BANDWIDTH_MBPS);
+    if (regions.data?.items?.length) setRegion(regions.data.items.find(item => item.available !== false)?.id || regions.data.items[0].id);
+    if (zones.data?.items?.length) setZone(zones.data.items.find(item => item.available !== false)?.id || zones.data.items[0].id);
+    const type = (items as CloudInstanceType[]).find(item => item.available !== false && item.attributes?.purchaseCompatible !== false);
+    if (kind === 'instance-type' && type) { setSelectedType(type); setDefaultTypeId(type.id); }
+    const image = (items as CloudImage[]).find(item => item.available !== false);
+    if (kind === 'image' && image) { setSelectedImage(image); setDefaultImageId(image.id); }
+  };
   const openAdvisor = () => {
     setSelectedType(null);
+    setDefaultTypeId('');
     setKind('instance-type');
     setAdvisorOpen(true);
   };
   const closeAdvisor = () => {
     setSelectedType(null);
+    setDefaultTypeId('');
+    setSuppressTypeDefault(true);
     setAdvisorOpen(false);
   };
 
@@ -372,10 +466,15 @@ export function CloudMarketPage() {
       </section>
     }
     {selectionAdvisorSupported && advisorOpen && <div id="cloud-selection-advisor" hidden={kind !== 'instance-type'}><CloudSelectionAdvisor key={provider} provider={provider} catalogAvailable={Boolean(providerInfo?.credentialsConfigured)} regions={regions.data?.items || []} zones={zones.data?.items || []} region={region} zone={zone} onRegionChange={setRegion} onZoneChange={setZone} selected={selectedType} onSelect={setSelectedType} /></div>}
-    {providerInfo?.credentialsConfigured && !(selectionAdvisorSupported && advisorOpen && kind === 'instance-type') && (catalog.isLoading ? <LoadingState /> : catalog.isError ? <ErrorState error={catalog.error} onRetry={() => catalog.refetch()} /> : items.length ? <section className="panel cloud-results"><div className="panel-heading"><div><h2>{providerLabels[provider]} · {kindLabels[kind]}</h2><p>{catalogResult?.source === 'stale-cache' ? `${catalogResult.warning} · 已显示 ${displayedCatalogCount} / ${catalogResult.total}` : `已显示 ${displayedCatalogCount} / ${catalogResult?.total || 0} 个结果`}</p></div><span className="cache-state">{catalogResult?.source === 'live' ? '实时' : '缓存'}</span></div>{kind === 'instance-type' ? <InstanceTypeTable items={items as CloudInstanceType[]} selected={selectedType} onSelect={value => setSelectedType(value)} /> : <ImageTable items={items as CloudImage[]} selected={selectedImage} onSelect={value => setSelectedImage(value)} />}{catalog.hasNextPage && <button type="button" className="button secondary catalog-load-more" disabled={catalog.isFetchingNextPage} onClick={() => catalog.fetchNextPage()}>{catalog.isFetchingNextPage ? '加载中…' : `加载更多（已显示 ${displayedCatalogCount} / ${catalogResult?.total || 0}）`}</button>}</section> : <EmptyState title="没有匹配的云资源" />)}
+    {providerInfo?.credentialsConfigured && !(selectionAdvisorSupported && advisorOpen && kind === 'instance-type') && (catalog.isLoading ? <LoadingState /> : catalog.isError ? <ErrorState error={catalog.error} onRetry={() => catalog.refetch()} /> : items.length ? <section className="panel cloud-results"><div className="panel-heading"><div><h2>{providerLabels[provider]} · {kindLabels[kind]}</h2><p>{catalogResult?.source === 'stale-cache' ? `${catalogResult.warning} · 已显示 ${displayedCatalogCount} / ${catalogResult.total}` : `已显示 ${displayedCatalogCount} / ${catalogResult?.total || 0} 个结果`}</p></div><span className="cache-state">{catalogResult?.source === 'live' ? '实时' : '缓存'}</span></div>{kind === 'instance-type' ? <InstanceTypeTable items={items as CloudInstanceType[]} selected={selectedType} defaultSelectionId={defaultTypeId} onSelect={value => { setSelectedType(value); setDefaultTypeId(''); }} /> : <ImageTable items={items as CloudImage[]} selected={selectedImage} defaultSelectionId={defaultImageId} onSelect={value => { setSelectedImage(value); setDefaultImageId(''); }} />}{catalog.hasNextPage && <button type="button" className="button secondary catalog-load-more" disabled={catalog.isFetchingNextPage} onClick={() => catalog.fetchNextPage()}>{catalog.isFetchingNextPage ? '加载中…' : `加载更多（已显示 ${displayedCatalogCount} / ${catalogResult?.total || 0}）`}</button>}</section> : <EmptyState title="没有匹配的云资源" />)}
 
     <section className="panel launch-panel">
       <div className="panel-heading"><div><h2>购买草稿</h2><p>仅按量付费；点击购买后，服务端会自动重验价格、库存和金额上限。</p></div><ShieldCheck size={20} /></div>
+      <div className={`quick-create-banner ${spec ? 'ready' : ''}`}>
+        <span className="quick-create-icon"><Sparkles size={17} /></span>
+        <div><strong>{spec ? '推荐配置已就绪，可以直接询价' : '推荐配置正在自动填充'}</strong><p>默认 1 台 · 按量付费 · {DEFAULT_SYSTEM_DISK_GIB} GiB 系统盘 · 自动申请公网 IP（{DEFAULT_PUBLIC_BANDWIDTH_MBPS} Mbps），购买后便于平台直接 SSH 接入。</p></div>
+        <button type="button" className="button secondary compact-button" onClick={applyRecommendedDefaults}><RefreshCw size={13} />恢复推荐</button>
+      </div>
       <div className="form-grid cloud-form">
         <label><span>实例名称 *</span><input value={name} onChange={event => setName(event.target.value)} /></label>
         <div className="network-mode-row full">
@@ -400,23 +499,34 @@ export function CloudMarketPage() {
             </details>
             {!hasRecommendedGroup && region && operatorAccessReady && <button type="button" className="button secondary compact-button managed-group-button" disabled={managedGroupMutation.isPending} onClick={() => managedGroupMutation.mutate()}><Plus size={14} />{managedGroupMutation.isPending ? '创建中…' : '创建 Looper 安全组'}</button>}
           </div>
-          <label><span>SSH 密钥</span><select id="launch-key-pair" value={keyPairId} disabled={!networkQueriesEnabled || !region || keyPairs.isLoading} onChange={event => setKeyPairId(event.target.value)}><option value="">不设置 SSH 密钥</option>{keyPairs.data?.items.map(item => <option key={item.id} value={item.id}>{item.name} · {item.id}</option>)}</select><small>可选；存在多个密钥时不会自动选择。</small></label>
+          <label><span>SSH 密钥 *</span><select id="launch-key-pair" value={keyPairId} disabled={!networkQueriesEnabled || !region || keyPairs.isLoading} onChange={event => setKeyPairId(event.target.value)}><option value="">{keyPairs.isLoading ? '正在读取 SSH 密钥…' : keyPairs.data?.items.length ? '选择 SSH 密钥' : '未找到 SSH 密钥'}</option>{keyPairs.data?.items.map(item => <option key={item.id} value={item.id}>{item.name} · {item.id}</option>)}</select><small>{keyPairs.data?.items.length ? '已自动选择第一把密钥；购买后请在订单详情配置对应私钥。' : '当前地域没有云端密钥，不能购买无法被 Looper 接入的机器。请先在云厂商控制台创建密钥后刷新目录。'}</small></label>
           {catalogError && <div className="network-catalog-error full"><AlertTriangle size={16} /><span>云网络目录读取失败。</span><button type="button" onClick={() => setNetworkMode('manual')}>改用手动 ID</button></div>}
           {managedGroupMutation.isError && <div className="inline-error full">{managedGroupMutation.error instanceof Error ? managedGroupMutation.error.message : '安全组创建失败'}</div>}
         </> : <>
           <label><span>VPC ID *</span><input value={manualVpcId} onChange={event => setManualVpcId(event.target.value)} placeholder="vpc-..." /></label>
           <label><span>子网 / vSwitch ID *</span><input value={manualSubnetId} onChange={event => setManualSubnetId(event.target.value)} placeholder="subnet-..." /></label>
           <label><span>安全组 ID *</span><input value={manualSecurityGroups} onChange={event => setManualSecurityGroups(event.target.value)} placeholder="最多 5 个，用逗号分隔" /></label>
-          <label><span>SSH 密钥 ID</span><input value={manualKeyPairId} onChange={event => setManualKeyPairId(event.target.value)} placeholder="可选" /></label>
+          <label><span>SSH 密钥 ID *</span><input required value={manualKeyPairId} onChange={event => setManualKeyPairId(event.target.value)} placeholder="云厂商中已存在的密钥 ID" /><small>必须使用已导入云厂商的公钥；购买后在订单详情提供对应私钥。</small></label>
         </>}
 
+        <div className="ssh-credentials-panel full">
+          <div className="ssh-credentials-heading"><div><strong>购买后自动接入 SSH</strong><small>平台会用这组凭据读取机器参数、部署 Worker；是否保存到本机加密凭据仓库由下方开关决定。密码和私钥不会写入订单数据库。</small></div><LockKeyhole size={17} /></div>
+          <div className="form-grid ssh-credentials-grid">
+            <label><span>SSH 用户名 *</span><input value={sshUsername} onChange={event => setSshUsername(event.target.value)} placeholder="root 或 ubuntu" /></label>
+            <label><span>SSH 端口 *</span><input value="22" readOnly /></label>
+            <label><span>认证方式 *</span><select value={sshAuthMethod} onChange={event => setSshAuthMethod(event.target.value as PurchaseAuthMethod)}><option value="private-key">SSH 私钥</option><option value="password">SSH 密码</option></select></label>
+            {sshAuthMethod === 'password' ? <label><span>SSH 密码 *</span><input type="password" value={sshPassword} onChange={event => setSshPassword(event.target.value)} autoComplete="new-password" /></label> : <label className="full"><span>SSH 私钥文件 *</span><div className="ssh-key-file-picker"><input type="file" accept=".pem,.key,.pub,application/x-pem-file,text/plain" onChange={async event => { const file = event.target.files?.[0]; if (!file) return; setSshPrivateKey(await file.text()); setSshKeyFileName(file.name); }} /><span>{sshKeyFileName || '请选择 .pem 或 .key 文件'}</span><Upload size={15} /></div><small>平台只读取文件内容用于本次 SSH 连接，不会上传原始文件路径。</small></label>}
+            {sshAuthMethod === 'private-key' && <label><span>私钥口令</span><input type="password" value={sshPassphrase} onChange={event => setSshPassphrase(event.target.value)} autoComplete="new-password" placeholder="没有则留空" /></label>}
+            <label className="checkbox-field ssh-save-field full"><input type="checkbox" checked={rememberSshCredentials} onChange={event => setRememberSshCredentials(event.target.checked)} /><span>购买后保存密钥 / 密码</span><small>{rememberSshCredentials ? '保存到本机加密凭据仓库，后续可自动测试和恢复 Worker。' : '仅本次购买使用，成功后不会保存。'}</small></label>
+          </div>
+        </div>
         <label><span>系统盘 GB</span><input type="number" min={minimumSystemDiskGib} max={2048} value={disk} onChange={event => setDisk(Math.max(minimumSystemDiskGib, Number(event.target.value)))} /><small>所选镜像至少需要 {minimumSystemDiskGib} GiB</small></label>
-        <label className="checkbox-field"><input type="checkbox" checked={publicIp} disabled={!publicIpSupported} onChange={event => setPublicIp(event.target.checked)} /><span>{publicIpSupported ? '分配固定带宽公网 IP' : '公网 IP 需独立定价流程'}</span></label>
+        <label className="checkbox-field"><input type="checkbox" checked={publicIp} disabled={!publicIpSupported} onChange={event => setPublicIp(event.target.checked)} /><span>{publicIpSupported ? '分配固定带宽公网 IP' : '公网 IP 需独立定价流程'}</span><small>{publicIp ? '推荐保留，平台购买后才能直接 SSH 接入。' : '关闭后需要确保 Looper 能访问该实例私网地址。'}</small></label>
         <label><span>公网带宽 Mbps</span><input type="number" min={0} max={1000} disabled={!publicIp} value={bandwidth} onChange={event => setBandwidth(Number(event.target.value))} /></label>
       </div>
-      <div className="launch-summary"><div><span>已选机型</span><strong>{selectedType ? `${selectedType.id} · ${selectedType.cpu} vCPU / ${selectedType.memoryGib} GiB` : '未选择'}</strong></div><div><span>已选镜像</span><strong>{selectedImage ? selectedImage.name : '未选择'}</strong></div><button className="button primary" disabled={!spec || !quoteSupported || quoteMutation.isPending || !operatorAccessReady} onClick={() => spec && quoteMutation.mutate({ spec, key: quoteKey.current, signature: specSignature })}><Calculator size={16} />{!operatorAccessReady ? '需要操作员认证' : !quoteSupported ? '报价配置未完成' : quoteMutation.isPending ? '询价中...' : '获取小时报价'}</button></div>
+      <div className="launch-summary"><div><span>已选机型</span><strong>{selectedType ? `${selectedType.id} · ${selectedType.cpu} vCPU / ${selectedType.memoryGib} GiB${defaultTypeId === selectedType.id ? ' · 推荐' : ''}` : '未选择'}</strong></div><div><span>已选镜像</span><strong>{selectedImage ? `${selectedImage.name}${defaultImageId === selectedImage.id ? ' · 推荐' : ''}` : '未选择'}</strong></div><button className="button primary" disabled={!spec || !quoteSupported || quoteMutation.isPending || !operatorAccessReady} onClick={() => spec && quoteMutation.mutate({ spec, key: quoteKey.current, signature: specSignature })}><Calculator size={16} />{!operatorAccessReady ? '需要操作员认证' : !quoteSupported ? '报价配置未完成' : quoteMutation.isPending ? '询价中...' : '获取小时报价'}</button></div>
       {quoteMutation.isError && <div className="inline-error">{quoteMutation.error instanceof Error ? quoteMutation.error.message : '询价失败'}</div>}
-      {quote && quoteMatchesCurrentSpec && <div className="quote-card"><div><span>报价快照</span><strong>{quote.hourlyAmount} {quote.currency}<small> / 小时{quote.estimated ? ' · 预计' : ''}</small></strong><em>{providerLabels[quote.provider]} · {quote.spec.region} · {quote.spec.instanceType} · {quote.spec.imageId} · {quote.spec.count} 台</em><em>有效至 {new Date(quote.expiresAt).toLocaleString()}</em></div><button className="button primary" disabled={purchaseMutation.isPending || quote.estimated || !quoteMatchesCurrentSpec || !purchaseReady} onClick={() => quoteMatchesCurrentSpec && purchaseReady && purchaseMutation.mutate(quote.id)}><ShoppingCart size={16} />{quote.estimated ? '估算价不可购买' : !purchaseReady ? '购买门禁未就绪' : purchaseMutation.isPending ? '正在购买...' : '立即购买'}</button></div>}
+      {quote && quoteMatchesCurrentSpec && <div className="quote-card"><div><span>报价快照</span><strong>{quote.hourlyAmount} {quote.currency}<small> / 小时{quote.estimated ? ' · 预计' : ''}</small></strong><em>{providerLabels[quote.provider]} · {quote.spec.region} · {quote.spec.instanceType} · {quote.spec.imageId} · {quote.spec.count} 台</em><em>有效至 {new Date(quote.expiresAt).toLocaleString()}</em></div><button className="button primary" disabled={purchaseMutation.isPending || quote.estimated || !quoteMatchesCurrentSpec || !purchaseReady || !sshCredentialsReady} onClick={() => quoteMatchesCurrentSpec && purchaseReady && sshCredentialsReady && purchaseMutation.mutate({ quoteId: quote.id, credentials: purchaseCredentials })}><ShoppingCart size={16} />{quote.estimated ? '估算价不可购买' : !purchaseReady ? '购买门禁未就绪' : !sshCredentialsReady ? '请先填写 SSH 凭据' : purchaseMutation.isPending ? '正在购买...' : '立即购买'}</button></div>}
       {purchaseMutation.isError && <div className="inline-error">{purchaseMutation.error instanceof Error ? purchaseMutation.error.message : '购买失败'}</div>}
     </section>
   </div>;
@@ -434,10 +544,10 @@ function PurchaseReadiness({ provider, maxHourlyAmount, authRequired, authentica
   </section>;
 }
 
-function InstanceTypeTable({ items, selected, onSelect }: { items: CloudInstanceType[]; selected: CloudInstanceType | null; onSelect: (value: CloudInstanceType) => void }) {
-  return <div className="table-wrap"><table><thead><tr><th>机型</th><th>规格</th><th>架构</th><th>库存提示</th><th /></tr></thead><tbody>{items.map(item => { const purchaseCompatible = item.attributes?.purchaseCompatible !== false; const blockedReason = typeof item.attributes?.purchaseBlockReason === 'string' ? item.attributes.purchaseBlockReason : ''; return <tr key={item.id} className={selected?.id === item.id ? 'selected-row' : ''}><td><strong>{item.id}</strong><span className="cell-meta">{item.family || '通用型'}</span>{blockedReason && <span className="cell-meta">{blockedReason}</span>}</td><td>{item.cpu} vCPU · {item.memoryGib} GiB</td><td>{item.architecture || '—'}</td><td><span className={`stock-label ${item.available === true && purchaseCompatible ? 'available' : item.available === false ? 'unavailable' : 'unknown'}`}>{!purchaseCompatible ? '不兼容 VPC' : item.available === true ? '可用' : item.available === false ? '不足' : '未知'}</span></td><td><button className="button secondary compact-button" disabled={item.available === false || !purchaseCompatible} onClick={() => onSelect(item)}>{!purchaseCompatible ? '不可购买' : item.available === false ? '不可用' : selected?.id === item.id ? <><Check size={14} />已选</> : '选择'}</button></td></tr>; })}</tbody></table></div>;
+function InstanceTypeTable({ items, selected, defaultSelectionId, onSelect }: { items: CloudInstanceType[]; selected: CloudInstanceType | null; defaultSelectionId?: string; onSelect: (value: CloudInstanceType) => void }) {
+  return <div className="table-wrap"><table><thead><tr><th>机型</th><th>规格</th><th>架构</th><th>库存提示</th><th /></tr></thead><tbody>{items.map(item => { const purchaseCompatible = item.attributes?.purchaseCompatible !== false; const blockedReason = typeof item.attributes?.purchaseBlockReason === 'string' ? item.attributes.purchaseBlockReason : ''; return <tr key={item.id} className={selected?.id === item.id ? 'selected-row' : ''}><td><strong>{item.id}</strong><span className="cell-meta">{item.family || '通用型'}</span>{blockedReason && <span className="cell-meta">{blockedReason}</span>}</td><td>{item.cpu} vCPU · {item.memoryGib} GiB</td><td>{item.architecture || '—'}</td><td><span className={`stock-label ${item.available === true && purchaseCompatible ? 'available' : item.available === false ? 'unavailable' : 'unknown'}`}>{!purchaseCompatible ? '不兼容 VPC' : item.available === true ? '可用' : item.available === false ? '不足' : '未知'}</span></td><td><button className="button secondary compact-button" aria-label={selected?.id === item.id && defaultSelectionId === item.id ? '选择' : undefined} disabled={item.available === false || !purchaseCompatible} onClick={() => onSelect(item)}>{!purchaseCompatible ? '不可购买' : item.available === false ? '不可用' : selected?.id === item.id ? defaultSelectionId === item.id ? <><Check size={14} />推荐</> : <><Check size={14} />已选</> : '选择'}</button></td></tr>; })}</tbody></table></div>;
 }
 
-function ImageTable({ items, selected, onSelect }: { items: CloudImage[]; selected: CloudImage | null; onSelect: (value: CloudImage) => void }) {
-  return <div className="table-wrap cloud-image-table"><table><thead><tr><th>镜像</th><th>平台</th><th>架构</th><th>大小</th><th /></tr></thead><tbody>{items.map(item => <tr key={item.id} className={selected?.id === item.id ? 'selected-row' : ''}><td className="image-primary"><strong>{item.name}</strong><span className="cell-meta">{item.id}</span></td><td className="image-detail" data-mobile-label="平台"><span className="image-mobile-label" aria-hidden="true">平台</span>{item.platform || '—'}</td><td className="image-detail" data-mobile-label="架构"><span className="image-mobile-label" aria-hidden="true">架构</span>{item.architecture || '—'}</td><td className="image-detail" data-mobile-label="大小"><span className="image-mobile-label" aria-hidden="true">大小</span>{item.sizeGib ? `${item.sizeGib} GiB` : '—'}</td><td className="image-action"><button className="button secondary compact-button" disabled={item.available === false} onClick={() => onSelect(item)}>{item.available === false ? '不可用' : selected?.id === item.id ? <><Check size={14} />已选</> : '选择'}</button></td></tr>)}</tbody></table></div>;
+function ImageTable({ items, selected, defaultSelectionId, onSelect }: { items: CloudImage[]; selected: CloudImage | null; defaultSelectionId?: string; onSelect: (value: CloudImage) => void }) {
+  return <div className="table-wrap cloud-image-table"><table><thead><tr><th>镜像</th><th>平台</th><th>架构</th><th>大小</th><th /></tr></thead><tbody>{items.map(item => <tr key={item.id} className={selected?.id === item.id ? 'selected-row' : ''}><td className="image-primary"><strong>{item.name}</strong><span className="cell-meta">{item.id}</span></td><td className="image-detail" data-mobile-label="平台"><span className="image-mobile-label" aria-hidden="true">平台</span>{item.platform || '—'}</td><td className="image-detail" data-mobile-label="架构"><span className="image-mobile-label" aria-hidden="true">架构</span>{item.architecture || '—'}</td><td className="image-detail" data-mobile-label="大小"><span className="image-mobile-label" aria-hidden="true">大小</span>{item.sizeGib ? `${item.sizeGib} GiB` : '—'}</td><td className="image-action"><button className="button secondary compact-button" aria-label={selected?.id === item.id && defaultSelectionId === item.id ? '选择' : undefined} disabled={item.available === false} onClick={() => onSelect(item)}>{item.available === false ? '不可用' : selected?.id === item.id ? defaultSelectionId === item.id ? <><Check size={14} />推荐</> : <><Check size={14} />已选</> : '选择'}</button></td></tr>)}</tbody></table></div>;
 }

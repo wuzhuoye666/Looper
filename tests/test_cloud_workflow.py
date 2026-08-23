@@ -7,6 +7,7 @@ import pytest
 from looper_api.cloud_contracts import (
     CatalogFilters,
     CloudPurchaseSpec,
+    CloudSshCredentials,
     DestroyedResource,
     ImageInfo,
     InstanceTypeInfo,
@@ -46,6 +47,7 @@ from looper_api.models import (
 )
 from looper_api.providers.base import CloudProvider, CloudProviderError
 from looper_api.providers.registry import CloudProviderRegistry
+from looper_api.serialization import target_view
 from looper_core.canonical import canonical_digest, utc_now
 from sqlalchemy import select, text, update
 from sqlalchemy.orm import Session
@@ -168,6 +170,20 @@ class FakeProvider(CloudProvider):
             ],
         )
 
+
+
+def test_cloud_ssh_credentials_accept_camel_case_remember_flag() -> None:
+    credentials = CloudSshCredentials.model_validate(
+        {
+            "username": "ubuntu",
+            "authMethod": "password",
+            "password": "one-time-secret",
+            "rememberCredentials": False,
+        }
+    )
+
+    assert credentials.remember_credentials is False
+    assert credentials.model_dump(by_alias=True)["rememberCredentials"] is False
 
 def spec() -> CloudPurchaseSpec:
     return CloudPurchaseSpec(
@@ -536,6 +552,13 @@ def test_confirm_purchase_is_idempotent_and_naturalizes_target(db_session, tmp_p
         text("select count(*) from targets where id='cloud:tencent:ap-test:ins-fake-1'")
     ).scalar_one()
     assert target_count == 1
+    target = db_session.get(TargetRecord, "cloud:tencent:ap-test:ins-fake-1")
+    assert target is not None
+    view = target_view(target)
+    assert view["endpoint"] == "—"
+    assert "2 vCPU" in view["hardware"]
+    assert "2 GiB" in view["hardware"]
+    assert view["framework"] == "镜像 img-test"
 
 
 def test_purchase_quote_completes_order_without_browser_confirmation(db_session, tmp_path) -> None:

@@ -844,6 +844,7 @@ def _provisioned_instance(
         zone=str(instance.Placement.Zone) if instance.Placement else None,
         status=str(instance.InstanceState or "PENDING"),
         privateIp=private_ips[0] if private_ips else None,
+        publicIp=public_ips[0] if public_ips else None,
         publicIpPresent=bool(public_ips),
     )
 

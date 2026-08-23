@@ -1,6 +1,6 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { CheckCircle2, KeyRound, Server, X } from 'lucide-react';
-import { useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import { api } from '../lib/api';
 import type { Target } from '../lib/types';
 
@@ -17,7 +17,11 @@ const emptyDraft = {
   expectedHostKey: '',
 };
 
-export function ImportTargetDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+export function ImportTargetDialog({
+  open,
+  onClose,
+  target = null,
+}: { open: boolean; onClose: () => void; target?: Target | null }) {
   const queryClient = useQueryClient();
   const [draft, setDraft] = useState(emptyDraft);
   const [connected, setConnected] = useState<Target | null>(null);
@@ -26,19 +30,28 @@ export function ImportTargetDialog({ open, onClose }: { open: boolean; onClose: 
     setDraft(current => ({ ...current, [key]: value }));
   };
 
+  useEffect(() => {
+    if (!open) return;
+    setDraft(current => ({
+      ...emptyDraft,
+      endpoint: target?.endpoint && target.endpoint !== '—' ? target.endpoint : current.endpoint,
+    }));
+  }, [open, target]);
+
   const connect = useMutation({
     mutationFn: () => {
       const fingerprint = draft.expectedHostKey.trim();
-      return api.connectExternalTarget({
-      endpoint: draft.endpoint.trim(),
-      port: Number(draft.port),
-      username: draft.username.trim(),
-      auth_method: draft.authMethod,
-      password: draft.authMethod === 'password' ? draft.password : undefined,
-      private_key: draft.authMethod === 'private-key' ? draft.privateKey : undefined,
-      passphrase: draft.authMethod === 'private-key' && draft.passphrase ? draft.passphrase : undefined,
-      expected_host_key_sha256: fingerprint ? (fingerprint.startsWith('SHA256:') ? fingerprint : `SHA256:${fingerprint}`) : undefined,
-    });
+      const payload = {
+        endpoint: draft.endpoint.trim(),
+        port: Number(draft.port),
+        username: draft.username.trim(),
+        auth_method: draft.authMethod,
+        password: draft.authMethod === 'password' ? draft.password : undefined,
+        private_key: draft.authMethod === 'private-key' ? draft.privateKey : undefined,
+        passphrase: draft.authMethod === 'private-key' && draft.passphrase ? draft.passphrase : undefined,
+        expected_host_key_sha256: fingerprint ? (fingerprint.startsWith('SHA256:') ? fingerprint : `SHA256:${fingerprint}`) : undefined,
+      };
+      return target ? api.connectTargetSsh(target.id, payload) : api.connectExternalTarget(payload);
     },
     onSuccess: target => {
       setConnected(target);
@@ -73,7 +86,7 @@ export function ImportTargetDialog({ open, onClose }: { open: boolean; onClose: 
         onMouseDown={event => event.stopPropagation()}
       >
         <div className="operator-dialog-heading">
-          <div><span className="eyebrow">EXTERNAL TARGET</span><h2 id="import-target-title">连接外部机器</h2></div>
+          <div><span className="eyebrow">{target ? 'PURCHASED TARGET' : 'EXTERNAL TARGET'}</span><h2 id="import-target-title">{target ? '配置并测试 SSH' : '连接外部机器'}</h2></div>
           <button className="icon-button" type="button" onClick={close} aria-label="关闭"><X size={18} /></button>
         </div>
 
@@ -99,7 +112,7 @@ export function ImportTargetDialog({ open, onClose }: { open: boolean; onClose: 
             <button className="button primary" type="button" onClick={close}>完成</button>
           </div>
         </> : <>
-          <p className="dialog-hint">输入 SSH 连接信息，Looper 会自动读取机器参数、部署测试 Worker，并通过加密隧道回传数据。</p>
+          <p className="dialog-hint">{target ? `为 ${target.name} 补充 SSH 凭据。连接成功后会读取机器参数、部署 Worker，并保存加密凭据供后续自动测试。` : '输入 SSH 连接信息，Looper 会自动读取机器参数、部署测试 Worker，并通过加密隧道回传数据。'}</p>
           <div className="import-form-grid connection-form-grid">
             <label className="import-span"><span>IP / 主机名 *</span><input required value={draft.endpoint} onChange={event => set('endpoint', event.target.value)} placeholder="如 10.0.0.7 或 db-01.internal" autoFocus /></label>
             <label><span>连接方式 *</span><select value={draft.authMethod} onChange={event => set('authMethod', event.target.value as AuthMethod)}><option value="password">SSH 密码</option><option value="private-key">SSH 私钥</option><option value="ssh-agent">SSH Agent / 服务端密钥</option></select></label>

@@ -114,6 +114,9 @@ export const api = {
   syncTencentTargets: (region = 'ap-guangzhou') => request<ListResponse<Target>>(
     `/targets/tencent-cvm/sync?region=${encodeURIComponent(region)}`, { method: 'POST' },
   ),
+  syncAlibabaTargets: (region = 'cn-hangzhou') => request<ListResponse<Target>>(
+    `/targets/alibaba-ecs/sync?region=${encodeURIComponent(region)}`, { method: 'POST' },
+  ),
   importExternalTarget: (payload: Record<string, unknown>) => request<Target>(
     '/targets/import', { method: 'POST', body: JSON.stringify(payload) },
   ),
@@ -122,6 +125,11 @@ export const api = {
   ),
   testTargetSsh: (targetId: string) => request<Target>(
     `/targets/${encodeURIComponent(targetId)}/ssh-test`, { method: 'POST' },
+  ),
+  connectTargetSsh: (targetId: string, payload: Record<string, unknown>) => request<Target>(
+    `/targets/${encodeURIComponent(targetId)}/ssh-connect`, {
+      method: 'POST', body: JSON.stringify(payload),
+    }
   ),
   targetDestroyPreview: (targetId: string) => request<TargetDestroyPreview>(
     `/targets/${encodeURIComponent(targetId)}/destroy-preview`,
@@ -160,8 +168,8 @@ export const api = {
   quote: (spec: CloudPurchaseSpec, key: string) => request<CloudQuote>('/cloud/quotes', {
     method: 'POST', headers: { 'Idempotency-Key': key }, body: JSON.stringify({ spec }),
   }),
-  purchaseQuote: (quoteId: string, key: string) => request<CloudOrder>('/cloud/orders/purchase', {
-    method: 'POST', headers: { 'Idempotency-Key': key }, body: JSON.stringify({ quoteId }),
+  purchaseQuote: (quoteId: string, key: string, payload?: { sshCredentials?: { username: string; port: number; authMethod: 'password' | 'private-key'; password?: string; privateKey?: string; passphrase?: string; rememberCredentials: boolean } }) => request<CloudOrder>('/cloud/orders/purchase', {
+    method: 'POST', headers: { 'Idempotency-Key': key }, body: JSON.stringify({ quoteId, ...payload }),
   }),
   orders: async (status = '') => list(await request<CloudOrder[] | ListResponse<CloudOrder>>(`/cloud/orders${status ? `?status=${encodeURIComponent(status)}` : ''}`)),
   order: (id: string) => request<CloudOrder>(`/cloud/orders/${encodeURIComponent(id)}`),

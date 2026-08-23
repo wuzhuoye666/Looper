@@ -107,6 +107,9 @@ def test_order_http_routes_enforce_operator_bearer(db_session, tmp_path) -> None
             denied_sync = await client.post(
                 "/api/v1/targets/tencent-cvm/sync?instance_id=ins-test"
             )
+            denied_alibaba_sync = await client.post(
+                "/api/v1/targets/alibaba-ecs/sync?instance_id=i-test"
+            )
             denied_evidence = await client.get("/api/v1/cloud/orders/missing/evidence")
             denied_purchase = await client.post(
                 "/api/v1/cloud/orders/purchase",
@@ -125,6 +128,7 @@ def test_order_http_routes_enforce_operator_bearer(db_session, tmp_path) -> None
                 denied_catalog,
                 denied_managed_group,
                 denied_sync,
+                denied_alibaba_sync,
                 denied_evidence,
                 denied_purchase,
                 allowed_evidence,
@@ -140,6 +144,7 @@ def test_order_http_routes_enforce_operator_bearer(db_session, tmp_path) -> None
             denied_catalog,
             denied_managed_group,
             denied_sync,
+            denied_alibaba_sync,
             denied_evidence,
             denied_purchase,
             allowed_evidence,
@@ -160,6 +165,7 @@ def test_order_http_routes_enforce_operator_bearer(db_session, tmp_path) -> None
         assert denied_catalog.status_code == 401
         assert denied_managed_group.status_code == 401
         assert denied_sync.status_code == 401
+        assert denied_alibaba_sync.status_code == 401
         assert denied_evidence.status_code == 401
         assert denied_purchase.status_code == 401
         assert allowed_evidence.status_code == 404

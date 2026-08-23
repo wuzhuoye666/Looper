@@ -3,14 +3,15 @@ kind: Benchmark
 metadata:
   id: looper.demo.compression
   name: Deterministic compression loop
-  version: 1.0.0
-  description: Searches zlib level and chunk size with a round-trip correctness gate.
+  version: 1.1.0
+  description: A self-contained zlib workload that compares compression throughput and latency while enforcing byte-for-byte round-trip correctness.
   license: INTERNAL
+  source:
+    url: looper://workspace/benchmarks/demo
+    digest: sha256:f98aea1b2562feb98343c9514c86b09a155a6e4af2674d1f08b5f1d2bb94d241
 spec:
   trust: trusted
-  capabilities:
-    - python
-    - local-process
+  capabilities: [python, local-process, python-zlib]
   parameters:
     compression_level:
       type: integer
@@ -18,44 +19,92 @@ spec:
       maximum: 9
       step: 1
       default: 6
-      description: zlib compression level
+      description: zlib compression level.
     chunk_size:
       type: categorical
       choices: [4096, 16384, 65536]
       default: 16384
-      description: bytes supplied to the compressor per update
+      description: Bytes supplied to the compressor per update.
   workloads:
     - id: small
       name: 128 KiB payload
       weight: 1
-      metadata:
-        size_kib: 128
-        samples: 24
+      metadata: {size_kib: 128, samples: 24}
     - id: medium
       name: 512 KiB payload
       weight: 2
-      metadata:
-        size_kib: 512
-        samples: 24
+      metadata: {size_kib: 512, samples: 24}
     - id: large
       name: 2 MiB payload
       weight: 1
-      metadata:
-        size_kib: 2048
-        samples: 16
+      metadata: {size_kib: 2048, samples: 16}
+  scenario:
+    id: microbenchmark.compression.zlib
+    name: Deterministic zlib compression
+    decision_question: Which target and compression parameters deliver the highest data throughput while preserving lossless round-trip correctness and an acceptable compression ratio?
+    user_value: Compare CPU compression behavior using deterministic payloads and retain the native per-sample evidence behind every score.
+    workload_class: cpu-compression
+    topology: single-node
+    roles:
+      - id: target
+        kind: target
+        included_in_score: true
+        description: Host CPU and Python zlib runtime under comparison.
+      - id: benchmark-runner
+        kind: load-generator
+        co_located_with: target
+        included_in_score: true
+        description: Package-owned deterministic producer running on the target.
+    primary_metric: throughput_mib_s
+  infrastructure:
+    orchestration: adapter
+    primaryNodeGroup: target
+    nodeGroups:
+      - id: target
+        role: target
+        count: {minimum: 1, default: 1, maximum: 1}
+        includedInScore: true
+        requirements:
+          osFamilies: [linux, windows]
+          capabilities: [python, local-process]
+          cpu: {minimumLogicalCpus: 1}
+          memory: {minimumGiB: 0.25}
+        placement:
+          sameZone: true
+          dedicated: true
+  adapter:
+    protocol: looper-adapter/v1
+    executionModel: batch-suite
+    primaryMetric: throughput_mib_s
+    requiredChecks: [roundtrip]
+    inputs: []
+    canonicalOutputs:
+      metrics: metrics.jsonl
+      result: result.json
   runtime:
     type: local-process
     workingDirectory: .
+    dependencyLockDigest: sha256:f47b2faa6b960438f77d821ef0bf2158ea942ddb3d6958d2065ff6018eebc03a
+    dependencies: []
+    provisioning:
+      mode: managed
+      hostCapabilities: [python, local-process]
+      provides: [python-zlib]
+      cacheKey: sha256:f47b2faa6b960438f77d821ef0bf2158ea942ddb3d6958d2065ff6018eebc03a
+      requiresNetwork: false
+      privilege: none
     commands:
+      prepare:
+        argv: ["{python}", "{benchmarkRoot}/prepare.py", "--benchmark-root", "{benchmarkRoot}", "--cache", "{cache}"]
+        timeoutSeconds: 30
+        allowedExitCodes: [0]
       run:
-        argv:
-          - "{python}"
-          - "{benchmarkRoot}/compression_benchmark.py"
-          - --envelope
-          - "{envelope}"
-          - --output
-          - "{output}"
-        timeoutSeconds: 120
+        argv: ["{python}", "{benchmarkRoot}/compression_benchmark.py", "--envelope", "{envelope}", "--output", "{output}"]
+        timeoutSeconds: 180
+        allowedExitCodes: [0]
+      normalize:
+        argv: ["{python}", "{benchmarkRoot}/normalizer.py", "--envelope", "{envelope}", "--output", "{output}"]
+        timeoutSeconds: 30
         allowedExitCodes: [0]
   metrics:
     throughput_mib_s:
@@ -64,9 +113,10 @@ spec:
       kind: sample
       required: true
       minimumSamples: 3
+      description: Uncompressed input bytes processed per second for each native sample.
       presentation:
-        userLabel: 吞吐量
-        userDescription: 每秒处理的压缩数据量，越高越好，是选择压缩参数时的主结果。
+        userLabel: 压缩吞吐量
+        userDescription: 每秒处理的原始数据量，越高越好，是本套件的主结果。
         roles: [primary_outcome]
         defaultVisibility: summary
         displayFormat: throughput
@@ -77,9 +127,10 @@ spec:
       kind: sample
       required: true
       minimumSamples: 3
+      description: Wall-clock duration of one compression sample.
       presentation:
-        userLabel: 处理延迟
-        userDescription: 单次压缩处理耗时，用于确保吞吐提升不以延迟剧增为代价。
+        userLabel: 单次压缩延迟
+        userDescription: 单次压缩处理耗时，用于确认吞吐提升没有伴随异常延迟。
         roles: [guardrail]
         defaultVisibility: detail
         displayFormat: duration
@@ -90,9 +141,10 @@ spec:
       kind: aggregate
       required: true
       minimumSamples: 1
+      description: Compressed bytes divided by original bytes.
       presentation:
         userLabel: 压缩率
-        userDescription: 压缩产物与原始数据的大小比值，数值越小压缩越强，是吞吐优化的保护指标。
+        userDescription: 压缩产物与原始数据的大小比值，数值越小压缩越强。
         roles: [guardrail]
         defaultVisibility: detail
         displayFormat: number
@@ -103,11 +155,12 @@ spec:
       kind: boolean
       required: true
       minimumSamples: 1
+      description: Whether every compressed sample decompresses to the source payload.
       presentation:
-        userLabel: 往返校验
-        userDescription: 压缩后能否无损还原原始数据，必须为真，否则本次结果无效。
+        userLabel: 无损往返校验
+        userDescription: 所有样本都必须逐字节还原原始数据，否则本次结果无效。
         roles: [hard_gate]
-        defaultVisibility: hidden
+        defaultVisibility: summary
         displayFormat: boolean
     output_bytes:
       unit: bytes
@@ -115,9 +168,10 @@ spec:
       kind: counter
       required: false
       minimumSamples: 1
+      description: Size of the deterministic compressed output.
       presentation:
-        userLabel: 输出字节数
-        userDescription: 压缩产物体积，用于问题定位与成本估算，不代表用户收益。
+        userLabel: 压缩后体积
+        userDescription: 压缩产物大小，用于解释压缩率和定位异常。
         roles: [diagnostic]
         defaultVisibility: expert
         displayFormat: bytes
@@ -126,6 +180,10 @@ spec:
     maxBytes: 16777216
     maxMetricLines: 1000
     artifacts:
+      - path: compression-native.json
+        role: raw-result
+        mediaType: application/json
+        required: true
       - path: result.json
         role: result
         mediaType: application/json
@@ -134,8 +192,15 @@ spec:
         role: log
         mediaType: text/plain
         required: true
+  audit:
+    minimumRepeats: 5
+    referencePolicy: recommended
+    environmentAxes: [machine, day]
+    requiredEvidence: [system-fingerprint, raw-result, log]
   x-extensions:
     bootstrapCatalog: true
+    executionStatus: executable
+    sourceLock: source-lock.json
     postBenchmarkActions:
       - id: larger-compression-chunks
         label: 增大压缩分块并复测

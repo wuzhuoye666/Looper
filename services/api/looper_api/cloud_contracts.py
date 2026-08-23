@@ -5,7 +5,7 @@ from decimal import Decimal
 from enum import StrEnum
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
 
 
 def _camel(value: str) -> str:
@@ -247,8 +247,27 @@ class QuoteCreateRequest(ApiModel):
     spec: CloudPurchaseSpec
 
 
+class CloudSshCredentials(ApiModel):
+    username: str = Field(min_length=1, max_length=128)
+    port: int = Field(default=22, ge=1, le=65535)
+    auth_method: Literal["password", "private-key"] = "private-key"
+    password: SecretStr | None = None
+    private_key: SecretStr | None = None
+    passphrase: SecretStr | None = None
+    remember_credentials: bool = True
+
+    @model_validator(mode="after")
+    def validate_credential(self) -> CloudSshCredentials:
+        if self.auth_method == "password" and not self.password:
+            raise ValueError("password authentication requires a password")
+        if self.auth_method == "private-key" and not self.private_key:
+            raise ValueError("private-key authentication requires a private key")
+        return self
+
+
 class OrderPrepareRequest(ApiModel):
     quote_id: str = Field(min_length=8, max_length=100)
+    ssh_credentials: CloudSshCredentials | None = None
 
 
 class OrderConfirmRequest(ApiModel):

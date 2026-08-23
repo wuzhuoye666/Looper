@@ -52,9 +52,7 @@ def _metric_definition(declaration: dict[str, Any]) -> dict[str, Any]:
     measurement field from a missing metric.
     """
     return {
-        field: declaration[field]
-        for field in _METRIC_DECLARATION_FIELDS
-        if field in declaration
+        field: declaration[field] for field in _METRIC_DECLARATION_FIELDS if field in declaration
     }
 
 
@@ -88,10 +86,7 @@ def benchmark_view(
     runtime = spec["runtime"]
     package_ready = bool(
         record.manifest_path
-        or (
-            runtime.get("type") == "container"
-            and "@sha256:" in str(runtime.get("image") or "")
-        )
+        or (runtime.get("type") == "container" and "@sha256:" in str(runtime.get("image") or ""))
     )
     runnable = bool(
         execution_status == "executable"
@@ -168,37 +163,66 @@ def target_view(record: TargetRecord) -> dict[str, Any]:
         status = "inventory" if record.lifecycle_status == "active" else "offline"
     elif record.status == "inventory-only" and provider_state in {"STOPPED", "TERMINATED"}:
         status = "offline"
-    fingerprint = record.fingerprint_json
+    fingerprint = record.fingerprint_json or {}
+    inventory = record.inventory_json or {}
+
+    # Cloud inventory records created by older syncs kept hardware fields in
+    # inventory_json, while external targets keep them in fingerprint_json.
+    def first_value(*keys: str) -> Any:
+        for source in (fingerprint, inventory):
+            for key in keys:
+                value = source.get(key)
+                if value is not None and value != "":
+                    return value
+        return None
 
     # Architecture-like strings that are not real processor names
     _ARCH_LIKE = {
-        "x86_64", "amd64", "AMD64", "aarch64", "arm64",
-        "armv7l", "armv8l", "i386", "i686",
+        "x86_64",
+        "amd64",
+        "AMD64",
+        "aarch64",
+        "arm64",
+        "armv7l",
+        "armv8l",
+        "i386",
+        "i686",
     }
-    processor = fingerprint.get("processor")
+    processor = first_value("processor")
     if processor and str(processor).strip() in _ARCH_LIKE:
+        # Some Linux probes report the architecture in processor while the
+        # detailed model is available under cpu.model_name.
         processor = None
+        for source in (fingerprint, inventory):
+            cpu_details = source.get("cpu")
+            if isinstance(cpu_details, dict):
+                processor = cpu_details.get("model_name") or cpu_details.get("model")
+                if processor:
+                    break
 
     # CPU: real processor name, or cloud instance type
-    cpu = processor or fingerprint.get("instance_type") or ""
+    cpu = processor or first_value("instance_type") or ""
 
-    # Architecture: from fingerprint, or machine, or platform
-    arch = (
-        fingerprint.get("architecture")
-        or fingerprint.get("machine")
-        or fingerprint.get("platform")
-        or ""
-    )
+    # Architecture: preserve provider metadata, then explicit image metadata.
+    arch = first_value("architecture", "machine", "platform", "cpu_architecture")
+    if not arch:
+        image_id = first_value("image_id")
+        image_marker = str(image_id or "").casefold()
+        if any(marker in image_marker for marker in ("aarch64", "arm64", "arm_", "_arm")):
+            arch = "aarch64"
+        elif any(marker in image_marker for marker in ("x86_64", "x64", "_amd64", "amd64")):
+            arch = "x86_64"
+    arch = arch or ""
 
-    # Cores
-    cores = fingerprint.get("logical_cpu_count")
+    # Cores: external targets use logical_cpu_count; cloud inventory uses cpu.
+    cores = first_value("logical_cpu_count", "cpu", "vcpu", "vcpus")
 
-    # Memory: prefer memory_gib, fallback to memory_bytes
-    memory_gib = fingerprint.get("memory_gib")
+    # Memory: prefer memory_gib, fallback to memory_bytes.
+    memory_gib = first_value("memory_gib")
     if memory_gib is None:
-        memory_bytes = fingerprint.get("memory_bytes")
+        memory_bytes = first_value("memory_bytes")
         if memory_bytes:
-            memory_gib = round(memory_bytes / (1024 ** 3), 1)
+            memory_gib = round(memory_bytes / (1024**3), 1)
 
     hardware_parts = [
         cpu if cpu else None,
@@ -211,9 +235,18 @@ def target_view(record: TargetRecord) -> dict[str, Any]:
         "name": record.name,
         "type": record.provider,
         "provider": record.provider,
-        "endpoint": inventory.get("endpoint") or inventory.get("private_ip") or "local",
+        "orderId": inventory.get("order_id"),
+        "endpoint": (
+            inventory.get("endpoint")
+            or inventory.get("private_ip")
+            or ("local" if record.id == "local" else "—")
+        ),
         "status": status,
-        "framework": inventory.get("framework") or fingerprint.get("system"),
+        "framework": (
+            inventory.get("framework")
+            or fingerprint.get("system")
+            or (f"镜像 {inventory.get('image_id')}" if inventory.get("image_id") else None)
+        ),
         "version": fingerprint.get("release"),
         "hardware": " · ".join(str(item) for item in hardware_parts if item),
         "lastSeenAt": _iso(record.last_inventory_seen_at or record.updated_at),
@@ -380,6 +413,11 @@ def experiment_view(
         ],
         "benchmarkId": spec.benchmark_id,
         "benchmarkName": benchmark.name if benchmark else spec.benchmark_id,
+        "metricDefinitions": _metric_definitions(
+            (benchmark.manifest_json.get("spec") or {}).get("metrics", {})
+        )
+        if benchmark
+        else {},
         "progress": round(
             100
             * (

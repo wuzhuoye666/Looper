@@ -10,7 +10,7 @@ import { VariabilityPanel } from '../components/VariabilityPanel';
 import { BenchTrustPanel } from '../components/BenchTrustPanel';
 import { API_BASE, api } from '../lib/api';
 import { formatDate, formatNumber, scoreDelta } from '../lib/format';
-import type { AnalysisData, Evaluation, Experiment, PostOptimizationStatus, SelectionComparison, SelectionTargetResult } from '../lib/types';
+import type { AnalysisData, Evaluation, Experiment, MetricDefinition, PostOptimizationStatus, SelectionComparison, SelectionTargetResult } from '../lib/types';
 
 const selectionTabs = [['overview', '概览'], ['targets', '目标结果'], ['comparison', '对比结论'], ['benchtrust', '可信度'], ['variability', '波动分析'], ['evidence', '证据'], ['config', '配置']];
 const optimizationTabs = [['overview', '概览'], ['evaluations', '评估记录'], ['pareto', 'Pareto 前沿'], ['benchtrust', '可信度'], ['variability', '波动分析'], ['evidence', '证据'], ['config', '配置']];
@@ -161,6 +161,7 @@ function Overview({ experiment, evaluations, delta }: { experiment: Experiment; 
     ];
     return <>
       <section className="stat-grid detail-stats">{stats.map(item => <div className="stat-block" key={item.label}><div className="stat-label"><span>{item.label}</span></div><strong>{item.value}</strong><small>{item.note}</small></div>)}</section>
+      <MetricDefinitions definitions={experiment.metricDefinitions} />
       <section className="content-grid overview-grid">
         <div className="panel"><div className="panel-heading"><div><h2>采购问题</h2><p>{experiment.scenario?.workload_class || 'scenario'}</p></div></div><div className="decision-copy">{experiment.decisionQuestion || experiment.scenario?.decision_question || experiment.description}</div></div>
         <div className="panel"><div className="panel-heading"><div><h2>场景边界</h2></div></div><dl className="info-list"><div><dt>拓扑</dt><dd>{experiment.scenario?.topology || '—'}</dd></div><div><dt>主指标</dt><dd>{experiment.scenario?.primary_metric || experiment.objective || '—'}</dd></div><div><dt>重复</dt><dd>{evaluations.length ? `${evaluations.length} evaluations` : '待执行'}</dd></div></dl></div>
@@ -174,6 +175,19 @@ function Overview({ experiment, evaluations, delta }: { experiment: Experiment; 
     { label: '状态', value: experiment.status, note: formatDate(experiment.updatedAt) },
   ];
   return <section className="stat-grid detail-stats">{stats.map(item => <div className="stat-block" key={item.label}><div className="stat-label"><span>{item.label}</span></div><strong>{item.value}</strong><small>{item.note}</small></div>)}</section>;
+}
+
+function MetricDefinitions({ definitions }: { definitions?: Record<string, MetricDefinition> }) {
+  const entries = Object.entries(definitions || {}).filter(([, definition]) => definition.presentation?.defaultVisibility !== 'hidden');
+  if (!entries.length) return null;
+  const roleLabels: Record<string, string> = { primary_outcome: '主结果', hard_gate: '硬门槛', guardrail: '护栏', cost_efficiency: '成本效率', stability: '稳定性', diagnostic: '诊断', context: '上下文' };
+  return <section className="panel metric-definitions"><div className="panel-heading"><div><h2>声明指标</h2><p>来自 Benchmark manifest 的 suite-specific presentation</p></div></div><div className="metric-definition-grid">{entries.map(([name, definition]) => {
+    const presentation = definition.presentation;
+    const label = presentation?.userLabel || name;
+    const roles = presentation?.roles?.map(role => roleLabels[role] || role).join(' · ');
+    const details = [roles, definition.unit, definition.direction && (definition.direction === 'maximize' ? '越高越好' : definition.direction === 'minimize' ? '越低越好' : '方向无关')].filter(Boolean).join(' · ');
+    return <article key={name}><div className="metric-definition-title"><strong>{label}</strong><span className="tag">{name}</span></div>{details && <span className="cell-meta">{details}</span>}<p>{presentation?.userDescription || definition.description || '暂无指标说明。'}</p></article>;
+  })}</div></section>;
 }
 
 function TargetResults({ items }: { items: SelectionTargetResult[] }) {

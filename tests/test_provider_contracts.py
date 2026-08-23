@@ -76,6 +76,7 @@ def test_tencent_quote_and_run_share_launch_payload(monkeypatch) -> None:
     assert result.instances[0].id == "ins-test"
     assert result.instances[0].status == "RUNNING"
     assert result.instances[0].private_ip == "10.0.0.8"
+    assert result.instances[0].public_ip == "203.0.113.8"
     assert result.instances[0].public_ip_present is True
     assert '"InstanceChargeType": "POSTPAID_BY_HOUR"' in quote_map
     assert '"DiskSize": 60' in run_map

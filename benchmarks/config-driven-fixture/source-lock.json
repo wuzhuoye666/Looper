@@ -1,0 +1,9 @@
+{
+  "schemaVersion": "looper.source-lock/v1",
+  "source": "looper://workspace/benchmarks/config-driven-fixture",
+  "files": {
+    "normalizer.py": "sha256:a85fae631ac670f1138a56d8e5325c62a666f303308a135daed8e6cf6b913841",
+    "prepare.py": "sha256:c7933f09dac25001cac06c164215f04cbbb344d2a30238d66056905c87fdb2ff",
+    "producer.py": "sha256:2c2fe51b3048bb02f68efd7bd2158badfdb25801b66170234b539bb1254c001e"
+  }
+}

@@ -64,6 +64,35 @@ def test_external_cloud_adoption_uses_canonical_target_identity(db_session) -> N
     assert target_view(record)["status"] == "offline"
 
 
+def test_target_view_uses_legacy_cloud_inventory_hardware_fields(db_session) -> None:
+    record = adopt_cloud_target(
+        db_session,
+        provider="alibaba",
+        region="cn-hangzhou",
+        zone="cn-hangzhou-h",
+        instance_id="i-legacy",
+        name="legacy-ecs",
+        instance_type="ecs.c9i.2xlarge",
+        image_id="img-linux",
+        state="RUNNING",
+        cpu=8,
+        memory_gib=16,
+    )
+    # Older cloud syncs stored CPU and memory outside the fingerprint.
+    record.fingerprint_json = {
+        "instance_type": "ecs.c9i.2xlarge",
+        "memory_gib": 16,
+        "image_id": "ubuntu_24_04_x64_20G_alibase.vhd",
+    }
+    record.inventory_json = {
+        **record.inventory_json,
+        "cpu": 8,
+        "memory_gib": 16,
+    }
+
+    assert target_view(record)["hardware"] == "ecs.c9i.2xlarge · x86_64 · 8 vCPU · 16 GiB"
+
+
 def test_cloud_setup_writes_secrets_without_replacing_existing_configuration(tmp_path) -> None:
     template = tmp_path / ".env.example"
     env_file = tmp_path / ".env"

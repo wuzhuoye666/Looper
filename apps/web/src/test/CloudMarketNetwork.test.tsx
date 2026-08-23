@@ -171,7 +171,7 @@ describe('腾讯云购买网络选择', () => {
     const subnet = screen.getByLabelText('子网 *');
     await waitFor(() => expect(subnet).toHaveValue('subnet-default'));
     expect(await screen.findByText('已选择 1 个安全组')).toBeInTheDocument();
-    expect(screen.getByLabelText(/SSH 密钥/)).toHaveValue('');
+    await waitFor(() => expect(screen.getByLabelText(/SSH 密钥/)).toHaveValue('skey-one'));
 
     fireEvent.change(vpc, { target: { value: 'vpc-other' } });
     await waitFor(() => expect(subnet).toHaveValue('subnet-other'));
@@ -195,8 +195,11 @@ describe('腾讯云购买网络选择', () => {
     await screen.findByRole('option', { name: /测试地域/ });
     fireEvent.change(screen.getByLabelText('地域'), { target: { value: 'ap-test' } });
 
-    const firstType = await screen.findByText('S9.TEST');
-    expect(view.container.querySelectorAll('.cloud-results tbody tr')).toHaveLength(20);
+    await waitFor(() =>
+      expect(view.container.querySelectorAll('.cloud-results tbody tr')).toHaveLength(20),
+    );
+    const results = view.container.querySelector('.cloud-results')!;
+    const firstType = within(results).getByText('S9.TEST');
     fireEvent.click(within(firstType.closest('tr')!).getByRole('button', { name: '选择' }));
     expect(screen.getByText('已选机型').parentElement).toHaveTextContent('S9.TEST');
     fireEvent.click(screen.getByRole('button', { name: '加载更多（已显示 20 / 25）' }));

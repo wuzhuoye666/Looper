@@ -56,18 +56,18 @@ def test_integration_templates_validate(path: str) -> None:
 
 
 @pytest.mark.parametrize(
-    "path",
+    ("path", "execution_status"),
     [
-        "benchmarks/benchbase-smallbank/benchmark.yaml",
-        "benchmarks/dcperf-mediawiki/benchmark.yaml",
+        ("benchmarks/benchbase-smallbank/benchmark.yaml", "stage0-adapter-only"),
+        ("benchmarks/dcperf-mediawiki/benchmark.yaml", "executable"),
     ],
 )
-def test_scenario_manifests_validate(path: str) -> None:
+def test_scenario_manifests_validate(path: str, execution_status: str) -> None:
     manifest, digest = load_and_validate_manifest(__import__("pathlib").Path(path))
     scenario = ScenarioBenchmarkSpec.model_validate(manifest["spec"]["scenario"])
     assert scenario.primary_metric in manifest["spec"]["metrics"]
     assert digest.startswith("sha256:")
-    assert manifest["spec"]["x-extensions"]["executionStatus"] == "stage0-adapter-only"
+    assert manifest["spec"]["x-extensions"]["executionStatus"] == execution_status
 
 
 def test_client_load_accounting_closes_the_request_chain() -> None:

@@ -23,8 +23,8 @@ def remembered_target_request(
 ):
     """Load a saved SSH request and keep it pinned to the discovered host key."""
 
-    if target.provider != "external":
-        raise RemoteCredentialError("only external SSH targets can reuse saved credentials")
+    if target.provider not in {"external", "tencent", "alibaba", "volcengine", "baidu"}:
+        raise RemoteCredentialError("target provider cannot reuse saved credentials")
     if target.lifecycle_status != "active":
         raise RemoteCredentialError("target is not active")
     request = EncryptedSshCredentialStore(settings).load(target.id)
@@ -41,7 +41,7 @@ def recover_remembered_target(target_id: str, settings: Settings) -> bool:
         target = session.get(TargetRecord, target_id)
         if (
             target is None
-            or target.provider != "external"
+            or target.provider not in {"external", "tencent", "alibaba", "volcengine", "baidu"}
             or target.lifecycle_status != "active"
         ):
             return True

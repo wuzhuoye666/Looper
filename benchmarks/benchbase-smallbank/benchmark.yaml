@@ -434,6 +434,11 @@ spec:
   x-extensions:
     bootstrapCatalog: true
     executionStatus: stage0-adapter-only
+    registrationStatus: blocked
+    selectable: false
+    executable: false
+    executionBlocker: client/server multi-machine orchestration is required, which current Looper does not support
+    executionBlockerReason: This paper suite requires separate client and server machines; current Looper supports no client/server multi-machine orchestration.
     adapterPath: adapters/benchbase-smallbank
     databaseVersion: "16"
     runtimeNormalizer:

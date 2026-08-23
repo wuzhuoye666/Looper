@@ -3,7 +3,11 @@ import { CheckCircle2, LoaderCircle, PlugZap } from 'lucide-react';
 import { api } from '../lib/api';
 import type { Target } from '../lib/types';
 
-export function TargetSshButton({ target, compact = false }: { target: Target; compact?: boolean }) {
+export function TargetSshButton({
+  target,
+  compact = false,
+  onConfigure,
+}: { target: Target; compact?: boolean; onConfigure?: () => void }) {
   const queryClient = useQueryClient();
   const test = useMutation({
     mutationFn: () => api.testTargetSsh(target.id),
@@ -13,6 +17,17 @@ export function TargetSshButton({ target, compact = false }: { target: Target; c
   });
 
   if (!target.credentialsRemembered) {
+    if (target.type !== 'external' && onConfigure) {
+      return <button
+        type="button"
+        className="button secondary target-ssh-button"
+        disabled={target.lifecycleStatus !== 'active'}
+        onClick={onConfigure}
+        aria-label={target.name + ' · 配置 SSH 并测试'}
+      >
+        <PlugZap size={14} />配置 SSH 并测试
+      </button>;
+    }
     return <span className="ssh-credential-missing" title="先连接一次并保存凭据，后续即可免输入测试">未保存 SSH 凭据</span>;
   }
 
