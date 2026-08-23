@@ -6,6 +6,8 @@ from looper_core.system_opt.component import CandidateSuggestion
 from looper_core.system_opt.component.mapping import (
     CandidateRule,
     ConditionOperator,
+    ConditionStatistic,
+    ConfidenceMode,
     EvidenceCondition,
     RuleRejection,
     StrategyFormulaMapping,
@@ -86,7 +88,7 @@ class TestRuleEvaluation:
         )
         mapping = StrategyFormulaMapping([_rule()])
         assert mapping.suggest(snapshot, None) == []
-        assert "missing" in mapping.last_rejections[0].reason
+        assert "unavailable in the snapshot" in mapping.last_rejections[0].reason
 
     def test_batch_takes_precedence_over_snapshot(self):
         mapping = StrategyFormulaMapping([_rule()])
@@ -134,3 +136,91 @@ class TestDomainValidation:
     def test_rejection_round_trips(self):
         rejection = RuleRejection(rule_id="r", reason="x")
         assert RuleRejection.model_validate_json(rejection.model_dump_json()) == rejection
+
+
+class TestConfidenceModes:
+    def test_lcb_blocks_when_variance_is_high(self):
+        rule = CandidateRule(
+            rule_id="lcb-rule",
+            when=[EvidenceCondition(metric_id="tput", operator=ConditionOperator.GT,
+                                    threshold=90.0, confidence=ConfidenceMode.LCB95)],
+            suggest_parameters={"k": "v"}, rationale="r", formula_id="F/v0", priority=1,
+        )
+        mapping = StrategyFormulaMapping([rule])
+        suggestions = mapping.suggest(None, _batch({"tput": [60.0, 120.0, 121.0, 119.0]}))
+        assert suggestions == []
+        assert "lcb95" in mapping.last_rejections[0].reason
+
+    def test_ucb_passes_when_upper_bound_clears_threshold(self):
+        rule = CandidateRule(
+            rule_id="ucb-rule",
+            when=[EvidenceCondition(metric_id="lat", operator=ConditionOperator.LT,
+                                    threshold=50.0, confidence=ConfidenceMode.UCB95)],
+            suggest_parameters={"k": "v"}, rationale="r", formula_id="F/v0", priority=1,
+        )
+        mapping = StrategyFormulaMapping([rule])
+        suggestions = mapping.suggest(None, _batch({"lat": [10.0, 11.0, 12.0, 10.5]}))
+        assert len(suggestions) == 1
+
+    def test_minimum_samples_is_fail_closed(self):
+        rule = CandidateRule(
+            rule_id="min-rule",
+            when=[EvidenceCondition(metric_id="tput", operator=ConditionOperator.GT,
+                                    threshold=1.0, minimum_samples=5)],
+            suggest_parameters={"k": "v"}, rationale="r", formula_id="F/v0", priority=1,
+        )
+        mapping = StrategyFormulaMapping([rule])
+        suggestions = mapping.suggest(None, _batch({"tput": [10.0, 11.0]}))
+        assert suggestions == []
+        assert "below minimum_samples=5" in mapping.last_rejections[0].reason
+
+    def test_confidence_mode_requires_batch_not_snapshot(self):
+        rule = CandidateRule(
+            rule_id="snap-conf-rule",
+            when=[EvidenceCondition(metric_id="cpu.load", operator=ConditionOperator.GT,
+                                    threshold=0.5, confidence=ConfidenceMode.LCB95)],
+            suggest_parameters={"k": "v"}, rationale="r", formula_id="F/v0", priority=1,
+        )
+        mapping = StrategyFormulaMapping([rule])
+        assert mapping.suggest(_snapshot({"cpu.load": 0.9}), None) == []
+        assert "requires a measurement batch" in mapping.last_rejections[0].reason
+
+    def test_snapshot_rejects_non_median_statistic(self):
+        rule = CandidateRule(
+            rule_id="snap-cv-rule",
+            when=[EvidenceCondition(metric_id="cpu.load", operator=ConditionOperator.LT,
+                                    threshold=0.5, statistic=ConditionStatistic.CV)],
+            suggest_parameters={"k": "v"}, rationale="r", formula_id="F/v0", priority=1,
+        )
+        mapping = StrategyFormulaMapping([rule])
+        assert mapping.suggest(_snapshot({"cpu.load": 0.1}), None) == []
+        assert "median only" in mapping.last_rejections[0].reason
+
+    def test_cv_statistic_on_batch(self):
+        rule = CandidateRule(
+            rule_id="cv-rule",
+            when=[EvidenceCondition(metric_id="tput", operator=ConditionOperator.LT,
+                                    threshold=0.05, statistic=ConditionStatistic.CV)],
+            suggest_parameters={"k": "v"}, rationale="r", formula_id="F/v0", priority=1,
+        )
+        mapping = StrategyFormulaMapping([rule])
+        stable = mapping.suggest(None, _batch({"tput": [100.0, 100.1, 100.0, 99.9]}))
+        assert len(stable) == 1
+        noisy = StrategyFormulaMapping([rule]).suggest(
+            None, _batch({"tput": [50.0, 150.0, 80.0, 120.0]})
+        )
+        assert noisy == []
+
+    def test_same_seed_is_deterministic(self):
+        rule = CandidateRule(
+            rule_id="det-rule",
+            when=[EvidenceCondition(metric_id="tput", operator=ConditionOperator.GT,
+                                    threshold=90.0, confidence=ConfidenceMode.LCB95)],
+            suggest_parameters={"k": "v"}, rationale="r", formula_id="F/v0", priority=1,
+        )
+        batch = _batch({"tput": [70.0, 110.0, 105.0, 108.0]})
+        first = StrategyFormulaMapping([rule], bootstrap_seed=7).suggest(None, batch)
+        second = StrategyFormulaMapping([rule], bootstrap_seed=7).suggest(None, batch)
+        assert [s.digest if hasattr(s, "digest") else s for s in first] == [
+            s.digest if hasattr(s, "digest") else s for s in second
+        ]

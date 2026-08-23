@@ -1,20 +1,24 @@
 """L5 公式映射逻辑：策略规则 × 证据 → 带优先级的域内候选建议。
 
-架构层：L5（docs/system-optimizer/architecture/overall.md）。逻辑保证（本模块
-最重要的职责）：
+架构层：L5（docs/system-optimizer/architecture/overall.md）。逻辑保证：
 
-1. 规则只在**全部条件命中**时触发；任一条件引用的指标在证据中缺失 →
-   该规则不触发并记录原因（fail-closed，不猜）；
-2. 建议参数必须落在组件已解析的合法域内，越域建议被拒绝并记录，
-   不静默丢弃也不静默修正；
-3. 映射只**排序与建议**，永不判定接受——门禁与终裁在 L8；
-4. 输出确定性：同策略同证据同域 → 同摘要。
+1. 条件可声明分布统计量（median/mean/p95/cv）与置信模式
+   （point / lcb95 / ucb95，bootstrap 界，formula id
+   F-PROJECT-CONDITION-BOOTSTRAP/v1）——恢复 S1.1/S4/S7 原有的
+   分布与置信纪律，不允许只看中位数点估计；
+2. 样本数低于规则的 minimum_samples、或置信模式/分布统计量缺乏
+   分布证据（collector 快照只有点值）→ 条件"未决"，规则不触发并记录
+   （fail-closed，不猜）；
+3. 全部条件命中才触发；建议参数必须落在已解析合法域内，越域拒绝并记录；
+4. 映射只排序与建议，永不终裁（L8 职责）；同策略同证据同域同种子 → 同输出。
 """
 
 from __future__ import annotations
 
+import random
 from collections.abc import Mapping
 from enum import StrEnum
+from statistics import fmean, median
 from typing import Any
 
 from pydantic import Field, model_validator
@@ -25,7 +29,7 @@ from looper_core.system_opt.collector import ComponentMetricSnapshot
 from looper_core.system_opt.component import CandidateSuggestion
 from looper_core.system_opt.scoring import MeasurementBatch
 
-from statistics import median
+CONDITION_BOOTSTRAP_FORMULA = "F-PROJECT-CONDITION-BOOTSTRAP/v1"
 
 
 class ConditionOperator(StrEnum):
@@ -35,14 +39,71 @@ class ConditionOperator(StrEnum):
     GTE = "gte"
 
 
+class ConditionStatistic(StrEnum):
+    MEDIAN = "median"
+    MEAN = "mean"
+    P95 = "p95"
+    CV = "cv"
+
+
+class ConfidenceMode(StrEnum):
+    POINT = "point"
+    LCB95 = "lcb95"
+    UCB95 = "ucb95"
+
+
+def _percentile(sorted_values: list[float], fraction: float) -> float:
+    index = min(
+        len(sorted_values) - 1, max(0, int(round(fraction * (len(sorted_values) - 1))))
+    )
+    return sorted_values[index]
+
+
+def _statistic(values: list[float], statistic: ConditionStatistic) -> float:
+    if statistic is ConditionStatistic.MEDIAN:
+        return float(median(values))
+    if statistic is ConditionStatistic.MEAN:
+        return float(fmean(values))
+    ordered = sorted(values)
+    if statistic is ConditionStatistic.P95:
+        return _percentile(ordered, 0.95)
+    if len(values) < 2:
+        raise ValueError("cv requires at least two samples")
+    mean = fmean(values)
+    if mean == 0:
+        raise ValueError("cv is undefined for a zero-mean metric")
+    variance = sum((value - mean) ** 2 for value in values) / (len(values) - 1)
+    return variance ** 0.5 / abs(mean)
+
+
+def _bootstrap_bound(
+    values: list[float], statistic: ConditionStatistic, mode: ConfidenceMode, seed: int
+) -> float:
+    generator = random.Random(seed)
+    bounds: list[float] = []
+    for _ in range(2000):
+        sample = [values[generator.randrange(len(values))] for _ in values]
+        bounds.append(_statistic(sample, statistic))
+    bounds.sort()
+    if mode is ConfidenceMode.LCB95:
+        return _percentile(bounds, 0.05)
+    return _percentile(bounds, 0.95)
+
+
 class EvidenceCondition(StrictModel):
     metric_id: str = Field(min_length=1, max_length=160)
     operator: ConditionOperator
     threshold: float
+    statistic: ConditionStatistic = ConditionStatistic.MEDIAN
+    confidence: ConfidenceMode = ConfidenceMode.POINT
+    minimum_samples: int = Field(default=1, ge=1, le=10000)
 
     @model_validator(mode="after")
     def threshold_finite(self) -> EvidenceCondition:
-        if self.threshold != self.threshold or self.threshold in (float("inf"), float("-inf")):
+        if self.threshold != self.threshold or self.threshold in (
+            float("inf"),
+            float("-inf"),
+        ):
             raise ValueError("threshold must be finite")
         return self
 
@@ -72,16 +133,26 @@ class RuleRejection(StrictModel):
     reason: str = Field(min_length=1, max_length=500)
 
 
+class _Undecided(Exception):
+    pass
+
+
+class _NotMet(Exception):
+    pass
+
+
 class StrategyFormulaMapping:
     """Evaluate strategy rules against evidence; validate suggestions in-domain."""
 
-    def __init__(self, rules: list[CandidateRule]) -> None:
+    def __init__(self, rules: list[CandidateRule], *, bootstrap_seed: int = 20260823) -> None:
         priorities = [rule.priority for rule in rules]
         if len(priorities) != len(set(priorities)):
             raise ValueError("rule priorities must be unique for a deterministic order")
         self._rules = sorted(rules, key=lambda rule: (rule.priority, rule.rule_id))
+        self._seed = bootstrap_seed
+        self.last_rejections: list[RuleRejection] = []
 
-    def _condition_holds(self, condition: EvidenceCondition, value: float) -> bool:
+    def _compare(self, value: float, condition: EvidenceCondition) -> bool:
         if condition.operator is ConditionOperator.LT:
             return value < condition.threshold
         if condition.operator is ConditionOperator.LTE:
@@ -90,24 +161,61 @@ class StrategyFormulaMapping:
             return value > condition.threshold
         return value >= condition.threshold
 
-    def _aggregate(
+    def _evaluate(
         self,
-        batch: MeasurementBatch | None,
+        condition: EvidenceCondition,
+        baseline: MeasurementBatch | None,
         snapshot: ComponentMetricSnapshot | None,
-        metric_id: str,
-    ) -> float | None:
-        # Evidence preference: measured distribution first, collector snapshot second.
-        if batch is not None and metric_id in batch.metrics:
-            values = batch.metrics[metric_id].values
-            if not values:
-                return None
-            return float(median(values))
-        if snapshot is not None and metric_id in snapshot.metrics:
-            metric = snapshot.metrics[metric_id]
+    ) -> bool:
+        if baseline is not None and condition.metric_id in baseline.metrics:
+            values = baseline.metrics[condition.metric_id].values
+            if len(values) < condition.minimum_samples:
+                raise _Undecided(
+                    f"metric '{condition.metric_id}' has {len(values)} samples, "
+                    f"below minimum_samples={condition.minimum_samples}"
+                )
+            statistic = _statistic(values, condition.statistic)
+            if condition.confidence is ConfidenceMode.POINT:
+                if not self._compare(statistic, condition):
+                    raise _NotMet(
+                        f"{condition.metric_id}={statistic} fails "
+                        f"{condition.operator.value} {condition.threshold}"
+                    )
+                return True
+            bound = _bootstrap_bound(
+                values, condition.statistic, condition.confidence, self._seed
+            )
+            if not self._compare(bound, condition):
+                raise _NotMet(
+                    f"{condition.metric_id} {condition.confidence.value}={bound} fails "
+                    f"{condition.operator.value} {condition.threshold}"
+                )
+            return True
+        if snapshot is not None and condition.metric_id in snapshot.metrics:
+            metric = snapshot.metrics[condition.metric_id]
             if metric.value is None:
-                return None
-            return float(metric.value)
-        return None
+                raise _Undecided(
+                    f"metric '{condition.metric_id}' is unavailable in the snapshot"
+                )
+            if condition.confidence is not ConfidenceMode.POINT:
+                raise _Undecided(
+                    f"metric '{condition.metric_id}': confidence mode "
+                    f"{condition.confidence.value} requires a measurement batch; "
+                    "the snapshot carries a single point value"
+                )
+            if condition.statistic is not ConditionStatistic.MEDIAN:
+                raise _Undecided(
+                    f"metric '{condition.metric_id}': snapshot supports median only, "
+                    f"not {condition.statistic.value}"
+                )
+            value = float(metric.value)
+            if not self._compare(value, condition):
+                raise _NotMet(
+                    f"{condition.metric_id}={value} fails "
+                    f"{condition.operator.value} {condition.threshold}"
+                )
+            return True
+        raise _Undecided(f"metric '{condition.metric_id}' missing in evidence")
 
     def suggest(
         self,
@@ -117,20 +225,22 @@ class StrategyFormulaMapping:
         if baseline is None and snapshot is None:
             raise ValueError("formula mapping requires at least one evidence source")
         suggestions: list[CandidateSuggestion] = []
+        rejections: list[RuleRejection] = []
         for rule in self._rules:
-            reasons: list[str] = []
+            fired = True
+            reason: str | None = None
             for condition in rule.when:
-                value = self._aggregate(baseline, snapshot, condition.metric_id)
-                if value is None:
-                    reasons.append(f"metric '{condition.metric_id}' missing or empty in evidence")
+                try:
+                    self._evaluate(condition, baseline, snapshot)
+                except _NotMet as not_met:
+                    reason = str(not_met)
+                    fired = False
                     break
-                if not self._condition_holds(condition, value):
-                    reasons.append(
-                        f"{condition.metric_id}={value} fails {condition.operator.value} "
-                        f"{condition.threshold}"
-                    )
+                except _Undecided as undecided:
+                    reason = f"undecided (fail-closed): {undecided}"
+                    fired = False
                     break
-            if not reasons:
+            if fired:
                 suggestions.append(
                     CandidateSuggestion(
                         parameters=dict(rule.suggest_parameters),
@@ -138,30 +248,12 @@ class StrategyFormulaMapping:
                         formula_id=rule.formula_id,
                     )
                 )
-        self.last_rejections = [
-            RuleRejection(rule_id=rule.rule_id, reason=reason)
-            for rule in self._rules
-            for reason in [self._first_failure(rule, baseline, snapshot)]
-            if reason is not None
-        ]
-        return suggestions
-
-    def _first_failure(
-        self,
-        rule: CandidateRule,
-        baseline: MeasurementBatch | None,
-        snapshot: ComponentMetricSnapshot | None,
-    ) -> str | None:
-        for condition in rule.when:
-            value = self._aggregate(baseline, snapshot, condition.metric_id)
-            if value is None:
-                return f"metric '{condition.metric_id}' missing or empty in evidence"
-            if not self._condition_holds(condition, value):
-                return (
-                    f"{condition.metric_id}={value} fails {condition.operator.value} "
-                    f"{condition.threshold}"
+            else:
+                rejections.append(
+                    RuleRejection(rule_id=rule.rule_id, reason=reason or "unknown")
                 )
-        return None
+        self.last_rejections = rejections
+        return suggestions
 
 
 def validate_suggestions_in_domain(
@@ -178,7 +270,11 @@ def validate_suggestions_in_domain(
             if name not in domains:
                 problems.append(f"parameter '{name}' is not in the resolved search space")
                 continue
-            parameter = domains[name].to_search_parameter() if hasattr(domains[name], "to_search_parameter") else None
+            parameter = (
+                domains[name].to_search_parameter()
+                if hasattr(domains[name], "to_search_parameter")
+                else None
+            )
             choices = getattr(parameter, "choices", None) if parameter is not None else None
             if choices is not None and value not in choices:
                 problems.append(f"value {value!r} outside authorized choices {choices}")
@@ -192,8 +288,11 @@ def validate_suggestions_in_domain(
 
 
 __all__ = [
+    "CONDITION_BOOTSTRAP_FORMULA",
     "CandidateRule",
     "ConditionOperator",
+    "ConditionStatistic",
+    "ConfidenceMode",
     "EvidenceCondition",
     "RuleRejection",
     "StrategyFormulaMapping",
