@@ -1,3 +1,9 @@
+"""L2 测量与打分公式：S0 可比、S2 门禁、S4 组件优先级、S6 改善量、S7 接受。
+
+架构层：L2（docs/system-optimizer/architecture/overall.md）；公式来源
+contracts/formula-provenance.md。所有派生值引用输入 digest 与公式版本，fail-closed。
+"""
+
 from __future__ import annotations
 
 import math

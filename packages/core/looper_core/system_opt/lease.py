@@ -1,3 +1,9 @@
+"""L1 单目标文件租约：所有权、fencing、过期对账与 needs-attention。
+
+架构层：L1（docs/system-optimizer/architecture/overall.md）。
+单写者租约 + fencing token；冲突或过期接管需先 reconcile，否则 fail-closed。
+"""
+
 from __future__ import annotations
 
 import json

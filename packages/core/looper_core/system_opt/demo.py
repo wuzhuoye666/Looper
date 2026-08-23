@@ -1,3 +1,9 @@
+"""确定性合成演示/测试夹具：构建 synthetic manifest、policy、域与测量适配器。
+
+性质：只证明代码闭环可跑，不证明任何真实性能收益（source 一律标注 synthetic）。
+GENERAL 与 WORKLOAD 两种模式的 E2E 都从这里构造，供 demo 与测试复用。
+"""
+
 from __future__ import annotations
 
 import hashlib

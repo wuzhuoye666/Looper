@@ -1,3 +1,9 @@
+"""L0 确定性模拟执行后端：当前唯一默认启用的后端，供测试与故障注入。
+
+架构层：L0（docs/system-optimizer/architecture/overall.md）。
+支持漂移、延迟与故障注入；同 seed 同 trace，保证测试可复现。
+"""
+
 from __future__ import annotations
 
 from typing import Any

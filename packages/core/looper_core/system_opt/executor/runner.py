@@ -1,3 +1,9 @@
+"""L0 子进程命令执行器：显式可执行文件与可写文件根白名单。
+
+架构层：L0（docs/system-optimizer/architecture/overall.md）。
+仅允许白名单内的可执行文件在允许的根目录内执行，防止任意命令注入。
+"""
+
 from __future__ import annotations
 
 import subprocess

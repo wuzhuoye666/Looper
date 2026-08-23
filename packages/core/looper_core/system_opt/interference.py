@@ -1,3 +1,9 @@
+"""L3/L4 独占窗口进程干扰门禁：检测禁止进程，保护压力测量不被污染。
+
+架构层：L3/L4（docs/system-optimizer/architecture/overall.md）。
+只读扫描进程树，忽略自身祖先并脱敏命令；检测到干扰时 fail-closed。
+"""
+
 from __future__ import annotations
 
 import argparse

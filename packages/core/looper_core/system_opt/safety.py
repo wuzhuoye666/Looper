@@ -1,3 +1,9 @@
+"""L1 安全执行原语：preflight → snapshot → apply → verify → rollback（fail-closed）。
+
+架构层：L1（docs/system-optimizer/architecture/overall.md）。
+多接口修改是补偿事务，不宣称内核级原子；回退后必须读回验证，失败进入 needs-attention。
+"""
+
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping

@@ -1,3 +1,9 @@
+"""L0 执行后端门面：后端能力、preflight/apply/verify/rollback 接口与结果模型。
+
+架构层：L0（docs/system-optimizer/architecture/overall.md）。
+后端包括 simulated / local-linux / ssh-remote；真实后端默认禁用，需显式授权。
+"""
+
 from __future__ import annotations
 
 from enum import StrEnum

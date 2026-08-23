@@ -1,3 +1,9 @@
+"""L1 配置清点：环境指纹、manifest/raw/tool 清单、完整性与权限状态。
+
+架构层：L1（docs/system-optimizer/architecture/overall.md）。
+为可比性（S0）提供环境指纹；区分枚举与可读性，权限拒绝如实上报。
+"""
+
 from __future__ import annotations
 
 import base64

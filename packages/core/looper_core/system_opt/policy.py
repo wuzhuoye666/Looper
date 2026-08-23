@@ -1,3 +1,9 @@
+"""L5 优化策略合同：mode、指标、门禁、统计、搜索与安全合同的声明式定义。
+
+架构层：L5（docs/system-optimizer/architecture/overall.md）。
+所有数值策略必须由任务合同显式提供，禁止隐式默认；YAML 解析失败即 fail-closed。
+"""
+
 from __future__ import annotations
 
 from enum import StrEnum

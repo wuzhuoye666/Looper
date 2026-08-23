@@ -1,3 +1,9 @@
+"""L0 SSH 远程执行后端：经本机后端接口转发到远程主机，默认禁用。
+
+架构层：L0（docs/system-optimizer/architecture/overall.md）。
+真实 CVM 未验收；启用需显式能力、权限与操作者授权。
+"""
+
 from __future__ import annotations
 
 import base64
