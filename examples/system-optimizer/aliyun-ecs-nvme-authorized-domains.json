@@ -1,0 +1,13 @@
+[
+  {
+    "item_id": "io-nvme0n1-scheduler",
+    "domain": {
+      "minimum": null,
+      "maximum": null,
+      "step": null,
+      "choices": ["mq-deadline", "none"],
+      "log": false
+    },
+    "reason": "User authorized the confirmed mq-deadline versus none experiment on 2026-08-23; every candidate must roll back."
+  }
+]
