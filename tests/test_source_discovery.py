@@ -87,6 +87,33 @@ def test_parameter_locations_are_normalized() -> None:
     assert interface.confidence == 0.85
 
 
+def test_completed_discovery_never_exposes_stale_failure() -> None:
+    from looper_api.source_discovery import discovery_view
+    from looper_core.canonical import new_id, utc_now
+
+    record = SourceDiscoveryRecord(
+        id=new_id("discovery"),
+        archive_name="app.zip",
+        source_digest="sha256:test",
+        status="completed",
+        provider="deepseek",
+        model="deepseek-test",
+        file_manifest_json=[],
+        excluded_files_json=[],
+        contract_json={"apiVersion": CONTRACT_VERSION, "spec": {"interfaces": []}},
+        trace_json=[],
+        error_code="source_discovery_interrupted",
+        error_message="stale concurrent recovery",
+        created_at=utc_now(),
+        completed_at=utc_now(),
+    )
+
+    view = discovery_view(record)
+    assert view["status"] == "completed"
+    assert view["error"] is None
+    assert view["completedAt"] == record.completed_at.isoformat()
+
+
 @pytest.mark.asyncio
 async def test_harness_executes_only_read_tools_and_validates_evidence(tmp_path: Path) -> None:
     workspace = SourceWorkspace.from_zip(

@@ -685,7 +685,7 @@ def discovery_view(record: SourceDiscoveryRecord) -> dict[str, Any]:
         "contract": record.contract_json,
         "trace": record.trace_json,
         "error": {"code": record.error_code, "message": record.error_message}
-        if record.error_code
+        if record.status == "failed" and record.error_code
         else None,
         "createdAt": record.created_at.isoformat(),
         "completedAt": record.completed_at.isoformat() if record.completed_at else None,
@@ -724,6 +724,8 @@ async def create_discovery(
         record.contract_json = contract
         record.trace_json = trace
         record.status = "completed"
+        record.error_code = None
+        record.error_message = None
     except asyncio.CancelledError:
         record.status = "failed"
         record.error_code = "source_discovery_cancelled"
