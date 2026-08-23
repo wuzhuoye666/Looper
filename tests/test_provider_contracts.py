@@ -416,6 +416,13 @@ def test_alibaba_network_catalog_maps_vpc_resources(monkeypatch) -> None:
 
 def test_alibaba_catalog_search_scans_later_pages(monkeypatch) -> None:
     provider = AlibabaEcsProvider()
+    monkeypatch.setattr(
+        provider,
+        "_availability",
+        lambda _filters: {
+            "ecs.target.large": [{"zone": "cn-test-a", "available": True}]
+        },
+    )
     calls: list[tuple[str, object]] = []
     first_types = [
         SimpleNamespace(
@@ -483,9 +490,86 @@ def test_alibaba_catalog_search_scans_later_pages(monkeypatch) -> None:
     assert len([method for method, _ in calls if method == "describe_images"]) == 2
 
 
+def test_alibaba_instance_catalog_reads_every_page_and_rejects_stalled_tokens(
+    monkeypatch,
+) -> None:
+    provider = AlibabaEcsProvider()
+    calls: list[str | None] = []
+    inventory = {
+        f"ecs.full.{index}": [{"zone": "cn-test-a", "available": True}]
+        for index in range(620)
+    }
+    inventory.update(
+        {
+            "ecs.stalled.first": [{"zone": "cn-test-a", "available": True}],
+            "ecs.stalled.same-token": [{"zone": "cn-test-a", "available": True}],
+        }
+    )
+    monkeypatch.setattr(provider, "_availability", lambda _filters: inventory)
+
+    def call(_method: str, _region: str, request: object):
+        calls.append(request.next_token)
+        offset = int(request.next_token or 0)
+        rows = [
+            SimpleNamespace(
+                instance_type_id=f"ecs.full.{index}",
+                instance_type_family="ecs.full",
+                cpu_core_count=2,
+                memory_size=4,
+            )
+            for index in range(offset, min(offset + 100, 620))
+        ]
+        next_token = str(offset + 100) if offset + 100 < 620 else None
+        return SimpleNamespace(
+            body=SimpleNamespace(
+                next_token=next_token,
+                instance_types=SimpleNamespace(instance_type=rows),
+            )
+        )
+
+    monkeypatch.setattr(provider, "_call", call)
+    result = provider.search_instance_types(CatalogFilters(region="cn-test", limit=20))
+    assert len(result) == 620
+    assert calls == [None, "100", "200", "300", "400", "500", "600"]
+
+    def stalled(_method: str, _region: str, request: object):
+        return SimpleNamespace(
+            body=SimpleNamespace(
+                next_token="same-token",
+                instance_types=SimpleNamespace(
+                    instance_type=[
+                        SimpleNamespace(
+                            instance_type_id=f"ecs.stalled.{request.next_token or 'first'}",
+                            instance_type_family="ecs.stalled",
+                            cpu_core_count=2,
+                            memory_size=4,
+                        )
+                    ]
+                ),
+            )
+        )
+
+    monkeypatch.setattr(provider, "_call", stalled)
+    with pytest.raises(CloudProviderError, match="repeated a token"):
+        provider.search_instance_types(CatalogFilters(region="cn-test", limit=20))
+
+
 def test_alibaba_instance_catalog_normalizes_selection_attributes(monkeypatch) -> None:
     provider = AlibabaEcsProvider()
-    monkeypatch.setattr(provider, "_availability", lambda _filters: {"ecs.gn9i.xlarge": True})
+    monkeypatch.setattr(
+        provider,
+        "_availability",
+        lambda _filters: {
+            "ecs.gn9i.xlarge": [
+                {
+                    "zone": "cn-test-a",
+                    "available": True,
+                    "status": "Available",
+                    "statusCategory": "WithStock",
+                }
+            ]
+        },
+    )
 
     def call(_method: str, _region: str, _request: object):
         return SimpleNamespace(
@@ -529,6 +613,138 @@ def test_alibaba_instance_catalog_normalizes_selection_attributes(monkeypatch) -
     assert item.local_storage_count == 2
     assert item.local_storage_capacity_gib == 1900
     assert item.local_storage_category == "local_ssd_pro"
+    assert item.zones == ["cn-test-a"]
+    capability = item.attributes["zoneCapabilities"][0]
+    assert capability["available"] is True
+    assert capability["networkBandwidthGbps"] == 20
+    assert capability["networkPps"] == 2_500_000
+    assert capability["localStorageCategory"] == "local_ssd_pro"
+
+
+def test_alibaba_instance_catalog_aggregates_regional_inventory_and_hides_absent_types(
+    monkeypatch,
+) -> None:
+    provider = AlibabaEcsProvider()
+    calls: list[tuple[str, str | None]] = []
+    type_rows = [
+        SimpleNamespace(
+            instance_type_id=instance_type,
+            instance_type_family="ecs.g6",
+            cpu_core_count=cpu,
+            memory_size=cpu * 4,
+        )
+        for instance_type, cpu in [
+            ("ecs.g6.2xlarge", 8),
+            ("ecs.g6.13xlarge", 52),
+            ("ecs.g6.20xlarge", 80),
+            ("ecs.g6.32xlarge", 128),
+        ]
+    ]
+    inventory = {
+        "cn-test-a": [
+            ("ecs.g6.2xlarge", "Available", "WithStock"),
+            ("ecs.g6.13xlarge", "SoldOut", "WithoutStock"),
+            ("ecs.g6.20xlarge", "FutureStatus", "FutureCategory"),
+        ],
+        "cn-test-b": [
+            ("ecs.g6.2xlarge", "SoldOut", "WithoutStock"),
+            ("ecs.g6.13xlarge", "SoldOut", "ClosedWithoutStock"),
+        ],
+    }
+
+    def available_resource_response(zone: str) -> SimpleNamespace:
+        supported = [
+            SimpleNamespace(value=value, status=status, status_category=category)
+            for value, status, category in inventory[zone]
+        ]
+        return SimpleNamespace(
+            body=SimpleNamespace(
+                available_zones=SimpleNamespace(
+                    available_zone=[
+                        SimpleNamespace(
+                            zone_id=zone,
+                            available_resources=SimpleNamespace(
+                                available_resource=[
+                                    SimpleNamespace(
+                                        supported_resources=SimpleNamespace(
+                                            supported_resource=supported
+                                        )
+                                    )
+                                ]
+                            ),
+                        )
+                    ]
+                )
+            )
+        )
+
+    def call(method: str, _region: str, request: object):
+        calls.append((method, getattr(request, "zone_id", None)))
+        if method == "describe_zones":
+            return SimpleNamespace(
+                body=SimpleNamespace(
+                    zones=SimpleNamespace(
+                        zone=[
+                            SimpleNamespace(
+                                zone_id="cn-test-a",
+                                local_name="测试一区",
+                                zone_type="AvailabilityZone",
+                            ),
+                            SimpleNamespace(
+                                zone_id="cn-test-b",
+                                local_name="测试二区",
+                                zone_type="AvailabilityZone",
+                            ),
+                            SimpleNamespace(
+                                zone_id="cn-test-cloudbox",
+                                local_name="云盒测试区",
+                                zone_type="CloudBoxZone",
+                            ),
+                        ]
+                    )
+                )
+            )
+        if method == "describe_available_resource":
+            return available_resource_response(request.zone_id)
+        return SimpleNamespace(
+            body=SimpleNamespace(
+                next_token=None,
+                instance_types=SimpleNamespace(instance_type=type_rows),
+            )
+        )
+
+    monkeypatch.setattr(provider, "_call", call)
+    regional = provider.search_instance_types(CatalogFilters(region="cn-test"))
+
+    assert [item.id for item in regional] == [
+        "ecs.g6.2xlarge",
+        "ecs.g6.13xlarge",
+        "ecs.g6.20xlarge",
+    ]
+    assert [item.available for item in regional] == [True, False, None]
+    assert regional[0].zones == ["cn-test-a", "cn-test-b"]
+    assert [
+        capability["available"]
+        for capability in regional[0].attributes["zoneCapabilities"]
+    ] == [True, False]
+    assert calls[:3] == [
+        ("describe_zones", None),
+        ("describe_available_resource", "cn-test-a"),
+        ("describe_available_resource", "cn-test-b"),
+    ]
+
+    calls.clear()
+    selected_zone = provider.search_instance_types(
+        CatalogFilters(region="cn-test", zone="cn-test-a")
+    )
+    assert [item.id for item in selected_zone] == [
+        "ecs.g6.2xlarge",
+        "ecs.g6.13xlarge",
+        "ecs.g6.20xlarge",
+    ]
+    assert all(item.zones == ["cn-test-a"] for item in selected_zone)
+    assert calls[0] == ("describe_available_resource", "cn-test-a")
+    assert not any(method == "describe_zones" for method, _zone in calls)
 
 
 def test_tencent_image_search_scans_later_pages(monkeypatch) -> None:

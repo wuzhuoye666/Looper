@@ -35,7 +35,6 @@ from looper_api.providers.utils import (
     environment_credentials,
     filter_images,
     filter_instance_types,
-    image_scan_limit,
     legacy_cloud_target_ids,
     optional_environment,
     parse_datetime,
@@ -545,9 +544,8 @@ class TencentCvmProvider(CloudProvider):
             provider_filters.append({"Name": "platform", "Values": [filters.platform]})
         items: list[ImageInfo] = []
         offset = 0
-        scan_limit = image_scan_limit(filters)
-        while len(items) < scan_limit:
-            page_size = min(100, scan_limit - len(items))
+        page_size = 100
+        while True:
             request = models.DescribeImagesRequest()
             request.from_json_string(
                 canonical_json({"Filters": provider_filters, "Offset": offset, "Limit": page_size})

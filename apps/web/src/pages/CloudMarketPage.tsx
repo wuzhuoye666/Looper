@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   AlertTriangle,
   Calculator,
@@ -69,7 +69,6 @@ export function CloudMarketPage() {
   const [advisorOpen, setAdvisorOpen] = useState(false);
   const [search, setSearch] = useState('');
   const [catalogSearch, setCatalogSearch] = useState('');
-  const [visibleCatalogCount, setVisibleCatalogCount] = useState(CATALOG_PAGE_SIZE);
   const [minCpu, setMinCpu] = useState(0);
   const [minMemory, setMinMemory] = useState(0);
   const [selectedType, setSelectedType] = useState<CloudInstanceType | null>(null);
@@ -119,16 +118,19 @@ export function CloudMarketPage() {
     enabled: !!region && !!providerInfo?.credentialsConfigured,
     staleTime: 300_000,
   });
-  const catalog = useQuery({
+  const catalog = useInfiniteQuery({
     queryKey: ['cloud-catalog', provider, kind, region, zone, catalogSearch, minCpu, minMemory],
-    queryFn: () => api.catalog<CloudInstanceType | CloudImage>(provider, kind, {
+    queryFn: ({ pageParam }) => api.catalog<CloudInstanceType | CloudImage>(provider, kind, {
       region,
       zone: kind === 'instance-type' ? zone : undefined,
       query: catalogSearch,
       min_cpu: kind === 'instance-type' && minCpu ? minCpu : undefined,
       min_memory_gib: kind === 'instance-type' && minMemory ? minMemory : undefined,
-      limit: 80,
+      offset: pageParam,
+      limit: CATALOG_PAGE_SIZE,
     }),
+    initialPageParam: 0,
+    getNextPageParam: lastPage => lastPage.nextOffset ?? undefined,
     enabled: !!region && !!providerInfo?.credentialsConfigured && !(selectionAdvisorSupported && advisorOpen && kind === 'instance-type'),
     staleTime: 30_000,
   });
@@ -156,9 +158,10 @@ export function CloudMarketPage() {
     enabled: networkQueriesEnabled && !!region && !!providerInfo?.capabilities.includes('key-pairs'),
     staleTime: 30_000,
   });
-  const items = catalog.data?.items || [];
-  const visibleItems = items.slice(0, visibleCatalogCount);
-  const displayedCatalogCount = Math.min(visibleCatalogCount, items.length);
+  const catalogPages = catalog.data?.pages || [];
+  const catalogResult = catalogPages[0];
+  const items = catalogPages.flatMap(page => page.items);
+  const displayedCatalogCount = items.length;
   const securityGroupItems = useMemo(
     () => [...(securityGroups.data?.items || [])].sort((left, right) =>
       Number(right.recommended) - Number(left.recommended) || left.name.localeCompare(right.name)),
@@ -191,9 +194,6 @@ export function CloudMarketPage() {
     const timer = window.setTimeout(() => setCatalogSearch(search.trim()), 300);
     return () => window.clearTimeout(timer);
   }, [search]);
-  useEffect(() => {
-    setVisibleCatalogCount(CATALOG_PAGE_SIZE);
-  }, [provider, kind, region, zone, catalogSearch, minCpu, minMemory]);
   useEffect(() => {
     setAdvisorOpen(false);
     setRegion('');
@@ -367,7 +367,7 @@ export function CloudMarketPage() {
       </section>
     }
     {selectionAdvisorSupported && advisorOpen && <div id="cloud-selection-advisor" hidden={kind !== 'instance-type'}><CloudSelectionAdvisor key={provider} provider={provider} catalogAvailable={Boolean(providerInfo?.credentialsConfigured)} regions={regions.data?.items || []} zones={zones.data?.items || []} region={region} zone={zone} onRegionChange={setRegion} onZoneChange={setZone} selected={selectedType} onSelect={setSelectedType} /></div>}
-    {providerInfo?.credentialsConfigured && !(selectionAdvisorSupported && advisorOpen && kind === 'instance-type') && (catalog.isLoading ? <LoadingState /> : catalog.isError ? <ErrorState error={catalog.error} onRetry={() => catalog.refetch()} /> : items.length ? <section className="panel cloud-results"><div className="panel-heading"><div><h2>{providerLabels[provider]} · {kindLabels[kind]}</h2><p>{catalog.data?.source === 'stale-cache' ? `${catalog.data.warning} · 已显示 ${displayedCatalogCount} / ${items.length}` : `已显示 ${displayedCatalogCount} / ${items.length} 个结果`}</p></div><span className="cache-state">{catalog.data?.source === 'live' ? '实时' : '缓存'}</span></div>{kind === 'instance-type' ? <InstanceTypeTable items={visibleItems as CloudInstanceType[]} selected={selectedType} onSelect={value => setSelectedType(value)} /> : <ImageTable items={visibleItems as CloudImage[]} selected={selectedImage} onSelect={value => setSelectedImage(value)} />}{displayedCatalogCount < items.length && <button type="button" className="button secondary catalog-load-more" onClick={() => setVisibleCatalogCount(count => Math.min(count + CATALOG_PAGE_SIZE, items.length))}>加载更多（已显示 {displayedCatalogCount} / {items.length}）</button>}</section> : <EmptyState title="没有匹配的云资源" />)}
+    {providerInfo?.credentialsConfigured && !(selectionAdvisorSupported && advisorOpen && kind === 'instance-type') && (catalog.isLoading ? <LoadingState /> : catalog.isError ? <ErrorState error={catalog.error} onRetry={() => catalog.refetch()} /> : items.length ? <section className="panel cloud-results"><div className="panel-heading"><div><h2>{providerLabels[provider]} · {kindLabels[kind]}</h2><p>{catalogResult?.source === 'stale-cache' ? `${catalogResult.warning} · 已显示 ${displayedCatalogCount} / ${catalogResult.total}` : `已显示 ${displayedCatalogCount} / ${catalogResult?.total || 0} 个结果`}</p></div><span className="cache-state">{catalogResult?.source === 'live' ? '实时' : '缓存'}</span></div>{kind === 'instance-type' ? <InstanceTypeTable items={items as CloudInstanceType[]} selected={selectedType} onSelect={value => setSelectedType(value)} /> : <ImageTable items={items as CloudImage[]} selected={selectedImage} onSelect={value => setSelectedImage(value)} />}{catalog.hasNextPage && <button type="button" className="button secondary catalog-load-more" disabled={catalog.isFetchingNextPage} onClick={() => catalog.fetchNextPage()}>{catalog.isFetchingNextPage ? '加载中…' : `加载更多（已显示 ${displayedCatalogCount} / ${catalogResult?.total || 0}）`}</button>}</section> : <EmptyState title="没有匹配的云资源" />)}
 
     <section className="panel launch-panel">
       <div className="panel-heading"><div><h2>购买草稿</h2><p>仅按量付费；报价不锁定库存，创建前仍需服务端确认。</p></div><ShieldCheck size={20} /></div>

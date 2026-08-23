@@ -74,6 +74,7 @@ from looper_api.cloud_contracts import (
 )
 from looper_api.cloud_service import (
     CloudWorkflowError,
+    catalog_inventory,
     catalog_search,
     confirm_order,
     create_quote,
@@ -445,6 +446,7 @@ def cloud_catalog(
     max_memory_gib: float | None = Query(default=None, ge=0.25, le=65536),
     image_type: str | None = Query(default=None, max_length=60),
     platform: str | None = Query(default=None, max_length=80),
+    offset: int = Query(default=0, ge=0),
     limit: int = Query(default=100, ge=1, le=500),
 ) -> dict[str, Any]:
     account_resources = {"vpc", "subnet", "security-group", "key-pair"}
@@ -469,6 +471,7 @@ def cloud_catalog(
         maxMemoryGib=max_memory_gib,
         imageType=image_type,
         platform=platform,
+        offset=offset,
         limit=limit,
     )
     result = catalog_search(
@@ -490,13 +493,13 @@ def cloud_selection_advisor(
     app_settings: SettingsDependency,
     registry: ProviderRegistryDependency,
 ) -> dict[str, Any]:
-    catalog = catalog_search(
+    catalog = catalog_inventory(
         session,
         app_settings,
         registry,
         ProviderId(request.provider),
         "instance-type",
-        CatalogFilters(region=request.region, zone=request.zone, limit=500),
+        CatalogFilters(region=request.region, zone=request.zone, offset=request.offset),
     )
     response = advise_instance_types(
         request,

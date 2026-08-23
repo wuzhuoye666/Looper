@@ -150,6 +150,9 @@ class CatalogResponse(ApiModel):
     ]
     items: list[dict[str, Any]]
     total: int
+    offset: int = 0
+    limit: int = 100
+    next_offset: int | None = None
     source: Literal["live", "cache", "stale-cache"]
     fetched_at: datetime
     expires_at: datetime
@@ -168,6 +171,7 @@ class CatalogFilters(ApiModel):
     max_memory_gib: float | None = Field(default=None, ge=0.25, le=65536)
     image_type: str | None = Field(default=None, max_length=60)
     platform: str | None = Field(default=None, max_length=80)
+    offset: int = Field(default=0, ge=0)
     limit: int = Field(default=100, ge=1, le=500)
 
 

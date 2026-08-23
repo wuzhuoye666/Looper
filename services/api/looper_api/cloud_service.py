@@ -4,7 +4,9 @@ import base64
 import hashlib
 import hmac
 import json
+import re
 import secrets
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any, Literal
@@ -18,6 +20,8 @@ from looper_api.cloud_contracts import (
     CatalogFilters,
     CatalogResponse,
     CloudPurchaseSpec,
+    ImageInfo,
+    InstanceTypeInfo,
     OrderConfirmRequest,
     OrderResolveRequest,
     ProviderId,
@@ -37,7 +41,13 @@ from looper_api.models import (
 )
 from looper_api.providers.base import CloudProviderError
 from looper_api.providers.registry import CloudProviderRegistry
-from looper_api.providers.utils import cloud_target_id, legacy_cloud_target_ids, to_plain
+from looper_api.providers.utils import (
+    cloud_target_id,
+    filter_images,
+    filter_instance_types,
+    legacy_cloud_target_ids,
+    to_plain,
+)
 
 CatalogKind = Literal[
     "region",
@@ -212,12 +222,37 @@ def ensure_managed_security_group(
     return group.model_dump(mode="json", by_alias=True)
 
 
+_FULL_CATALOG_CACHE_VERSION = 3
+_PAGED_CATALOG_KINDS = {"instance-type", "image"}
+
+
+@dataclass(frozen=True)
+class _CatalogSnapshot:
+    items: list[dict[str, Any]]
+    source: Literal["live", "cache", "stale-cache"]
+    fetched_at: datetime
+    expires_at: datetime
+    stale: bool = False
+    warning: str | None = None
+
+
+def _snapshot_filters(kind: CatalogKind, filters: CatalogFilters) -> CatalogFilters:
+    if kind == "instance-type":
+        return CatalogFilters(region=filters.region, zone=filters.zone)
+    if kind == "image":
+        return CatalogFilters(region=filters.region, imageType=filters.image_type)
+    return CatalogFilters(region=filters.region, zone=filters.zone, vpcId=filters.vpc_id)
+
+
 def _cache_key(provider: ProviderId, kind: CatalogKind, filters: CatalogFilters) -> str:
     return canonical_digest(
         {
+            "version": _FULL_CATALOG_CACHE_VERSION,
             "provider": provider.value,
             "kind": kind,
-            "filters": filters.model_dump(mode="json", exclude_none=True),
+            "filters": filters.model_dump(
+                mode="json", exclude_none=True, exclude={"offset", "limit"}
+            ),
         }
     )
 
@@ -248,42 +283,75 @@ def _catalog_call(provider: Any, kind: CatalogKind, filters: CatalogFilters) -> 
     return provider.list_key_pairs(filters.region)
 
 
-def catalog_search(
+def _deduplicate_catalog(kind: CatalogKind, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if kind not in _PAGED_CATALOG_KINDS:
+        return items
+    result: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in items:
+        item_id = str(item.get("id") or "")
+        if not item_id or item_id in seen:
+            continue
+        seen.add(item_id)
+        result.append(item)
+    return result
+
+
+def _catalog_snapshot(
     session: Session,
     settings: Settings,
     registry: CloudProviderRegistry,
     provider_id: ProviderId,
     kind: CatalogKind,
     filters: CatalogFilters,
-) -> CatalogResponse:
+) -> _CatalogSnapshot:
     provider = registry.get(provider_id)
     now = utc_now()
-    key = _cache_key(provider_id, kind, filters)
+    snapshot_filters = _snapshot_filters(kind, filters)
+    key = _cache_key(provider_id, kind, snapshot_filters)
     record = session.get(CloudCatalogCacheRecord, key)
     if record and _aware(record.expires_at) > now:
-        return CatalogResponse(
-            provider=provider_id,
-            resourceType=kind,
+        return _CatalogSnapshot(
             items=record.payload_json,
-            total=len(record.payload_json),
             source="cache",
-            fetchedAt=record.fetched_at,
-            expiresAt=record.expires_at,
+            fetched_at=record.fetched_at,
+            expires_at=record.expires_at,
             stale=False,
+        )
+    if (
+        record
+        and filters.offset > 0
+        and _aware(record.fetched_at) + timedelta(seconds=settings.cloud_stale_cache_seconds) > now
+    ):
+        return _CatalogSnapshot(
+            items=record.payload_json,
+            source="stale-cache",
+            fetched_at=record.fetched_at,
+            expires_at=_aware(record.fetched_at)
+            + timedelta(seconds=settings.cloud_stale_cache_seconds),
+            stale=True,
+            warning="为保持分页顺序一致，继续使用当前目录快照",
         )
 
     try:
-        models = _catalog_call(provider, kind, filters)
-        payload = [model.model_dump(mode="json", by_alias=True) for model in models]
+        models = _catalog_call(provider, kind, snapshot_filters)
+        payload = _deduplicate_catalog(
+            kind, [model.model_dump(mode="json", by_alias=True) for model in models]
+        )
         expires = now + timedelta(seconds=settings.cloud_catalog_ttl_seconds)
         if record is None:
             record = CloudCatalogCacheRecord(
                 key=key,
                 provider=provider_id.value,
                 resource_type=kind,
-                region=filters.region,
-                zone=filters.zone,
-                query_json=filters.model_dump(mode="json", exclude_none=True),
+                region=snapshot_filters.region,
+                zone=snapshot_filters.zone,
+                query_json={
+                    "version": _FULL_CATALOG_CACHE_VERSION,
+                    **snapshot_filters.model_dump(
+                        mode="json", exclude_none=True, exclude={"offset", "limit"}
+                    ),
+                },
                 payload_json=payload,
                 fetched_at=now,
                 expires_at=expires,
@@ -296,14 +364,11 @@ def catalog_search(
             record.expires_at = expires
             record.last_error = None
         session.flush()
-        return CatalogResponse(
-            provider=provider_id,
-            resourceType=kind,
+        return _CatalogSnapshot(
             items=payload,
-            total=len(payload),
             source="live",
-            fetchedAt=now,
-            expiresAt=expires,
+            fetched_at=now,
+            expires_at=expires,
             stale=False,
         )
     except (CloudProviderError, CloudWorkflowError) as error:
@@ -316,18 +381,109 @@ def catalog_search(
             stale_expires = _aware(record.fetched_at) + timedelta(
                 seconds=settings.cloud_stale_cache_seconds
             )
-            return CatalogResponse(
-                provider=provider_id,
-                resourceType=kind,
+            return _CatalogSnapshot(
                 items=record.payload_json,
-                total=len(record.payload_json),
                 source="stale-cache",
-                fetchedAt=record.fetched_at,
-                expiresAt=stale_expires,
+                fetched_at=record.fetched_at,
+                expires_at=stale_expires,
                 stale=True,
                 warning=f"实时查询失败，显示缓存：{error}",
             )
         raise
+
+
+def catalog_inventory(
+    session: Session,
+    settings: Settings,
+    registry: CloudProviderRegistry,
+    provider_id: ProviderId,
+    kind: CatalogKind,
+    filters: CatalogFilters,
+) -> CatalogResponse:
+    snapshot = _catalog_snapshot(session, settings, registry, provider_id, kind, filters)
+    return CatalogResponse(
+        provider=provider_id,
+        resourceType=kind,
+        items=snapshot.items,
+        total=len(snapshot.items),
+        offset=0,
+        limit=max(len(snapshot.items), 1),
+        nextOffset=None,
+        source=snapshot.source,
+        fetchedAt=snapshot.fetched_at,
+        expiresAt=snapshot.expires_at,
+        stale=snapshot.stale,
+        warning=snapshot.warning,
+    )
+
+
+def _natural_catalog_key(value: str) -> tuple[tuple[int, int | str], ...]:
+    return tuple(
+        (1, int(part)) if part.isdigit() else (0, part.casefold())
+        for part in re.split(r"(\d+)", value)
+        if part
+    )
+
+
+def _inventory_sort_rank(available: bool | None) -> int:
+    if available is True:
+        return 0
+    if available is False:
+        return 1
+    return 2
+
+
+def catalog_search(
+    session: Session,
+    settings: Settings,
+    registry: CloudProviderRegistry,
+    provider_id: ProviderId,
+    kind: CatalogKind,
+    filters: CatalogFilters,
+) -> CatalogResponse:
+    snapshot = _catalog_snapshot(session, settings, registry, provider_id, kind, filters)
+    items = snapshot.items
+    if kind == "instance-type":
+        models = filter_instance_types(
+            [InstanceTypeInfo.model_validate(item) for item in items], filters
+        )
+        if provider_id in {ProviderId.TENCENT, ProviderId.ALIBABA}:
+            models.sort(
+                key=lambda item: (
+                    _inventory_sort_rank(item.available),
+                    _natural_catalog_key(item.id),
+                    item.id,
+                )
+            )
+        else:
+            models.sort(key=lambda item: (_natural_catalog_key(item.id), item.id))
+        items = [item.model_dump(mode="json", by_alias=True) for item in models]
+    elif kind == "image":
+        models = filter_images([ImageInfo.model_validate(item) for item in items], filters)
+        items = [item.model_dump(mode="json", by_alias=True) for item in models]
+
+    total = len(items)
+    if kind in _PAGED_CATALOG_KINDS:
+        page = items[filters.offset : filters.offset + filters.limit]
+        next_offset = filters.offset + filters.limit
+        next_offset = next_offset if next_offset < total else None
+    else:
+        page = items
+        next_offset = None
+    return CatalogResponse(
+        provider=provider_id,
+        resourceType=kind,
+        items=page,
+        total=total,
+        offset=filters.offset if kind in _PAGED_CATALOG_KINDS else 0,
+        limit=filters.limit,
+        nextOffset=next_offset,
+        source=snapshot.source,
+        fetchedAt=snapshot.fetched_at,
+        expiresAt=snapshot.expires_at,
+        stale=snapshot.stale,
+        warning=snapshot.warning,
+    )
 
 
 def _public_spec(spec_json: dict[str, Any]) -> dict[str, Any]:

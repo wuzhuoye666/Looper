@@ -177,7 +177,7 @@ export interface SelectionAdvisorRequest {
   exactMemoryGib?: number; workloadScale?: string; minimumGpuCount: number;
   localStorage: 'required' | 'not-required' | 'unknown'; minimumNetworkBandwidthGbps?: number;
   minimumNetworkPps?: number; codeAvailability: 'available' | 'unavailable' | 'unknown';
-  architecture: 'x86' | 'arm' | 'unknown'; offset: number; limit: number;
+  architecture: 'x86' | 'arm' | 'unknown'; query?: string; offset: number; limit: number;
 }
 export interface SelectionExclusionStage {
   code: string; label: string; before: number; after: number; removed: number;
@@ -187,7 +187,7 @@ export interface AdvisedCloudInstanceType extends CloudInstanceType {
 }
 export interface SelectionAdvisorResponse {
   provider: 'alibaba' | 'tencent'; region: string; zone?: string; items: AdvisedCloudInstanceType[]; total: number;
-  offset: number; limit: number; nextOffset?: number; exclusionStages: SelectionExclusionStage[];
+  eligibleTotal: number; offset: number; limit: number; nextOffset?: number; exclusionStages: SelectionExclusionStage[];
   mostRestrictiveStage?: SelectionExclusionStage; source: 'live' | 'cache' | 'stale-cache';
   fetchedAt: string; expiresAt: string; stale: boolean; warning?: string;
 }
@@ -197,6 +197,7 @@ export interface CloudImage {
 }
 export interface CloudCatalogResponse<T> {
   provider: CloudProviderId; resourceType: string; items: T[]; total: number;
+  offset: number; limit: number; nextOffset?: number;
   source: 'live' | 'cache' | 'stale-cache'; fetchedAt: string; expiresAt: string; stale: boolean; warning?: string;
 }
 export interface CloudPurchaseSpec {

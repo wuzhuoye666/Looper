@@ -53,6 +53,7 @@ class SelectionAdvisorRequest(ApiModel):
     minimum_network_pps: int | None = Field(default=None, ge=0, le=2_000_000_000)
     code_availability: Literal["available", "unavailable", "unknown"] = "unknown"
     architecture: Literal["x86", "arm", "unknown"] = "unknown"
+    query: str | None = Field(default=None, max_length=120)
     offset: int = Field(default=0, ge=0)
     limit: int = Field(default=20, ge=1, le=100)
 
@@ -89,6 +90,7 @@ class SelectionAdvisorResponse(ApiModel):
     zone: str | None = None
     items: list[AdvisedInstanceType]
     total: int
+    eligible_total: int
     offset: int
     limit: int
     next_offset: int | None = None
@@ -238,7 +240,7 @@ def _capability_matches(
     pps: bool = False,
 ) -> bool:
     available = capability.get("available")
-    if request.provider == "tencent" and request.zone is None:
+    if request.provider in {"tencent", "alibaba"} and request.zone is None:
         if available is not True:
             return False
     elif available is False:
@@ -353,7 +355,7 @@ def _reasons_and_warnings(
     if request.local_storage == "required":
         reasons.append("提供本地盘")
     eligible_zones = _eligible_zones(item, request)
-    if request.provider == "tencent" and request.zone is None and eligible_zones:
+    if request.provider in {"tencent", "alibaba"} and request.zone is None and eligible_zones:
         reasons.append(f"地域内 {len(eligible_zones)} 个可用区满足硬约束")
         warnings.append(
             f"地域聚合结果，需选择可用区确认；当前匹配：{'、'.join(eligible_zones)}"
@@ -368,6 +370,12 @@ def _reasons_and_warnings(
         if str(capability.get("zone") or "") in eligible_zones
     ):
         warnings.append("部分匹配可用区库存即将售罄")
+    if any(
+        str(capability.get("statusCategory") or "").casefold() == "closedwithstock"
+        for capability in _zone_capabilities(item)
+        if str(capability.get("zone") or "") in eligible_zones
+    ):
+        warnings.append("部分匹配可用区当前有库存，但不会继续补充")
     if request.architecture == "unknown" and _architecture_kind(item.architecture) == "arm":
         warnings.append("ARM 兼容性未经代码分析验证")
     if request.code_availability != "available":
@@ -477,8 +485,15 @@ def advise_instance_types(
             item.id,
         ),
     )
+    eligible_total = len(ranked)
+    query = (request.query or "").casefold()
+    searched = [
+        item
+        for item in ranked
+        if not query or query in f"{item.id} {item.family or ''}".casefold()
+    ]
     advised: list[AdvisedInstanceType] = []
-    for item in ranked[request.offset : request.offset + request.limit]:
+    for item in searched[request.offset : request.offset + request.limit]:
         rank = _combined_family_rank(item, request)
         reasons, warnings, tier = _reasons_and_warnings(item, request, rank)
         advised.append(
@@ -493,10 +508,11 @@ def advise_instance_types(
         region=request.region,
         zone=request.zone,
         items=advised,
-        total=len(ranked),
+        total=len(searched),
+        eligibleTotal=eligible_total,
         offset=request.offset,
         limit=request.limit,
-        nextOffset=next_offset if next_offset < len(ranked) else None,
+        nextOffset=next_offset if next_offset < len(searched) else None,
         exclusionStages=stages,
         mostRestrictiveStage=(
             most_restrictive if most_restrictive and most_restrictive.removed else None

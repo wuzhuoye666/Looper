@@ -11,12 +11,15 @@ function response(data: unknown) {
   });
 }
 
-function catalog(resourceType: string, items: unknown[]) {
+function catalog(resourceType: string, items: unknown[], total = items.length, offset = 0, nextOffset?: number) {
   return {
     provider: 'tencent',
     resourceType,
     items,
-    total: items.length,
+    total,
+    offset,
+    limit: 20,
+    nextOffset,
     source: 'live',
     fetchedAt: '2026-08-21T00:00:00Z',
     expiresAt: '2026-08-21T00:05:00Z',
@@ -65,28 +68,36 @@ describe('腾讯云购买网络选择', () => {
       if (url.includes('/cloud/catalog/tencent/zone')) return response(catalog('zone', [
         { provider: 'tencent', region: 'ap-test', id: 'ap-test-1', name: '测试一区', available: true },
       ]));
-      if (url.includes('/cloud/catalog/tencent/instance-type')) return response(catalog('instance-type', Array.from({ length: 25 }, (_, index) => ({
-        provider: 'tencent',
-        region: 'ap-test',
-        zone: 'ap-test-1',
-        id: index === 0 ? 'S9.TEST' : `S9.TEST.${String(index + 1).padStart(2, '0')}`,
-        family: 'S9',
-        cpu: 4,
-        memoryGib: 8,
-        architecture: 'x86',
-        available: true,
-      }))));
-      if (url.includes('/cloud/catalog/tencent/image')) return response(catalog('image', Array.from({ length: 25 }, (_, index) => ({
-        provider: 'tencent',
-        region: 'ap-test',
-        id: index === 0 ? 'img-tencentos-test' : `img-tencentos-test-${index + 1}`,
-        name: index === 0 ? 'TencentOS Server 4 for x86_64' : `TencentOS Server 4 test image ${index + 1}`,
-        platform: 'TencentOS',
-        architecture: 'x86_64',
-        imageType: 'PUBLIC_IMAGE',
-        sizeGib: 20,
-        available: true,
-      }))));
+      if (url.includes('/cloud/catalog/tencent/instance-type')) {
+        const offset = Number(new URL(url).searchParams.get('offset') || 0);
+        const all = Array.from({ length: 25 }, (_, index) => ({
+          provider: 'tencent',
+          region: 'ap-test',
+          zone: 'ap-test-1',
+          id: index === 0 ? 'S9.TEST' : `S9.TEST.${String(index + 1).padStart(2, '0')}`,
+          family: 'S9',
+          cpu: 4,
+          memoryGib: 8,
+          architecture: 'x86',
+          available: true,
+        }));
+        return response(catalog('instance-type', all.slice(offset, offset + 20), all.length, offset, offset + 20 < all.length ? offset + 20 : undefined));
+      }
+      if (url.includes('/cloud/catalog/tencent/image')) {
+        const offset = Number(new URL(url).searchParams.get('offset') || 0);
+        const all = Array.from({ length: 25 }, (_, index) => ({
+          provider: 'tencent',
+          region: 'ap-test',
+          id: index === 0 ? 'img-tencentos-test' : `img-tencentos-test-${index + 1}`,
+          name: index === 0 ? 'TencentOS Server 4 for x86_64' : `TencentOS Server 4 test image ${index + 1}`,
+          platform: 'TencentOS',
+          architecture: 'x86_64',
+          imageType: 'PUBLIC_IMAGE',
+          sizeGib: 20,
+          available: true,
+        }));
+        return response(catalog('image', all.slice(offset, offset + 20), all.length, offset, offset + 20 < all.length ? offset + 20 : undefined));
+      }
       if (url.includes('/cloud/catalog/tencent/vpc')) return response(catalog('vpc', [
         { provider: 'tencent', region: 'ap-test', id: 'vpc-default', name: 'Default-VPC', cidrBlock: '172.16.0.0/16', isDefault: true },
         { provider: 'tencent', region: 'ap-test', id: 'vpc-other', name: '业务网络', cidrBlock: '10.0.0.0/16', isDefault: false },
@@ -121,6 +132,7 @@ describe('腾讯云购买网络选择', () => {
           reasons: ['规格族适合 Web / API 场景'], warnings: [],
         }],
         total: 1,
+        eligibleTotal: 1,
         offset: 0,
         limit: 20,
         nextOffset: null,
@@ -188,7 +200,7 @@ describe('腾讯云购买网络选择', () => {
     fireEvent.click(within(firstType.closest('tr')!).getByRole('button', { name: '选择' }));
     expect(screen.getByText('已选机型').parentElement).toHaveTextContent('S9.TEST');
     fireEvent.click(screen.getByRole('button', { name: '加载更多（已显示 20 / 25）' }));
-    expect(view.container.querySelectorAll('.cloud-results tbody tr')).toHaveLength(25);
+    await waitFor(() => expect(view.container.querySelectorAll('.cloud-results tbody tr')).toHaveLength(25));
     expect(screen.getByText('已选机型').parentElement).toHaveTextContent('S9.TEST');
 
     fireEvent.change(screen.getByLabelText('最低 vCPU'), { target: { value: '8' } });
@@ -248,7 +260,7 @@ describe('腾讯云购买网络选择', () => {
     expect(screen.getByText('已选镜像').parentElement).toHaveTextContent('TencentOS Server 4 for x86_64');
 
     fireEvent.click(screen.getByRole('button', { name: '加载更多（已显示 20 / 25）' }));
-    expect(view.container.querySelectorAll('.cloud-image-table tbody tr')).toHaveLength(25);
+    await waitFor(() => expect(view.container.querySelectorAll('.cloud-image-table tbody tr')).toHaveLength(25));
     expect(screen.getByText('已选镜像').parentElement).toHaveTextContent('TencentOS Server 4 for x86_64');
 
     fireEvent.change(screen.getByLabelText('搜索云资源'), { target: { value: 'TencentOS' } });

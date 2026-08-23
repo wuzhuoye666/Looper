@@ -154,43 +154,94 @@ class AlibabaEcsProvider(CloudProvider):
             )
             for item in rows
             if attr(item, "zone_id")
+            and str(attr(item, "zone_type", default="AvailabilityZone") or "AvailabilityZone")
+            == "AvailabilityZone"
         ]
 
-    def _availability(self, filters: CatalogFilters) -> dict[str, bool]:
-        if not filters.region or not filters.zone:
+    @staticmethod
+    def _stock_status(status: Any, status_category: Any) -> bool | None:
+        normalized = str(status or "").casefold()
+        if normalized == "available":
+            return True
+        if normalized == "soldout":
+            return False
+        category = str(status_category or "").casefold()
+        if category in {"withstock", "closedwithstock"}:
+            return True
+        if category in {"withoutstock", "closedwithoutstock"}:
+            return False
+        return None
+
+    def _availability(self, filters: CatalogFilters) -> dict[str, list[dict[str, Any]]]:
+        if not filters.region:
             return {}
         from alibabacloud_ecs20140526 import models
 
-        request = models.DescribeAvailableResourceRequest(
-            region_id=filters.region,
-            zone_id=filters.zone,
-            destination_resource="InstanceType",
-            resource_type="instance",
-            instance_charge_type="PostPaid",
-            spot_strategy="NoSpot",
-            io_optimized="optimized",
+        zone_ids = (
+            [filters.zone]
+            if filters.zone
+            else [zone.id for zone in self.list_zones(filters.region) if zone.id]
         )
-        response = self._call("describe_available_resource", filters.region, request)
-        result: dict[str, bool] = {}
-        zones = as_list(
-            nested(response, ("body",), ("available_zones",), ("available_zone",), default=[])
-        )
-        for zone in zones:
-            resources = as_list(attr(zone, "available_resources", default=[]))
-            if not isinstance(attr(zone, "available_resources"), list):
-                resources = as_list(
-                    attr(attr(zone, "available_resources"), "available_resource", default=[])
+        by_instance: dict[str, dict[str, dict[str, Any]]] = {}
+        for requested_zone in zone_ids:
+            request = models.DescribeAvailableResourceRequest(
+                region_id=filters.region,
+                zone_id=requested_zone,
+                destination_resource="InstanceType",
+                resource_type="instance",
+                instance_charge_type="PostPaid",
+                spot_strategy="NoSpot",
+                io_optimized="optimized",
+            )
+            response = self._call("describe_available_resource", filters.region, request)
+            zones = as_list(
+                nested(
+                    response,
+                    ("body",),
+                    ("available_zones",),
+                    ("available_zone",),
+                    default=[],
                 )
-            for resource in resources:
-                supported = attr(resource, "supported_resources", default=[])
-                if not isinstance(supported, list):
-                    supported = attr(supported, "supported_resource", default=[])
-                for item in as_list(supported):
-                    value = attr(item, "value")
-                    status = str(attr(item, "status", default="")).casefold()
-                    if value:
-                        result[str(value)] = status in {"available", "sufficient", "normal"}
-        return result
+            )
+            for zone in zones:
+                zone_id = str(attr(zone, "zone_id", default=requested_zone) or requested_zone)
+                resources = as_list(attr(zone, "available_resources", default=[]))
+                if not isinstance(attr(zone, "available_resources"), list):
+                    resources = as_list(
+                        attr(
+                            attr(zone, "available_resources"),
+                            "available_resource",
+                            default=[],
+                        )
+                    )
+                for resource in resources:
+                    supported = attr(resource, "supported_resources", default=[])
+                    if not isinstance(supported, list):
+                        supported = attr(supported, "supported_resource", default=[])
+                    for item in as_list(supported):
+                        value = attr(item, "value")
+                        if not value:
+                            continue
+                        status = attr(item, "status")
+                        status_category = attr(item, "status_category")
+                        capability = {
+                            "zone": zone_id,
+                            "available": self._stock_status(status, status_category),
+                            "status": str(status) if status else None,
+                            "statusCategory": (
+                                str(status_category) if status_category else None
+                            ),
+                        }
+                        existing = by_instance.setdefault(str(value), {}).get(zone_id)
+                        status_rank = {None: 0, False: 1, True: 2}
+                        if existing is None or status_rank[capability["available"]] > status_rank[
+                            existing["available"]
+                        ]:
+                            by_instance[str(value)][zone_id] = capability
+        return {
+            instance_type: [capabilities[zone] for zone in sorted(capabilities)]
+            for instance_type, capabilities in by_instance.items()
+        }
 
     def search_instance_types(self, filters: CatalogFilters) -> list[InstanceTypeInfo]:
         if not filters.region:
@@ -200,14 +251,14 @@ class AlibabaEcsProvider(CloudProvider):
         available = self._availability(filters)
         rows: list[Any] = []
         next_token: str | None = None
-        scan_limit = max(filters.limit, 1000 if filters.query else filters.limit)
-        while len(rows) < scan_limit:
+        seen_tokens: set[str] = set()
+        while True:
             request = models.DescribeInstanceTypesRequest(
                 minimum_cpu_core_count=filters.min_cpu,
                 maximum_cpu_core_count=filters.max_cpu,
                 minimum_memory_size=filters.min_memory_gib,
                 maximum_memory_size=filters.max_memory_gib,
-                max_results=min(100, scan_limit - len(rows)),
+                max_results=100,
                 next_token=next_token,
             )
             response = self._call("describe_instance_types", filters.region, request)
@@ -217,43 +268,92 @@ class AlibabaEcsProvider(CloudProvider):
             next_token = attr(body, "next_token")
             if not next_token or not batch:
                 break
-        items = [
-            InstanceTypeInfo(
+            if next_token in seen_tokens:
+                raise CloudProviderError(
+                    "Alibaba Cloud instance type pagination repeated a token",
+                    code="pagination_stalled",
+                )
+            seen_tokens.add(next_token)
+        items: list[InstanceTypeInfo] = []
+        for item in rows:
+            instance_type = str(attr(item, "instance_type_id", default="") or "")
+            capabilities = available.get(instance_type, [])
+            if not instance_type or not capabilities:
+                continue
+            gpu = float(attr(item, "gpuamount", "gpu_amount", default=0) or 0)
+            bandwidth_rx = (
+                float(attr(item, "instance_bandwidth_rx")) / 1_000_000
+                if attr(item, "instance_bandwidth_rx") is not None
+                else None
+            )
+            bandwidth_tx = (
+                float(attr(item, "instance_bandwidth_tx")) / 1_000_000
+                if attr(item, "instance_bandwidth_tx") is not None
+                else None
+            )
+            pps_rx = attr(item, "instance_pps_rx")
+            pps_tx = attr(item, "instance_pps_tx")
+            local_storage_count = attr(item, "local_storage_amount")
+            local_storage_capacity = attr(item, "local_storage_capacity")
+            local_storage_category = attr(item, "local_storage_category")
+            zone_capabilities = [
+                {
+                    **capability,
+                    "gpu": gpu,
+                    "networkBandwidthGbps": (
+                        min(bandwidth_rx, bandwidth_tx)
+                        if bandwidth_rx is not None and bandwidth_tx is not None
+                        else bandwidth_rx or bandwidth_tx
+                    ),
+                    "networkPps": (
+                        min(pps_rx, pps_tx)
+                        if pps_rx is not None and pps_tx is not None
+                        else pps_rx or pps_tx
+                    ),
+                    "localStorageCount": local_storage_count,
+                    "localStorageCapacityGib": local_storage_capacity,
+                    "localStorageCategory": local_storage_category,
+                }
+                for capability in capabilities
+            ]
+            statuses = {capability["available"] for capability in zone_capabilities}
+            aggregate_available = (
+                True if True in statuses else False if statuses == {False} else None
+            )
+            items.append(
+                InstanceTypeInfo(
                 provider=self.id,
                 region=filters.region,
-                id=str(attr(item, "instance_type_id")),
+                id=instance_type,
                 family=attr(item, "instance_type_family"),
                 cpu=int(attr(item, "cpu_core_count", default=0) or 0),
                 memoryGib=float(attr(item, "memory_size", default=0) or 0),
-                gpu=int(attr(item, "gpuamount", "gpu_amount", default=0) or 0),
+                gpu=gpu,
                 gpuModel=attr(item, "gpuspec", "gpu_spec"),
                 gpuMemoryGib=attr(item, "gpumemory_size", "gpu_memory_size"),
                 architecture=attr(item, "cpu_architecture"),
-                networkBandwidthRxGbps=(
-                    float(attr(item, "instance_bandwidth_rx")) / 1_000_000
-                    if attr(item, "instance_bandwidth_rx") is not None
-                    else None
+                networkBandwidthRxGbps=bandwidth_rx,
+                networkBandwidthTxGbps=bandwidth_tx,
+                networkPpsRx=pps_rx,
+                networkPpsTx=pps_tx,
+                localStorageCount=local_storage_count,
+                localStorageCapacityGib=local_storage_capacity,
+                localStorageCategory=local_storage_category,
+                zones=sorted(
+                    {
+                        str(capability["zone"])
+                        for capability in zone_capabilities
+                        if capability.get("zone")
+                    }
                 ),
-                networkBandwidthTxGbps=(
-                    float(attr(item, "instance_bandwidth_tx")) / 1_000_000
-                    if attr(item, "instance_bandwidth_tx") is not None
-                    else None
-                ),
-                networkPpsRx=attr(item, "instance_pps_rx"),
-                networkPpsTx=attr(item, "instance_pps_tx"),
-                localStorageCount=attr(item, "local_storage_amount"),
-                localStorageCapacityGib=attr(item, "local_storage_capacity"),
-                localStorageCategory=attr(item, "local_storage_category"),
-                zones=[filters.zone] if filters.zone else [],
-                available=available.get(str(attr(item, "instance_type_id"))),
+                available=aggregate_available,
                 attributes={
                     "networkEniQuantity": attr(item, "eni_quantity"),
                     "physicalProcessorModel": attr(item, "physical_processor_model"),
+                    "zoneCapabilities": zone_capabilities,
                 },
             )
-            for item in rows
-            if attr(item, "instance_type_id")
-        ]
+            )
         return filter_instance_types(items, filters)
 
     def search_images(self, filters: CatalogFilters) -> list[ImageInfo]:
@@ -263,9 +363,9 @@ class AlibabaEcsProvider(CloudProvider):
 
         rows: list[Any] = []
         page_number = 1
-        scan_limit = max(filters.limit, 1000 if filters.query else filters.limit)
-        while len(rows) < scan_limit:
-            page_size = min(100, scan_limit - len(rows))
+        seen_pages: set[tuple[str, ...]] = set()
+        while True:
+            page_size = 100
             request = models.DescribeImagesRequest(
                 region_id=filters.region,
                 image_owner_alias="system",
@@ -278,6 +378,14 @@ class AlibabaEcsProvider(CloudProvider):
             )
             response = self._call("describe_images", filters.region, request)
             batch = as_list(nested(response, ("body",), ("images",), ("image",), default=[]))
+            signature = tuple(str(attr(item, "image_id", default="")) for item in batch)
+            if batch and signature in seen_pages:
+                raise CloudProviderError(
+                    "Alibaba Cloud image pagination repeated a page",
+                    code="pagination_stalled",
+                )
+            if batch:
+                seen_pages.add(signature)
             rows.extend(batch)
             if len(batch) < page_size:
                 break
