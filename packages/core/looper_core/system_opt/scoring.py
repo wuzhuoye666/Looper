@@ -202,6 +202,14 @@ def bootstrap_improvement(
 
 
 def pressure_value(value: float, contract: MetricContract) -> float:
+    """Return the F-PROJECT-002 pressure transform P_m (diagnostic only).
+
+    Dispatches on the declared pressure method; every scaled branch requires
+    the contract's explicit scale (no abs(reference)/1.0 fallbacks), negative
+    utilization fails closed as counter wrap or bad measurement, and the
+    result never feeds candidate acceptance utility (S7 owns that).
+    """
+
     reference = contract.pressure_reference
     if contract.pressure_method == PressureMethod.EXPLICIT_SCORE:
         if not 0 <= value <= 1:
@@ -245,6 +253,7 @@ def pressure_value(value: float, contract: MetricContract) -> float:
 
 
 def _explicit_scale(contract: MetricContract, purpose: str) -> float:
+    """Fail closed unless the metric declares its coordinate scale s_m > 0."""
     if contract.scale is None:
         raise InsufficientEvidence(f"{contract.id} {purpose} requires an explicit scale")
     return contract.scale

@@ -121,6 +121,8 @@ class MetricContract(StrictModel):
         if self.pressure_method in scaled_pressure_methods and self.scale is None:
             raise ValueError("scaled pressure transforms require an explicit scale")
 
+        # F-PROJECT-002 方向-方法相容表：压力语义必须与指标声明的坏方向一致，
+        # 否则 P 与 D 会在相反方向上各算各的（登记表 R2 节，fail-closed）。
         compatible_directions = {
             PressureMethod.UTILIZATION: {
                 MetricDirection.MINIMIZE,
