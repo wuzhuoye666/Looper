@@ -1,6 +1,7 @@
 # 配置平面
 
-> 状态：draft；配置采集、人工修改和共同安全闭环 confirmed；所有权细节 open。
+> 状态：normative draft；配置采集、人工修改和共同安全闭环 confirmed；
+> M1 所有权证据合同已实现，跨发行版持久化优先级解析仍 open。
 
 ## 必需状态
 
@@ -48,6 +49,15 @@ WSL2 只用于验证上述状态分支。CVM 必须重新采集全部能力，�
 ## 人工修改
 
 人工修改 MUST 经过与优化候选相同的 preflight、snapshot、apply、verify、rollback 和审计。界面或 API 不得直接执行系统命令。
+
+自动写入前还必须提供与 target、manifest 和当前环境指纹同时绑定的状态证据：
+
+- 显式源文件采集保留全部可解析 `key=value`，只做目标键精确匹配，不推断同名字段语义。
+- 单一外部声明记为 `external-writer`；重复声明不猜测发行版优先级，记为 ownership conflict。
+- 没有证据的项保持 unknown；external、conflict、unknown 和 pinned 均 fail-closed。
+- 操作者只能通过显式 `authorize-state` 声明，把逐项运行时写所有权授予指定 actor；
+  声明绑定原状态证据 digest，未列出的项目不会连带授权。
+- 当前值偏离 manifest default 不能证明人工所有权，也不能触发自动覆盖。
 
 人工意图的候选语义仍待确认：单次修改、pin、新基线或保存为 Profile。确认前实现不得把所有人工修改自动视为永久 pin，也不得自动交给优化器覆盖。
 

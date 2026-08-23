@@ -84,6 +84,75 @@ def test_validate_and_simulated_inventory_commands(tmp_path: Path) -> None:
     assert "no deduplication" in payload["counting_basis"]
 
 
+def test_state_inventory_preserves_explicit_source_assignments(tmp_path: Path) -> None:
+    manifest_path = tmp_path / "manifest.yaml"
+    source_path = tmp_path / "90-admin.conf"
+    output_path = tmp_path / "state-evidence.json"
+    authorized_path = tmp_path / "authorized-state-evidence.json"
+    manifest_path.write_text(
+        yaml.safe_dump(build_demo_manifest().model_dump(mode="json"), sort_keys=False),
+        encoding="utf-8",
+    )
+    source_path.write_text(
+        "vm.swappiness = 10\nunrelated.value = keep-me\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "system-opt",
+            "state-inventory",
+            "--manifest",
+            str(manifest_path),
+            "--target-id",
+            "target-1",
+            "--source",
+            str(source_path),
+            "--output",
+            str(output_path),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert [item["key"] for item in payload["assignments"]] == [
+        "vm.swappiness",
+        "unrelated.value",
+    ]
+    swappiness = next(item for item in payload["records"] if item["item_id"] == "vm-swappiness")
+    assert swappiness["ownership"] == "external-writer"
+
+    authorized = runner.invoke(
+        app,
+        [
+            "system-opt",
+            "authorize-state",
+            "--state-evidence",
+            str(output_path),
+            "--actor-id",
+            "optimizer-a",
+            "--declared-by",
+            "operator-a",
+            "--item-id",
+            "vm-swappiness",
+            "--reason",
+            "controlled test target",
+            "--output",
+            str(authorized_path),
+        ],
+    )
+
+    assert authorized.exit_code == 0, authorized.output
+    authorized_payload = json.loads(authorized_path.read_text(encoding="utf-8"))
+    authorized_swappiness = next(
+        item for item in authorized_payload["records"] if item["item_id"] == "vm-swappiness"
+    )
+    assert authorized_swappiness["ownership"] == "explicit-owner"
+    assert authorized_swappiness["owner_id"] == "optimizer-a"
+    assert len(authorized_payload["ownership_declarations"]) == 1
+
+
 def test_real_manual_command_rejects_non_linux_host_before_write(tmp_path: Path) -> None:
     if platform.system().lower() == "linux":
         return

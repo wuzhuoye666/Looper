@@ -22,6 +22,7 @@ from looper_core.system_opt.domain import (
     DomainEvidence,
     resolve_domain,
 )
+from looper_core.system_opt.executor import ConfigSnapshot
 from looper_core.system_opt.executor.local_linux import LocalLinuxBackend
 from looper_core.system_opt.executor.runner import SubprocessCommandRunner
 from looper_core.system_opt.executor.simulated import SimulatedBackend
@@ -30,9 +31,15 @@ from looper_core.system_opt.inventory import (
     LinuxRawCollector,
     LocalToolInventoryCollector,
     ManifestInventoryCollector,
+    capture_environment_fingerprint,
     parse_tool_requirements_yaml,
 )
-from looper_core.system_opt.lease import FileTargetGuard
+from looper_core.system_opt.lease import (
+    FileTargetGuard,
+    ReconciliationOutcome,
+    TargetReconciliation,
+    TargetRecoveryEvidence,
+)
 from looper_core.system_opt.measurement import (
     CommandMeasurementAdapter,
     MeasurementCommandSpec,
@@ -43,6 +50,12 @@ from looper_core.system_opt.policy import (
 )
 from looper_core.system_opt.safety import SafetyController, SafetyPolicy, SafetyState
 from looper_core.system_opt.scoring import MeasurementBatch
+from looper_core.system_opt.state_evidence import (
+    OWNERSHIP_DECLARATION_SCHEMA,
+    ConfigurationStateEvidence,
+    LinuxExactAssignmentCollector,
+    OwnershipDeclaration,
+)
 from looper_core.system_opt.tuning import SystemOptimizationEngine
 from pydantic import TypeAdapter
 from rich.console import Console
@@ -94,6 +107,21 @@ def _write_json(path: Path, value: object) -> None:
         json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2),
         encoding="utf-8",
     )
+
+
+def _load_state_evidence(path: Path) -> ConfigurationStateEvidence:
+    return ConfigurationStateEvidence.model_validate(_read_json(path))
+
+
+def _load_reconciliation(path: Path | None) -> TargetReconciliation | None:
+    if path is None:
+        return None
+    return TargetReconciliation.model_validate(_read_json(path))
+
+
+def _current_environment_digest() -> str:
+    fingerprint = capture_environment_fingerprint()
+    return canonical_digest(fingerprint.model_dump(mode="json"))
 
 
 def _require_linux_confirmation(enable_real: bool, confirmation: str) -> None:
@@ -190,6 +218,9 @@ def collect_system_inventory(
     output: Path = typer.Option(..., "--output", dir_okay=False),
     initial_state: Path | None = typer.Option(None, "--initial-state", exists=True, dir_okay=False),
     allow_executable: list[str] | None = typer.Option(None, "--allow-executable"),
+    state_evidence_path: Path | None = typer.Option(
+        None, "--state-evidence", exists=True, dir_okay=False
+    ),
 ) -> None:
     manifest = parse_config_manifest_yaml(manifest_path.read_text(encoding="utf-8"))
     if backend_kind == "simulated":
@@ -208,7 +239,15 @@ def collect_system_inventory(
         )
     else:
         raise typer.BadParameter("backend must be simulated or local-linux")
-    result = ManifestInventoryCollector().collect(manifest, backend, fencing_token=0)
+    state_evidence = (
+        _load_state_evidence(state_evidence_path) if state_evidence_path is not None else None
+    )
+    result = ManifestInventoryCollector().collect(
+        manifest,
+        backend,
+        fencing_token=0,
+        state_evidence=state_evidence,
+    )
     _write_json(output, result)
     console.print_json(
         json.dumps(
@@ -221,6 +260,202 @@ def collect_system_inventory(
                 "count": len(result.items),
                 "counting_basis": result.counting_basis,
                 "digest": result.digest,
+                "output": str(output.resolve()),
+            }
+        )
+    )
+
+
+@system_opt_app.command("state-inventory")
+def collect_linux_configuration_state(
+    manifest_path: Path = typer.Option(..., "--manifest", exists=True, dir_okay=False),
+    target_id: str = typer.Option(..., "--target-id"),
+    source: list[Path] = typer.Option(..., "--source", exists=True, dir_okay=False),
+    output: Path = typer.Option(..., "--output", dir_okay=False),
+) -> None:
+    manifest = parse_config_manifest_yaml(manifest_path.read_text(encoding="utf-8"))
+    environment_digest = _current_environment_digest()
+    result = LinuxExactAssignmentCollector().collect(
+        manifest,
+        target_id=target_id,
+        environment_digest=environment_digest,
+        source_paths=source,
+        collected_at=datetime.now(UTC),
+    )
+    _write_json(output, result)
+    console.print_json(
+        json.dumps(
+            {
+                "target_id": result.target_id,
+                "manifest_digest": result.manifest_digest,
+                "state_evidence_digest": result.digest,
+                "source_count": len(result.source_scope),
+                "assignment_count": len(result.assignments),
+                "record_count": len(result.records),
+                "counting_basis": result.counting_basis,
+                "output": str(output.resolve()),
+            }
+        )
+    )
+
+
+@system_opt_app.command("reconcile-expired-lease")
+def reconcile_expired_target_lease(
+    manifest_path: Path = typer.Option(..., "--manifest", exists=True, dir_okay=False),
+    expected_snapshot_path: Path = typer.Option(
+        ..., "--expected-snapshot", exists=True, dir_okay=False
+    ),
+    target_id: str = typer.Option(..., "--target-id"),
+    lease_root: Path = typer.Option(..., "--lease-root", file_okay=False),
+    allow_executable: list[str] = typer.Option(..., "--allow-executable"),
+    output: Path = typer.Option(..., "--output", dir_okay=False),
+) -> None:
+    manifest = parse_config_manifest_yaml(manifest_path.read_text(encoding="utf-8"))
+    expected = ConfigSnapshot.model_validate(_read_json(expected_snapshot_path))
+    backend = _local_backend(
+        manifest,
+        target_id=target_id,
+        allowed_executables=allow_executable,
+        writable_roots=[],
+    )
+    guard = FileTargetGuard(lease_root)
+    existing = guard.current_lease(target_id)
+    now = datetime.now(UTC)
+    if existing is None:
+        raise typer.BadParameter("target has no lease to reconcile")
+    if existing.expires_at > now:
+        raise typer.BadParameter("target lease has not expired")
+    actual = backend.snapshot(manifest.items, fencing_token=existing.fencing_token)
+    matched = actual.complete and expected.complete and actual.digest == expected.digest
+    result = TargetReconciliation(
+        target_id=target_id,
+        previous_lease_digest=existing.digest,
+        actual_snapshot=actual,
+        expected_snapshot=expected,
+        outcome=(
+            ReconciliationOutcome.MATCHED_SNAPSHOT
+            if matched
+            else ReconciliationOutcome.NEEDS_ATTENTION
+        ),
+        reason=(
+            "actual target snapshot matches the expected recovery snapshot"
+            if matched
+            else "actual target snapshot is incomplete or differs from expected recovery state"
+        ),
+        recorded_at=now,
+    )
+    _write_json(output, result)
+    if not matched:
+        guard.mark_needs_attention(
+            target_id,
+            reason=result.reason,
+            evidence_digest=result.digest,
+            now=now,
+        )
+    console.print_json(
+        json.dumps(
+            {
+                "target_id": target_id,
+                "outcome": result.outcome,
+                "actual_snapshot_digest": result.actual_snapshot_digest,
+                "expected_snapshot_digest": result.expected_snapshot_digest,
+                "reconciliation_digest": result.digest,
+                "output": str(output.resolve()),
+            }
+        )
+    )
+    if not matched:
+        raise typer.Exit(code=2)
+
+
+@system_opt_app.command("authorize-state")
+def authorize_configuration_state(
+    state_evidence_path: Path = typer.Option(..., "--state-evidence", exists=True, dir_okay=False),
+    actor_id: str = typer.Option(..., "--actor-id"),
+    declared_by: str = typer.Option(..., "--declared-by"),
+    item_id: list[str] = typer.Option(..., "--item-id"),
+    reason: str = typer.Option(..., "--reason"),
+    output: Path = typer.Option(..., "--output", dir_okay=False),
+) -> None:
+    source = _load_state_evidence(state_evidence_path)
+    current_environment = _current_environment_digest()
+    if source.environment_digest != current_environment:
+        raise typer.BadParameter(
+            "state evidence environment digest does not match the current host"
+        )
+    declaration = OwnershipDeclaration(
+        schema_version=OWNERSHIP_DECLARATION_SCHEMA,
+        target_id=source.target_id,
+        manifest_digest=source.manifest_digest,
+        environment_digest=source.environment_digest,
+        source_evidence_digest=source.digest,
+        actor_id=actor_id,
+        declared_by=declared_by,
+        item_ids=item_id,
+        reason=reason,
+        declared_at=datetime.now(UTC),
+    )
+    result = source.apply_ownership_declaration(declaration)
+    _write_json(output, result)
+    console.print_json(
+        json.dumps(
+            {
+                "target_id": result.target_id,
+                "actor_id": actor_id,
+                "authorized_item_ids": item_id,
+                "source_evidence_digest": source.digest,
+                "declaration_digest": declaration.digest,
+                "state_evidence_digest": result.digest,
+                "output": str(output.resolve()),
+            }
+        )
+    )
+
+
+@system_opt_app.command("recover-attention")
+def recover_target_attention(
+    manifest_path: Path = typer.Option(..., "--manifest", exists=True, dir_okay=False),
+    approved_snapshot_path: Path = typer.Option(
+        ..., "--approved-snapshot", exists=True, dir_okay=False
+    ),
+    target_id: str = typer.Option(..., "--target-id"),
+    lease_root: Path = typer.Option(..., "--lease-root", file_okay=False),
+    allow_executable: list[str] = typer.Option(..., "--allow-executable"),
+    output: Path = typer.Option(..., "--output", dir_okay=False),
+) -> None:
+    manifest = parse_config_manifest_yaml(manifest_path.read_text(encoding="utf-8"))
+    approved = ConfigSnapshot.model_validate(_read_json(approved_snapshot_path))
+    backend = _local_backend(
+        manifest,
+        target_id=target_id,
+        allowed_executables=allow_executable,
+        writable_roots=[],
+    )
+    guard = FileTargetGuard(lease_root)
+    attention = guard.current_attention(target_id)
+    if attention is None:
+        raise typer.BadParameter("target has no attention record")
+    actual = backend.snapshot(manifest.items, fencing_token=0)
+    if not actual.complete or not approved.complete or actual.digest != approved.digest:
+        raise typer.BadParameter(
+            "actual target snapshot is incomplete or differs from the approved snapshot"
+        )
+    result = TargetRecoveryEvidence(
+        target_id=target_id,
+        attention_evidence_digest=attention.evidence_digest,
+        actual_snapshot=actual,
+        approved_snapshot=approved,
+        reason="actual target snapshot matches the operator-approved recovery state",
+        recorded_at=datetime.now(UTC),
+    )
+    _write_json(output, result)
+    guard.clear_attention(target_id, recovery=result)
+    console.print_json(
+        json.dumps(
+            {
+                "target_id": target_id,
+                "recovery_digest": result.digest,
+                "attention_cleared": True,
                 "output": str(output.resolve()),
             }
         )
@@ -300,7 +535,10 @@ def apply_manual_system_configuration(
     max_changes_reason: str | None = typer.Option(None, "--max-changes-reason"),
     allow_executable: list[str] = typer.Option(..., "--allow-executable"),
     writable_root: list[Path] = typer.Option(..., "--writable-root", file_okay=False),
-    reconciliation_digest: str | None = typer.Option(None, "--reconciliation-digest"),
+    state_evidence_path: Path = typer.Option(..., "--state-evidence", exists=True, dir_okay=False),
+    reconciliation_evidence_path: Path | None = typer.Option(
+        None, "--reconciliation-evidence", exists=True, dir_okay=False
+    ),
     keep: bool = typer.Option(False, "--keep"),
     authorize_keep: bool = typer.Option(False, "--authorize-keep"),
     enable_real: bool = typer.Option(False, "--enable-real"),
@@ -318,21 +556,28 @@ def apply_manual_system_configuration(
         allowed_executables=allow_executable,
         writable_roots=writable_root,
     )
+    state_evidence = _load_state_evidence(state_evidence_path)
+    pinned_items, ownership_unknown_items = state_evidence.safety_constraints(
+        manifest,
+        target_id=target_id,
+        actor_id=owner_id,
+        environment_digest=_current_environment_digest(),
+    )
     guard = FileTargetGuard(lease_root)
     lease = guard.acquire(
         target_id,
         owner_id,
         ttl_seconds=lease_ttl_seconds,
         now=datetime.now(UTC),
-        reconciliation_digest=reconciliation_digest,
+        reconciliation=_load_reconciliation(reconciliation_evidence_path),
     )
     try:
         result = SafetyController(
             SafetyPolicy(
                 max_changes=max_changes,
                 max_changes_reason=max_changes_reason,
-                pinned_items=set(),
-                ownership_unknown_items=set(),
+                pinned_items=pinned_items,
+                ownership_unknown_items=ownership_unknown_items,
                 high_risk_waivers=set(),
                 allow_keep=keep,
                 require_privileged=True,
@@ -393,7 +638,10 @@ def run_linux_system_optimization(
     lease_ttl_seconds: float = typer.Option(..., "--lease-ttl-seconds", min=1),
     allow_executable: list[str] = typer.Option(..., "--allow-executable"),
     writable_root: list[Path] = typer.Option(..., "--writable-root", file_okay=False),
-    reconciliation_digest: str | None = typer.Option(None, "--reconciliation-digest"),
+    state_evidence_path: Path = typer.Option(..., "--state-evidence", exists=True, dir_okay=False),
+    reconciliation_evidence_path: Path | None = typer.Option(
+        None, "--reconciliation-evidence", exists=True, dir_okay=False
+    ),
     enable_real: bool = typer.Option(False, "--enable-real"),
     confirmation: str = typer.Option("", "--confirmation"),
     output: Path = typer.Option(..., "--output", dir_okay=False),
@@ -432,6 +680,18 @@ def run_linux_system_optimization(
         allowed_executables=allow_executable,
         writable_roots=writable_root,
     )
+    state_evidence = _load_state_evidence(state_evidence_path)
+    pinned_items, ownership_unknown_items = state_evidence.safety_constraints(
+        manifest,
+        target_id=target_id,
+        actor_id=owner_id,
+        environment_digest=_current_environment_digest(),
+    )
+    policy = policy.model_copy(deep=True)
+    policy.safety.pinned_items = sorted(set(policy.safety.pinned_items) | pinned_items)
+    policy.safety.ownership_unknown_items = sorted(
+        set(policy.safety.ownership_unknown_items) | ownership_unknown_items
+    )
     runner = SubprocessCommandRunner(
         allowed_executables=set(allow_executable),
         writable_file_roots=writable_root,
@@ -450,10 +710,16 @@ def run_linux_system_optimization(
         owner_id,
         ttl_seconds=lease_ttl_seconds,
         now=datetime.now(UTC),
-        reconciliation_digest=reconciliation_digest,
+        reconciliation=_load_reconciliation(reconciliation_evidence_path),
     )
     try:
-        result = SystemOptimizationEngine(policy, manifest, domains, backend).run(
+        result = SystemOptimizationEngine(
+            policy,
+            manifest,
+            domains,
+            backend,
+            state_evidence_digest=state_evidence.digest,
+        ).run(
             baseline_parameters=baseline,
             measure=measure,
             fencing_token=lease.fencing_token,

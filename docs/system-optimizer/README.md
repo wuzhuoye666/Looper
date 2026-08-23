@@ -51,6 +51,7 @@ System Optimizer 是一个操作系统配置采集、人工管理和有限闭环
 - planning/roadmap.md：重新基线后的阶段计划、依赖和交付物。
 - planning/acceptance-criteria.md：功能、证据、安全、指标和文档验收。
 - planning/implementation-rebaseline-2026-08-23.md：当前实际能力与原 M1–M5 对照。
+- planning/m1-state-ownership-recovery-contract-2026-08-23.md：M1 状态来源、逐项所有权授权、完整快照崩溃对账与未完成边界。
 
 ### 调研与历史
 

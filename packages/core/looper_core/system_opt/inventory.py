@@ -18,6 +18,11 @@ from looper_core.canonical import canonical_digest
 from looper_core.contracts import StrictModel
 from looper_core.system_opt.config_manifest import ConfigManifest
 from looper_core.system_opt.executor import ExecutorBackend, OperationStatus
+from looper_core.system_opt.state_evidence import (
+    ConfigurationStateEvidence,
+    OwnershipDisposition,
+    PersistenceDisposition,
+)
 
 
 class InventoryStatus(StrEnum):
@@ -27,6 +32,7 @@ class InventoryStatus(StrEnum):
     PARSE_FAILED = "parse-failed"
     UNSUPPORTED = "unsupported"
     TOO_LARGE = "too-large"
+    CONFLICT = "conflict"
 
 
 class EnvironmentFingerprint(StrictModel):
@@ -43,6 +49,7 @@ class EnvironmentFingerprint(StrictModel):
 class InventoryMetadata(StrictModel):
     collector_environment: EnvironmentFingerprint
     scope_limitations: list[str]
+    state_evidence_digest: str | None = Field(default=None, pattern=r"^sha256:[0-9a-f]{64}$")
 
 
 def _read_os_release(path: Path = Path("/etc/os-release")) -> dict[str, str]:
@@ -200,19 +207,48 @@ class ManifestInventoryCollector:
         *,
         fencing_token: int,
         desired_values: dict[str, Any] | None = None,
-        persistent_values: dict[str, Any] | None = None,
-        ownership: dict[str, str] | None = None,
+        state_evidence: ConfigurationStateEvidence | None = None,
         environment: EnvironmentFingerprint | None = None,
     ) -> ConfigInventoryReport:
         desired = desired_values or {}
-        persistent = persistent_values or {}
-        owners = ownership or {}
+        if state_evidence is not None:
+            state_evidence.validate_identity(manifest, backend.capabilities.target_id)
+        state_by_item = state_evidence.records_by_item() if state_evidence else {}
         items: list[ConfigInventoryItem] = []
         for item in sorted(manifest.items, key=lambda candidate: candidate.id):
             preflight = backend.preflight_check(item)
             probe = backend.probe(item, fencing_token=fencing_token)
             current_status = _inventory_status(probe.status)
             parameter_id = item.parameter_id
+            state = state_by_item.get(item.id)
+            persistent_status = InventoryStatus.UNAVAILABLE
+            persistent_value = None
+            ownership_status = InventoryStatus.UNAVAILABLE
+            ownership_value: Any | None = None
+            state_source = "no configuration state evidence supplied"
+            if state is not None:
+                state_source = f"state evidence {state_evidence.digest}"
+                persistent_status = (
+                    InventoryStatus.SUCCEEDED
+                    if state.persistence == PersistenceDisposition.DECLARED
+                    else InventoryStatus.CONFLICT
+                    if state.persistence == PersistenceDisposition.CONFLICT
+                    else InventoryStatus.UNAVAILABLE
+                )
+                persistent_value = state.persistent_value
+                ownership_status = (
+                    InventoryStatus.CONFLICT
+                    if state.ownership == OwnershipDisposition.CONFLICT
+                    else InventoryStatus.UNAVAILABLE
+                    if state.ownership == OwnershipDisposition.UNKNOWN
+                    else InventoryStatus.SUCCEEDED
+                )
+                ownership_value = {
+                    "disposition": state.ownership,
+                    "owner_id": state.owner_id,
+                    "pinned": state.pinned,
+                    "reason": state.reason,
+                }
             items.append(
                 ConfigInventoryItem(
                     item_id=item.id,
@@ -245,22 +281,14 @@ class ManifestInventoryCollector:
                         source="same readback as current; no separate effective source declared",
                     ),
                     persistent=ConfigStateField(
-                        status=(
-                            InventoryStatus.SUCCEEDED
-                            if parameter_id in persistent
-                            else InventoryStatus.UNAVAILABLE
-                        ),
-                        value=persistent.get(parameter_id),
-                        source="explicit persistent values",
+                        status=persistent_status,
+                        value=persistent_value,
+                        source=state_source,
                     ),
                     ownership=ConfigStateField(
-                        status=(
-                            InventoryStatus.SUCCEEDED
-                            if item.id in owners
-                            else InventoryStatus.UNAVAILABLE
-                        ),
-                        value=owners.get(item.id),
-                        source="explicit ownership map",
+                        status=ownership_status,
+                        value=ownership_value,
+                        source=state_source,
                     ),
                     raw_readback=probe.raw_output,
                     message=probe.message,
@@ -268,11 +296,14 @@ class ManifestInventoryCollector:
             )
         fingerprint = environment or capture_environment_fingerprint()
         return ConfigInventoryReport(
-            schema_version="looper.system-config-inventory/v1alpha2",
+            schema_version="looper.system-config-inventory/v1alpha3",
             metadata=InventoryMetadata(
                 collector_environment=fingerprint,
                 scope_limitations=_scope_limitations(
                     fingerprint, target_os=backend.capabilities.os
+                ),
+                state_evidence_digest=(
+                    state_evidence.digest if state_evidence is not None else None
                 ),
             ),
             target_id=backend.capabilities.target_id,

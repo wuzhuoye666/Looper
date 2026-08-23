@@ -16,12 +16,13 @@ MUST：
 - rollback 按依赖逆序并再次 verify。
 - rollback 失败或目标状态无法确定时进入 needs-attention，禁止继续搜索。
 
-## 当前已知 A 级实现问题
+## 已关闭的 A 级实现问题
 
-1. ConfigItem.preconditions 已声明，但当前 SafetyController preflight 未执行它们。
-2. 当前 apply 项发生 failed、timeout 或 unknown 时可能未加入补偿集合，部分施加状态可能逃逸回滚。
+1. ConfigItem.preconditions 已接入 backend preflight，并有不满足前置条件即拒绝的专项测试。
+2. 当前 apply 项一旦开始，不论返回 failed、timeout 或 unknown 都进入补偿集合，并有部分施加后回滚的专项测试。
 
-这两项在修复、专项测试和 isolated full suite 通过前，现有安全执行器不能宣称满足新合同。
+这两项的代码缺口已关闭；真实 CVM rollback failure 演练仍是独立验收门，不能用 simulated
+专项测试替代。
 
 ## 并发
 
@@ -44,6 +45,15 @@ MUST：
 - 任务租约和操作者意图。
 
 对账后才能选择继续、补偿回滚或 needs-attention。不得在 unknown 状态盲目重试 apply。
+
+M1 实现合同进一步规定：
+
+- 过期租约不能用任意 SHA-256 字符串接管；reconciliation 必须内嵌完整 actual/expected
+  `ConfigSnapshot` 并绑定原租约 digest。
+- `matched-snapshot` 只接受同一 target 的两个完整且 digest 相等的快照。
+- CLI 必须现场重新读取 actual snapshot；不完整或不一致时写入 needs-attention，并禁止接管。
+- 清除 needs-attention 必须再次现场读回，并提交绑定原 attention evidence 的完整
+  actual/approved 快照；不一致时保持阻断。
 
 ## 测量隔离
 

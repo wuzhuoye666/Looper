@@ -76,6 +76,7 @@ class OptimizationRun(StrictModel):
     policy_id: str
     policy_digest: str
     manifest_digest: str
+    state_evidence_digest: str | None = Field(default=None, pattern=r"^sha256:[0-9a-f]{64}$")
     mode: OptimizationMode
     baseline: MeasurementBatch
     baseline_history: list[MeasurementBatch]
@@ -101,11 +102,13 @@ class SystemOptimizationEngine:
         manifest: ConfigManifest,
         resolved_domains: Mapping[str, ResolvedDomain],
         backend: ExecutorBackend,
+        state_evidence_digest: str | None = None,
     ) -> None:
         self.policy = policy
         self.manifest = manifest
         self.domains = dict(resolved_domains)
         self.backend = backend
+        self.state_evidence_digest = state_evidence_digest
         self.safety = SafetyController(
             SafetyPolicy(
                 max_changes=policy.safety.max_changes,
@@ -498,6 +501,7 @@ class SystemOptimizationEngine:
             policy_id=self.policy.id,
             policy_digest=canonical_digest(self.policy.model_dump(mode="json")),
             manifest_digest=self.manifest.digest,
+            state_evidence_digest=self.state_evidence_digest,
             mode=self.policy.mode,
             baseline=baseline,
             baseline_history=baseline_history,

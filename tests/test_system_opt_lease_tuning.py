@@ -11,11 +11,32 @@ from looper_core.system_opt.demo import (
     resolve_demo_domains,
     run_full_demo,
 )
+from looper_core.system_opt.executor import ConfigSnapshot, OperationStatus, SnapshotEntry
 from looper_core.system_opt.executor.simulated import SimulatedBackend
-from looper_core.system_opt.lease import FileTargetGuard, LeaseConflict
+from looper_core.system_opt.lease import (
+    FileTargetGuard,
+    LeaseConflict,
+    ReconciliationOutcome,
+    TargetReconciliation,
+    TargetRecoveryEvidence,
+)
 from looper_core.system_opt.policy import OptimizationMode
 from looper_core.system_opt.safety import SafetyState
 from looper_core.system_opt.tuning import StopReason, SystemOptimizationEngine
+
+
+def _snapshot(target_id: str = "target-1", value: int = 10) -> ConfigSnapshot:
+    return ConfigSnapshot(
+        target_id=target_id,
+        entries={
+            "vm-swappiness": SnapshotEntry(
+                item_id="vm-swappiness",
+                target="vm.swappiness",
+                status=OperationStatus.SUCCEEDED,
+                value=value,
+            )
+        },
+    )
 
 
 def test_target_lease_conflict_and_expired_takeover_require_reconciliation(
@@ -28,7 +49,7 @@ def test_target_lease_conflict_and_expired_takeover_require_reconciliation(
         "owner-a",
         ttl_seconds=10,
         now=now,
-        reconciliation_digest=None,
+        reconciliation=None,
     )
 
     with pytest.raises(LeaseConflict, match="leased"):
@@ -37,7 +58,7 @@ def test_target_lease_conflict_and_expired_takeover_require_reconciliation(
             "owner-b",
             ttl_seconds=10,
             now=now + timedelta(seconds=1),
-            reconciliation_digest=None,
+            reconciliation=None,
         )
     with pytest.raises(LeaseConflict, match="reconciliation"):
         guard.acquire(
@@ -45,15 +66,25 @@ def test_target_lease_conflict_and_expired_takeover_require_reconciliation(
             "owner-b",
             ttl_seconds=10,
             now=now + timedelta(seconds=11),
-            reconciliation_digest=None,
+            reconciliation=None,
         )
 
+    snapshot = _snapshot()
+    reconciliation = TargetReconciliation(
+        target_id="target-1",
+        previous_lease_digest=first.digest,
+        actual_snapshot=snapshot,
+        expected_snapshot=snapshot,
+        outcome=ReconciliationOutcome.MATCHED_SNAPSHOT,
+        reason="actual target snapshot matches the recorded rollback snapshot",
+        recorded_at=now + timedelta(seconds=11),
+    )
     second = guard.acquire(
         "target-1",
         "owner-b",
         ttl_seconds=10,
         now=now + timedelta(seconds=11),
-        reconciliation_digest="sha256:" + "a" * 64,
+        reconciliation=reconciliation,
     )
     assert second.fencing_token == first.fencing_token + 1
     guard.release(second)
@@ -74,7 +105,61 @@ def test_needs_attention_blocks_future_writers(tmp_path: Path) -> None:
             "owner-a",
             ttl_seconds=10,
             now=datetime(2026, 8, 23, tzinfo=UTC),
-            reconciliation_digest=None,
+            reconciliation=None,
+        )
+
+
+def test_attention_clear_requires_bound_matching_recovery_evidence(tmp_path: Path) -> None:
+    guard = FileTargetGuard(tmp_path / "leases")
+    attention = guard.mark_needs_attention(
+        "target-1",
+        reason="rollback verification failed",
+        evidence_digest="sha256:" + "b" * 64,
+        now=datetime(2026, 8, 23, tzinfo=UTC),
+    )
+    snapshot = _snapshot()
+    recovery = TargetRecoveryEvidence(
+        target_id="target-1",
+        attention_evidence_digest=attention.evidence_digest,
+        actual_snapshot=snapshot,
+        approved_snapshot=snapshot,
+        reason="operator approved the verified current state",
+        recorded_at=datetime(2026, 8, 23, tzinfo=UTC),
+    )
+
+    guard.clear_attention("target-1", recovery=recovery)
+
+    assert guard.current_attention("target-1") is None
+
+
+def test_expired_takeover_rejects_unbound_reconciliation(tmp_path: Path) -> None:
+    guard = FileTargetGuard(tmp_path / "leases")
+    now = datetime(2026, 8, 23, tzinfo=UTC)
+    guard.acquire(
+        "target-1",
+        "owner-a",
+        ttl_seconds=1,
+        now=now,
+        reconciliation=None,
+    )
+    snapshot = _snapshot()
+    unbound = TargetReconciliation(
+        target_id="target-1",
+        previous_lease_digest="sha256:" + "e" * 64,
+        actual_snapshot=snapshot,
+        expected_snapshot=snapshot,
+        outcome=ReconciliationOutcome.MATCHED_SNAPSHOT,
+        reason="syntactically valid but not bound to the expired lease",
+        recorded_at=now + timedelta(seconds=2),
+    )
+
+    with pytest.raises(LeaseConflict, match="does not bind"):
+        guard.acquire(
+            "target-1",
+            "owner-b",
+            ttl_seconds=1,
+            now=now + timedelta(seconds=2),
+            reconciliation=unbound,
         )
 
 
