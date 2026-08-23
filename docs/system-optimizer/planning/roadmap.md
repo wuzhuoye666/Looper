@@ -54,6 +54,13 @@ M2/M3 代码切片不代表对应里程碑已经验收。
 [计划差距审计](gap-audit-after-real-multiround-2026-08-23.md)。该实测只关闭真实存储
 多轮纵向切片，不改变 M2 其他组件和 M3–M5 的出口标准。
 
+2026-08-23 已新增统一标准压力阶段合同与 CPU/Memory/NUMA/Network 探针，并完成阿里云
+ECS 首次 `report-only` 校准。CPU、Memory、Network-loopback 能重复出数，NUMA 因单节点
+明确 unavailable；详情见
+[M2 组件合同](m2-component-pressure-contract-2026-08-23.md)与
+[组件校准实录](../research/aliyun-ecs-m2-component-calibration-2026-08-23.md)。这不等于
+M2 完成：稳定阈值、三个组件的合法候选闭环、真实跨机网络和组合复验仍未关闭。
+
 ## M3：workload 动态观测与下钻调优
 
 交付：

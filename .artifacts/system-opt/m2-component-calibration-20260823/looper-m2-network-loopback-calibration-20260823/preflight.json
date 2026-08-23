@@ -1,0 +1,14 @@
+{
+  "duration_seconds": 3,
+  "host": "127.0.0.1",
+  "iperf3": "iperf 3.16 (cJSON 1.7.15)",
+  "loopback": true,
+  "omit_seconds": 1,
+  "parallel_streams": 2,
+  "port": 5203,
+  "recorded_at": "2026-08-23T05:33:15.905666+00:00",
+  "schema_version": "looper.network-pressure-preflight/v1alpha1",
+  "server_startup_seconds": 0.2,
+  "start_local_server": true,
+  "target": "sha256:9fb11d6a5ce5de3e7398a82e723dd6a73adf432939250f30baa80dc185683922"
+}

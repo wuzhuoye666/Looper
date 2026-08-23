@@ -1,0 +1,14 @@
+{
+  "available": false,
+  "cpu_node": 0,
+  "hardware_output": "available: 1 nodes (0)\nnode 0 cpus: 0 1 2 3 4 5 6 7\nnode 0 size: 15069 MB\nnode 0 free: 9361 MB\nnode distances:\nnode   0 \n  0:  10 \n",
+  "local_memory_node": 0,
+  "nodes": [
+    0
+  ],
+  "reason": "requires at least two NUMA nodes and all explicitly selected nodes",
+  "recorded_at": "2026-08-23T05:31:39.891414+00:00",
+  "remote_memory_node": 1,
+  "schema_version": "looper.numa-pressure-capability/v1alpha1",
+  "target": "sha256:9fb11d6a5ce5de3e7398a82e723dd6a73adf432939250f30baa80dc185683922"
+}

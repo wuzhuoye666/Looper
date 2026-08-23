@@ -1,0 +1,10 @@
+{
+  "duration_seconds": 5,
+  "method": "matrixprod",
+  "online_cpus": 8,
+  "recorded_at": "2026-08-23T05:24:32.737983+00:00",
+  "schema_version": "looper.cpu-pressure-preflight/v1alpha1",
+  "stress_ng": "stress-ng, version 0.17.06 (gcc 13.2.0, x86_64 Linux 6.8.0-137-generic)",
+  "target": "sha256:9fb11d6a5ce5de3e7398a82e723dd6a73adf432939250f30baa80dc185683922",
+  "workers": 8
+}

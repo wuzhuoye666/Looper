@@ -1,0 +1,27 @@
+-----------------------------------------------------------
+Server listening on 5203 (test #1)
+-----------------------------------------------------------
+Accepted connection from 127.0.0.1, port 38504
+[  5] local 127.0.0.1 port 5203 connected to 127.0.0.1 port 38516
+[  8] local 127.0.0.1 port 5203 connected to 127.0.0.1 port 38532
+[ ID] Interval           Transfer     Bitrate
+[  5]   0.00-1.00   sec  7.01 GBytes  60.2 Gbits/sec                  (omitted)
+[  8]   0.00-1.00   sec  6.31 GBytes  54.2 Gbits/sec                  (omitted)
+[SUM]   0.00-1.00   sec  13.3 GBytes   114 Gbits/sec                  (omitted)
+- - - - - - - - - - - - - - - - - - - - - - - - -
+[  5]   0.00-1.00   sec  6.18 GBytes  53.0 Gbits/sec                  
+[  8]   0.00-1.00   sec  6.56 GBytes  56.3 Gbits/sec                  
+[SUM]   0.00-1.00   sec  12.7 GBytes   109 Gbits/sec                  
+- - - - - - - - - - - - - - - - - - - - - - - - -
+[  5]   1.00-2.00   sec  6.41 GBytes  55.1 Gbits/sec                  
+[  8]   1.00-2.00   sec  6.45 GBytes  55.4 Gbits/sec                  
+[SUM]   1.00-2.00   sec  12.9 GBytes   110 Gbits/sec                  
+- - - - - - - - - - - - - - - - - - - - - - - - -
+[  5]   2.00-3.00   sec  6.60 GBytes  56.8 Gbits/sec                  
+[  8]   2.00-3.00   sec  6.49 GBytes  55.8 Gbits/sec                  
+[SUM]   2.00-3.00   sec  13.1 GBytes   113 Gbits/sec                  
+- - - - - - - - - - - - - - - - - - - - - - - - -
+[ ID] Interval           Transfer     Bitrate
+[  5]   0.00-3.00   sec  19.2 GBytes  54.9 Gbits/sec                  receiver
+[  8]   0.00-3.00   sec  19.5 GBytes  55.8 Gbits/sec                  receiver
+[SUM]   0.00-3.00   sec  38.7 GBytes   111 Gbits/sec                  receiver
