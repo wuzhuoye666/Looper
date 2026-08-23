@@ -1,3 +1,11 @@
+"""组件闭环引擎（L5）：基线→候选→安全施加→测量→回退的单组件循环。
+
+终裁语义（2026-08-23 架构 v2 起）：``CandidateEvaluation.accepted`` 是**组件级
+晋级建议**（S7 组件内判定），不是最终接受结论；终裁由 L8 引擎判断器
+（``looper_core.system_opt.engine.evaluate_candidate``）产出。字段名保留以兼容
+存量工件，语义变化见 architecture/overall.md 与 component.py。
+"""
+
 from __future__ import annotations
 
 import time
@@ -67,6 +75,8 @@ class CandidateEvaluation(StrictModel):
     gates: list[GateEvidence]
     improvements: dict[str, ImprovementEvidence]
     feasible: bool
+    # Semantic (architecture v2): component-level promotion suggestion only;
+    # the final verdict belongs to the L8 engine judge.
     accepted: bool
     pareto_rank: int | None = None
 
