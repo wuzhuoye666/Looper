@@ -93,11 +93,58 @@ class MetricContract(StrictModel):
         if self.pressure_method == PressureMethod.NONE:
             if self.role == MetricRole.COMPONENT_DIAGNOSTIC:
                 raise ValueError("component diagnostic metrics require a pressure transform")
-        elif (
-            self.pressure_method != PressureMethod.EXPLICIT_SCORE
+            return self
+
+        reference_pressure_methods = {
+            PressureMethod.UTILIZATION,
+            PressureMethod.UPPER_LIMIT_EXCESS,
+            PressureMethod.LOWER_LIMIT_DEFICIT,
+            PressureMethod.TARGET_DISTANCE,
+        }
+        if (
+            self.pressure_method in reference_pressure_methods
             and self.pressure_reference is None
         ):
             raise ValueError("pressure transform requires pressure_reference")
+        scaled_pressure_methods = {
+            PressureMethod.UPPER_LIMIT_EXCESS,
+            PressureMethod.LOWER_LIMIT_DEFICIT,
+            PressureMethod.TARGET_DISTANCE,
+            PressureMethod.RANGE_EXCESS,
+        }
+        if self.pressure_method in scaled_pressure_methods and self.scale is None:
+            raise ValueError("scaled pressure transforms require an explicit scale")
+
+        compatible_directions = {
+            PressureMethod.UTILIZATION: {
+                MetricDirection.MINIMIZE,
+                MetricDirection.DIAGNOSTIC_ONLY,
+            },
+            PressureMethod.UPPER_LIMIT_EXCESS: {
+                MetricDirection.MINIMIZE,
+                MetricDirection.DIAGNOSTIC_ONLY,
+            },
+            PressureMethod.LOWER_LIMIT_DEFICIT: {
+                MetricDirection.MAXIMIZE,
+                MetricDirection.DIAGNOSTIC_ONLY,
+            },
+            PressureMethod.TARGET_DISTANCE: {MetricDirection.TARGET},
+            PressureMethod.RANGE_EXCESS: {MetricDirection.RANGE},
+            PressureMethod.EXPLICIT_SCORE: {
+                MetricDirection.MINIMIZE,
+                MetricDirection.DIAGNOSTIC_ONLY,
+            },
+        }
+        if self.direction not in compatible_directions[self.pressure_method]:
+            raise ValueError(
+                f"pressure method {self.pressure_method.value} is incompatible with "
+                f"direction {self.direction.value}"
+            )
+        if (
+            self.pressure_method == PressureMethod.TARGET_DISTANCE
+            and self.target != self.pressure_reference
+        ):
+            raise ValueError("target-distance pressure reference must equal metric target")
         return self
 
 
