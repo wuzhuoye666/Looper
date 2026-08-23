@@ -55,6 +55,7 @@ def test_exact_assignment_collection_preserves_all_fields_and_conflicts(
     assert record.persistence == PersistenceDisposition.CONFLICT
     assert record.ownership == OwnershipDisposition.CONFLICT
     assert record.persistent_value is None
+    assert "manifest-declared persistent-key" in evidence.counting_basis
     assert "no precedence inference" in evidence.counting_basis
 
 

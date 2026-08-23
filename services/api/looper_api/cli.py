@@ -13,6 +13,7 @@ from looper_core.adapters import load_and_apply_adapter
 from looper_core.canonical import canonical_digest
 from looper_core.manifest import load_and_validate_manifest
 from looper_core.system_opt.config_manifest import (
+    ConfigItem,
     ConfigManifest,
     parse_config_manifest_yaml,
 )
@@ -122,6 +123,18 @@ def _load_reconciliation(path: Path | None) -> TargetReconciliation | None:
 def _current_environment_digest() -> str:
     fingerprint = capture_environment_fingerprint()
     return canonical_digest(fingerprint.model_dump(mode="json"))
+
+
+def _manifest_items_for_snapshot(
+    manifest: ConfigManifest, snapshot: ConfigSnapshot
+) -> list[ConfigItem]:
+    by_id = {item.id: item for item in manifest.items}
+    unknown = sorted(set(snapshot.entries) - set(by_id))
+    if unknown:
+        raise typer.BadParameter(f"snapshot references unknown manifest items: {unknown}")
+    if not snapshot.entries:
+        raise typer.BadParameter("snapshot must contain at least one manifest item")
+    return [by_id[item_id] for item_id in sorted(snapshot.entries)]
 
 
 def _require_linux_confirmation(enable_real: bool, confirmation: str) -> None:
@@ -312,6 +325,9 @@ def reconcile_expired_target_lease(
 ) -> None:
     manifest = parse_config_manifest_yaml(manifest_path.read_text(encoding="utf-8"))
     expected = ConfigSnapshot.model_validate(_read_json(expected_snapshot_path))
+    if expected.target_id != target_id:
+        raise typer.BadParameter("expected snapshot target does not match --target-id")
+    snapshot_items = _manifest_items_for_snapshot(manifest, expected)
     backend = _local_backend(
         manifest,
         target_id=target_id,
@@ -325,7 +341,7 @@ def reconcile_expired_target_lease(
         raise typer.BadParameter("target has no lease to reconcile")
     if existing.expires_at > now:
         raise typer.BadParameter("target lease has not expired")
-    actual = backend.snapshot(manifest.items, fencing_token=existing.fencing_token)
+    actual = backend.snapshot(snapshot_items, fencing_token=existing.fencing_token)
     matched = actual.complete and expected.complete and actual.digest == expected.digest
     result = TargetReconciliation(
         target_id=target_id,
@@ -425,6 +441,9 @@ def recover_target_attention(
 ) -> None:
     manifest = parse_config_manifest_yaml(manifest_path.read_text(encoding="utf-8"))
     approved = ConfigSnapshot.model_validate(_read_json(approved_snapshot_path))
+    if approved.target_id != target_id:
+        raise typer.BadParameter("approved snapshot target does not match --target-id")
+    snapshot_items = _manifest_items_for_snapshot(manifest, approved)
     backend = _local_backend(
         manifest,
         target_id=target_id,
@@ -435,7 +454,7 @@ def recover_target_attention(
     attention = guard.current_attention(target_id)
     if attention is None:
         raise typer.BadParameter("target has no attention record")
-    actual = backend.snapshot(manifest.items, fencing_token=0)
+    actual = backend.snapshot(snapshot_items, fencing_token=0)
     if not actual.complete or not approved.complete or actual.digest != approved.digest:
         raise typer.BadParameter(
             "actual target snapshot is incomplete or differs from the approved snapshot"

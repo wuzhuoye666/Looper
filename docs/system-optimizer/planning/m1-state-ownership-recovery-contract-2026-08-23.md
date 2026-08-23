@@ -38,6 +38,10 @@
 needs-attention。`recover-attention` 只有在新的 actual 与 operator-approved snapshot
 完整一致、且 recovery 绑定原 attention evidence 时才清除阻断。
 
+现场复读严格采用 expected/approved snapshot 的 item 集合，并验证这些 item 都属于当前
+manifest。这样既不遗漏历史事务实际修改的项目，也不会因为 manifest 后续包含额外未修改项
+而产生集合不相等的假冲突。
+
 ## 命令链
 
 1. `state-inventory`：读取所有显式列出的配置来源，输出原始 assignment 和逐项状态。

@@ -4,16 +4,52 @@ import json
 import platform
 from pathlib import Path
 
+import pytest
+import typer
 import yaml
-from looper_api.cli import app
+from looper_api.cli import _manifest_items_for_snapshot, app
 from looper_core.system_opt.demo import (
     build_demo_manifest,
     build_demo_policy,
 )
+from looper_core.system_opt.executor import ConfigSnapshot, OperationStatus, SnapshotEntry
 from looper_core.system_opt.policy import OptimizationMode
 from typer.testing import CliRunner
 
 runner = CliRunner()
+
+
+def test_reconciliation_reads_only_items_bound_by_expected_snapshot() -> None:
+    manifest = build_demo_manifest()
+    selected = manifest.item("vm-swappiness")
+    snapshot = ConfigSnapshot(
+        target_id="target-1",
+        entries={
+            selected.id: SnapshotEntry(
+                item_id=selected.id,
+                target=selected.target,
+                status=OperationStatus.SUCCEEDED,
+                value=selected.default,
+            )
+        },
+    )
+
+    assert _manifest_items_for_snapshot(manifest, snapshot) == [selected]
+
+    unknown = snapshot.model_copy(
+        update={
+            "entries": {
+                "outside-manifest": SnapshotEntry(
+                    item_id="outside-manifest",
+                    target="outside",
+                    status=OperationStatus.SUCCEEDED,
+                    value=1,
+                )
+            }
+        }
+    )
+    with pytest.raises(typer.BadParameter, match="unknown manifest items"):
+        _manifest_items_for_snapshot(manifest, unknown)
 
 
 def test_demo_command_writes_a_labeled_full_closed_loop(tmp_path: Path) -> None:

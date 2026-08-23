@@ -52,6 +52,8 @@ M1 实现合同进一步规定：
   `ConfigSnapshot` 并绑定原租约 digest。
 - `matched-snapshot` 只接受同一 target 的两个完整且 digest 相等的快照。
 - CLI 必须现场重新读取 actual snapshot；不完整或不一致时写入 needs-attention，并禁止接管。
+- 现场复读的 item 集合必须与 expected snapshot 完全一致；expected 引用 manifest 外项目时拒绝，
+  不能因整份 manifest 比历史事务快照多出未修改项目而制造假冲突。
 - 清除 needs-attention 必须再次现场读回，并提交绑定原 attention evidence 的完整
   actual/approved 快照；不一致时保持阻断。
 

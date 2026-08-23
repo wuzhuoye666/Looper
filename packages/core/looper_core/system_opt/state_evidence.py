@@ -334,7 +334,8 @@ class LinuxExactAssignmentCollector:
             ownership_declarations=[],
             counting_basis=(
                 "all parseable key=value assignments from every explicitly listed source "
-                "are retained; exact target-key matching only; no precedence inference"
+                "are retained; exact target or manifest-declared persistent-key matching "
+                "only; no precedence inference"
             ),
         )
 
