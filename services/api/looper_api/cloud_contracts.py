@@ -64,6 +64,8 @@ class VpcInfo(ApiModel):
     name: str
     cidr_block: str | None = None
     is_default: bool = False
+    tags: dict[str, str] = Field(default_factory=dict)
+    managed: bool = False
 
 
 class SubnetInfo(ApiModel):
@@ -195,6 +197,7 @@ class InstanceNetworkResolution(ApiModel):
     vpc: VpcInfo
     subnet: SubnetInfo
     zone_automatically_selected: bool = False
+    vpc_action: Literal["reused", "created"]
     subnet_action: Literal["reused", "created"]
     warnings: list[str] = Field(default_factory=list)
 
@@ -337,7 +340,9 @@ class SearchResult(ApiModel):
 
 
 class DestroyedResource(ApiModel):
-    kind: Literal["instance", "system-disk", "local-disk", "public-ip", "subnet", "security-group"]
+    kind: Literal[
+        "instance", "system-disk", "local-disk", "public-ip", "vpc", "subnet", "security-group"
+    ]
     id: str = Field(min_length=1, max_length=180)
     released: bool = True
     note: str | None = Field(default=None, max_length=500)

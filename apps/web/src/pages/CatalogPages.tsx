@@ -21,7 +21,7 @@ const CLOUD_PROVIDERS = new Set(['tencent', 'alibaba', 'volcengine', 'baidu']);
 
 const DESTROY_KIND_LABELS: Record<string, string> = {
   'instance': '实例', 'system-disk': '系统盘', 'local-disk': '本地盘',
-  'public-ip': '公网 IP', 'subnet': '子网', 'security-group': '安全组',
+  'public-ip': '公网 IP', 'vpc': 'VPC', 'subnet': '子网', 'security-group': '安全组',
 };
 
 export function TargetsPage() {

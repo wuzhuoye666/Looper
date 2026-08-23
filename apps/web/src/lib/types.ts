@@ -131,7 +131,7 @@ export interface Target {
     system?: string; release?: string; architecture?: string; host_key_sha256?: string; host_key_type?: string;
   };
 }
-export type DestroyedResourceKind = 'instance' | 'system-disk' | 'local-disk' | 'public-ip' | 'subnet' | 'security-group';
+export type DestroyedResourceKind = 'instance' | 'system-disk' | 'local-disk' | 'public-ip' | 'vpc' | 'subnet' | 'security-group';
 export interface DestroyedResource {
   kind: DestroyedResourceKind; id: string; released: boolean; note?: string;
 }
@@ -265,6 +265,7 @@ export interface CloudRegion { provider: CloudProviderId; id: string; name: stri
 export interface CloudZone { provider: CloudProviderId; region: string; id: string; name: string; available?: boolean }
 export interface CloudVpc {
   provider: CloudProviderId; region: string; id: string; name: string; cidrBlock?: string; isDefault: boolean;
+  tags?: Record<string, string>; managed?: boolean;
 }
 export interface CloudSubnet {
   provider: CloudProviderId; region: string; zone: string; vpcId: string; id: string; name: string;
@@ -276,7 +277,7 @@ export interface InstanceNetworkResolveRequest {
 export interface InstanceNetworkResolution {
   provider: CloudProviderId; region: string; instanceType: string; zone: string; eligibleZones: string[];
   vpc: CloudVpc; subnet: CloudSubnet; zoneAutomaticallySelected: boolean;
-  subnetAction: 'reused' | 'created'; warnings: string[];
+  vpcAction: 'reused' | 'created'; subnetAction: 'reused' | 'created'; warnings: string[];
 }
 export interface CloudSecurityGroup {
   provider: CloudProviderId; region: string; id: string; name: string; description?: string;

@@ -107,6 +107,8 @@ class AlibabaEcsProvider(CloudProvider):
                 "images",
                 "stock-advisory",
                 "vpcs",
+                "managed-vpc",
+                "empty-vpc-cleanup",
                 "subnets",
                 "managed-subnet",
                 "security-groups",
@@ -193,7 +195,7 @@ class AlibabaEcsProvider(CloudProvider):
                 f"Alibaba Cloud VPC {method} failed: {message}",
                 code=str(code),
                 retryable=str(code) in {"Throttling", "ServiceUnavailable", "InternalError"},
-                ambiguous=method == "create_vswitch"
+                ambiguous=method in {"create_vpc", "create_vswitch"}
                 and ambiguous_create_error(provider_code, error),
                 details={"requestId": request_id} if request_id else {},
             ) from error
@@ -515,8 +517,18 @@ class AlibabaEcsProvider(CloudProvider):
             )
             response = self._call("describe_vpcs", region, request)
             rows = as_list(nested(response, ("body",), ("vpcs",), ("vpc",), default=[]))
-            items.extend(
-                VpcInfo(
+            for item in rows:
+                if not attr(item, "vpc_id"):
+                    continue
+                tag_rows = as_list(nested(item, ("tags",), ("tag",), default=[]))
+                tags = {
+                    str(attr(tag, "tag_key", "key")): str(
+                        attr(tag, "tag_value", "value", default="") or ""
+                    )
+                    for tag in tag_rows
+                    if attr(tag, "tag_key", "key")
+                }
+                items.append(VpcInfo(
                     provider=self.id,
                     region=region,
                     id=str(attr(item, "vpc_id")),
@@ -525,15 +537,70 @@ class AlibabaEcsProvider(CloudProvider):
                     ),
                     cidrBlock=attr(item, "cidr_block"),
                     isDefault=bool(attr(item, "is_default", default=False)),
-                )
-                for item in rows
-                if attr(item, "vpc_id")
-            )
+                    tags=tags,
+                    managed=tags.get("managedBy", "").casefold() == "looper",
+                ))
             total = int(attr(nested(response, ("body",)), "total_count", default=0) or 0)
             if not rows or len(items) >= total:
                 break
             page_number += 1
         return items
+
+    def create_managed_vpc(
+        self,
+        *,
+        region: str,
+        cidr_block: str,
+        name: str,
+        client_token: str,
+    ) -> VpcInfo:
+        from alibabacloud_vpc20160428 import models
+
+        request = models.CreateVpcRequest(
+            region_id=region,
+            cidr_block=cidr_block,
+            vpc_name=name,
+            client_token=client_token,
+            tag=[
+                models.CreateVpcRequestTag(key="managedBy", value="looper"),
+                models.CreateVpcRequestTag(key="purpose", value="cloud-purchase"),
+            ],
+        )
+        response = self._vpc_call("create_vpc", region, request)
+        vpc_id = attr(nested(response, ("body",)), "vpc_id")
+        if not vpc_id:
+            raise CloudProviderError(
+                "Alibaba Cloud created a VPC without returning its id",
+                code="ambiguous_response",
+                ambiguous=True,
+            )
+        deadline = time.monotonic() + 45
+        while time.monotonic() < deadline:
+            describe = models.DescribeVpcAttributeRequest(region_id=region, vpc_id=str(vpc_id))
+            item = nested(self._vpc_call("describe_vpc_attribute", region, describe), ("body",))
+            status = str(attr(item, "status", default="") or "")
+            if status.casefold() == "available":
+                return VpcInfo(
+                    provider=self.id,
+                    region=region,
+                    id=str(vpc_id),
+                    name=str(attr(item, "vpc_name", default=name) or name),
+                    cidrBlock=attr(item, "cidr_block", default=cidr_block),
+                    isDefault=bool(attr(item, "is_default", default=False)),
+                    tags={"managedBy": "looper", "purpose": "cloud-purchase"},
+                    managed=True,
+                )
+            if status and status.casefold() not in {"pending", "creating"}:
+                raise CloudProviderError(
+                    f"Alibaba Cloud VPC entered unexpected state {status}",
+                    code="vpc_create_failed",
+                )
+            time.sleep(1)
+        raise CloudProviderError(
+            "Alibaba Cloud VPC creation is still pending",
+            code="ambiguous_response",
+            ambiguous=True,
+        )
 
     def list_subnets(self, region: str, zone: str, vpc_id: str) -> list[SubnetInfo]:
         return self._list_vswitches(region, vpc_id=vpc_id, zone=zone)
@@ -1109,6 +1176,40 @@ class AlibabaEcsProvider(CloudProvider):
                     note=f"vSwitch 清理暂缓：{error}",
                 )
             ]
+
+    def delete_vpc_if_empty(self, *, region: str, vpc_id: str) -> DestroyedResource:
+        from alibabacloud_vpc20160428 import models
+
+        try:
+            vpc = next((item for item in self.list_vpcs(region) if item.id == vpc_id), None)
+            if vpc is None:
+                return DestroyedResource(kind="vpc", id=vpc_id, note="VPC 已不存在")
+            if vpc.is_default:
+                return DestroyedResource(
+                    kind="vpc", id=vpc_id, released=False, note="默认 VPC 按安全策略保留"
+                )
+            subnets = self.list_vpc_subnets(region, vpc_id)
+            if subnets:
+                return DestroyedResource(
+                    kind="vpc",
+                    id=vpc_id,
+                    released=False,
+                    note=f"VPC 仍包含 {len(subnets)} 个 vSwitch，保留不动",
+                )
+            request = models.DeleteVpcRequest(
+                region_id=region,
+                vpc_id=vpc_id,
+                force_delete=False,
+            )
+            self._vpc_call("delete_vpc", region, request)
+            return DestroyedResource(kind="vpc", id=vpc_id, note="空闲非默认 VPC 已删除")
+        except CloudProviderError as error:
+            return DestroyedResource(
+                kind="vpc",
+                id=vpc_id,
+                released=False,
+                note=f"VPC 清理暂缓：{error}",
+            )
 
 
 _ARCHIVE_AFTER_AUTHORITATIVE_MISSES = 3

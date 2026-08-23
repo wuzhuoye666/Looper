@@ -77,6 +77,18 @@ class CloudProvider(ABC):
             items.extend(self.list_subnets(region, zone.id, vpc_id))
         return items
 
+    def create_managed_vpc(
+        self,
+        *,
+        region: str,
+        cidr_block: str,
+        name: str,
+        client_token: str,
+    ) -> VpcInfo:
+        raise CloudProviderError(
+            "managed VPC creation is not supported", code="unsupported_operation"
+        )
+
     def create_managed_subnet(
         self,
         *,
@@ -132,3 +144,17 @@ class CloudProvider(ABC):
         other instances.
         """
         return []
+
+    def delete_vpc_if_empty(self, *, region: str, vpc_id: str) -> DestroyedResource:
+        """Delete one non-default VPC only when it has no remaining subnets.
+
+        Implementations must re-check both the VPC default flag and its subnet
+        inventory immediately before issuing the provider delete request. Provider
+        dependency checks remain the final guard against deleting an in-use VPC.
+        """
+        return DestroyedResource(
+            kind="vpc",
+            id=vpc_id,
+            released=False,
+            note="当前云厂商尚不支持自动清理空 VPC",
+        )

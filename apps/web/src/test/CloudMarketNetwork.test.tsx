@@ -129,9 +129,10 @@ describe('腾讯云购买网络选择', () => {
         instanceType: 'S9.TEST',
         zone: 'ap-test-1',
         eligibleZones: ['ap-test-1'],
-        vpc: { provider: 'tencent', region: 'ap-test', id: 'vpc-default', name: 'Default-VPC', cidrBlock: '172.16.0.0/16', isDefault: true },
+        vpc: { provider: 'tencent', region: 'ap-test', id: 'vpc-default', name: 'Default-VPC', cidrBlock: '172.16.0.0/16', isDefault: true, tags: {}, managed: false },
         subnet: { provider: 'tencent', region: 'ap-test', zone: 'ap-test-1', vpcId: 'vpc-default', id: 'subnet-default', name: 'Default-Subnet', availableIpCount: 250, isDefault: true },
         zoneAutomaticallySelected: true,
+        vpcAction: 'reused',
         subnetAction: 'reused',
         warnings: [],
       });
@@ -193,6 +194,8 @@ describe('腾讯云购买网络选择', () => {
     await chooseFirstMachine();
     expect(vi.mocked(fetch).mock.calls.some(([request]) => String(request).includes('/cloud/network/tencent/resolve-instance-network'))).toBe(true);
     expect(screen.getAllByText(/ap-test-1/).length).toBeGreaterThan(0);
+    expect(screen.getByText(/已复用 VPC Default-VPC · vpc-default/)).toBeInTheDocument();
+    expect(screen.getByText(/已复用子网 Default-Subnet · subnet-default/)).toBeInTheDocument();
     expect(vi.mocked(fetch).mock.calls.some(([request]) => {
       const url = String(request);
       return url.includes('/cloud/catalog/tencent/image') && url.includes('instance_type=S9.TEST');

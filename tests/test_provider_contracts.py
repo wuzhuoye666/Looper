@@ -5,7 +5,7 @@ from decimal import Decimal
 from types import SimpleNamespace
 
 import pytest
-from looper_api.cloud_contracts import CatalogFilters, CloudPurchaseSpec
+from looper_api.cloud_contracts import CatalogFilters, CloudPurchaseSpec, VpcInfo
 from looper_api.providers.alibaba_ecs import AlibabaEcsProvider
 from looper_api.providers.baidu_bcc import BaiduBccProvider
 from looper_api.providers.base import CloudProviderError
@@ -168,6 +168,114 @@ def test_tencent_network_catalog_maps_defaults_filters_and_recommendations(
     assert '"Name": "zone", "Values": ["ap-test-1"]' in subnet_payload
     assert '"Offset": "0"' in subnet_payload
     assert cvm_calls[0][0] == "DescribeKeyPairs"
+
+
+def test_tencent_managed_vpc_creation_and_empty_cleanup(monkeypatch) -> None:
+    provider = TencentCvmProvider()
+    calls: list[tuple[str, object]] = []
+
+    def call(method: str, _region: str, request: object):
+        calls.append((method, request))
+        if method == "CreateVpc":
+            return SimpleNamespace(
+                Vpc=SimpleNamespace(
+                    VpcId="vpc-created",
+                    VpcName="looper-vpc-test",
+                    CidrBlock="10.0.0.0/16",
+                    IsDefault=False,
+                    TagSet=[],
+                )
+            )
+        if method == "DescribeVpcs":
+            return SimpleNamespace(
+                TotalCount=1,
+                VpcSet=[SimpleNamespace(
+                    VpcId="vpc-created", VpcName="looper-vpc-test",
+                    CidrBlock="10.0.0.0/16", IsDefault=False, TagSet=[],
+                )],
+            )
+        if method == "DescribeSubnets":
+            return SimpleNamespace(TotalCount=0, SubnetSet=[])
+        return SimpleNamespace(RequestId="delete-vpc-request")
+
+    monkeypatch.setattr(provider, "_vpc_call", call)
+    vpc = provider.create_managed_vpc(
+        region="ap-test",
+        cidr_block="10.0.0.0/16",
+        name="looper-vpc-test",
+        client_token="unused-by-tencent",
+    )
+    deleted = provider.delete_vpc_if_empty(region="ap-test", vpc_id=vpc.id)
+
+    assert vpc.managed is True
+    assert deleted.released is True
+    assert [method for method, _request in calls] == [
+        "CreateVpc", "DescribeVpcs", "DescribeVpcs", "DescribeSubnets", "DeleteVpc"
+    ]
+    create_payload = calls[0][1].to_json_string()
+    assert '"CidrBlock": "10.0.0.0/16"' in create_payload
+    assert '"managedBy"' in create_payload
+    assert '"VpcId": "vpc-created"' in calls[-1][1].to_json_string()
+
+
+def test_alibaba_managed_vpc_creation_and_empty_cleanup(monkeypatch) -> None:
+    provider = AlibabaEcsProvider()
+    calls: list[tuple[str, object]] = []
+
+    def call(method: str, _region: str, request: object):
+        calls.append((method, request))
+        if method == "create_vpc":
+            return SimpleNamespace(body=SimpleNamespace(vpc_id="vpc-created"))
+        if method == "describe_vpc_attribute":
+            return SimpleNamespace(body=SimpleNamespace(
+                vpc_id="vpc-created", vpc_name="looper-vpc-test",
+                cidr_block="10.0.0.0/16", is_default=False, status="Available",
+            ))
+        return SimpleNamespace(body=SimpleNamespace(request_id="delete-vpc-request"))
+
+    monkeypatch.setattr(provider, "_vpc_call", call)
+    vpc = provider.create_managed_vpc(
+        region="cn-test",
+        cidr_block="10.0.0.0/16",
+        name="looper-vpc-test",
+        client_token="stable-vpc-token",
+    )
+    monkeypatch.setattr(provider, "list_vpcs", lambda _region: [vpc])
+    monkeypatch.setattr(provider, "list_vpc_subnets", lambda _region, _vpc_id: [])
+    deleted = provider.delete_vpc_if_empty(region="cn-test", vpc_id=vpc.id)
+
+    assert vpc.managed is True
+    assert deleted.released is True
+    assert [method for method, _request in calls] == [
+        "create_vpc", "describe_vpc_attribute", "delete_vpc"
+    ]
+    create_payload = calls[0][1].to_map()
+    assert create_payload["ClientToken"] == "stable-vpc-token"
+    assert create_payload["CidrBlock"] == "10.0.0.0/16"
+    assert {item["Key"] for item in create_payload["Tag"]} == {"managedBy", "purpose"}
+    assert calls[-1][1].to_map()["ForceDelete"] is False
+
+
+def test_empty_vpc_cleanup_keeps_default_and_vpc_with_subnets(monkeypatch) -> None:
+    provider = AlibabaEcsProvider()
+    default_vpc = VpcInfo(
+        provider="alibaba", region="cn-test", id="vpc-default", name="Default", isDefault=True
+    )
+    busy_vpc = VpcInfo(
+        provider="alibaba", region="cn-test", id="vpc-busy", name="Busy"
+    )
+    monkeypatch.setattr(provider, "list_vpcs", lambda _region: [default_vpc, busy_vpc])
+    monkeypatch.setattr(provider, "list_vpc_subnets", lambda _region, _vpc_id: [object()])
+    monkeypatch.setattr(
+        provider,
+        "_vpc_call",
+        lambda *_args: pytest.fail("provider delete must not be called"),
+    )
+
+    default_result = provider.delete_vpc_if_empty(region="cn-test", vpc_id="vpc-default")
+    busy_result = provider.delete_vpc_if_empty(region="cn-test", vpc_id="vpc-busy")
+    assert default_result.released is False
+    assert busy_result.released is False
 
 
 def test_tencent_ensure_security_group_uses_safe_atomic_policy(monkeypatch) -> None:

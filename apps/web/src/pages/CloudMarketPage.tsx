@@ -27,12 +27,15 @@ import { CloudSelectionAdvisor } from '../components/CloudSelectionAdvisor';
 import { EmptyState, ErrorState, LoadingState } from '../components/States';
 import { api } from '../lib/api';
 import type {
+  CloudCatalogResponse,
   CloudImage,
   CloudInstanceType,
   CloudProviderId,
   CloudProviderReadiness,
   CloudPurchaseSpec,
   CloudQuote,
+  CloudSubnet,
+  CloudVpc,
 } from '../lib/types';
 
 const providerLabels: Record<CloudProviderId, string> = {
@@ -52,6 +55,15 @@ const DEFAULT_PUBLIC_BANDWIDTH_MBPS = 1;
 
 function key() {
   return `looper-${Date.now()}-${window.crypto?.randomUUID?.() || Math.random().toString(36).slice(2)}`;
+}
+
+function mergeCatalogItem<T extends { id: string }>(
+  catalog: CloudCatalogResponse<T> | undefined,
+  item: T,
+) {
+  if (!catalog) return catalog;
+  const items = [item, ...catalog.items.filter(candidate => candidate.id !== item.id)];
+  return { ...catalog, items, total: Math.max(catalog.total, items.length) };
 }
 
 function parseIds(value: string) {
@@ -220,15 +232,25 @@ export function CloudMarketPage() {
       subnetId: subnetId || undefined,
     }, networkKey.current),
     onSuccess: (resolution, instance) => {
+      queryClient.setQueryData<CloudCatalogResponse<CloudVpc>>(
+        ['cloud-vpcs', provider, region],
+        current => mergeCatalogItem(current, resolution.vpc),
+      );
+      queryClient.setQueryData<CloudCatalogResponse<CloudSubnet>>(
+        ['cloud-subnets', provider, region, resolution.zone, resolution.vpc.id],
+        current => mergeCatalogItem(current, resolution.subnet),
+      );
       setSelectedType(instance);
       setSelectedImage(null);
       setZone(resolution.zone);
       setVpcId(resolution.vpc.id);
       setSubnetId(resolution.subnet.id);
-      setNetworkNotice(`${resolution.zoneAutomaticallySelected ? `已选择可售可用区 ${resolution.zone}` : `可用区 ${resolution.zone}`}；${resolution.subnetAction === 'created' ? '已创建' : '已复用'}子网 ${resolution.subnet.name} · ${resolution.subnet.id}`);
+      setNetworkNotice(`${resolution.zoneAutomaticallySelected ? `已选择可售可用区 ${resolution.zone}` : `可用区 ${resolution.zone}`}；${resolution.vpcAction === 'created' ? '已创建' : '已复用'} VPC ${resolution.vpc.name} · ${resolution.vpc.id}；${resolution.subnetAction === 'created' ? '已创建' : '已复用'}子网 ${resolution.subnet.name} · ${resolution.subnet.id}`);
       setSelectionError('');
       setSearch('');
       setStep('image');
+      void queryClient.invalidateQueries({ queryKey: ['cloud-vpcs', provider, region] });
+      void queryClient.invalidateQueries({ queryKey: ['cloud-subnets', provider, region] });
     },
     onError: error => setSelectionError(error instanceof Error ? error.message : '网络准备失败'),
   });

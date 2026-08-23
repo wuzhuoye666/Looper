@@ -7,6 +7,8 @@ import ipaddress
 import json
 import re
 import secrets
+import threading
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -72,6 +74,24 @@ CatalogKind = Literal[
     "security-group",
     "key-pair",
 ]
+
+_NETWORK_PREP_LOCKS: dict[tuple[str, str], threading.Lock] = {}
+_NETWORK_PREP_LOCKS_GUARD = threading.Lock()
+
+
+@contextmanager
+def _network_prep_lock(provider_id: ProviderId, region: str):
+    """Serialize regional network creation in this local API process.
+
+    Alibaba additionally receives a provider client token. Tencent CreateVpc
+    has no token field, so this lock plus deterministic naming and recovery
+    queries prevents ordinary concurrent UI requests from creating duplicates.
+    """
+    key = (provider_id.value, region)
+    with _NETWORK_PREP_LOCKS_GUARD:
+        lock = _NETWORK_PREP_LOCKS.setdefault(key, threading.Lock())
+    with lock:
+        yield
 
 
 def _aware(value: datetime) -> datetime:
@@ -706,13 +726,41 @@ def resolve_instance_network(
             code="instance_type_zone_unavailable",
         )
 
-    vpcs = sorted(provider.list_vpcs(request.region), key=lambda item: item.id)
-    if not vpcs:
-        raise CloudWorkflowError(
-            "当前地域没有 VPC，请先在云厂商控制台创建 VPC",
-            status_code=409,
-            code="vpc_missing",
-        )
+    warnings: list[str] = []
+    token_digest = hashlib.sha256(idempotency_key.encode("utf-8")).hexdigest()
+    vpc_action: Literal["reused", "created"] = "reused"
+    with _network_prep_lock(provider_id, request.region):
+        vpcs = sorted(provider.list_vpcs(request.region), key=lambda item: item.id)
+        if not vpcs:
+            vpc_name = f"looper-vpc-{token_digest[:8]}"
+            try:
+                created_vpc = provider.create_managed_vpc(
+                    region=request.region,
+                    cidr_block="10.0.0.0/16",
+                    name=vpc_name,
+                    client_token=token_digest,
+                )
+            except CloudProviderError:
+                refreshed = sorted(provider.list_vpcs(request.region), key=lambda item: item.id)
+                recovered = [
+                    item
+                    for item in refreshed
+                    if item.name == vpc_name
+                ]
+                if not recovered:
+                    raise
+                created_vpc = recovered[0]
+                warnings.append("创建响应不明确，已通过云端目录核对并复用 Looper VPC")
+            vpcs = [created_vpc]
+            vpc_action = "created"
+            warnings.append(f"当前地域没有 VPC，已自动创建 {created_vpc.name}")
+            session.execute(
+                delete(CloudCatalogCacheRecord).where(
+                    CloudCatalogCacheRecord.provider == provider_id.value,
+                    CloudCatalogCacheRecord.resource_type.in_(["vpc", "subnet"]),
+                    CloudCatalogCacheRecord.region == request.region,
+                )
+            )
     vpc = next((item for item in vpcs if item.id == request.vpc_id), None)
     if vpc is None:
         vpc = next((item for item in vpcs if item.is_default), vpcs[0])
@@ -731,7 +779,6 @@ def resolve_instance_network(
         with_subnets = [zone for zone in eligible_zones if by_zone.get(zone)]
         chosen_zone = (with_subnets or eligible_zones)[0]
 
-    warnings: list[str] = []
     if not request.zone:
         warnings.append(f"已稳定选择可售可用区 {chosen_zone}")
     subnet_options = by_zone.get(chosen_zone, [])
@@ -740,7 +787,6 @@ def resolve_instance_network(
         action: Literal["reused", "created"] = "reused"
     else:
         cidr_block = _free_subnet_cidr(vpc, all_subnets)
-        token_digest = hashlib.sha256(idempotency_key.encode("utf-8")).hexdigest()
         subnet_name = f"looper-{chosen_zone[-24:]}-{token_digest[:8]}"[:60]
         try:
             subnet = provider.create_managed_subnet(
@@ -789,6 +835,7 @@ def resolve_instance_network(
         vpc=vpc,
         subnet=subnet,
         zoneAutomaticallySelected=not bool(request.zone),
+        vpcAction=vpc_action,
         subnetAction=action,
         warnings=warnings,
     )
@@ -1895,7 +1942,8 @@ def _destroy_acknowledgement(provider_id: ProviderId, instance_name: str, instan
     provider_label = _PROVIDER_LABELS.get(provider_id.value, provider_id.value)
     return (
         f"确认销毁 {provider_label} 实例 {instance_name}（{instance_id}），"
-        f"并释放其系统盘、本地盘（含机械盘）、公网及 Looper 纳管的子网/安全组等随附资源"
+        f"并释放其系统盘、本地盘（含机械盘）、公网及 Looper 纳管的子网/安全组；"
+        f"机器所在的空闲非默认 VPC 也可能被删除"
     )
 
 
@@ -1920,6 +1968,16 @@ def _destroy_preview_resources(
     ]
     order = _target_order(session, target)
     if order is not None:
+        vpc_id = order.spec_json.get("vpc_id")
+        if vpc_id:
+            resources.append(
+                DestroyedResource(
+                    kind="vpc",
+                    id=str(vpc_id),
+                    released=False,
+                    note="机器销毁后若其为非默认且不含任何子网，将尝试删除",
+                )
+            )
         subnet_id = order.spec_json.get("subnet_id")
         if subnet_id:
             resources.append(
@@ -1985,12 +2043,30 @@ def destroy_target(
     network_resources: list[DestroyedResource] = []
     order = _target_order(session, target)
     if order is not None:
+        vpc_id = order.spec_json.get("vpc_id")
         network_resources = provider.cleanup_managed_network(
             region=region,
-            vpc_id=order.spec_json.get("vpc_id"),
+            vpc_id=vpc_id,
             subnet_id=order.spec_json.get("subnet_id"),
             security_group_ids=order.spec_json.get("security_group_ids") or [],
         )
+        if vpc_id:
+            network_resources.append(
+                provider.delete_vpc_if_empty(region=region, vpc_id=str(vpc_id))
+            )
+        released_network_kinds = {
+            item.kind
+            for item in network_resources
+            if item.released and item.kind in {"vpc", "subnet"}
+        }
+        if released_network_kinds:
+            session.execute(
+                delete(CloudCatalogCacheRecord).where(
+                    CloudCatalogCacheRecord.provider == provider_id.value,
+                    CloudCatalogCacheRecord.resource_type.in_(released_network_kinds),
+                    CloudCatalogCacheRecord.region == region,
+                )
+            )
 
     now = utc_now()
     target.status = "offline"
