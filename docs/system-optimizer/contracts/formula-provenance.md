@@ -82,6 +82,11 @@ Limit_{CV}=Q_{confidence}(\{CV_b\}_{b=1}^{B})
 外推到腾讯云 CVM/NIC。均值为零、样本少于 3、关键身份改变或派生上界为零时 fail-closed。
 该门禁只判断测量批次是否足够稳定，不等于候选收益 MDE，也不证明候选有效。
 
+同节登记 S1.1 的点估计 CV 报告公式 id：`F-PROJECT-PRESSURE-CV/v1alpha1`，定义
+`CV=s(Y)/|\bar Y|`（`evaluate_measurement_stability` 的 report 口径）。它只用于报告
+单批次的样本变异系数，不派生 `Limit_CV` 门限；门限派生只认
+`F-PROJECT-PRESSURE-CV-BOOTSTRAP-UPPER/v1alpha1`。
+
 ### S2：不可补偿门禁
 
 来源类型：PROJECT-CONTRACT，与 F-MENTOR-001 对齐。
@@ -147,6 +152,8 @@ I_m(x)=
 
 target 指标使用到目标距离的减少量，range 指标使用到合法区间超限距离的减少量。必须同时保存原始值、估计值、不确定性、公式 ID、公式版本和输入摘要。
 
+`I_m(x)` 的符号已方向归一化（改善为正）：后续搜索生成器与 Pareto 排名一律把改善量当作最大化目标，不得再次叠加指标自身方向（否则方向被双重编码）。
+
 ### S7：稳健接受条件
 
 来源类型：PROJECT-CONTRACT，与 F-MENTOR-002 对齐。
@@ -159,6 +166,11 @@ LCB_{confidence}(I_{primary}(x))>MDE_{primary}
 \]
 
 置信水平、重采样方法、重复次数和 `MDE` 必须由任务显式给出。只看到均值上升不能晋级。
+
+`bootstrap_improvement` 产出的 `ImprovementEvidence` 统一标注公式 id
+`F-PROJECT-S6-S7/v1alpha1`：它覆盖 S6 的点估计（`improvement_value`）与 S7 的
+bootstrap 置信下界（`LCB=Q_{\alpha/2}(\{I_b\}_{b=1}^{B})`），是 S6/S7 的组合证据
+标签，不含任何新的权重或阈值。
 
 ### S8：结果向量与排名
 
@@ -563,6 +575,16 @@ U_{workload}(x)=(U_{primary},U_{secondary},Cost,Risk,EvidenceCoverage)
 具体维度由 workload manifest 声明。系统微指标不自动进入 U_primary；只有 workload 合同明确声明资源或能耗为业务成本时才进入候选效用。
 
 比较必须分别保存：相对 frozen baseline、相对 incumbent、相对 general profile。
+
+### F-PROJECT-006：L5 条件判定分布统计量与置信界
+
+来源类型：PROJECT-CONTRACT；formula id：`F-PROJECT-CONDITION-BOOTSTRAP/v1`。
+
+L5 公式映射的 `when` 条件可声明分布统计量（median / mean / p95 / cv）与置信模式
+（point / lcb95 / ucb95）。置信模式为 lcb95/ucb95 时，用 bootstrap 有放回重采样该统计量，
+取 5%/95% 分位作为下/上界；样本数低于规则的 `minimum_samples`，或置信模式/分布统计量
+缺乏分布证据（collector 快照只有点值）时，条件判为“未决”且规则不触发（fail-closed，不猜）。
+该公式只用于 L5 内部的条件触发判定，不进入整体业务得分，也不替代 S7 的 LCB 接受判据。
 
 ## 7. 来源纠错与禁止表述
 
