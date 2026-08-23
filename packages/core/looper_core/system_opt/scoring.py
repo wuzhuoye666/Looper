@@ -28,10 +28,34 @@ class MetricEvidence(StrictModel):
         return canonical_digest(self.model_dump(mode="json"))
 
 
+class MeasurementPhaseEvidence(StrictModel):
+    phase_id: str
+    kind: str
+    command_digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    status: str
+    elapsed_seconds: float = Field(ge=0)
+
+
+class MeasurementStabilityEvidence(StrictModel):
+    metric_id: str
+    statistic: str
+    formula_id: str
+    sample_count: int = Field(ge=2)
+    value: float = Field(ge=0)
+    enforcement: str
+    acceptance_limit: float | None = Field(default=None, gt=0)
+    accepted: bool | None
+
+
 class MeasurementBatch(StrictModel):
     identity: dict[str, str]
     metrics: dict[str, MetricEvidence]
     gate_values: dict[str, float | bool | None]
+    pressure_protocol_digest: str | None = Field(
+        default=None, pattern=r"^sha256:[0-9a-f]{64}$"
+    )
+    phase_evidence: list[MeasurementPhaseEvidence] = Field(default_factory=list)
+    stability_evidence: MeasurementStabilityEvidence | None = None
 
     @property
     def digest(self) -> str:

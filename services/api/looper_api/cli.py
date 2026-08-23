@@ -49,6 +49,11 @@ from looper_core.system_opt.policy import (
     OptimizationMode,
     parse_optimization_policy_yaml,
 )
+from looper_core.system_opt.pressure import (
+    PhasedPressureMeasurementAdapter,
+    parse_standard_pressure_protocol_yaml,
+    validate_pressure_policy,
+)
 from looper_core.system_opt.safety import SafetyController, SafetyPolicy, SafetyState
 from looper_core.system_opt.scoring import MeasurementBatch
 from looper_core.system_opt.state_evidence import (
@@ -645,8 +650,11 @@ def run_linux_system_optimization(
     baseline_parameters_path: Path = typer.Option(
         ..., "--baseline-parameters", exists=True, dir_okay=False
     ),
-    measurement_command_path: Path = typer.Option(
-        ..., "--measurement-command", exists=True, dir_okay=False
+    measurement_command_path: Path | None = typer.Option(
+        None, "--measurement-command", exists=True, dir_okay=False
+    ),
+    pressure_protocol_path: Path | None = typer.Option(
+        None, "--pressure-protocol", exists=True, dir_okay=False
     ),
     diagnostic_reference_path: Path | None = typer.Option(
         None, "--diagnostic-reference", exists=True, dir_okay=False
@@ -668,6 +676,22 @@ def run_linux_system_optimization(
     _require_linux_confirmation(enable_real, confirmation)
     manifest = parse_config_manifest_yaml(manifest_path.read_text(encoding="utf-8"))
     policy = parse_optimization_policy_yaml(policy_path.read_text(encoding="utf-8"))
+    if (measurement_command_path is None) == (pressure_protocol_path is None):
+        raise typer.BadParameter(
+            "provide exactly one of --measurement-command or --pressure-protocol"
+        )
+    pressure_protocol = (
+        parse_standard_pressure_protocol_yaml(
+            pressure_protocol_path.read_text(encoding="utf-8")
+        )
+        if pressure_protocol_path is not None
+        else None
+    )
+    if pressure_protocol is not None:
+        try:
+            validate_pressure_policy(pressure_protocol, policy)
+        except ValueError as error:
+            raise typer.BadParameter(str(error)) from error
     capability_domains = TypeAdapter(list[DomainEvidence]).validate_python(
         _read_json(capability_domains_path)
     )
@@ -685,14 +709,32 @@ def run_linux_system_optimization(
     baseline = _read_json(baseline_parameters_path)
     if not isinstance(baseline, dict):
         raise typer.BadParameter("baseline parameters must be a JSON object")
-    measurement_spec = MeasurementCommandSpec.model_validate(_read_json(measurement_command_path))
-    minimum_lease = policy.search.wall_time_seconds + measurement_spec.timeout_seconds
+    measurement_spec = (
+        MeasurementCommandSpec.model_validate(_read_json(measurement_command_path))
+        if measurement_command_path is not None
+        else None
+    )
+    measurement_timeout = (
+        measurement_spec.timeout_seconds
+        if measurement_spec is not None
+        else sum(phase.command.timeout_seconds for phase in pressure_protocol.phases)
+    )
+    minimum_lease = policy.search.wall_time_seconds + measurement_timeout
     if lease_ttl_seconds <= minimum_lease:
         raise typer.BadParameter(
             "lease TTL must exceed search wall-time plus one measurement timeout"
         )
-    if measurement_spec.argv[0] not in set(allow_executable):
+    allowed_executables = set(allow_executable)
+    if measurement_spec is not None and measurement_spec.argv[0] not in allowed_executables:
         raise typer.BadParameter("measurement executable is not allowlisted")
+    if pressure_protocol is not None:
+        missing_executables = sorted(
+            set(pressure_protocol.required_executables) - allowed_executables
+        )
+        if missing_executables:
+            raise typer.BadParameter(
+                f"pressure executables are not allowlisted: {missing_executables}"
+            )
     backend = _local_backend(
         manifest,
         target_id=target_id,
@@ -715,7 +757,11 @@ def run_linux_system_optimization(
         allowed_executables=set(allow_executable),
         writable_file_roots=writable_root,
     )
-    measure = CommandMeasurementAdapter(measurement_spec, runner)
+    measure = (
+        CommandMeasurementAdapter(measurement_spec, runner)
+        if measurement_spec is not None
+        else PhasedPressureMeasurementAdapter(pressure_protocol, runner)
+    )
     reference = (
         MeasurementBatch.model_validate(_read_json(diagnostic_reference_path))
         if diagnostic_reference_path is not None
@@ -765,6 +811,69 @@ def run_linux_system_optimization(
                 "measurement_attempts": result.attempt_count,
                 "baseline_measurements": len(result.baseline_history),
                 "recommended_candidate_id": result.recommended_candidate_id,
+                "output": str(output.resolve()),
+            }
+        )
+    )
+
+
+@system_opt_app.command("calibrate-pressure")
+def calibrate_linux_pressure(
+    pressure_protocol_path: Path = typer.Option(
+        ..., "--pressure-protocol", exists=True, dir_okay=False
+    ),
+    repeats: int = typer.Option(..., "--repeats", min=2),
+    target_id: str = typer.Option(..., "--target-id"),
+    owner_id: str = typer.Option(..., "--owner-id"),
+    lease_root: Path = typer.Option(..., "--lease-root", file_okay=False),
+    lease_ttl_seconds: float = typer.Option(..., "--lease-ttl-seconds", min=1),
+    allow_executable: list[str] = typer.Option(..., "--allow-executable"),
+    writable_root: list[Path] = typer.Option(..., "--writable-root", file_okay=False),
+    enable_real: bool = typer.Option(False, "--enable-real"),
+    confirmation: str = typer.Option("", "--confirmation"),
+    output: Path = typer.Option(..., "--output", dir_okay=False),
+) -> None:
+    _require_linux_confirmation(enable_real, confirmation)
+    protocol = parse_standard_pressure_protocol_yaml(
+        pressure_protocol_path.read_text(encoding="utf-8")
+    )
+    allowed_executables = set(allow_executable)
+    missing_executables = sorted(set(protocol.required_executables) - allowed_executables)
+    if missing_executables:
+        raise typer.BadParameter(
+            f"pressure executables are not allowlisted: {missing_executables}"
+        )
+    maximum_runtime = sum(phase.command.timeout_seconds for phase in protocol.phases)
+    if lease_ttl_seconds <= maximum_runtime:
+        raise typer.BadParameter("lease TTL must exceed the sum of pressure phase timeouts")
+    runner = SubprocessCommandRunner(
+        allowed_executables=allowed_executables,
+        writable_file_roots=writable_root,
+    )
+    guard = FileTargetGuard(lease_root)
+    lease = guard.acquire(
+        target_id,
+        owner_id,
+        ttl_seconds=lease_ttl_seconds,
+        now=datetime.now(UTC),
+        reconciliation=None,
+    )
+    try:
+        batch = PhasedPressureMeasurementAdapter(protocol, runner)(repeats)
+        _write_json(output, batch)
+    finally:
+        guard.release(lease)
+    console.print_json(
+        json.dumps(
+            {
+                "protocol_id": protocol.id,
+                "protocol_digest": protocol.digest,
+                "component": protocol.component,
+                "stability": (
+                    batch.stability_evidence.model_dump(mode="json")
+                    if batch.stability_evidence is not None
+                    else None
+                ),
                 "output": str(output.resolve()),
             }
         )
