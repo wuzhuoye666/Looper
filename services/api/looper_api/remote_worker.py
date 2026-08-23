@@ -52,7 +52,6 @@ def _source_archive() -> bytes:
         Path("services/worker/looper_worker"),
         Path("packages/core/looper_core"),
         Path("packages/benchmark-sdk/looper_benchmark_sdk"),
-        Path("benchmarks"),
     )
     output = io.BytesIO()
     with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
@@ -224,16 +223,6 @@ def deploy_remote_worker(
                     f"{remote_root}/venv/bin/python -m pip install "
                     "--disable-pip-version-check -q 'httpx>=0.28,<1' 'psutil>=7,<8' "
                     "'pydantic>=2.11,<3' 'PyYAML>=6,<7' 'jsonschema>=4.24,<5'"
-                ),
-                (
-                    "if ! command -v sysbench >/dev/null 2>&1; then "
-                    "if ! command -v apt-get >/dev/null 2>&1; then "
-                    "echo 'sysbench is unavailable and this host has no apt-get' >&2; exit 42; "
-                    "elif test \"$(id -u)\" = 0; then "
-                    "apt-get update -qq && env DEBIAN_FRONTEND=noninteractive "
-                    "apt-get install -y -qq sysbench; else "
-                    "sudo -n apt-get update -qq && sudo -n env DEBIAN_FRONTEND=noninteractive "
-                    "apt-get install -y -qq sysbench; fi; fi"
                 ),
                 f"rm -rf {remote_root}/source",
                 f"mkdir -p {remote_root}/source",

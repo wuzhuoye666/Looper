@@ -37,11 +37,42 @@ def test_scenario_catalog_exposes_execution_boundary(db_session: object) -> None
         "benchbase.smallbank.postgres",
         "dcperf.mediawiki.closed-loop",
     }
+    assert "looper.phoronix-phpbench" not in views
     benchbase = views["benchbase.smallbank.postgres"]
     assert benchbase["category"] == "scenario"
     assert benchbase["executionStatus"] == "stage0-adapter-only"
     assert benchbase["runnable"] is False
     assert benchbase["primaryMetric"] == "committed_tps"
+
+
+def test_benchmark_view_exposes_metric_presentation_without_dropping_metrics(
+    db_session: object,
+) -> None:
+    session = db_session
+    records = list(session.scalars(select(BenchmarkRecord).order_by(BenchmarkRecord.key)))
+    views = {record.benchmark_id: benchmark_view(record) for record in records}
+
+    benchbase = views["benchbase.smallbank.postgres"]
+    # The legacy metrics string list is preserved for existing clients.
+    assert "committed_tps" in benchbase["metrics"]
+    # Structured definitions are additive.
+    assert "metricDefinitions" in benchbase
+    committed = benchbase["metricDefinitions"]["committed_tps"]
+    assert committed["unit"] == "transactions/second"
+    assert committed["presentation"]["roles"] == ["primary_outcome"]
+    assert committed["presentation"]["defaultVisibility"] == "summary"
+
+    # A context metric is machine-readable and not presented as a hard gate.
+    offered = benchbase["metricDefinitions"]["offered_tps"]
+    assert offered["presentation"]["roles"] == ["context"]
+
+    # A hard gate role is a display hint and never a substitute for scenario gates.
+    p99 = benchbase["metricDefinitions"]["latency_p99_ms"]
+    assert "hard_gate" in p99["presentation"]["roles"]
+    assert "guardrail" in p99["presentation"]["roles"]
+
+    # Primary metric appears as a primary_outcome in its presentation semantics.
+    assert "primary_outcome" in committed["presentation"]["roles"]
 
 
 def test_inactive_target_cannot_be_selected_for_a_new_experiment(db_session: object) -> None:

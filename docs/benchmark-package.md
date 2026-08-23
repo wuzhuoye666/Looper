@@ -4,7 +4,7 @@ Looper 通过配置驱动的 Benchmark Package 接入新套件。新增普通套
 
 ## 包的最小组成
 
-一个源码目录至少包含 `benchmark.yaml`。本地受信任开发包可以同时包含启动器和 normalizer；生产包应把它们放进固定 digest 的容器镜像。
+一个可执行接入包至少包含 `benchmark.yaml`、Adapter 和所需的自动部署脚本，并以 ZIP 导入。生产包优先把运行入口放进固定 digest 容器；需要直接测量新购宿主机时，可以使用经过最终登记确认的受信任 local-process 包与 managed provisioning。
 
 | 配置区域 | 维护者必须说明的事实 |
 | --- | --- |
@@ -16,6 +16,8 @@ Looper 通过配置驱动的 Benchmark Package 接入新套件。新增普通套
 | `spec.metrics` | 指标名称、单位、方向、类型和最低样本量 |
 | `spec.outputs` | 证据上限以及必须保留的原始 artifact；套件原生结构化输出使用 `raw-result` |
 | `spec.scenario` | 采购问题、角色拓扑、主指标、正确性/SLO 门禁和负载策略 |
+| `spec.infrastructure` | 每类机器的角色、数量范围、最低硬件、放置关系和网络链路 |
+| `spec.audit` | 默认重复次数、Reference 策略、跨环境轴和正式准入所需证据 |
 
 目录中的事实与页面描述分开管理。版本、源码、镜像、指标和运行行为以 manifest 为唯一事实源；负责人、中文说明和业务标签可以在 Looper 中维护，但每次修改保留事件记录。
 
@@ -40,6 +42,12 @@ Looper 通过配置驱动的 Benchmark Package 接入新套件。新增普通套
 - `result.json`：运行状态以及 correctness、SLO、安全和统计检查；
 - manifest 声明的原始 artifact。
 
+## 多机与最低机型
+
+`scenario.roles` 表达业务角色，`infrastructure.nodeGroups` 表达实际机器。多机套件不能只写一句 `topology: multi-node`：每个机器组必须给出 `minimum/default/maximum` 数量、计分归属、OS/架构、CPU/内存/加速器/存储/网络下限以及放置关系。
+
+当前多机执行使用 `infrastructure.orchestration: adapter`：Looper 在 `primaryNodeGroup` 启动统一入口，Adapter 通过 required `topology` 输入获得其他节点引用并负责编排。`orchestration: looper` 是预留合同，在多角色调度器落地前只能登记 Stage 0，不能标为已经可执行。完整说明和模板见 `docs/benchmark-integration.md` 与 `docs/examples/benchmark-multi-node.yaml`。
+
 原始套件可以继续输出任意 CSV、JSON、日志、报告或直方图。`normalize` 阶段负责转换；Looper 不解析套件私有格式。
 其中套件原生 JSON/CSV 结果使用 `raw-result`，标准化后的 Looper 结果使用 `result`。旧包原有的 `result`、`dataset` 角色继续兼容，不自动改写。
 
@@ -55,9 +63,11 @@ Worker 按以下顺序执行存在的阶段：
 6. `collect`：整理额外证据；
 7. `cleanup`：尽力清理，平台仍会强制回收进程或容器。
 
-命令必须使用参数数组，不能提交 Shell 字符串。可使用 `{envelope}`、`{input}`、`{output}`、`{workspace}` 和 `{benchmarkRoot}` 占位符；`{python}` 只允许受信任的本地开发包使用。
+命令必须使用参数数组，不能提交 Shell 字符串。可使用 `{envelope}`、`{input}`、`{output}`、`{workspace}`、`{benchmarkRoot}` 和版本级持久目录 `{cache}` 占位符；`{python}` 只允许受信任的本地进程包使用。
 
-生产容器默认无网络、只读根文件系统、移除 capabilities、禁止提权，并且镜像必须固定到 `@sha256`。远程导入不能获得本地进程信任。
+生产容器默认无网络、只读根文件系统、移除 capabilities、禁止提权，并且镜像必须固定到 `@sha256`。受信任 local-process ZIP 只有在操作者查看门禁并最终登记后才获得本地执行许可；仅上传 YAML/JSON 不会获得该许可。
+
+干净目标机使用 `runtime.provisioning.mode: managed`：`hostCapabilities` 是部署前必须存在的 Worker/操作系统能力，`provides` 是 `prepare` 自动安装或解包的套件依赖，`cacheKey` 必须等于 `dependencyLockDigest`。Looper 选择机器时只检查前者，实验启动后下发完整 ZIP、运行 `prepare`，再运行 Benchmark。`prepare` 必须幂等、校验下载摘要，并对缺少网络、sudo 或包管理器给出可操作错误。
 
 Executable 新注册还必须声明：
 
@@ -79,12 +89,13 @@ SPEC 类集成包选择 `batch-suite`。workload 对应 task 或 task group，�
 
 ## 导入与验证流程
 
-1. 在“注册 Benchmark”页面选择 UTF-8 YAML 或 JSON 配置；
-2. Looper 先执行 JSON Schema 校验，再从文件读取身份、运行合同和指标；
-3. 维护者补充正确性说明、Base/Reference 和跨环境审计声明；
-4. 保存后查看每条服务端约束和依据；
-5. Stage 0 配置只能进入目录，不能运行；
-6. 可执行配置必须使用固定 digest 容器、依赖锁、生产执行策略、`looper-adapter/v1` 和 `normalize` 阶段；
-7. 先运行 fixture/冒烟，再进入兼容性矩阵和正式审计。
+1. 开发者或接入 Skill 在 Package 中完成 manifest、Adapter 和 fixture；
+2. 在“注册 Benchmark”页面选择完整 ZIP；Stage 0 合同可只选 UTF-8 YAML 或 JSON；
+3. Looper 执行 JSON Schema 和跨字段校验，并从文件自动读取全部注册摘要；
+4. 有阻断项时回 Package 修改并重新导入，页面不维护第二份来源、指标或审计说明；
+5. 阻断项清零后点击一次“登记到目录”；
+6. Stage 0 配置只能进入目录，不能运行；
+7. 可执行配置必须包含可下发脚本包或固定 digest 容器、依赖锁、生产执行策略、`looper-adapter/v1` 和 `normalize` 阶段；
+8. 先运行 fixture/冒烟，再进入兼容性矩阵和正式审计。`spec.audit` 的缺失属于准入提醒，不阻止注册。
 
 仓库中的 `benchmarks/config-driven-fixture` 是合同测试样例，不是性能 Benchmark，也不能作为选型证据。它证明 suite-owned producer 与 normalizer 可以仅通过配置被通用 Worker 执行。该 fixture 故意使用本地进程且不声明生产源码 revision，因此从注册页导入时会显示生产门禁失败；程序员应以页面逐项约束为清单，把正式包改为固定 digest 容器并补齐不可变来源。

@@ -2,7 +2,7 @@ export type ExperimentStatus = 'draft' | 'queued' | 'running' | 'paused' | 'comp
 
 export interface Artifact { name: string; url: string; type?: string }
 export interface Metric { name: string; value: number; unit?: string; baseline?: number; direction?: 'min' | 'max' }
-export interface Evaluation { id: string; attemptId?: string; candidate: string; status: ExperimentStatus; score?: number; duration?: number; cost?: number; createdAt?: string; metrics?: Metric[]; artifacts?: Artifact[]; error?: string }
+export interface Evaluation { id: string; attemptId?: string; candidate: string; status: ExperimentStatus; phase?: string; phaseDetail?: string; score?: number; duration?: number; cost?: number; createdAt?: string; metrics?: Metric[]; artifacts?: Artifact[]; error?: string }
 export interface ScenarioContract {
   id: string; name: string; decision_question: string; user_value: string; workload_class: string;
   topology: 'single-node' | 'client-server' | 'multi-node' | 'closed-loop'; primary_metric: string;
@@ -29,6 +29,7 @@ export interface Experiment {
   createdAt?: string; updatedAt?: string; owner?: string; attempts?: number; maxAttempts?: number;
   objective?: string; decisionQuestion?: string; scenario?: ScenarioContract; comparison?: SelectionComparison;
   config?: Record<string, unknown>; evaluations?: Evaluation[]; artifacts?: Artifact[];
+  activePhase?: string; activePhaseDetail?: string;
 }
 export interface PostOptimizationAction {
   id: string; label: string; description?: string; risk: 'low' | 'medium' | 'high'; applyMode: 'benchmark-parameter';
@@ -42,12 +43,43 @@ export interface PostOptimizationStatus {
   candidateParameters?: Record<string, unknown>; followUpExperiment?: Experiment;
 }
 export interface DashboardData { counts?: Partial<Record<ExperimentStatus, number>>; activeExperiments?: Experiment[]; recentExperiments?: Experiment[]; trend?: Array<{ time: string; score: number; baseline?: number }>; successRate?: number; totalExperiments?: number; computeHours?: number }
+export type MetricRole = 'primary_outcome' | 'hard_gate' | 'guardrail' | 'cost_efficiency' | 'stability' | 'diagnostic' | 'context';
+export type MetricVisibility = 'summary' | 'detail' | 'expert' | 'hidden';
+export type MetricDisplayFormat = 'number' | 'percent' | 'duration' | 'bytes' | 'throughput' | 'boolean';
+export interface MetricPresentation {
+  userLabel?: string;
+  userDescription?: string;
+  roles?: MetricRole[];
+  defaultVisibility?: MetricVisibility;
+  displayFormat?: MetricDisplayFormat;
+  displayPrecision?: number;
+  glossary?: string;
+}
+export interface MetricDefinition {
+  unit?: string;
+  direction?: 'minimize' | 'maximize' | 'none';
+  kind?: 'sample' | 'aggregate' | 'counter' | 'boolean';
+  required?: boolean;
+  minimumSamples?: number;
+  description?: string;
+  presentation?: MetricPresentation;
+}
+export interface BenchmarkWorkload {
+  id: string;
+  name: string;
+  metrics?: Record<string, MetricDefinition>;
+}
 export interface Benchmark {
   id: string; key?: string; name: string; description?: string; category?: string; version?: string; metrics?: string[];
+  metricDefinitions?: Record<string, MetricDefinition>;
+  workloads?: BenchmarkWorkload[];
   executionModel?: BenchmarkExecutionModel;
   inputs?: BenchmarkInputDeclaration[];
+  infrastructure?: Record<string, unknown>;
+  auditPolicy?: Record<string, unknown>;
   executionPolicy?: Record<string, unknown>;
   cases?: number; updatedAt?: string; tags?: string[]; license?: string; runnable?: boolean; executionStatus?: string;
+  deploymentRequirements?: string[]; provisionedCapabilities?: string[]; provisioning?: Record<string, unknown>; packageReady?: boolean; packageDigest?: string;
   decisionQuestion?: string; primaryMetric?: string; scenario?: ScenarioContract;
   selectionReady?: boolean;
   registrationId?: string; registrationStatus?: string;
@@ -73,7 +105,7 @@ export interface BenchmarkRegistrationConstraint {
 export interface BenchmarkRegistration {
   id: string; status: 'draft' | 'registered'; revision: number; draft: BenchmarkRegistrationDraft;
   constraints: BenchmarkRegistrationConstraint[]; readyToRegister: boolean; manifestDigest?: string;
-  benchmarkKey?: string; createdAt: string; updatedAt: string; registeredAt?: string;
+  packageDigest?: string; packageReady?: boolean; benchmarkKey?: string; createdAt: string; updatedAt: string; registeredAt?: string;
 }
 export interface Target {
   id: string; name: string; type?: string; endpoint?: string;
@@ -83,7 +115,8 @@ export interface Target {
   inventoryMissCount?: number; archivedAt?: string; archiveReason?: string;
   tags?: string[]; runnable?: boolean;
   credentialsRemembered?: boolean;
-  deployment?: { status: string; workerId: string; remotePid: number; transport?: string; restartSafe?: boolean; deployedAt: string };
+  deployment?: { active?: boolean; status?: string; workerId?: string; remotePid?: number; remotePort?: number; transport?: string; restartSafe?: boolean; deployedAt?: string };
+  connectionTest?: { status: 'connected'; testedAt: string; hostKeySha256?: string };
   fingerprint?: {
     processor?: string; logical_cpu_count?: number; memory_gib?: number; instance_type?: string;
     system?: string; release?: string; architecture?: string; host_key_sha256?: string; host_key_type?: string;

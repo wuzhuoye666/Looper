@@ -83,6 +83,13 @@ def seed_system(session: Session) -> None:
     manifest_paths = sorted((repository_root() / "benchmarks").glob("*/benchmark.yaml"))
     for manifest_path in manifest_paths:
         manifest, manifest_digest = load_and_validate_manifest(manifest_path)
+        extensions = manifest["spec"].get("x-extensions", {})
+        if extensions.get("bootstrapCatalog") is not True:
+            # Repository packages are source artifacts, not automatically admitted
+            # catalog entries. Only built-in demos/fixtures opt into bootstrap seeding;
+            # every ordinary package must enter through Benchmark Registration so it
+            # receives a registration identity and an explicit audit state.
+            continue
         metadata = manifest["metadata"]
         key = f"{metadata['id']}@{metadata['version']}"
         benchmark = session.get(BenchmarkRecord, key)

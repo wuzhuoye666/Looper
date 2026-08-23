@@ -13,6 +13,18 @@ import type { AnalysisData, Evaluation, Experiment, PostOptimizationStatus, Sele
 
 const selectionTabs = [['overview', '概览'], ['targets', '目标结果'], ['comparison', '对比结论'], ['variability', '波动分析'], ['evidence', '证据'], ['config', '配置']];
 const optimizationTabs = [['overview', '概览'], ['evaluations', '评估记录'], ['pareto', 'Pareto 前沿'], ['variability', '波动分析'], ['evidence', '证据'], ['config', '配置']];
+const executionPhases = [
+  ['deploying-package', '下发脚本'],
+  ['checking-environment', '检查环境'],
+  ['preparing-environment', '安装依赖'],
+  ['warming-up', '预热'],
+  ['running-benchmark', '执行测试'],
+  ['normalizing-results', '整理结果'],
+  ['validating-results', '校验结果'],
+  ['collecting-evidence', '收集证据'],
+  ['cleaning-up', '清理环境'],
+  ['uploading-evidence', '回传证据'],
+];
 
 export function ExperimentDetailPage() {
   const { id = '' } = useParams();
@@ -67,6 +79,7 @@ export function ExperimentDetailPage() {
       <span className="id-label">ID: {experiment.id} · 更新于 {formatDate(experiment.updatedAt)}</span>
     </div><ExperimentActions status={experiment.status} busy={action.isPending} onAction={value => action.mutate(value)} /></header>
     {action.isError && <div className="inline-alert"><AlertTriangle size={16} />{action.error.message}</div>}
+    {experiment.activePhase && ['queued', 'running'].includes(experiment.status) && <section className="panel execution-progress" aria-label="自动部署与测试进度"><div className="execution-progress-heading"><LoaderCircle size={19}/><div><small>Looper 自动执行中</small><strong>{experiment.activePhaseDetail || experiment.activePhase}</strong></div></div><ol>{executionPhases.map(([key,label],index)=>{const activeIndex=executionPhases.findIndex(([phase])=>phase===experiment.activePhase);return <li className={key===experiment.activePhase?'active':index<activeIndex?'done':''} key={key}><span>{index+1}</span><small>{label}</small></li>;})}</ol></section>}
     {experiment.status === 'completed' && !selectionMode && <PostOptimizationPanel
       data={postOptimization.data}
       loading={postOptimization.isLoading}
@@ -179,7 +192,7 @@ function Comparisons({ items }: { items: SelectionComparison[] }) {
 
 function Evaluations({ items, retrying, onRetry }: { items: Evaluation[]; retrying: boolean; onRetry: (id: string) => void }) {
   if (!items.length) return <EmptyState title="暂无评估记录" />;
-  return <section className="panel table-panel"><div className="table-wrap"><table><thead><tr><th>候选</th><th>状态</th><th>得分</th><th>耗时</th><th>指标</th><th>操作</th></tr></thead><tbody>{items.map(item => <tr key={item.id}><td>{item.candidate}</td><td><StatusBadge status={item.status} /></td><td className="metric-cell">{formatNumber(item.score)}</td><td>{item.duration == null ? '—' : `${formatNumber(item.duration, 1)}s`}</td><td>{item.metrics?.map(metric => `${metric.name}=${formatNumber(metric.value)}`).join(' · ') || '—'}</td><td>{item.attemptId && item.status === 'failed' ? <button className="icon-button" title="重试" aria-label={`重试 ${item.candidate}`} disabled={retrying} onClick={() => onRetry(item.attemptId!)}><RotateCcw size={15} /></button> : '—'}</td></tr>)}</tbody></table></div></section>;
+  return <section className="panel table-panel"><div className="table-wrap"><table><thead><tr><th>候选</th><th>状态 / 阶段</th><th>得分</th><th>耗时</th><th>指标</th><th>操作</th></tr></thead><tbody>{items.map(item => <tr key={item.id}><td>{item.candidate}</td><td><StatusBadge status={item.status} />{item.phaseDetail&&<span className="cell-meta">{item.phaseDetail}</span>}</td><td className="metric-cell">{formatNumber(item.score)}</td><td>{item.duration == null ? '—' : `${formatNumber(item.duration, 1)}s`}</td><td>{item.metrics?.map(metric => `${metric.name}=${formatNumber(metric.value)}`).join(' · ') || '—'}</td><td>{item.attemptId && item.status === 'failed' ? <button className="icon-button" title="重试" aria-label={`重试 ${item.candidate}`} disabled={retrying} onClick={() => onRetry(item.attemptId!)}><RotateCcw size={15} /></button> : '—'}</td></tr>)}</tbody></table></div></section>;
 }
 
 function Pareto({ data }: { data: AnalysisData['pareto'] }) {

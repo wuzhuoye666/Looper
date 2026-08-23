@@ -26,6 +26,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from looper_core.canonical import utc_now
 from looper_core.cas import FileSystemCAS
 from looper_core.contracts import (
     Aggregation,
@@ -49,6 +50,12 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from looper_api.analysis_service import build_analysis_snapshot
+from looper_api.benchmark_packages import (
+    MAX_PACKAGE_BYTES,
+    BenchmarkPackageError,
+    install_benchmark_package,
+    parse_benchmark_package,
+)
 from looper_api.benchmark_registration import (
     BenchmarkRegistrationDraft,
     BenchmarkRegistrationRegister,
@@ -118,8 +125,12 @@ from looper_api.post_optimization import post_optimization_view, start_post_opti
 from looper_api.providers.base import CloudProviderError
 from looper_api.providers.registry import CloudProviderRegistry, get_provider_registry
 from looper_api.providers.tencent_cvm import TencentInventoryError, sync_cvm_inventory
-from looper_api.remote_credentials import EncryptedSshCredentialStore
-from looper_api.remote_recovery import recover_remembered_target, remembered_target_ids
+from looper_api.remote_credentials import EncryptedSshCredentialStore, RemoteCredentialError
+from looper_api.remote_recovery import (
+    recover_remembered_target,
+    remembered_target_ids,
+    remembered_target_request,
+)
 from looper_api.remote_worker import deploy_remote_worker, deployment_status
 from looper_api.scheduler import (
     SchedulerError,
@@ -302,6 +313,7 @@ async def origin_guard(request: Request, call_next: Any) -> Any:
 @app.exception_handler(CloudWorkflowError)
 @app.exception_handler(RegistrationError)
 @app.exception_handler(ExternalTargetError)
+@app.exception_handler(RemoteCredentialError)
 async def domain_error(_request: Request, error: Exception) -> JSONResponse:
     status_code = getattr(error, "status_code", 409)
     code = getattr(error, "code", error.__class__.__name__)
@@ -347,7 +359,13 @@ def build_benchmark_configure_skill_archive() -> bytes:
     skill_root = files("looper_api").joinpath(
         "assets", "skills", "looper-benchmark-configure"
     )
-    members = ("SKILL.md", "agents/openai.yaml")
+    members = (
+        "SKILL.md",
+        "agents/openai.yaml",
+        "references/benchmark-interface.md",
+        "templates/infrastructure-multi-node.yaml",
+        "templates/infrastructure-single-node.yaml",
+    )
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         for member in members:
@@ -718,14 +736,37 @@ def create_benchmark_registration(
 @app.post("/api/v1/benchmark-registrations/import", status_code=201)
 async def import_benchmark_registration(
     session: SessionDependency,
+    app_settings: SettingsDependency,
     _operator: OperatorDependency,
     configuration: UploadFile = File(...),
 ) -> dict[str, Any]:
-    draft = draft_from_manifest_bytes(
-        await configuration.read(2 * 1024 * 1024 + 1),
-        filename=configuration.filename or "benchmark.yaml",
+    filename = configuration.filename or "benchmark.yaml"
+    limit = MAX_PACKAGE_BYTES if filename.casefold().endswith(".zip") else 2 * 1024 * 1024
+    raw = await configuration.read(limit + 1)
+    package_digest: str | None = None
+    package_path: str | None = None
+    if filename.casefold().endswith(".zip"):
+        try:
+            package = parse_benchmark_package(raw)
+        except BenchmarkPackageError as error:
+            raise RegistrationError(
+                str(error), status_code=422, code="invalid_benchmark_package"
+            ) from error
+        draft = draft_from_manifest_bytes(
+            package.manifest_bytes,
+            filename=package.manifest_name,
+        )
+        installed = install_benchmark_package(app_settings.data_dir, package)
+        package_digest = package.package_digest
+        package_path = str(installed)
+    else:
+        draft = draft_from_manifest_bytes(raw, filename=filename)
+    record = create_registration(
+        session,
+        draft,
+        package_digest=package_digest,
+        package_path=package_path,
     )
-    record = create_registration(session, draft)
     session.commit()
     return registration_view(record)
 
@@ -805,7 +846,18 @@ def list_targets(
     if not include_inactive:
         statement = statement.where(TargetRecord.lifecycle_status == "active")
     records = list(session.scalars(statement.order_by(TargetRecord.name)))
-    return {"items": [target_view(item) for item in records], "total": len(records)}
+    try:
+        remembered = set(EncryptedSshCredentialStore(app_settings).target_ids())
+    except RemoteCredentialError:
+        # Inventory remains readable even if the local credential vault needs repair.
+        remembered = set()
+    items: list[dict[str, Any]] = []
+    for record in records:
+        item = target_view(record)
+        item["credentialsRemembered"] = record.id in remembered
+        item["deployment"] = deployment_status(record.id)
+        items.append(item)
+    return {"items": items, "total": len(records)}
 
 
 @app.post("/api/v1/targets/tencent-cvm/sync")
@@ -858,6 +910,35 @@ def get_target_worker(target_id: str, session: SessionDependency) -> dict[str, A
     if record is None:
         raise HTTPException(status_code=404, detail="target not found")
     return deployment_status(target_id)
+
+
+@app.post("/api/v1/targets/{target_id}/ssh-test")
+def test_target_ssh_connection(
+    target_id: str,
+    session: SessionDependency,
+    app_settings: SettingsDependency,
+    _operator: OperatorDependency,
+) -> dict[str, Any]:
+    """Verify SSH with encrypted saved credentials and restore the remote Worker."""
+
+    target = session.get(TargetRecord, target_id)
+    if target is None:
+        raise HTTPException(status_code=404, detail="target not found")
+    request = remembered_target_request(target, app_settings)
+    refreshed = connect_external_target(session, request)
+    if refreshed.id != target_id:
+        raise ExternalTargetError("SSH endpoint no longer resolves to the selected target")
+    session.commit()
+    deployment = deploy_remote_worker(request, refreshed, app_settings)
+    result = target_view(refreshed)
+    result["credentialsRemembered"] = True
+    result["connectionTest"] = {
+        "status": "connected",
+        "testedAt": utc_now().isoformat(),
+        "hostKeySha256": refreshed.fingerprint_json.get("host_key_sha256"),
+    }
+    result["deployment"] = deployment
+    return result
 
 
 @app.get("/api/v1/experiments")

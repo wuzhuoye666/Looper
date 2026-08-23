@@ -24,6 +24,9 @@ _PLAIN_PREFIX = b"file-v1:"
 class RemoteCredentialError(RuntimeError):
     """Credential storage is unavailable or cannot be decrypted safely."""
 
+    status_code = 409
+    code = "remote_credential_error"
+
 
 class _DataBlob(ctypes.Structure):
     _fields_ = [("cbData", ctypes.c_ulong), ("pbData", ctypes.POINTER(ctypes.c_ubyte))]

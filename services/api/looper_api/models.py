@@ -48,6 +48,7 @@ class BenchmarkRecord(Base):
     manifest_digest: Mapped[str] = mapped_column(String(71), nullable=False, unique=True)
     manifest_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
     manifest_path: Mapped[str | None] = mapped_column(Text)
+    package_digest: Mapped[str | None] = mapped_column(String(71))
     trusted: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     installed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
@@ -64,6 +65,8 @@ class BenchmarkRegistrationRecord(Base):
     draft_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
     constraints_json: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=False)
     manifest_digest: Mapped[str | None] = mapped_column(String(71))
+    package_digest: Mapped[str | None] = mapped_column(String(71))
+    package_path: Mapped[str | None] = mapped_column(Text)
     benchmark_key: Mapped[str | None] = mapped_column(
         ForeignKey("benchmarks.key"), unique=True
     )
@@ -297,6 +300,8 @@ class AttemptRecord(Base):
     envelope_digest: Mapped[str | None] = mapped_column(String(71))
     exit_code: Mapped[int | None] = mapped_column(Integer)
     error_message: Mapped[str | None] = mapped_column(Text)
+    phase: Mapped[str | None] = mapped_column(String(40))
+    phase_detail: Mapped[str | None] = mapped_column(String(500))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     leased_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

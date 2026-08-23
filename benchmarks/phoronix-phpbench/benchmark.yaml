@@ -1,0 +1,207 @@
+apiVersion: looper.dev/v1alpha1
+kind: Benchmark
+metadata:
+  id: looper.phoronix-phpbench
+  name: Phoronix Test Suite / PHPBench
+  version: 10.8.6-phpbench1.1.6-looper2
+  description: "Phoronix Test Suite 10.8.6 的固定 profile 接入包。Looper 在用户选定目标后自动部署 PTS、PHP CLI、unzip 和 Adapter；producer 仅允许执行 pts/phpbench-1.1.6，保存 PTS 原始 JSON；normalizer 校验 profile、Score 单位与 HIB 方向后生成标准观测。"
+  license: GPL-3.0-or-later
+  source:
+    url: https://github.com/phoronix-test-suite/phoronix-test-suite
+    commit: f977d6e270d5eb9eebfa26d3ca62385c00a547a6
+spec:
+  trust: trusted
+  capabilities: [python, local-process, phoronix-test-suite, php-cli, unzip]
+  parameters:
+    times_to_run:
+      type: integer
+      minimum: 1
+      maximum: 10
+      default: 3
+      description: Number of raw PHPBench repetitions requested through FORCE_TIMES_TO_RUN.
+    test_timeout_minutes:
+      type: integer
+      minimum: 2
+      maximum: 30
+      default: 10
+      description: Per-test timeout requested through TEST_TIMEOUT_AFTER.
+  workloads:
+    - id: phpbench
+      name: PHPBench 0.8.1
+      metadata:
+        profile: pts/phpbench-1.1.6
+        profileVersion: 1.1.6
+        resultHash: 946f5e0360cf178c425ab9080de3597a148b632b
+        resultScale: Score
+        resultProportion: HIB
+        payloadSha256: 32503bd4ace0c8429493de864ca48bb16febed867e52b75f4369d7145f797718
+  scenario:
+    id: microbenchmark.phoronix.phpbench
+    name: Phoronix PHP interpreter microbenchmark
+    decision_question: Which target environment delivers the higher PHPBench score under a pinned PTS profile and repeat policy?
+    user_value: Compare PHP interpreter and single-node CPU execution performance with a small, portable benchmark.
+    workload_class: microbenchmark
+    topology: single-node
+    roles:
+      - id: target
+        kind: target
+        included_in_score: true
+        description: Machine and PHP runtime being measured
+      - id: benchmark-runner
+        kind: load-generator
+        co_located_with: target
+        included_in_score: true
+        description: PTS and PHPBench process co-located with the target
+    primary_metric: phpbench_score
+    slo_gates:
+      - id: pts-execution
+        kind: correctness
+        scope: block
+        metric: pts_run_ok
+        operator: eq
+        threshold: 1
+        hard: true
+      - id: profile-contract
+        kind: correctness
+        scope: block
+        metric: profile_version_match
+        operator: eq
+        threshold: 1
+        hard: true
+      - id: positive-score
+        kind: slo
+        scope: block
+        metric: phpbench_score
+        operator: gt
+        threshold: 0
+        hard: true
+    goodput:
+      metric: phpbench_score
+      unit: Score
+      committed_outcome: successful
+      excluded_outcomes: [error, timeout]
+      maximum_error_ratio: 0
+      maximum_timeout_ratio: 0
+  infrastructure:
+    orchestration: adapter
+    primaryNodeGroup: target
+    nodeGroups:
+      - id: target
+        role: target
+        count: {minimum: 1, default: 1, maximum: 1}
+        includedInScore: true
+        requirements:
+          osFamilies: [linux]
+          architectures: [x86_64, aarch64]
+          capabilities: [python, local-process, linux]
+          cpu: {minimumLogicalCpus: 1}
+          software:
+            - {name: Phoronix Test Suite, versionConstraint: "==10.8.6"}
+            - {name: PHP CLI, versionConstraint: ">=8.0,<9.0"}
+            - {name: unzip, versionConstraint: available}
+        placement:
+          sameZone: true
+          dedicated: true
+    notes: "当前 pilot 只覆盖 Linux 单机 PHPBench；PTS 其它 profile 的拓扑、依赖和指标合同必须独立审计。"
+  adapter:
+    protocol: looper-adapter/v1
+    executionModel: batch-suite
+    primaryMetric: phpbench_score
+    requiredChecks: [pts-run-ok, profile-contract-match]
+    inputs: []
+    canonicalOutputs:
+      metrics: metrics.jsonl
+      result: result.json
+  runtime:
+    type: local-process
+    workingDirectory: .
+    dependencyLockDigest: sha256:876cfccea5d04e6f277445d132be7a9a413739fafae24ab31b33cb5cb8becb22
+    provisioning:
+      mode: managed
+      hostCapabilities: [python, local-process, linux]
+      provides: [phoronix-test-suite, php-cli, unzip]
+      cacheKey: sha256:876cfccea5d04e6f277445d132be7a9a413739fafae24ab31b33cb5cb8becb22
+      requiresNetwork: true
+      privilege: sudo
+    dependencies:
+      - id: phoronix-test-suite
+        source: https://github.com/phoronix-test-suite/phoronix-test-suite/archive/f977d6e270d5eb9eebfa26d3ca62385c00a547a6.zip
+        digest: sha256:9d4b811a1ff4710ac89d19b34ba7ef4188b8ce1bfe61d5d276b0ee689dba1dc4
+        license: GPL-3.0-or-later
+      - id: phpbench-payload
+        source: http://phoronix-test-suite.com/benchmark-files/phpbench-081-patched2.zip
+        digest: sha256:32503bd4ace0c8429493de864ca48bb16febed867e52b75f4369d7145f797718
+        license: upstream-Free
+    commands:
+      prepare:
+        argv: ["{python}", "{benchmarkRoot}/prepare.py", "--cache", "{cache}"]
+        timeoutSeconds: 900
+        allowedExitCodes: [0]
+      run:
+        argv: ["{python}", "{benchmarkRoot}/producer.py", "--envelope", "{envelope}", "--output", "{output}"]
+        timeoutSeconds: 2400
+        allowedExitCodes: [0]
+        environment:
+          LOOPER_PTS_BIN: "{cache}/phoronix-test-suite/phoronix-test-suite"
+          LOOPER_PHP_BIN: "{cache}/bin/php"
+          LOOPER_PHPBENCH_PAYLOAD: "{cache}/phpbench-081-patched2.zip"
+      normalize:
+        argv: ["{python}", "{benchmarkRoot}/normalizer.py", "--envelope", "{envelope}", "--output", "{output}"]
+        timeoutSeconds: 60
+        allowedExitCodes: [0]
+  metrics:
+    phpbench_score:
+      unit: Score
+      direction: maximize
+      kind: aggregate
+      required: true
+      minimumSamples: 1
+      description: Aggregate score exported by the pinned PTS PHPBench profile.
+    phpbench_score_sample:
+      unit: Score
+      direction: maximize
+      kind: sample
+      minimumSamples: 1
+      description: Raw score retained from each PTS repetition.
+    sample_count:
+      unit: count
+      direction: none
+      kind: aggregate
+      minimumSamples: 1
+    pts_run_ok:
+      unit: flag
+      direction: maximize
+      kind: boolean
+      minimumSamples: 1
+    profile_version_match:
+      unit: flag
+      direction: maximize
+      kind: boolean
+      minimumSamples: 1
+  outputs:
+    maxBytes: 8388608
+    maxMetricLines: 32
+    artifacts:
+      - path: pts-result.json
+        role: raw-result
+        mediaType: application/json
+        required: true
+      - path: run-metadata.json
+        role: profile
+        mediaType: application/json
+        required: true
+      - path: result.json
+        role: result
+        mediaType: application/json
+        required: true
+      - path: adapter.log
+        role: log
+        mediaType: text/plain
+        required: true
+  audit:
+    minimumRepeats: 3
+    referencePolicy: required
+    environmentAxes: [machine, day, runtime]
+    requiredEvidence: [system-fingerprint, raw-result, profile, log]
+  x-extensions:
+    executionStatus: executable

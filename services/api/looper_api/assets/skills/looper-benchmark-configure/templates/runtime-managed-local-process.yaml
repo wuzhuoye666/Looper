@@ -1,0 +1,29 @@
+runtime:
+  type: local-process
+  workingDirectory: .
+  dependencyLockDigest: sha256:REPLACE_WITH_CANONICAL_LOCK_DIGEST
+  provisioning:
+    mode: managed
+    hostCapabilities: [linux, python, local-process]
+    provides: [REPLACE_WITH_SUITE_CAPABILITY]
+    cacheKey: sha256:REPLACE_WITH_CANONICAL_LOCK_DIGEST
+    requiresNetwork: true
+    privilege: sudo
+  dependencies:
+    - id: replace-with-dependency
+      source: https://example.invalid/pinned-source.tar.gz
+      digest: sha256:REPLACE_WITH_VERIFIED_SOURCE_DIGEST
+      license: REPLACE_WITH_LICENSE
+  commands:
+    prepare:
+      argv: ["{python}", "{benchmarkRoot}/prepare.py", "--cache", "{cache}"]
+      timeoutSeconds: 900
+      allowedExitCodes: [0]
+    run:
+      argv: ["{python}", "{benchmarkRoot}/producer.py", "--envelope", "{envelope}", "--output", "{output}"]
+      timeoutSeconds: 3600
+      allowedExitCodes: [0]
+    normalize:
+      argv: ["{python}", "{benchmarkRoot}/normalizer.py", "--envelope", "{envelope}", "--output", "{output}"]
+      timeoutSeconds: 120
+      allowedExitCodes: [0]

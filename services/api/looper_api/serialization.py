@@ -11,6 +11,11 @@ from sqlalchemy.orm import Session
 
 from looper_api.analysis_service import build_analysis_snapshot
 from looper_api.benchmark_registration import selection_scenario_document
+from looper_api.benchmark_runtime import (
+    deployment_capabilities,
+    provisioned_capabilities,
+    provisioning_contract,
+)
 from looper_api.models import (
     ArtifactLinkRecord,
     AttemptRecord,
@@ -25,6 +30,48 @@ from looper_api.models import (
 
 def _iso(value: datetime | None) -> str | None:
     return value.isoformat() if value else None
+
+
+_METRIC_DECLARATION_FIELDS = (
+    "unit",
+    "direction",
+    "kind",
+    "required",
+    "minimumSamples",
+    "description",
+    "presentation",
+)
+
+
+def _metric_definition(declaration: dict[str, Any]) -> dict[str, Any]:
+    """Project a metric declaration to its API shape without inventing fields.
+
+    Spec-level metrics declare ``unit``/``direction``/``kind`` while a
+    workload-level override may declare only ``presentation``. Pass through
+    exactly what the author wrote so the consumer can distinguish an absent
+    measurement field from a missing metric.
+    """
+    return {
+        field: declaration[field]
+        for field in _METRIC_DECLARATION_FIELDS
+        if field in declaration
+    }
+
+
+def _metric_definitions(metrics: dict[str, Any]) -> dict[str, Any]:
+    return {name: _metric_definition(decl) for name, decl in metrics.items()}
+
+
+def _workload_views(workloads: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    views: list[dict[str, Any]] = []
+    for item in workloads:
+        view: dict[str, Any] = {"id": item["id"], "name": item["name"]}
+        if "metrics" in item:
+            view["metrics"] = {
+                name: _metric_definition(decl) for name, decl in item["metrics"].items()
+            }
+        views.append(view)
+    return views
 
 
 def benchmark_view(
@@ -49,14 +96,23 @@ def benchmark_view(
         "selectionReady": scenario is not None,
         "executionModel": adapter.get("executionModel", "custom"),
         "inputs": adapter.get("inputs", []),
+        "infrastructure": spec.get("infrastructure"),
+        "auditPolicy": spec.get("audit"),
         "executionPolicy": spec.get("runtime", {}).get("executionPolicy"),
         "version": record.version,
         "license": record.license,
         "manifestDigest": record.manifest_digest,
-        "metrics": list(manifest["spec"]["metrics"]),
-        "cases": len(manifest["spec"]["workloads"]),
+        "metrics": list(spec["metrics"]),
+        "metricDefinitions": _metric_definitions(spec.get("metrics", {})),
+        "workloads": _workload_views(spec.get("workloads", [])),
+        "cases": len(spec["workloads"]),
         "updatedAt": _iso(record.installed_at),
         "tags": manifest["spec"].get("capabilities", []),
+        "deploymentRequirements": sorted(deployment_capabilities(manifest)),
+        "provisionedCapabilities": sorted(provisioned_capabilities(manifest)),
+        "provisioning": provisioning_contract(manifest),
+        "packageReady": bool(record.manifest_path),
+        "packageDigest": record.package_digest,
         "trusted": record.trusted,
         "executionStatus": execution_status,
         "runnable": execution_status == "executable"
@@ -231,6 +287,16 @@ def experiment_view(
             CandidateStatus.FAILED,
         }
     )
+    active_attempt = max(
+        (
+            attempt
+            for attempt in attempts
+            if AttemptStatus(attempt.status)
+            in {AttemptStatus.LEASED, AttemptStatus.RUNNING, AttemptStatus.UPLOADING}
+        ),
+        key=lambda item: item.leased_at or item.created_at,
+        default=None,
+    )
     analysis_map, analysis = _analysis_by_candidate(session, record)
     is_selection = spec.mode.value == "selection"
     selection_targets = {item["target_id"]: item for item in (analysis or {}).get("targets", [])}
@@ -301,6 +367,8 @@ def experiment_view(
         "candidateCount": len(candidates),
         "revision": record.revision,
         "analysisStatus": analysis.get("status") if analysis else None,
+        "activePhase": active_attempt.phase if active_attempt else None,
+        "activePhaseDetail": active_attempt.phase_detail if active_attempt else None,
     }
     if not detail:
         return response
@@ -365,6 +433,8 @@ def experiment_view(
                 "candidateId": candidate.id if candidate else None,
                 "parameters": candidate.parameters_json if candidate else {},
                 "status": status_map[CandidateStatus(evaluation.status)],
+                "phase": latest.phase if latest else None,
+                "phaseDetail": latest.phase_detail if latest else None,
                 "score": objective_rows[0].get("raw") if objective_rows else None,
                 "duration": duration,
                 "createdAt": _iso(evaluation.created_at),

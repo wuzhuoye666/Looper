@@ -117,6 +117,9 @@ export const api = {
   connectExternalTarget: (payload: Record<string, unknown>) => request<Target>(
     '/targets/connect', { method: 'POST', body: JSON.stringify(payload) },
   ),
+  testTargetSsh: (targetId: string) => request<Target>(
+    `/targets/${encodeURIComponent(targetId)}/ssh-test`, { method: 'POST' },
+  ),
   createExperiment: (payload: Record<string, unknown>) => request<Experiment>('/experiments', { method: 'POST', body: JSON.stringify(payload) }),
   experimentAction: (id: string, action: 'start' | 'pause' | 'resume' | 'cancel') => request<Experiment>(`/experiments/${encodeURIComponent(id)}/${action}`, { method: 'POST' }),
   retryAttempt: (id: string) => request<unknown>(`/attempts/${encodeURIComponent(id)}/retry`, { method: 'POST' }),
