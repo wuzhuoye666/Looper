@@ -158,3 +158,9 @@ def test_excess_pressure_requires_explicit_scale() -> None:
     )
     with pytest.raises(InsufficientEvidence, match="explicit scale"):
         pressure_value(0.9, contract)
+
+
+def test_negative_utilization_fails_closed() -> None:
+    contract = build_demo_policy(OptimizationMode.WORKLOAD).metric("cpu.utilization")
+    with pytest.raises(InsufficientEvidence, match="negative utilization"):
+        pressure_value(-0.1, contract)

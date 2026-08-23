@@ -203,7 +203,11 @@ def pressure_value(value: float, contract: MetricContract) -> float:
     if contract.pressure_method == PressureMethod.UTILIZATION:
         if reference <= 0:
             raise InsufficientEvidence("utilization capacity must be positive")
-        return max(0.0, value / reference)
+        if value < 0:
+            raise InsufficientEvidence(
+                "negative utilization indicates counter wrap or a bad measurement"
+            )
+        return value / reference
     if contract.pressure_method == PressureMethod.UPPER_LIMIT_EXCESS:
         if contract.scale is None:
             raise InsufficientEvidence("upper-limit pressure requires an explicit scale")
