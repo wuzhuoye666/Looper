@@ -1,0 +1,4 @@
+{
+  "system.io-nvme0n1-nomerges": 0,
+  "system.io-nvme0n1-scheduler": "mq-deadline"
+}
