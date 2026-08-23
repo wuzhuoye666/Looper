@@ -41,6 +41,26 @@ def cloud_target_id(provider: str, region: str, instance_id: str) -> str:
     return f"cloud:{provider}:{region}:{instance_id}"
 
 
+def has_online_worker_for_target(session: Any, target_id: str) -> bool:
+    """Return True when a live Worker currently binds this target.
+
+    Inventory syncs are authoritative for provider facts but must not reset a
+    target to not-runnable while its worker is online and registered.
+    """
+    from sqlalchemy import select
+
+    from looper_api.models import WorkerRecord
+
+    capability = f'target.{target_id}'
+    match = session.scalars(
+        select(WorkerRecord.id).where(
+            WorkerRecord.status == "online",
+            WorkerRecord.capabilities_json.like(f'%"{capability}"%'),
+        )
+    ).first()
+    return match is not None
+
+
 def legacy_cloud_target_ids(provider: str, region: str, instance_id: str) -> list[str]:
     values = [f"{provider}:{instance_id}"]
     if provider == "tencent":

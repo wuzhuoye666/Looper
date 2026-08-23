@@ -3,8 +3,9 @@ from __future__ import annotations
 from decimal import Decimal
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
-from pydantic import AnyHttpUrl, Field, field_validator
+from pydantic import AnyHttpUrl, Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -20,6 +21,11 @@ class Settings(BaseSettings):
     port: int = 8000
     remote_worker_api_url: AnyHttpUrl | None = None
     remember_ssh_credentials: bool = True
+    default_ssh_username: str = "root"
+    default_ssh_port: int = Field(default=22, ge=1, le=65535)
+    default_ssh_auth_method: Literal["password", "private-key"] = "private-key"
+    default_ssh_private_key_path: str = ""
+    default_ssh_password: SecretStr | None = Field(default=None, repr=False)
     data_dir: Path = Path(".looper")
     database_url: str | None = None
     allowed_origins: str = "http://127.0.0.1:5173,http://localhost:5173"

@@ -10,6 +10,7 @@ import secrets
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from pathlib import Path
 from typing import Any, Literal
 
 from looper_core.canonical import canonical_digest, canonical_json, new_id, utc_now
@@ -498,8 +499,7 @@ def catalog_search(
                 (
                     InstanceTypeInfo.model_validate(item)
                     for item in instance_snapshot.items
-                    if str(item.get("id", "")).casefold()
-                    == filters.instance_type.casefold()
+                    if str(item.get("id", "")).casefold() == filters.instance_type.casefold()
                 ),
                 None,
             )
@@ -796,11 +796,7 @@ def _validate_image_compatibility(provider: Any, spec: CloudPurchaseSpec) -> Non
         )
     instance_architecture = _architecture_group(instance.architecture)
     image_architecture = _architecture_group(image.architecture)
-    if (
-        instance_architecture
-        and image_architecture
-        and instance_architecture != image_architecture
-    ):
+    if instance_architecture and image_architecture and instance_architecture != image_architecture:
         raise CloudWorkflowError(
             "所选镜像架构与机型不兼容",
             code="image_architecture_incompatible",
@@ -1184,8 +1180,7 @@ def renew_order_confirmation(
             entity_type="cloud_order",
             entity_id=order.id,
             idempotency_key=(
-                f"cloud-order-renewal-price-changed:{order.id}:"
-                f"{canonical_digest(payload)[7:23]}"
+                f"cloud-order-renewal-price-changed:{order.id}:{canonical_digest(payload)[7:23]}"
             ),
             payload=payload,
         )
@@ -1340,9 +1335,7 @@ def _upsert_provisioned_target(
     values = {
         "name": instance.name or instance.id,
         "provider": order.provider,
-        "status": "inventory-only"
-        if str(instance.status).upper() == "RUNNING"
-        else "provisioning",
+        "status": "inventory-only" if str(instance.status).upper() == "RUNNING" else "provisioning",
         "capabilities_json": [order.provider, "cloud-instance", "inventory"],
         "inventory_json": inventory,
         "fingerprint_json": fingerprint,
@@ -1590,6 +1583,57 @@ def confirm_order(
     return _order_view(order)
 
 
+def _default_cloud_ssh_credentials(
+    settings: Settings, *, remember_credentials: bool
+) -> CloudSshCredentials:
+    username = settings.default_ssh_username.strip() or "root"
+    port = settings.default_ssh_port
+    if settings.default_ssh_auth_method == "password":
+        password = (
+            settings.default_ssh_password.get_secret_value()
+            if settings.default_ssh_password
+            else ""
+        )
+        if not password:
+            raise CloudWorkflowError(
+                "default SSH password is not configured on the control plane",
+                code="ssh_credentials_not_configured",
+            )
+        return CloudSshCredentials(
+            username=username,
+            port=port,
+            auth_method="password",
+            password=password,
+            remember_credentials=remember_credentials,
+        )
+
+    key_path = Path(settings.default_ssh_private_key_path).expanduser()
+    if not settings.default_ssh_private_key_path or not key_path.is_file():
+        raise CloudWorkflowError(
+            "default SSH private-key file is not configured on the control plane",
+            code="ssh_credentials_not_configured",
+        )
+    try:
+        private_key = key_path.read_text(encoding="utf-8")
+    except OSError as error:
+        raise CloudWorkflowError(
+            "default SSH private-key file could not be read",
+            code="ssh_credentials_not_configured",
+        ) from error
+    if not private_key.strip():
+        raise CloudWorkflowError(
+            "default SSH private-key file is empty",
+            code="ssh_credentials_not_configured",
+        )
+    return CloudSshCredentials(
+        username=username,
+        port=port,
+        auth_method="private-key",
+        private_key=private_key,
+        remember_credentials=remember_credentials,
+    )
+
+
 def purchase_quote(
     session: Session,
     settings: Settings,
@@ -1597,6 +1641,7 @@ def purchase_quote(
     quote_id: str,
     idempotency_key: str,
     ssh_credentials: CloudSshCredentials | None = None,
+    remember_credentials: bool | None = None,
 ) -> dict[str, Any]:
     """Purchase an exact quote in one user action.
 
@@ -1608,6 +1653,17 @@ def purchase_quote(
     if prepared["status"] != "awaiting_confirmation":
         return prepared
 
+    effective_credentials = ssh_credentials
+    if effective_credentials is None and remember_credentials is not None:
+        effective_credentials = _default_cloud_ssh_credentials(
+            settings,
+            remember_credentials=remember_credentials,
+        )
+    elif effective_credentials is not None and remember_credentials is not None:
+        effective_credentials = effective_credentials.model_copy(
+            update={"remember_credentials": remember_credentials}
+        )
+
     request = OrderConfirmRequest(
         confirmationToken=str(prepared["confirmationToken"]),
         acknowledgement=str(prepared["acknowledgement"]),
@@ -1615,7 +1671,7 @@ def purchase_quote(
     )
     try:
         return confirm_order(
-            session, settings, registry, str(prepared["id"]), request, ssh_credentials
+            session, settings, registry, str(prepared["id"]), request, effective_credentials
         )
     except CloudWorkflowError:
         # Once provider submission has been attempted, return the persisted
@@ -1791,9 +1847,7 @@ def _target_order(session: Session, target: TargetRecord) -> CloudOrderRecord | 
     return session.get(CloudOrderRecord, order_id)
 
 
-def _destroy_acknowledgement(
-    provider_id: ProviderId, instance_name: str, instance_id: str
-) -> str:
+def _destroy_acknowledgement(provider_id: ProviderId, instance_name: str, instance_id: str) -> str:
     provider_label = _PROVIDER_LABELS.get(provider_id.value, provider_id.value)
     return (
         f"确认销毁 {provider_label} 实例 {instance_name}（{instance_id}），"
@@ -1842,9 +1896,7 @@ def _destroy_preview_resources(
     return resources
 
 
-def destroy_target_preview(
-    session: Session, settings: Settings, target_id: str
-) -> dict[str, Any]:
+def destroy_target_preview(session: Session, settings: Settings, target_id: str) -> dict[str, Any]:
     target = session.get(TargetRecord, target_id)
     if target is None:
         raise CloudWorkflowError("target not found", status_code=404, code="target_not_found")
@@ -1937,9 +1989,7 @@ def destroy_target(
         "instanceId": instance_id,
         "requestId": result.request_id,
         "status": "destroyed",
-        "resources": [
-            item.model_dump(mode="json", by_alias=True) for item in released_resources
-        ],
+        "resources": [item.model_dump(mode="json", by_alias=True) for item in released_resources],
     }
 
 

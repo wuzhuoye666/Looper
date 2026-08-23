@@ -262,3 +262,46 @@ def test_connect_does_not_persist_failed_probe(external_db_session) -> None:
     with pytest.raises(ExternalTargetError, match="authentication"):
         connect_external_target(external_db_session, _connection(), probe=failed_probe)
     assert external_targets(external_db_session) == []
+
+
+# --- Linux discovery command robustness --------------------------------------------
+
+
+def test_discovery_command_has_cpuinfo_fallbacks() -> None:
+    from looper_api.external_targets import _LINUX_DISCOVERY_COMMAND
+
+    # aarch64 /proc/cpuinfo has no "model name"; the probe must fall back to
+    # uname -p/uname -m instead of emitting an empty processor value.
+    assert "model name|Hardware|Processor" in _LINUX_DISCOVERY_COMMAND
+    assert "''|unknown|aarch64" in _LINUX_DISCOVERY_COMMAND
+    # The operating_system probe must not rely on awk's exit status (which is
+    # still 0 when no PRETTY_NAME line matches).
+    assert "if [ -n \"$value\" ]" in _LINUX_DISCOVERY_COMMAND
+    assert "else uname -s" in _LINUX_DISCOVERY_COMMAND
+
+
+def test_parse_linux_inventory_accepts_arm64_output() -> None:
+    from looper_api.external_targets import _parse_linux_inventory
+
+    output = (
+        "hostname=iZ7xv7pbi8h3rgoed1ume3Z\n"
+        "operating_system=Ubuntu 26.04 LTS\n"
+        "kernel=Linux 7.0.0-28-generic\n"
+        "architecture=aarch64\n"
+        "processor=aarch64\n"
+        "logical_cpu_count=1\n"
+        "memory_kib=1665396\n"
+    )
+
+    class FakeHostKey:
+        def asbytes(self) -> bytes:
+            return b"k" * 32
+
+        def get_name(self) -> str:
+            return "ssh-ed25519"
+
+    parsed = _parse_linux_inventory(output, FakeHostKey())
+    assert parsed.architecture == "aarch64"
+    assert parsed.processor == "aarch64"
+    assert parsed.logical_cpu_count == 1
+    assert parsed.operating_system == "Ubuntu 26.04 LTS"

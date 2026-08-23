@@ -24,6 +24,7 @@ from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, m
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from looper_api.events import append_event
 from looper_api.models import TargetRecord
 
 EXTERNAL_PROVIDER = "external"
@@ -134,17 +135,22 @@ _LINUX_DISCOVERY_COMMAND = "\n".join(
         "LC_ALL=C",
         "printf 'hostname='; (hostname 2>/dev/null || uname -n)",
         (
-            "printf 'operating_system='; (awk -F= "
+            "printf 'operating_system='; (value=$(awk -F= "
             "'$1==\"PRETTY_NAME\" {value=substr($0,index($0,\"=\")+1); "
             "gsub(/^\"|\"$/, \"\", value); print value; exit}' "
-            "/etc/os-release 2>/dev/null || uname -s)"
+            "/etc/os-release 2>/dev/null); "
+            "if [ -n \"$value\" ]; then printf '%s\\n' \"$value\"; else uname -s; fi)"
         ),
         "printf 'kernel='; uname -sr",
         "printf 'architecture='; uname -m",
         (
-            "printf 'processor='; (awk -F: '/^(model name|Hardware)/ "
-            "{value=$2; sub(/^[[:space:]]+/, \"\", value); print value; exit}' "
-            "/proc/cpuinfo 2>/dev/null || uname -p)"
+            "printf 'processor='; (value=$(awk -F: '/^(model name|Hardware|Processor)/ "
+            "{value=$2; sub(/^[[:space:]]+/, \"\", value); "
+            "if (length(value)>0) {print value; exit}}' /proc/cpuinfo 2>/dev/null); "
+            "if [ -n \"$value\" ]; then printf '%s\\n' \"$value\"; "
+            "else p=$(uname -p 2>/dev/null); "
+            "case \"$p\" in ''|unknown|aarch64) printf '%s\\n' \"$(uname -m)\" ;; "
+            "*) printf '%s\\n' \"$p\" ;; esac; fi)"
         ),
         (
             "printf 'logical_cpu_count='; "
@@ -511,6 +517,12 @@ def connect_external_target(
             "fingerprint": record.fingerprint_json,
         }
     )
+    # When the probed machine is already known from the provider inventory, keep
+    # the cloud record (richer identity) and archive the external duplicate.
+    cloud_twin = _cloud_twin_for_endpoint(session, endpoint)
+    if cloud_twin is not None:
+        merge_external_duplicate(session, cloud_twin, record)
+        return cloud_twin
     return record
 
 
@@ -576,3 +588,161 @@ def external_targets(session: Session) -> list[TargetRecord]:
             select(TargetRecord).where(TargetRecord.provider == EXTERNAL_PROVIDER)
         )
     )
+
+
+# Cloud inventory providers whose targets can also be probed externally.
+_CLOUD_PROVIDERS = {"alibaba", "tencent", "baidu", "volcengine"}
+_DEDUP_ARCHIVE_REASON = "superseded-by-cloud-inventory"
+
+# Fingerprint facts produced by a verified SSH probe that are safe to inherit
+# from the external record into its cloud twin when merging duplicates.
+# Provider identity (instance_type, cpu, region, zone, image_id) always stays
+# authoritative from the cloud inventory.
+_MERGED_FINGERPRINT_KEYS = (
+    "system",
+    "release",
+    "processor",
+    "logical_cpu_count",
+    "memory_gib",
+    "architecture",
+    "host_key_sha256",
+    "host_key_type",
+)
+
+
+def _external_verified(record: TargetRecord) -> bool:
+    return (
+        (record.inventory_json or {}).get("source") == "ssh-discovery"
+        or bool((record.fingerprint_json or {}).get("host_key_sha256"))
+    )
+
+
+def merge_external_duplicate(
+    session: Session,
+    cloud_record: TargetRecord,
+    external_record: TargetRecord,
+    *,
+    credential_store: Any | None = None,
+) -> bool:
+    """Fold a duplicate external target into its cloud inventory twin.
+
+    One physical machine can be discovered twice: once over SSH as an external
+    target (usually through its public address) and once through the provider
+    inventory (usually through its private address). After the merge the cloud
+    record keeps the provider identity and inherits the verified SSH facts,
+    while the external record is archived so the candidate resource page lists
+    each machine exactly once.
+
+    Only verified SSH discoveries are inherited; manually declared external
+    records are archived without touching cloud facts. When a credential store
+    is provided, remembered credentials move from the external id to the cloud
+    id so automated SSH tests and worker recovery keep working.
+    """
+    if (
+        cloud_record is None
+        or external_record is None
+        or cloud_record.id == external_record.id
+        or cloud_record.provider not in _CLOUD_PROVIDERS
+        or external_record.lifecycle_status != "active"
+    ):
+        return False
+    now = utc_now()
+    verified = _external_verified(external_record)
+    if verified:
+        external_fingerprint = external_record.fingerprint_json or {}
+        fingerprint = cloud_record.fingerprint_json or {}
+        changed = False
+        for key in _MERGED_FINGERPRINT_KEYS:
+            value = external_fingerprint.get(key)
+            if value not in (None, ""):
+                fingerprint[key] = value
+                changed = True
+        if changed:
+            cloud_record.fingerprint_json = fingerprint
+            cloud_record.snapshot_digest = canonical_digest(
+                {
+                    "provider": cloud_record.provider,
+                    "capabilities": cloud_record.capabilities_json,
+                    "fingerprint": fingerprint,
+                    "inventory": cloud_record.inventory_json,
+                }
+            )
+            cloud_record.updated_at = now
+        if credential_store is not None:
+            host_key = str(fingerprint.get("host_key_sha256") or "")
+            if host_key.startswith("SHA256:"):
+                try:
+                    request = credential_store.load(external_record.id)
+                    credential_store.save(cloud_record.id, request, host_key)
+                except Exception:
+                    # Credential migration is best-effort; the operator can
+                    # re-enter the key once through the SSH dialog.
+                    pass
+    external_record.lifecycle_status = "archived"
+    external_record.status = "offline"
+    external_record.runnable = False
+    external_record.inventory_missing_since = None
+    external_record.archived_at = external_record.archived_at or now
+    external_record.archive_reason = _DEDUP_ARCHIVE_REASON
+    external_record.updated_at = now
+    append_event(
+        session,
+        experiment_id=None,
+        event_type="target.external_duplicate_merged",
+        entity_type="target",
+        entity_id=cloud_record.id,
+        idempotency_key=(
+            f"target-external-duplicate-merged:{cloud_record.id}:{external_record.id}"
+        ),
+        payload={
+            "cloudTargetId": cloud_record.id,
+            "externalTargetId": external_record.id,
+            "verified": verified,
+        },
+    )
+    return True
+
+
+def external_twin_for_cloud(
+    session: Session, cloud_record: TargetRecord
+) -> TargetRecord | None:
+    """Return the single active external target describing the same machine."""
+    inventory = cloud_record.inventory_json or {}
+    endpoints = {inventory.get("public_ip"), inventory.get("private_ip")} - {None}
+    if not endpoints:
+        return None
+    matches = [
+        record
+        for record in external_targets(session)
+        if record.lifecycle_status == "active"
+        and (record.inventory_json or {}).get("endpoint") in endpoints
+    ]
+    return matches[0] if len(matches) == 1 else None
+
+
+def reconcile_external_duplicate(
+    session: Session,
+    cloud_record: TargetRecord,
+    *,
+    credential_store: Any | None = None,
+) -> bool:
+    """Archive a duplicate external twin of a cloud inventory record, if any."""
+    twin = external_twin_for_cloud(session, cloud_record)
+    if twin is None:
+        return False
+    return merge_external_duplicate(
+        session, cloud_record, twin, credential_store=credential_store
+    )
+
+
+def _cloud_twin_for_endpoint(session: Session, endpoint: str) -> TargetRecord | None:
+    matches: list[TargetRecord] = []
+    for record in session.scalars(
+        select(TargetRecord).where(TargetRecord.provider.in_(sorted(_CLOUD_PROVIDERS)))
+    ):
+        if record.lifecycle_status != "active":
+            continue
+        inventory = record.inventory_json or {}
+        if inventory.get("public_ip") == endpoint or inventory.get("private_ip") == endpoint:
+            matches.append(record)
+    return matches[0] if len(matches) == 1 else None
