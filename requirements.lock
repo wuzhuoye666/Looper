@@ -85,6 +85,7 @@ crc32c==2.8
 cryptography==50.0.0
     # via
     #   alibabacloud-tea-openapi
+    #   looper-platform
     #   paramiko
 darabonba-core==1.0.8
     # via

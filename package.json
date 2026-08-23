@@ -6,7 +6,7 @@
   "scripts": {
     "setup": "powershell -ExecutionPolicy Bypass -File scripts/bootstrap.ps1",
     "dev": "concurrently -k -n api,worker,web -c blue,green,magenta \"pnpm dev:api\" \"pnpm dev:worker\" \"pnpm dev:web\"",
-    "dev:api": ".\\.venv\\Scripts\\python.exe -m uvicorn looper_api.app:app --host 127.0.0.1 --port 8000 --reload",
+    "dev:api": ".\\.venv\\Scripts\\python.exe -m looper_api.server",
     "dev:worker": ".\\.venv\\Scripts\\python.exe -m looper_worker.main --api-url http://127.0.0.1:8000",
     "dev:web": "pnpm --dir apps/web dev --host 127.0.0.1",
     "test": "pnpm test:py && pnpm test:web",

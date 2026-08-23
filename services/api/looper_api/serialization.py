@@ -84,7 +84,16 @@ def target_view(record: TargetRecord) -> dict[str, Any]:
     status = status_map.get(record.status, "unknown")
     if record.lifecycle_status in {"missing", "archived"}:
         status = "offline"
-    if record.status == "inventory-only" and provider_state == "RUNNING":
+    if (
+        record.status == "inventory-only"
+        and inventory.get("source") == "ssh-discovery"
+        and record.lifecycle_status == "active"
+    ):
+        # SSH discovery is a persisted, verified inventory observation. A
+        # missing Worker means execution is not ready; it does not make the
+        # already-probed machine an unknown resource.
+        status = "inventory"
+    elif record.status == "inventory-only" and provider_state == "RUNNING":
         status = "inventory" if record.lifecycle_status == "active" else "offline"
     elif record.status == "inventory-only" and provider_state in {"STOPPED", "TERMINATED"}:
         status = "offline"

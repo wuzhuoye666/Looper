@@ -19,9 +19,15 @@ Start a Worker with one or more `--target-id` arguments to bind its claim author
 
 ## External machine discovery
 
-The candidate-resources page can connect to a Linux machine over SSH with a password, an in-memory private key, or the API process SSH agent. `POST /api/v1/targets/connect` runs one fixed, read-only inventory command, records the verified machine facts, uploads the Worker sources, creates an isolated virtual environment, and binds the Worker to that target. Passwords, private keys, and passphrases exist only in the request and are never persisted.
+The candidate-resources page can connect to a Linux machine over SSH with a password, a private key, or the API process SSH agent. `POST /api/v1/targets/connect` runs one fixed, read-only inventory command, records the verified machine facts, uploads the Worker sources, creates an isolated virtual environment, and binds the Worker to that target. After deployment succeeds, password/private-key authentication material is encrypted in `.looper/remote-worker-credentials.json`; it is never written to the target database or returned by the API. The independent key is stored in `.looper/remote-worker-credentials.key`. On Windows that key is additionally bound to the current service account with DPAPI; other platforms rely on owner-only file permissions. Set `LOOPER_REMEMBER_SSH_CREDENTIALS=false` to retain one-request-only behavior.
 
-An optional expected `SHA256:` host-key fingerprint pins first contact. Looper verifies the same fingerprint again for deployment. The API keeps the SSH connection open as a reverse tunnel from the remote Worker to the loopback-only control plane; no public API bind is required. A target becomes runnable only after the deployed Worker registers and advertises its actual Benchmark capabilities. Restarting the API closes ephemeral tunnels, so reconnect the target to redeploy after an API restart.
+An optional expected `SHA256:` host-key fingerprint pins first contact. Looper verifies the same fingerprint again for deployment. A target becomes runnable only after the deployed Worker registers and advertises its actual Benchmark capabilities.
+
+At API startup, Looper reads remembered target IDs, decrypts each request only in memory, verifies that its pinned SSH host key still matches the persisted machine fingerprint, and rebuilds the reverse tunnel. Failed connections are retried every 30 seconds. A changed host key fails closed and requires an intentional reconnect. Existing targets need one final manual connection after this upgrade so their credentials can be enrolled.
+
+Alternatively, set `LOOPER_REMOTE_WORKER_API_URL` to a stable control-plane URL reachable by every imported machine and bind `LOOPER_HOST` to the corresponding interface (for example `0.0.0.0`). The deployed Worker then connects directly and owns the reconnect loop. The URL hostname is automatically admitted by the trusted-host guard. Use HTTPS and a rotated non-default `LOOPER_LOCAL_WORKER_TOKEN` outside a trusted private network.
+
+When `LOOPER_REMOTE_WORKER_API_URL` is unset, Looper keeps the control plane loopback-only and uses the remembered SSH credentials to recreate process-local reverse tunnels after every restart. Deleting either credential file disables recovery for all enrolled machines; do not copy the pair to a different Windows account and expect DPAPI decryption to work.
 
 ## SQLite
 

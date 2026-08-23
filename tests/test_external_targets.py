@@ -226,6 +226,7 @@ def test_connect_discovers_inventory_without_persisting_credentials(
     assert "password" in persisted  # The non-secret auth method is retained.
 
     view = target_view(record)
+    assert view["status"] == "inventory"
     assert view["framework"] == "Ubuntu 24.04.2 LTS"
     assert view["hardware"] == "AMD EPYC 7B13 · 16 vCPU · 62.78 GiB"
 

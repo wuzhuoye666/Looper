@@ -29,15 +29,17 @@ from looper_api.seed import repository_root
 @dataclass(slots=True)
 class RemoteWorkerDeployment:
     target_id: str
-    client: Any
-    remote_port: int
+    client: Any | None
+    remote_port: int | None
     worker_id: str
+    transport: str = "reverse-tunnel"
     stop_event: threading.Event = field(default_factory=threading.Event)
     tunnel_thread: threading.Thread | None = None
 
     def close(self) -> None:
         self.stop_event.set()
-        self.client.close()
+        if self.client is not None:
+            self.client.close()
 
 
 _deployments: dict[str, RemoteWorkerDeployment] = {}
@@ -119,6 +121,8 @@ def _relay(channel: Any, local_host: str, local_port: int) -> None:
 
 
 def _serve_reverse_tunnel(deployment: RemoteWorkerDeployment, local_port: int) -> None:
+    if deployment.client is None:
+        return
     transport = deployment.client.get_transport()
     if transport is None:
         return
@@ -138,6 +142,15 @@ def _remote_port(transport: Any) -> int:
     if not allocated:
         raise ExternalTargetError("SSH server refused reverse port forwarding")
     return int(allocated)
+
+
+def _worker_api_endpoint(settings: Settings, transport: Any) -> tuple[str, int | None, str]:
+    """Choose a restart-safe direct endpoint when one was explicitly configured."""
+
+    if settings.remote_worker_api_url is not None:
+        return str(settings.remote_worker_api_url).rstrip("/"), None, "direct"
+    remote_port = _remote_port(transport)
+    return f"http://127.0.0.1:{remote_port}", remote_port, "reverse-tunnel"
 
 
 def deploy_remote_worker(
@@ -160,16 +173,23 @@ def deploy_remote_worker(
         if observed and connected_fingerprint != observed:
             raise ExternalTargetError("SSH host key changed after inventory discovery")
 
-        remote_port = _remote_port(transport)
+        worker_api_url, remote_port, transport_mode = _worker_api_endpoint(settings, transport)
         worker_id = f"remote-{canonical_digest({'target': target.id})[-16:]}"
-        deployment = RemoteWorkerDeployment(target.id, client, remote_port, worker_id)
-        deployment.tunnel_thread = threading.Thread(
-            target=_serve_reverse_tunnel,
-            args=(deployment, settings.port),
-            daemon=True,
-            name=f"looper-tunnel-{worker_id}",
+        deployment = RemoteWorkerDeployment(
+            target.id,
+            client if transport_mode == "reverse-tunnel" else None,
+            remote_port,
+            worker_id,
+            transport=transport_mode,
         )
-        deployment.tunnel_thread.start()
+        if transport_mode == "reverse-tunnel":
+            deployment.tunnel_thread = threading.Thread(
+                target=_serve_reverse_tunnel,
+                args=(deployment, settings.port),
+                daemon=True,
+                name=f"looper-tunnel-{worker_id}",
+            )
+            deployment.tunnel_thread.start()
 
         archive = _source_archive()
         remote_home = _run(client, "printf '%s' \"$HOME\"", timeout=30).strip()
@@ -241,7 +261,7 @@ def deploy_remote_worker(
             f"LOOPER_REPOSITORY_ROOT={remote_root}/source "
             f"LOOPER_LOCAL_WORKER_TOKEN=\"$(cat {remote_root}/worker.token)\" "
             f"{remote_root}/venv/bin/python -m looper_worker.main "
-            f"--api-url http://127.0.0.1:{remote_port} "
+            f"--api-url {shlex.quote(worker_api_url)} "
             f"--worker-id {shlex.quote(worker_id)} "
             f"--target-id {shlex.quote(target.id)} "
             f"--work-dir {remote_root}/work"
@@ -255,6 +275,11 @@ def deploy_remote_worker(
         launch = f"sh -c {shlex.quote(detached)}"
         remote_pid = _launch_background(client, launch)
 
+        if transport_mode == "direct":
+            # The Worker now owns its reconnect loop. The request-scoped SSH
+            # session is no longer needed and no credential is retained.
+            client.close()
+
         with _deployments_lock:
             previous = _deployments.pop(target.id, None)
             if previous is not None:
@@ -264,11 +289,15 @@ def deploy_remote_worker(
             "status": "deploying",
             "workerId": worker_id,
             "remotePid": remote_pid,
+            "transport": transport_mode,
+            "restartSafe": transport_mode == "direct",
             "deployedAt": utc_now().isoformat(),
         }
     except Exception:
         if deployment is not None:
             deployment.close()
+            if deployment.client is None:
+                client.close()
         else:
             client.close()
         raise
@@ -277,13 +306,16 @@ def deploy_remote_worker(
 def deployment_status(target_id: str) -> dict[str, Any]:
     with _deployments_lock:
         deployment = _deployments.get(target_id)
-        active = bool(
+        tunnel_active = bool(
             deployment
+            and deployment.client
             and deployment.client.get_transport()
             and deployment.client.get_transport().is_active()
         )
         return {
-            "active": active,
+            "active": tunnel_active,
             "workerId": deployment.worker_id if deployment else None,
-            "remotePort": deployment.remote_port if active and deployment else None,
+            "remotePort": deployment.remote_port if tunnel_active and deployment else None,
+            "transport": deployment.transport if deployment else None,
+            "restartSafe": bool(deployment and deployment.transport == "direct"),
         }
