@@ -1,0 +1,22 @@
+[Unit]
+Description=Looper local benchmark worker
+After=looper-api.service
+Requires=looper-api.service
+
+[Service]
+Type=simple
+User=looper
+Group=looper
+WorkingDirectory=/opt/looper
+EnvironmentFile=/etc/looper/looper.env
+ExecStart=/opt/looper/.venv/bin/python -m looper_worker.main --api-url http://127.0.0.1:8000 --work-dir /var/lib/looper/worker
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/looper
+
+[Install]
+WantedBy=multi-user.target

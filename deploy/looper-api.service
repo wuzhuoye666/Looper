@@ -1,0 +1,22 @@
+[Unit]
+Description=Looper API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=looper
+Group=looper
+WorkingDirectory=/opt/looper
+EnvironmentFile=/etc/looper/looper.env
+ExecStart=/opt/looper/.venv/bin/python -m uvicorn looper_api.app:app --app-dir services/api --host 127.0.0.1 --port 8000 --proxy-headers --forwarded-allow-ips=127.0.0.1
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/looper
+
+[Install]
+WantedBy=multi-user.target
