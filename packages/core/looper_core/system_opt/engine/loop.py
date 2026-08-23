@@ -44,6 +44,7 @@ from looper_core.system_opt.negative_cache import (
     candidate_parameters_digest,
     formula_versions_digest,
 )
+from looper_core.system_opt.result_vector import PromotionContract, VerificationObservation
 from looper_core.system_opt.rollback import PhaseRestoration, verify_phase_restoration
 from looper_core.system_opt.safety import SafetyState
 from looper_core.system_opt.executor import ConfigSnapshot
@@ -65,6 +66,7 @@ class EngineLoopConfig(StrictModel):
     max_rounds: int = Field(ge=1)
     max_pool_size: int = Field(ge=1)
     pre_screen_tolerance: float | None = Field(default=None, ge=0)
+    promotion_contract: PromotionContract | None = None
 
 
 class EngineRoundRecord(StrictModel):
@@ -78,6 +80,7 @@ class EngineRoundRecord(StrictModel):
     cached_exclusion_count: int = Field(default=0, ge=0)
     early_screened_candidate_ids: list[str] = Field(default_factory=list)
     incumbent_utility_after: float | None = None
+    promotion_observations: list[VerificationObservation] = Field(default_factory=list)
     note: str | None = Field(default=None, min_length=1, max_length=500)
 
 
@@ -143,6 +146,31 @@ def _negative_entry(
     )
 
 
+def promotion_observation(
+    *,
+    round_index: int,
+    environment_digest: str,
+    candidate: Any,
+    verdict: CandidateVerdict,
+    evidence_digest: str,
+) -> VerificationObservation | None:
+    """S9 observation for candidates that earned a promotion suggestion.
+
+    Only accepted (engine-verdict) candidates enter re-verification; rejected
+    candidates never generate promotion evidence. None otherwise.
+    """
+
+    if not verdict.accepted:
+        return None
+    return VerificationObservation(
+        candidate_id=candidate.candidate_id,
+        passed=verdict.comparable and verdict.feasible,
+        time_block_id=f"engine-round-{round_index}",
+        environment_digest=environment_digest,
+        evidence_digest=evidence_digest,
+    )
+
+
 def run_engine_loop(
     component_optimizers: Sequence[ComponentOptimizer],
     *,
@@ -186,6 +214,7 @@ def run_engine_loop(
     stop_reason = EngineStopReason.ROUND_BUDGET
     stop_detail = "explicit round budget exhausted"
 
+    promotion_observations: list[VerificationObservation] = []
     for round_index in range(1, config.max_rounds + 1):
         active = [by_component[name] for name in components if name not in completed]
         if not active:
@@ -308,6 +337,18 @@ def run_engine_loop(
             )
             negative_cache.add(entry)
             cache_entry_digests.append(entry.digest)
+        round_observations = [
+            promotion_observation(
+                round_index=round_index,
+                environment_digest=config.environment_digest,
+                candidate=candidate,
+                verdict=verdict,
+                evidence_digest=report.run_digest or report.digest,
+            )
+            for candidate, verdict in zip(report.candidates, verdicts, strict=True)
+            if config.promotion_contract is not None
+        ]
+        promotion_observations.extend(round_observations)
         rounds.append(
             EngineRoundRecord(
                 round_index=round_index,
@@ -322,6 +363,7 @@ def run_engine_loop(
                 incumbent_utility_after=(
                     tracker.best.utility if tracker is not None and tracker.best else None
                 ),
+                promotion_observations=round_observations,
             )
         )
         if any(

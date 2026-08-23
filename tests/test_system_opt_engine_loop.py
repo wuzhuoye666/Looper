@@ -70,6 +70,9 @@ class TestEngineLoop:
         backend = SimulatedBackend(initial, target_id="engine-loop-test")
         optimizers, manifest = _optimizers(["cpu", "memory"], backend)
         cache = NegativeCache()
+        from datetime import UTC, datetime
+
+        fixed_at = datetime(2026, 8, 23, 12, 0, 0, tzinfo=UTC)
         result = run_engine_loop(
             optimizers,
             baseline_parameters=_baseline_parameters(manifest),
@@ -116,13 +119,15 @@ class TestEngineLoop:
         assert len(result.rounds) == 1
 
     def test_fully_cached_pools_stop_before_any_round(self):
+        from datetime import UTC, datetime
+
+        fixed_at = datetime(2026, 8, 23, 12, 0, 0, tzinfo=UTC)
         manifest = build_demo_manifest()
         initial = {item.id: item.default for item in manifest.items}
         backend = SimulatedBackend(initial, target_id="all-cached-test")
         optimizers, manifest = _optimizers(["cpu", "memory"], backend)
         cache = NegativeCache()
-        from datetime import UTC, datetime
-
+        
         fixed_at = datetime(2026, 8, 23, 12, 0, 0, tzinfo=UTC)
         for optimizer in optimizers:
             protocol = FIXED_PROTOCOL
@@ -347,3 +352,62 @@ class TestPreScreenWiring:
         assert result.stop_reason is EngineStopReason.COMPLETED
         record = result.rounds[0]
         assert record.incumbent_utility_after is not None
+
+
+DIGEST = "sha256:" + "4" * 64
+
+
+class TestPromotionObservations:
+    def test_promotion_observation_only_for_accepted(self):
+        from looper_core.system_opt.engine.loop import promotion_observation
+        from looper_core.system_opt.engine.judge import CandidateVerdict
+        
+        accepted = CandidateVerdict(
+            candidate_id="c1", comparable=True, feasible=True, accepted=True,
+            reasons=["S7: ok"], primary_metric="m", minimum_effect=0.0,
+        )
+        rejected = accepted.model_copy(update={"accepted": False})
+        class _C:
+            candidate_id = "c1"
+
+        obs = promotion_observation(
+            round_index=2, environment_digest=ENV,
+            candidate=_C(), verdict=accepted, evidence_digest=DIGEST,
+        )
+        assert obs is not None and obs.passed and obs.time_block_id == "engine-round-2"
+        assert promotion_observation(
+            round_index=2, environment_digest=ENV,
+            candidate=_C(), verdict=rejected, evidence_digest=DIGEST,
+        ) is None
+
+    def test_engine_emits_observations_when_contract_present(self):
+        from looper_core.system_opt.result_vector import PromotionContract
+
+        manifest = build_demo_manifest()
+        initial = {item.id: item.default for item in manifest.items}
+        backend = SimulatedBackend(initial, target_id="s9-test")
+        optimizers, manifest = _optimizers(["cpu"], backend)
+        result = run_engine_loop(
+            optimizers,
+            baseline_parameters=_baseline_parameters(manifest),
+            measures={"cpu": SyntheticMeasurementAdapter(backend, mode=OptimizationMode.GENERAL)},
+            negative_cache=NegativeCache(),
+            config=EngineLoopConfig(
+                environment_digest=ENV,
+                formula_versions=FORMULAS,
+                pressure_protocol_digests={"cpu": FIXED_PROTOCOL},
+                max_rounds=3,
+                max_pool_size=64,
+                promotion_contract=PromotionContract(
+                    min_observations=1, min_distinct_time_blocks=1, min_environments=1
+                ),
+            ),
+            fencing_token=3,
+        )
+        emitted = [
+            obs for record in result.rounds for obs in record.promotion_observations
+        ]
+        accepted_count = sum(
+            1 for record in result.rounds for verdict in record.verdicts if verdict.accepted
+        )
+        assert len(emitted) == accepted_count
