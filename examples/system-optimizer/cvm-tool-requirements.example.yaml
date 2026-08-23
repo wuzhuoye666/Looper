@@ -1,0 +1,41 @@
+requirements:
+  - id: python-runtime
+    executable: python3
+    criticality: critical
+    purpose: Run the System Optimizer core on the selected CVM.
+    alternatives: []
+  - id: sysctl-cli
+    executable: sysctl
+    criticality: optional
+    purpose: Read or write sysctl names when a run explicitly selects the sysctl CLI path.
+    alternatives: []
+  - id: cpu-memory-pressure
+    executable: stress-ng
+    criticality: optional
+    purpose: Candidate CPU and memory standard-pressure workload; critical only when selected.
+    alternatives: []
+  - id: storage-pressure
+    executable: fio
+    criticality: optional
+    purpose: Candidate storage standard-pressure workload; critical only when selected.
+    alternatives: []
+  - id: network-pressure
+    executable: iperf3
+    criticality: optional
+    purpose: Candidate network workload; critical only when selected.
+    alternatives: []
+  - id: numa-control
+    executable: numactl
+    criticality: optional
+    purpose: NUMA topology and process-policy control when a NUMA experiment is selected.
+    alternatives: []
+  - id: hardware-counters
+    executable: perf
+    criticality: optional
+    purpose: Optional PMU-backed drill-down metrics; absence must not block software metrics.
+    alternatives: []
+  - id: nic-inspection
+    executable: ethtool
+    criticality: optional
+    purpose: Optional NIC capability inspection on a selected CVM interface.
+    alternatives: []

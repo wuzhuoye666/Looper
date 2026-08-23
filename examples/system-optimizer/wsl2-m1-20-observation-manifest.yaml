@@ -1,0 +1,449 @@
+schema_version: looper.system-config-manifest/v1alpha1
+id: wsl2-m1-documented-20-observation-20260823
+version: "1"
+description: >-
+  Exactly 20 kernel.org-documented Linux configuration candidates used to exercise
+  direct read and unavailable branches on this WSL2 instance. This is not a CVM
+  manifest and contains no writable or searchable item.
+metadata:
+  target_os: linux
+  collector_environment: wsl2
+  counting_basis: "6 categories x 3 items + IRQ affinity + MTU; no deduplication"
+  portability: "must regenerate selectors and capabilities on the target CVM"
+items:
+  - id: vm-swappiness
+    category: sysctl
+    primary_component: memory
+    related_components: []
+    target: /proc/sys/vm/swappiness
+    value_type: integer
+    domain: &unknown_numeric {minimum: null, maximum: null, step: null, choices: null, log: false}
+    default: null
+    read: &integer_read
+      command: {argv: [read-file, "{target}"], timeout_seconds: 5}
+      parser: integer
+      true_values: []
+      false_values: []
+    apply: null
+    rollback: &snapshot {mode: restore-snapshot, command: null}
+    activation: immediate
+    risk: medium
+    risk_reason: null
+    dependencies: []
+    preconditions: []
+    compatibility: {required_paths: [/proc/sys/vm/swappiness]}
+    searchable: false
+    value_aliases: {}
+    description: Relative reclaim cost of swap-backed and filesystem-backed pages.
+    source: https://docs.kernel.org/admin-guide/sysctl/vm.html#swappiness
+  - id: vm-dirty-ratio
+    category: sysctl
+    primary_component: memory
+    related_components: [storage]
+    target: /proc/sys/vm/dirty_ratio
+    value_type: integer
+    domain: *unknown_numeric
+    default: null
+    read: *integer_read
+    apply: null
+    rollback: *snapshot
+    activation: immediate
+    risk: medium
+    risk_reason: null
+    dependencies: []
+    preconditions: []
+    compatibility: {required_paths: [/proc/sys/vm/dirty_ratio]}
+    searchable: false
+    value_aliases: {}
+    description: Dirty-memory percentage at which a writer starts writeback.
+    source: https://docs.kernel.org/admin-guide/sysctl/vm.html#dirty-ratio
+  - id: vm-dirty-background-ratio
+    category: sysctl
+    primary_component: memory
+    related_components: [storage]
+    target: /proc/sys/vm/dirty_background_ratio
+    value_type: integer
+    domain: *unknown_numeric
+    default: null
+    read: *integer_read
+    apply: null
+    rollback: *snapshot
+    activation: immediate
+    risk: medium
+    risk_reason: null
+    dependencies: []
+    preconditions: []
+    compatibility: {required_paths: [/proc/sys/vm/dirty_background_ratio]}
+    searchable: false
+    value_aliases: {}
+    description: Dirty-memory percentage at which background writeback starts.
+    source: https://docs.kernel.org/admin-guide/sysctl/vm.html#dirty-background-ratio
+  - id: cpufreq-governor-policy0
+    category: cpufreq
+    primary_component: cpu
+    related_components: []
+    target: /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor
+    value_type: categorical
+    domain: &unknown_categorical {minimum: null, maximum: null, step: null, choices: null, log: false}
+    default: null
+    read: &raw_read
+      command: {argv: [read-file, "{target}"], timeout_seconds: 5}
+      parser: raw
+      true_values: []
+      false_values: []
+    apply: null
+    rollback: *snapshot
+    activation: immediate
+    risk: medium
+    risk_reason: null
+    dependencies: []
+    preconditions: []
+    compatibility: {required_paths: [/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor]}
+    searchable: false
+    value_aliases: {}
+    description: Governor attached to the CPUFreq policy represented by CPU 0.
+    source: https://docs.kernel.org/admin-guide/pm/cpufreq.html#policy-interface-in-sysfs
+  - id: cpufreq-min-policy0
+    category: cpufreq
+    primary_component: cpu
+    related_components: []
+    target: /sys/devices/system/cpu/cpu0/cpufreq/scaling_min_freq
+    value_type: integer
+    domain: *unknown_numeric
+    default: null
+    read: *integer_read
+    apply: null
+    rollback: *snapshot
+    activation: immediate
+    risk: medium
+    risk_reason: null
+    dependencies: []
+    preconditions: []
+    compatibility: {required_paths: [/sys/devices/system/cpu/cpu0/cpufreq/scaling_min_freq]}
+    searchable: false
+    value_aliases: {}
+    description: Minimum frequency allowed for CPUFreq policy 0, in kHz.
+    source: https://docs.kernel.org/admin-guide/pm/cpufreq.html#policy-interface-in-sysfs
+  - id: cpufreq-max-policy0
+    category: cpufreq
+    primary_component: cpu
+    related_components: []
+    target: /sys/devices/system/cpu/cpu0/cpufreq/scaling_max_freq
+    value_type: integer
+    domain: *unknown_numeric
+    default: null
+    read: *integer_read
+    apply: null
+    rollback: *snapshot
+    activation: immediate
+    risk: medium
+    risk_reason: null
+    dependencies: []
+    preconditions: []
+    compatibility: {required_paths: [/sys/devices/system/cpu/cpu0/cpufreq/scaling_max_freq]}
+    searchable: false
+    value_aliases: {}
+    description: Maximum frequency allowed for CPUFreq policy 0, in kHz.
+    source: https://docs.kernel.org/admin-guide/pm/cpufreq.html#policy-interface-in-sysfs
+  - id: thp-enabled
+    category: thp
+    primary_component: memory
+    related_components: [numa]
+    target: /sys/kernel/mm/transparent_hugepage/enabled
+    value_type: categorical
+    domain: *unknown_categorical
+    default: null
+    read: &bracket_read
+      command: {argv: [read-file, "{target}"], timeout_seconds: 5}
+      parser: bracket-selected
+      true_values: []
+      false_values: []
+    apply: null
+    rollback: *snapshot
+    activation: immediate
+    risk: medium
+    risk_reason: null
+    dependencies: []
+    preconditions: []
+    compatibility: {required_paths: [/sys/kernel/mm/transparent_hugepage/enabled]}
+    searchable: false
+    value_aliases: {}
+    description: Top-level Transparent Hugepage enablement policy.
+    source: https://docs.kernel.org/admin-guide/mm/transhuge.html#global-thp-controls
+  - id: thp-defrag
+    category: thp
+    primary_component: memory
+    related_components: [numa]
+    target: /sys/kernel/mm/transparent_hugepage/defrag
+    value_type: categorical
+    domain: *unknown_categorical
+    default: null
+    read: *bracket_read
+    apply: null
+    rollback: *snapshot
+    activation: immediate
+    risk: medium
+    risk_reason: null
+    dependencies: []
+    preconditions: []
+    compatibility: {required_paths: [/sys/kernel/mm/transparent_hugepage/defrag]}
+    searchable: false
+    value_aliases: {}
+    description: Reclaim and compaction policy used to satisfy THP allocations.
+    source: https://docs.kernel.org/admin-guide/mm/transhuge.html#global-thp-controls
+  - id: thp-shmem-enabled
+    category: thp
+    primary_component: memory
+    related_components: []
+    target: /sys/kernel/mm/transparent_hugepage/shmem_enabled
+    value_type: categorical
+    domain: *unknown_categorical
+    default: null
+    read: *bracket_read
+    apply: null
+    rollback: *snapshot
+    activation: immediate
+    risk: medium
+    risk_reason: null
+    dependencies: []
+    preconditions: []
+    compatibility: {required_paths: [/sys/kernel/mm/transparent_hugepage/shmem_enabled]}
+    searchable: false
+    value_aliases: {}
+    description: Transparent Hugepage policy for shmem and tmpfs.
+    source: https://docs.kernel.org/admin-guide/mm/transhuge.html#global-thp-controls
+  - id: io-sda-scheduler
+    category: io
+    primary_component: storage
+    related_components: []
+    target: /sys/block/sda/queue/scheduler
+    value_type: categorical
+    domain: *unknown_categorical
+    default: null
+    read: *bracket_read
+    apply: null
+    rollback: *snapshot
+    activation: immediate
+    risk: medium
+    risk_reason: null
+    dependencies: []
+    preconditions: []
+    compatibility: {required_paths: [/sys/block/sda/queue/scheduler]}
+    searchable: false
+    value_aliases: {}
+    description: Current and available I/O schedulers for the observed sda device.
+    source: https://docs.kernel.org/block/queue-sysfs.html#scheduler-rw
+  - id: io-sda-nr-requests
+    category: io
+    primary_component: storage
+    related_components: []
+    target: /sys/block/sda/queue/nr_requests
+    value_type: integer
+    domain: *unknown_numeric
+    default: null
+    read: *integer_read
+    apply: null
+    rollback: *snapshot
+    activation: immediate
+    risk: medium
+    risk_reason: null
+    dependencies: []
+    preconditions: []
+    compatibility: {required_paths: [/sys/block/sda/queue/nr_requests]}
+    searchable: false
+    value_aliases: {}
+    description: Request allocation limit for the observed sda block queue.
+    source: https://docs.kernel.org/block/queue-sysfs.html#nr-requests-rw
+  - id: io-sda-read-ahead-kb
+    category: io
+    primary_component: storage
+    related_components: [memory]
+    target: /sys/block/sda/queue/read_ahead_kb
+    value_type: integer
+    domain: *unknown_numeric
+    default: null
+    read: *integer_read
+    apply: null
+    rollback: *snapshot
+    activation: immediate
+    risk: medium
+    risk_reason: null
+    dependencies: []
+    preconditions: []
+    compatibility: {required_paths: [/sys/block/sda/queue/read_ahead_kb]}
+    searchable: false
+    value_aliases: {}
+    description: Filesystem read-ahead limit for the observed sda device, in KiB.
+    source: https://docs.kernel.org/block/queue-sysfs.html#read-ahead-kb-rw
+  - id: numa-balancing
+    category: numa
+    primary_component: numa
+    related_components: [memory]
+    target: /proc/sys/kernel/numa_balancing
+    value_type: boolean
+    domain: {minimum: null, maximum: null, step: null, choices: null, log: false}
+    default: null
+    read:
+      command: {argv: [read-file, "{target}"], timeout_seconds: 5}
+      parser: boolean
+      true_values: ["1"]
+      false_values: ["0"]
+    apply: null
+    rollback: *snapshot
+    activation: immediate
+    risk: medium
+    risk_reason: null
+    dependencies: []
+    preconditions: []
+    compatibility: {required_paths: [/proc/sys/kernel/numa_balancing]}
+    searchable: false
+    value_aliases: {}
+    description: Automatic NUMA balancing enablement state.
+    source: https://docs.kernel.org/5.17/admin-guide/sysctl/kernel.html#numa-balancing
+  - id: numa-scan-period-min-ms
+    category: numa
+    primary_component: numa
+    related_components: [memory]
+    target: /proc/sys/kernel/numa_balancing_scan_period_min_ms
+    value_type: integer
+    domain: *unknown_numeric
+    default: null
+    read: *integer_read
+    apply: null
+    rollback: *snapshot
+    activation: immediate
+    risk: medium
+    risk_reason: null
+    dependencies: []
+    preconditions: []
+    compatibility: {required_paths: [/proc/sys/kernel/numa_balancing_scan_period_min_ms]}
+    searchable: false
+    value_aliases: {}
+    description: Minimum automatic NUMA-balancing scan period, in milliseconds.
+    source: https://docs.kernel.org/5.17/admin-guide/sysctl/kernel.html#numa-balancing-scan-period-min-ms-numa-balancing-scan-delay-ms-numa-balancing-scan-period-max-ms-numa-balancing-scan-size-mb
+  - id: numa-scan-period-max-ms
+    category: numa
+    primary_component: numa
+    related_components: [memory]
+    target: /proc/sys/kernel/numa_balancing_scan_period_max_ms
+    value_type: integer
+    domain: *unknown_numeric
+    default: null
+    read: *integer_read
+    apply: null
+    rollback: *snapshot
+    activation: immediate
+    risk: medium
+    risk_reason: null
+    dependencies: []
+    preconditions: []
+    compatibility: {required_paths: [/proc/sys/kernel/numa_balancing_scan_period_max_ms]}
+    searchable: false
+    value_aliases: {}
+    description: Maximum automatic NUMA-balancing scan period, in milliseconds.
+    source: https://docs.kernel.org/5.17/admin-guide/sysctl/kernel.html#numa-balancing-scan-period-min-ms-numa-balancing-scan-delay-ms-numa-balancing-scan-period-max-ms-numa-balancing-scan-size-mb
+  - id: net-somaxconn
+    category: net
+    primary_component: network
+    related_components: []
+    target: /proc/sys/net/core/somaxconn
+    value_type: integer
+    domain: *unknown_numeric
+    default: null
+    read: *integer_read
+    apply: null
+    rollback: *snapshot
+    activation: immediate
+    risk: medium
+    risk_reason: null
+    dependencies: []
+    preconditions: []
+    compatibility: {required_paths: [/proc/sys/net/core/somaxconn]}
+    searchable: false
+    value_aliases: {}
+    description: Socket listen backlog limit.
+    source: https://docs.kernel.org/networking/ip-sysctl.html#tcp-variables
+  - id: net-tcp-max-syn-backlog
+    category: net
+    primary_component: network
+    related_components: []
+    target: /proc/sys/net/ipv4/tcp_max_syn_backlog
+    value_type: integer
+    domain: *unknown_numeric
+    default: null
+    read: *integer_read
+    apply: null
+    rollback: *snapshot
+    activation: immediate
+    risk: medium
+    risk_reason: null
+    dependencies: []
+    preconditions: []
+    compatibility: {required_paths: [/proc/sys/net/ipv4/tcp_max_syn_backlog]}
+    searchable: false
+    value_aliases: {}
+    description: Per-listener limit for remembered SYN_RECV requests.
+    source: https://docs.kernel.org/networking/ip-sysctl.html#tcp-variables
+  - id: net-tcp-congestion-control
+    category: net
+    primary_component: network
+    related_components: []
+    target: /proc/sys/net/ipv4/tcp_congestion_control
+    value_type: categorical
+    domain: *unknown_categorical
+    default: null
+    read: *raw_read
+    apply: null
+    rollback: *snapshot
+    activation: immediate
+    risk: medium
+    risk_reason: null
+    dependencies: []
+    preconditions: []
+    compatibility: {required_paths: [/proc/sys/net/ipv4/tcp_congestion_control]}
+    searchable: false
+    value_aliases: {}
+    description: Congestion-control algorithm assigned to new TCP connections.
+    source: https://docs.kernel.org/networking/ip-sysctl.html#tcp-variables
+  - id: irq0-smp-affinity-list
+    category: irq
+    primary_component: cpu
+    related_components: [network, storage]
+    target: /proc/irq/0/smp_affinity_list
+    value_type: categorical
+    domain: *unknown_categorical
+    default: null
+    read: *raw_read
+    apply: null
+    rollback: *snapshot
+    activation: immediate
+    risk: medium
+    risk_reason: null
+    dependencies: []
+    preconditions: []
+    compatibility: {required_paths: [/proc/irq/0/smp_affinity_list]}
+    searchable: false
+    value_aliases: {}
+    description: WSL-only selector proving the per-IRQ allowed CPU-list read path.
+    source: https://docs.kernel.org/core-api/irq/irq-affinity.html
+  - id: net-eth0-mtu
+    category: other
+    primary_component: network
+    related_components: []
+    target: /sys/class/net/eth0/mtu
+    value_type: integer
+    domain: *unknown_numeric
+    default: null
+    read: *integer_read
+    apply: null
+    rollback: *snapshot
+    activation: immediate
+    risk: medium
+    risk_reason: null
+    dependencies: []
+    preconditions: []
+    compatibility: {required_paths: [/sys/class/net/eth0/mtu]}
+    searchable: false
+    value_aliases: {}
+    description: WSL-only selector proving the per-interface MTU read path.
+    source: https://docs.kernel.org/admin-guide/abi-testing-files.html

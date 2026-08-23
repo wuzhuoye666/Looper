@@ -1,13 +1,50 @@
 from __future__ import annotations
 
 import json
+import os
+import platform
+from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 
 import typer
 from looper_core.action_loop import VerificationPolicy
 from looper_core.adapters import load_and_apply_adapter
+from looper_core.canonical import canonical_digest
 from looper_core.manifest import load_and_validate_manifest
+from looper_core.system_opt.config_manifest import (
+    ConfigManifest,
+    parse_config_manifest_yaml,
+)
+from looper_core.system_opt.demo import run_full_demo
+from looper_core.system_opt.domain import (
+    AuthorizedDomain,
+    DomainEvidence,
+    resolve_domain,
+)
+from looper_core.system_opt.executor.local_linux import LocalLinuxBackend
+from looper_core.system_opt.executor.runner import SubprocessCommandRunner
+from looper_core.system_opt.executor.simulated import SimulatedBackend
+from looper_core.system_opt.inventory import (
+    LinuxDiscoveryPolicy,
+    LinuxRawCollector,
+    LocalToolInventoryCollector,
+    ManifestInventoryCollector,
+    parse_tool_requirements_yaml,
+)
+from looper_core.system_opt.lease import FileTargetGuard
+from looper_core.system_opt.measurement import (
+    CommandMeasurementAdapter,
+    MeasurementCommandSpec,
+)
+from looper_core.system_opt.policy import (
+    OptimizationMode,
+    parse_optimization_policy_yaml,
+)
+from looper_core.system_opt.safety import SafetyController, SafetyPolicy, SafetyState
+from looper_core.system_opt.scoring import MeasurementBatch
+from looper_core.system_opt.tuning import SystemOptimizationEngine
+from pydantic import TypeAdapter
 from rich.console import Console
 from sqlalchemy import select
 
@@ -33,14 +70,417 @@ evidence_app = typer.Typer(help="Evidence bundle tools")
 source_app = typer.Typer(help="Third-party source governance")
 demo_app = typer.Typer(help="Local demo experiment")
 cloud_app = typer.Typer(help="Multi-cloud runtime configuration")
+system_opt_app = typer.Typer(help="Linux System Optimizer closed-loop tools")
 app.add_typer(benchmark_app, name="benchmark")
 app.add_typer(adapter_app, name="adapter")
 app.add_typer(evidence_app, name="evidence")
 app.add_typer(source_app, name="source")
 app.add_typer(demo_app, name="demo")
 app.add_typer(cloud_app, name="cloud")
+app.add_typer(system_opt_app, name="system-opt")
 console = Console()
 error_console = Console(stderr=True)
+
+
+def _read_json(path: Path) -> object:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _write_json(path: Path, value: object) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if hasattr(value, "model_dump"):
+        value = value.model_dump(mode="json", exclude_none=False)
+    path.write_text(
+        json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2),
+        encoding="utf-8",
+    )
+
+
+def _require_linux_confirmation(enable_real: bool, confirmation: str) -> None:
+    if platform.system().lower() != "linux":
+        raise typer.BadParameter("real System Optimizer writes require Linux")
+    if not enable_real or confirmation != "I_UNDERSTAND_LINUX_CONFIG_WRITES":
+        raise typer.BadParameter(
+            "real writes require --enable-real and the exact confirmation token"
+        )
+
+
+def _local_backend(
+    manifest: ConfigManifest,
+    *,
+    target_id: str,
+    allowed_executables: list[str],
+    writable_roots: list[Path],
+) -> LocalLinuxBackend:
+    if platform.system().lower() != "linux":
+        raise typer.BadParameter("local-linux backend requires Linux")
+    if not allowed_executables:
+        raise typer.BadParameter("at least one --allow-executable is required")
+    declared = {
+        command.argv[0]
+        for item in manifest.items
+        for command in (item.read.command, item.apply)
+        if command is not None
+    }
+    missing = sorted(declared - set(allowed_executables))
+    if missing:
+        raise typer.BadParameter(f"manifest executables are not allowlisted: {missing}")
+    runner = SubprocessCommandRunner(
+        allowed_executables=set(allowed_executables),
+        writable_file_roots=writable_roots,
+    )
+    privileged = hasattr(os, "geteuid") and os.geteuid() == 0
+    return LocalLinuxBackend(
+        target_id=target_id,
+        enabled=True,
+        runner=runner,
+        system_name="linux",
+        privileged=privileged,
+    )
+
+
+@system_opt_app.command("validate")
+def validate_system_optimizer_contracts(
+    manifest_path: Path = typer.Option(..., "--manifest", exists=True, dir_okay=False),
+    policy_path: Path = typer.Option(..., "--policy", exists=True, dir_okay=False),
+) -> None:
+    manifest = parse_config_manifest_yaml(manifest_path.read_text(encoding="utf-8"))
+    policy = parse_optimization_policy_yaml(policy_path.read_text(encoding="utf-8"))
+    console.print_json(
+        json.dumps(
+            {
+                "valid": True,
+                "manifest_id": manifest.id,
+                "manifest_digest": manifest.digest,
+                "policy_id": policy.id,
+                "policy_digest": canonical_digest(policy.model_dump(mode="json")),
+                "target_os": "linux",
+            }
+        )
+    )
+
+
+@system_opt_app.command("demo")
+def run_system_optimizer_demo(
+    output: Path = typer.Option(..., "--output", dir_okay=False),
+) -> None:
+    result = run_full_demo()
+    _write_json(output, result)
+    console.print_json(
+        json.dumps(
+            {
+                "evidence_kind": result.evidence_kind,
+                "warning": result.warning,
+                "general_stop": result.general.stop_reason,
+                "general_recommended": result.general.recommended_candidate_id,
+                "workload_stop": result.workload.stop_reason,
+                "workload_routed_components": result.workload.routed_components,
+                "workload_recommended": result.workload.recommended_candidate_id,
+                "output": str(output.resolve()),
+            }
+        )
+    )
+
+
+@system_opt_app.command("inventory")
+def collect_system_inventory(
+    manifest_path: Path = typer.Option(..., "--manifest", exists=True, dir_okay=False),
+    backend_kind: str = typer.Option(..., "--backend"),
+    target_id: str = typer.Option(..., "--target-id"),
+    output: Path = typer.Option(..., "--output", dir_okay=False),
+    initial_state: Path | None = typer.Option(None, "--initial-state", exists=True, dir_okay=False),
+    allow_executable: list[str] | None = typer.Option(None, "--allow-executable"),
+) -> None:
+    manifest = parse_config_manifest_yaml(manifest_path.read_text(encoding="utf-8"))
+    if backend_kind == "simulated":
+        if initial_state is None:
+            raise typer.BadParameter("simulated inventory requires --initial-state")
+        payload = _read_json(initial_state)
+        if not isinstance(payload, dict):
+            raise typer.BadParameter("initial state must be a JSON object")
+        backend = SimulatedBackend(payload, target_id=target_id)
+    elif backend_kind == "local-linux":
+        backend = _local_backend(
+            manifest,
+            target_id=target_id,
+            allowed_executables=allow_executable or [],
+            writable_roots=[],
+        )
+    else:
+        raise typer.BadParameter("backend must be simulated or local-linux")
+    result = ManifestInventoryCollector().collect(manifest, backend, fencing_token=0)
+    _write_json(output, result)
+    console.print_json(
+        json.dumps(
+            {
+                "target_id": result.target_id,
+                "target_os": result.target_os,
+                "collector_environment": result.metadata.collector_environment.model_dump(
+                    mode="json"
+                ),
+                "count": len(result.items),
+                "counting_basis": result.counting_basis,
+                "digest": result.digest,
+                "output": str(output.resolve()),
+            }
+        )
+    )
+
+
+@system_opt_app.command("raw-inventory")
+def collect_linux_raw_inventory(
+    root: list[Path] = typer.Option(..., "--root", file_okay=False),
+    max_files: int = typer.Option(..., "--max-files", min=1),
+    max_bytes_per_file: int = typer.Option(..., "--max-bytes-per-file", min=1),
+    output: Path = typer.Option(..., "--output", dir_okay=False),
+) -> None:
+    result = LinuxRawCollector().collect(
+        LinuxDiscoveryPolicy(
+            roots=root,
+            max_files=max_files,
+            max_bytes_per_file=max_bytes_per_file,
+        )
+    )
+    _write_json(output, result)
+    console.print_json(
+        json.dumps(
+            {
+                "target_os": result.target_os,
+                "collector_environment": result.metadata.collector_environment.model_dump(
+                    mode="json"
+                ),
+                "enumeration_complete": result.enumeration_complete,
+                "all_values_readable": result.all_values_readable,
+                "complete": result.complete,
+                "count": len(result.records),
+                "counting_basis": result.counting_basis,
+                "digest": result.digest,
+                "output": str(output.resolve()),
+            }
+        )
+    )
+
+
+@system_opt_app.command("tool-inventory")
+def collect_linux_tool_inventory(
+    requirements_path: Path = typer.Option(..., "--requirements", exists=True, dir_okay=False),
+    output: Path = typer.Option(..., "--output", dir_okay=False),
+) -> None:
+    requirements = parse_tool_requirements_yaml(requirements_path.read_text(encoding="utf-8"))
+    result = LocalToolInventoryCollector().collect(requirements)
+    _write_json(output, result)
+    console.print_json(
+        json.dumps(
+            {
+                "target_os": result.target_os,
+                "collector_environment": result.metadata.collector_environment.model_dump(
+                    mode="json"
+                ),
+                "critical_executables_resolved": (result.critical_executables_resolved),
+                "verification_scope": result.verification_scope,
+                "critical_missing": result.critical_missing,
+                "count": len(result.items),
+                "counting_basis": result.counting_basis,
+                "digest": result.digest,
+                "output": str(output.resolve()),
+            }
+        )
+    )
+
+
+@system_opt_app.command("manual")
+def apply_manual_system_configuration(
+    manifest_path: Path = typer.Option(..., "--manifest", exists=True, dir_okay=False),
+    changes_path: Path = typer.Option(..., "--changes", exists=True, dir_okay=False),
+    target_id: str = typer.Option(..., "--target-id"),
+    owner_id: str = typer.Option(..., "--owner-id"),
+    lease_root: Path = typer.Option(..., "--lease-root", file_okay=False),
+    lease_ttl_seconds: float = typer.Option(..., "--lease-ttl-seconds", min=1),
+    max_changes: int = typer.Option(..., "--max-changes", min=1, max=100),
+    max_changes_reason: str | None = typer.Option(None, "--max-changes-reason"),
+    allow_executable: list[str] = typer.Option(..., "--allow-executable"),
+    writable_root: list[Path] = typer.Option(..., "--writable-root", file_okay=False),
+    reconciliation_digest: str | None = typer.Option(None, "--reconciliation-digest"),
+    keep: bool = typer.Option(False, "--keep"),
+    authorize_keep: bool = typer.Option(False, "--authorize-keep"),
+    enable_real: bool = typer.Option(False, "--enable-real"),
+    confirmation: str = typer.Option("", "--confirmation"),
+    output: Path = typer.Option(..., "--output", dir_okay=False),
+) -> None:
+    _require_linux_confirmation(enable_real, confirmation)
+    manifest = parse_config_manifest_yaml(manifest_path.read_text(encoding="utf-8"))
+    changes = _read_json(changes_path)
+    if not isinstance(changes, dict):
+        raise typer.BadParameter("changes must be a JSON object")
+    backend = _local_backend(
+        manifest,
+        target_id=target_id,
+        allowed_executables=allow_executable,
+        writable_roots=writable_root,
+    )
+    guard = FileTargetGuard(lease_root)
+    lease = guard.acquire(
+        target_id,
+        owner_id,
+        ttl_seconds=lease_ttl_seconds,
+        now=datetime.now(UTC),
+        reconciliation_digest=reconciliation_digest,
+    )
+    try:
+        result = SafetyController(
+            SafetyPolicy(
+                max_changes=max_changes,
+                max_changes_reason=max_changes_reason,
+                pinned_items=set(),
+                ownership_unknown_items=set(),
+                high_risk_waivers=set(),
+                allow_keep=keep,
+                require_privileged=True,
+            )
+        ).execute(
+            manifest,
+            changes,
+            backend,
+            fencing_token=lease.fencing_token,
+            keep=keep,
+            keep_authorized=authorize_keep,
+        )
+        _write_json(output, result)
+        if result.state == SafetyState.NEEDS_ATTENTION:
+            guard.mark_needs_attention(
+                target_id,
+                reason=result.reason or "manual transaction needs attention",
+                evidence_digest=canonical_digest(result.model_dump(mode="json")),
+                now=datetime.now(UTC),
+            )
+    finally:
+        guard.release(lease)
+    console.print_json(
+        json.dumps(
+            {
+                "state": result.state,
+                "reason": result.reason,
+                "output": str(output.resolve()),
+            }
+        )
+    )
+    if result.state in {SafetyState.REJECTED, SafetyState.NEEDS_ATTENTION}:
+        raise typer.Exit(code=2)
+
+
+@system_opt_app.command("run")
+def run_linux_system_optimization(
+    manifest_path: Path = typer.Option(..., "--manifest", exists=True, dir_okay=False),
+    policy_path: Path = typer.Option(..., "--policy", exists=True, dir_okay=False),
+    capability_domains_path: Path = typer.Option(
+        ..., "--capability-domains", exists=True, dir_okay=False
+    ),
+    authorized_domains_path: Path = typer.Option(
+        ..., "--authorized-domains", exists=True, dir_okay=False
+    ),
+    baseline_parameters_path: Path = typer.Option(
+        ..., "--baseline-parameters", exists=True, dir_okay=False
+    ),
+    measurement_command_path: Path = typer.Option(
+        ..., "--measurement-command", exists=True, dir_okay=False
+    ),
+    diagnostic_reference_path: Path | None = typer.Option(
+        None, "--diagnostic-reference", exists=True, dir_okay=False
+    ),
+    target_id: str = typer.Option(..., "--target-id"),
+    owner_id: str = typer.Option(..., "--owner-id"),
+    lease_root: Path = typer.Option(..., "--lease-root", file_okay=False),
+    lease_ttl_seconds: float = typer.Option(..., "--lease-ttl-seconds", min=1),
+    allow_executable: list[str] = typer.Option(..., "--allow-executable"),
+    writable_root: list[Path] = typer.Option(..., "--writable-root", file_okay=False),
+    reconciliation_digest: str | None = typer.Option(None, "--reconciliation-digest"),
+    enable_real: bool = typer.Option(False, "--enable-real"),
+    confirmation: str = typer.Option("", "--confirmation"),
+    output: Path = typer.Option(..., "--output", dir_okay=False),
+) -> None:
+    _require_linux_confirmation(enable_real, confirmation)
+    manifest = parse_config_manifest_yaml(manifest_path.read_text(encoding="utf-8"))
+    policy = parse_optimization_policy_yaml(policy_path.read_text(encoding="utf-8"))
+    capability_domains = TypeAdapter(list[DomainEvidence]).validate_python(
+        _read_json(capability_domains_path)
+    )
+    authorized_domains = TypeAdapter(list[AuthorizedDomain]).validate_python(
+        _read_json(authorized_domains_path)
+    )
+    capability_by_id = {domain.item_id: domain for domain in capability_domains}
+    authorization_by_id = {domain.item_id: domain for domain in authorized_domains}
+    domains = {}
+    for item in manifest.items:
+        if item.id not in capability_by_id or item.id not in authorization_by_id:
+            continue
+        resolved = resolve_domain(item, capability_by_id[item.id], authorization_by_id[item.id])
+        domains[item.parameter_id] = resolved
+    baseline = _read_json(baseline_parameters_path)
+    if not isinstance(baseline, dict):
+        raise typer.BadParameter("baseline parameters must be a JSON object")
+    measurement_spec = MeasurementCommandSpec.model_validate(_read_json(measurement_command_path))
+    minimum_lease = policy.search.wall_time_seconds + measurement_spec.timeout_seconds
+    if lease_ttl_seconds <= minimum_lease:
+        raise typer.BadParameter(
+            "lease TTL must exceed search wall-time plus one measurement timeout"
+        )
+    if measurement_spec.argv[0] not in set(allow_executable):
+        raise typer.BadParameter("measurement executable is not allowlisted")
+    backend = _local_backend(
+        manifest,
+        target_id=target_id,
+        allowed_executables=allow_executable,
+        writable_roots=writable_root,
+    )
+    runner = SubprocessCommandRunner(
+        allowed_executables=set(allow_executable),
+        writable_file_roots=writable_root,
+    )
+    measure = CommandMeasurementAdapter(measurement_spec, runner)
+    reference = (
+        MeasurementBatch.model_validate(_read_json(diagnostic_reference_path))
+        if diagnostic_reference_path is not None
+        else None
+    )
+    if policy.mode == OptimizationMode.WORKLOAD and reference is None:
+        raise typer.BadParameter("workload mode requires --diagnostic-reference")
+    guard = FileTargetGuard(lease_root)
+    lease = guard.acquire(
+        target_id,
+        owner_id,
+        ttl_seconds=lease_ttl_seconds,
+        now=datetime.now(UTC),
+        reconciliation_digest=reconciliation_digest,
+    )
+    try:
+        result = SystemOptimizationEngine(policy, manifest, domains, backend).run(
+            baseline_parameters=baseline,
+            measure=measure,
+            fencing_token=lease.fencing_token,
+            diagnostic_reference=reference,
+        )
+        _write_json(output, result)
+        if any(
+            candidate.safety_state == SafetyState.NEEDS_ATTENTION for candidate in result.candidates
+        ):
+            guard.mark_needs_attention(
+                target_id,
+                reason="optimization candidate rollback needs attention",
+                evidence_digest=result.digest,
+                now=datetime.now(UTC),
+            )
+    finally:
+        guard.release(lease)
+    console.print_json(
+        json.dumps(
+            {
+                "stop_reason": result.stop_reason,
+                "stop_detail": result.stop_detail,
+                "recommended_candidate_id": result.recommended_candidate_id,
+                "output": str(output.resolve()),
+            }
+        )
+    )
 
 
 @app.command("init")
