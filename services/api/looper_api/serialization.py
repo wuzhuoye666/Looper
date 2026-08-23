@@ -85,6 +85,19 @@ def benchmark_view(
     adapter = spec.get("adapter") or {}
     extensions = spec.get("x-extensions", {})
     execution_status = extensions.get("executionStatus", "executable")
+    runtime = spec["runtime"]
+    package_ready = bool(
+        record.manifest_path
+        or (
+            runtime.get("type") == "container"
+            and "@sha256:" in str(runtime.get("image") or "")
+        )
+    )
+    runnable = bool(
+        execution_status == "executable"
+        and package_ready
+        and (record.trusted or runtime.get("type") == "container")
+    )
     metadata_extensions = metadata.get("x-extensions") or {}
     explicit_category = metadata_extensions.get("category") or extensions.get("category")
     return {
@@ -93,7 +106,10 @@ def benchmark_view(
         "name": record.name,
         "description": record.description,
         "category": explicit_category or ("scenario" if scenario else "unclassified"),
-        "selectionReady": scenario is not None,
+        # A scenario only appears in the experiment picker when it can really
+        # be delivered to a target and executed. Stage-0 contracts remain in
+        # the catalog for research, but are never presented as runnable choices.
+        "selectionReady": scenario is not None and runnable,
         "executionModel": adapter.get("executionModel", "custom"),
         "inputs": adapter.get("inputs", []),
         "infrastructure": spec.get("infrastructure"),
@@ -111,12 +127,11 @@ def benchmark_view(
         "deploymentRequirements": sorted(deployment_capabilities(manifest)),
         "provisionedCapabilities": sorted(provisioned_capabilities(manifest)),
         "provisioning": provisioning_contract(manifest),
-        "packageReady": bool(record.manifest_path),
+        "packageReady": package_ready,
         "packageDigest": record.package_digest,
         "trusted": record.trusted,
         "executionStatus": execution_status,
-        "runnable": execution_status == "executable"
-        and (record.trusted or manifest["spec"]["runtime"].get("type") == "container"),
+        "runnable": runnable,
         "registrationId": registration.id if registration else None,
         "registrationStatus": registration.status if registration else None,
         "auditStatus": "registered-not-admitted" if registration else "legacy-unreviewed",

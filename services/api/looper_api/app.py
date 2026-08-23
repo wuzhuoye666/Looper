@@ -670,7 +670,22 @@ def cloud_order_confirm(
 
 @app.get("/api/v1/benchmarks")
 def list_benchmarks(session: SessionDependency) -> dict[str, Any]:
-    records = list(session.scalars(select(BenchmarkRecord).order_by(BenchmarkRecord.name)))
+    records = list(
+        session.scalars(
+            select(BenchmarkRecord).order_by(
+                BenchmarkRecord.benchmark_id,
+                BenchmarkRecord.installed_at.desc(),
+                BenchmarkRecord.key.desc(),
+            )
+        )
+    )
+    # Versions remain addressable for historical experiments, but the catalog
+    # exposes one current package per stable Benchmark ID. A newly registered
+    # version therefore replaces the old choice instead of creating duplicates.
+    current_by_id: dict[str, BenchmarkRecord] = {}
+    for record in records:
+        current_by_id.setdefault(record.benchmark_id, record)
+    current = sorted(current_by_id.values(), key=lambda item: item.name.casefold())
     registrations = {
         item.benchmark_key: item
         for item in session.scalars(
@@ -680,8 +695,8 @@ def list_benchmarks(session: SessionDependency) -> dict[str, Any]:
         )
     }
     return {
-        "items": [benchmark_view(item, registrations.get(item.key)) for item in records],
-        "total": len(records),
+        "items": [benchmark_view(item, registrations.get(item.key)) for item in current],
+        "total": len(current),
     }
 
 
@@ -1027,12 +1042,26 @@ def _normalize_create_request(payload: dict[str, Any], session: Session) -> Expe
 def _selection_create_request(payload: dict[str, Any], session: Session) -> ExperimentCreate:
     benchmark_id = str(payload.get("benchmarkId") or "")
     benchmark_version = str(payload.get("benchmarkVersion") or "")
-    statement = select(BenchmarkRecord).where(BenchmarkRecord.benchmark_id == benchmark_id)
+    current = session.scalar(
+        select(BenchmarkRecord)
+        .where(BenchmarkRecord.benchmark_id == benchmark_id)
+        .order_by(BenchmarkRecord.installed_at.desc(), BenchmarkRecord.key.desc())
+        .limit(1)
+    )
+    benchmark = current
     if benchmark_version:
-        statement = statement.where(BenchmarkRecord.version == benchmark_version)
-    benchmark = session.scalar(statement.order_by(BenchmarkRecord.installed_at.desc()).limit(1))
+        benchmark = session.scalar(
+            select(BenchmarkRecord).where(
+                BenchmarkRecord.benchmark_id == benchmark_id,
+                BenchmarkRecord.version == benchmark_version,
+            )
+        )
     if benchmark is None:
         raise SchedulerError("scenario benchmark version is not installed")
+    if current is None or benchmark.key != current.key:
+        raise SchedulerError(
+            "selected benchmark version has been replaced; use the current catalog version"
+        )
     registration = session.scalar(
         select(BenchmarkRegistrationRecord).where(
             BenchmarkRegistrationRecord.benchmark_key == benchmark.key,
@@ -1042,6 +1071,11 @@ def _selection_create_request(payload: dict[str, Any], session: Session) -> Expe
     scenario_document = selection_scenario_document(benchmark, registration)
     if scenario_document is None:
         raise SchedulerError("selected benchmark is missing a selection scenario contract")
+    if not benchmark_view(benchmark, registration)["selectionReady"]:
+        raise SchedulerError(
+            "selected benchmark is not directly testable; install a trusted executable package "
+            "with automatic target provisioning"
+        )
     scenario = ScenarioBenchmarkSpec.model_validate(scenario_document)
 
     raw_target_ids = payload.get("targetIds")

@@ -94,8 +94,9 @@ SPEC 类集成包选择 `batch-suite`。workload 对应 task 或 task group，�
 3. Looper 执行 JSON Schema 和跨字段校验，并从文件自动读取全部注册摘要；
 4. 有阻断项时回 Package 修改并重新导入，页面不维护第二份来源、指标或审计说明；
 5. 阻断项清零后点击一次“登记到目录”；
-6. Stage 0 配置只能进入目录，不能运行；
-7. 可执行配置必须包含可下发脚本包或固定 digest 容器、依赖锁、生产执行策略、`looper-adapter/v1` 和 `normalize` 阶段；
-8. 先运行 fixture/冒烟，再进入兼容性矩阵和正式审计。`spec.audit` 的缺失属于准入提醒，不阻止注册。
+6. Stage 0 配置只能作为研究合同保留，不能进入新建选型的可选列表；
+7. 同一 Benchmark ID 只展示最后登记的当前版本；旧版本仅供已有实验追溯。
+8. 可执行配置必须包含可下发脚本包或固定 digest 容器、依赖锁、生产执行策略、`looper-adapter/v1` 和 `normalize` 阶段；
+9. 先运行 fixture/冒烟，再进入兼容性矩阵和正式审计。`spec.audit` 的缺失属于准入提醒，不阻止注册。
 
 仓库中的 `benchmarks/config-driven-fixture` 是合同测试样例，不是性能 Benchmark，也不能作为选型证据。它证明 suite-owned producer 与 normalizer 可以仅通过配置被通用 Worker 执行。该 fixture 故意使用本地进程且不声明生产源码 revision，因此从注册页导入时会显示生产门禁失败；程序员应以页面逐项约束为清单，把正式包改为固定 digest 容器并补齐不可变来源。

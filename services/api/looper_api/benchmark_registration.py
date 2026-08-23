@@ -528,7 +528,8 @@ def evaluate_registration_constraints(
             (
                 f"{benchmark_key} 可以登记。"
                 if version_owner is None
-                else f"{benchmark_key} 已存在；请提升版本号，历史版本不会被覆盖。"
+                else f"{benchmark_key} 已存在；请提升版本号。新版本会成为目录中的当前版本，"
+                "旧版本仅供已有实验追溯。"
             ),
         ))
         if digest is not None:

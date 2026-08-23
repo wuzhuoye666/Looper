@@ -1,6 +1,6 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { Boxes, Check, ChevronRight, ClipboardCheck, Server } from 'lucide-react';
-import { FormEvent, useMemo, useState } from 'react';
+import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { BackLink } from '../components/Layout';
 import { ErrorState } from '../components/States';
@@ -33,8 +33,23 @@ export function CreateExperimentPage() {
     () => benchmarks.data?.items || [],
     [benchmarks.data],
   );
-  const selectionReady = (item: typeof benchmarkOptions[number]) => item.selectionReady ?? Boolean(item.scenario || item.category === 'scenario');
-  const selectedBenchmark = benchmarkOptions.find(item => (item.key || item.id) === form.benchmarkKey && selectionReady(item));
+  const selectableBenchmarks = useMemo(
+    () => benchmarkOptions.filter(item => item.selectionReady && item.runnable && item.packageReady),
+    [benchmarkOptions],
+  );
+  useEffect(() => {
+    if (!selectableBenchmarks.length) return;
+    setForm(current => selectableBenchmarks.some(item => (item.key || item.id) === current.benchmarkKey)
+      ? current
+      : {
+          ...current,
+          benchmarkKey: selectableBenchmarks[0].key || selectableBenchmarks[0].id,
+          targetIds: [],
+          targetBindings: {},
+          inputBindings: {},
+        });
+  }, [selectableBenchmarks]);
+  const selectedBenchmark = selectableBenchmarks.find(item => (item.key || item.id) === form.benchmarkKey);
   const requiredCapabilities = new Set(selectedBenchmark?.deploymentRequirements || selectedBenchmark?.tags || []);
   const targetReady = (target: { runnable?: boolean; tags?: string[] }) => target.runnable && [...requiredCapabilities].every(capability => target.tags?.includes(capability));
   const targetState = (target: { runnable?: boolean; tags?: string[] }) => {
@@ -141,15 +156,15 @@ export function CreateExperimentPage() {
         <div className="form-grid form-section-gap">
           <label className="full"><span>Benchmark 场景 *</span>
             <select required value={form.benchmarkKey} onChange={event => setForm(current => ({ ...current, benchmarkKey: event.target.value, targetIds: [], targetBindings: {}, inputBindings: {} }))}>
-              <option value="">选择场景</option>
-              {benchmarkOptions.map(item => <option disabled={!selectionReady(item)} key={item.key || `${item.id}-${item.version}`} value={item.key || item.id}>{item.name}{item.version ? ` · ${item.version}` : ''}{selectionReady(item) ? '' : ' · 缺少选型合同'}</option>)}
+              {!selectableBenchmarks.length && <option value="">暂无可直接测试的 Benchmark</option>}
+              {selectableBenchmarks.map(item => <option key={item.key || `${item.id}-${item.version}`} value={item.key || item.id}>{item.name}{item.version ? ` · ${item.version}` : ''}</option>)}
             </select>
           </label>
           {selectedBenchmark?.scenario && <div className="scenario-facts full">
             <div><span>决策问题</span><strong>{selectedBenchmark.scenario.decision_question}</strong></div>
             <div><span>主指标</span><strong>{selectedBenchmark.primaryMetric}</strong></div>
             <div><span>拓扑</span><strong>{selectedBenchmark.scenario.topology}</strong></div>
-            <div><span>执行状态</span><strong>{selectedBenchmark.runnable ? '可执行' : 'Stage 0 · 仅本地契约'}</strong></div>
+            <div><span>执行状态</span><strong>可自动部署并测试</strong></div>
           </div>}
           <div className="full"><span className="field-label">候选资源 *</span>
             <div className="target-choice-list">

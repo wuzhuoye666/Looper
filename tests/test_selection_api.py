@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from datetime import timedelta
 
 import pytest
 from looper_api.analysis_service import build_analysis_snapshot
-from looper_api.app import _normalize_create_request
+from looper_api.app import _normalize_create_request, list_benchmarks
 from looper_api.models import (
     AttemptRecord,
     BenchmarkRecord,
@@ -21,10 +22,9 @@ from looper_api.scheduler import (
     create_experiment,
     start_experiment,
 )
-from looper_api.serialization import benchmark_view, experiment_view
+from looper_api.serialization import benchmark_view
 from looper_core.canonical import canonical_digest, new_id, utc_now
-from looper_core.contracts import ExperimentMode
-from looper_core.state import AttemptStatus, ExperimentStatus
+from looper_core.state import AttemptStatus
 from sqlalchemy import select
 
 
@@ -75,6 +75,48 @@ def test_benchmark_view_exposes_metric_presentation_without_dropping_metrics(
     assert "primary_outcome" in committed["presentation"]["roles"]
 
 
+def test_catalog_exposes_only_current_version_per_benchmark_id(db_session: object) -> None:
+    session = db_session
+    current = session.scalar(
+        select(BenchmarkRecord).where(BenchmarkRecord.benchmark_id == "looper.sysbench")
+    )
+    assert current is not None
+    old_manifest = deepcopy(current.manifest_json)
+    old_manifest["metadata"]["version"] = "0.9.0"
+    session.add(BenchmarkRecord(
+        key="looper.sysbench@0.9.0",
+        benchmark_id=current.benchmark_id,
+        version="0.9.0",
+        name=current.name,
+        description=current.description,
+        license=current.license,
+        manifest_digest="sha256:" + "0" * 64,
+        manifest_json=old_manifest,
+        manifest_path=current.manifest_path,
+        package_digest=current.package_digest,
+        trusted=current.trusted,
+        installed_at=current.installed_at - timedelta(days=1),
+    ))
+    session.flush()
+
+    catalog = list_benchmarks(session)
+    sysbench = [item for item in catalog["items"] if item["id"] == "looper.sysbench"]
+    assert len(sysbench) == 1
+    assert sysbench[0]["version"] == current.version
+
+    with pytest.raises(SchedulerError, match="has been replaced"):
+        _normalize_create_request(
+            {
+                "mode": "selection",
+                "name": "obsolete Sysbench",
+                "benchmarkId": "looper.sysbench",
+                "benchmarkVersion": "0.9.0",
+                "targetIds": ["local"],
+            },
+            session,
+        )
+
+
 def test_inactive_target_cannot_be_selected_for_a_new_experiment(db_session: object) -> None:
     target = db_session.get(TargetRecord, "local")
     target.lifecycle_status = "archived"
@@ -83,30 +125,21 @@ def test_inactive_target_cannot_be_selected_for_a_new_experiment(db_session: obj
         create_experiment(db_session, create_demo_request("inactive target"))
 
 
-def test_selection_study_can_be_saved_but_stage0_adapter_cannot_start(
+def test_stage0_adapter_cannot_be_selected_for_a_new_study(
     db_session: object,
 ) -> None:
     session = db_session
-    request = _normalize_create_request(
-        {
-            "mode": "selection",
-            "name": "SmallBank SKU pilot",
-            "benchmarkId": "benchbase.smallbank.postgres",
-            "targetIds": ["local"],
-            "config": {"repeats": 5, "seed": 77, "timeout": 86400},
-        },
-        session,
-    )
-    assert request.spec.mode == ExperimentMode.SELECTION
-    assert request.spec.selection is not None
-    assert request.spec.selection.target_bindings[0].target_id == "local"
-    experiment = create_experiment(session, request)
-    view = experiment_view(session, experiment, detail=True)
-    assert experiment.status == ExperimentStatus.DRAFT
-    assert view["config"]["mode"] == "selection"
-    with pytest.raises(SchedulerError, match="stage0-adapter-only"):
-        start_experiment(session, experiment)
-    assert experiment.status == ExperimentStatus.DRAFT
+    with pytest.raises(SchedulerError, match="not directly testable"):
+        _normalize_create_request(
+            {
+                "mode": "selection",
+                "name": "SmallBank SKU pilot",
+                "benchmarkId": "benchbase.smallbank.postgres",
+                "targetIds": ["local"],
+                "config": {"repeats": 5, "seed": 77, "timeout": 86400},
+            },
+            session,
+        )
 
 
 def test_selection_analysis_pairs_time_blocks_by_target_variant(db_session: object) -> None:

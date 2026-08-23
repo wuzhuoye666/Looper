@@ -3,8 +3,8 @@ kind: Benchmark
 metadata:
   id: looper.sysbench
   name: Sysbench
-  version: 1.0.0
-  description: "Sysbench 1.0 通用系统性能套件：CPU 素数、内存带宽、线程调度与互斥锁竞争。由套件自带 producer 调用本地 sysbench 二进制，normalizer 将原生文本报告转换为标准观测。"
+  version: 1.0.1
+  description: "Sysbench 1.0 通用系统性能套件：选择目标机器后由 Looper 自动下发 Adapter、安装或复用 sysbench，再运行 CPU、内存、线程调度与互斥锁测试。"
   license: GPL-2.0
   source:
     url: https://github.com/akopytov/sysbench
@@ -12,7 +12,7 @@ metadata:
     digest: null
 spec:
   trust: trusted
-  capabilities: [python, local-process, sysbench]
+  capabilities: [python, local-process, linux, sysbench]
   parameters:
     threads:
       type: integer
@@ -122,8 +122,12 @@ spec:
         count: {minimum: 1, default: 1, maximum: 1}
         includedInScore: true
         requirements:
-          capabilities: [python, local-process, sysbench]
+          osFamilies: [linux]
+          capabilities: [python, local-process, linux]
           cpu: {minimumLogicalCpus: 1}
+          software:
+            - name: sysbench
+              versionConstraint: ">=1.0,<1.1"
         placement:
           sameZone: true
           dedicated: true
@@ -139,7 +143,19 @@ spec:
   runtime:
     type: local-process
     workingDirectory: .
+    dependencyLockDigest: "sha256:24312a4f48a6635524f17b4ab84dc2869b014c1885e3aa2fb1c2c28150881064"
+    provisioning:
+      mode: managed
+      hostCapabilities: [python, local-process, linux]
+      provides: [sysbench]
+      cacheKey: "sha256:24312a4f48a6635524f17b4ab84dc2869b014c1885e3aa2fb1c2c28150881064"
+      requiresNetwork: true
+      privilege: sudo
     commands:
+      prepare:
+        argv: ["{python}", "{benchmarkRoot}/prepare.py", "--cache", "{cache}"]
+        timeoutSeconds: 900
+        allowedExitCodes: [0]
       run:
         argv: ["{python}", "{benchmarkRoot}/producer.py", "--envelope", "{envelope}", "--output", "{output}"]
         timeoutSeconds: 360
