@@ -3,7 +3,7 @@ import type {
   CloudOrderEvent, CloudOrderEvidence, CloudProviderId, CloudProviderInfo, CloudPurchaseReadiness, CloudPurchaseSpec,
   CloudKeyPair, CloudQuote, CloudReconciliationContext, CloudRegion, CloudSecurityGroup, CloudSubnet, CloudVpc, CloudZone,
   DashboardData, Experiment, GlobalSearchResult, ListResponse, PostOptimizationStatus, SelectionAdvisorRequest,
-  SelectionAdvisorResponse, Target, VariabilityData,
+  SelectionAdvisorResponse, SourceDiscovery, SourceDiscoveryReadiness, Target, VariabilityData,
 } from './types';
 
 export const API_BASE = (import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000/api/v1').replace(/\/$/, '');
@@ -72,6 +72,12 @@ function query(values: Record<string, string | number | undefined>) {
 }
 
 export const api = {
+  sourceDiscoveryReadiness: () => request<SourceDiscoveryReadiness>('/source-discoveries/readiness'),
+  sourceDiscoveries: async () => list(await request<SourceDiscovery[] | ListResponse<SourceDiscovery>>('/source-discoveries')),
+  discoverSource: (archive: File) => {
+    const body = new FormData(); body.append('archive', archive);
+    return request<SourceDiscovery>('/source-discoveries', { method: 'POST', body });
+  },
   dashboard: () => request<DashboardData>('/dashboard'),
   experiments: async (query = '') => list(await request<Experiment[] | ListResponse<Experiment> | { data?: Experiment[] }>(`/experiments${query}`)),
   experiment: (id: string) => request<Experiment>(`/experiments/${encodeURIComponent(id)}`),

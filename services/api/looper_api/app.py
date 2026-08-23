@@ -112,6 +112,7 @@ from looper_api.models import (
     BenchmarkRegistrationRecord,
     EventRecord,
     ExperimentRecord,
+    SourceDiscoveryRecord,
     TargetRecord,
 )
 from looper_api.post_optimization import post_optimization_view, start_post_optimization
@@ -139,6 +140,12 @@ from looper_api.serialization import (
     dashboard_view,
     experiment_view,
     target_view,
+)
+from looper_api.source_discovery import (
+    SourceDiscoveryError,
+    create_discovery,
+    discovery_view,
+    list_discoveries,
 )
 from looper_api.variability_service import build_variability_report
 from looper_api.worker_protocol import (
@@ -228,9 +235,7 @@ async def _remote_worker_recovery() -> None:
     while pending:
         for target_id in sorted(pending):
             try:
-                recovered = await asyncio.to_thread(
-                    recover_remembered_target, target_id, settings
-                )
+                recovered = await asyncio.to_thread(recover_remembered_target, target_id, settings)
             except Exception:
                 logger.exception("Remote Worker recovery failed for %s", target_id)
                 continue
@@ -302,6 +307,7 @@ async def origin_guard(request: Request, call_next: Any) -> Any:
 @app.exception_handler(CloudWorkflowError)
 @app.exception_handler(RegistrationError)
 @app.exception_handler(ExternalTargetError)
+@app.exception_handler(SourceDiscoveryError)
 async def domain_error(_request: Request, error: Exception) -> JSONResponse:
     status_code = getattr(error, "status_code", 409)
     code = getattr(error, "code", error.__class__.__name__)
@@ -344,9 +350,7 @@ def download_benchmark_configure_skill() -> StreamingResponse:
 
 
 def build_benchmark_configure_skill_archive() -> bytes:
-    skill_root = files("looper_api").joinpath(
-        "assets", "skills", "looper-benchmark-configure"
-    )
+    skill_root = files("looper_api").joinpath("assets", "skills", "looper-benchmark-configure")
     members = ("SKILL.md", "agents/openai.yaml")
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
@@ -417,6 +421,89 @@ def operator_session(
     app_settings: SettingsDependency,
 ) -> dict[str, bool]:
     return operator_session_status(credentials, app_settings)
+
+
+@app.get("/api/v1/source-discoveries/readiness")
+def source_discovery_readiness(app_settings: SettingsDependency) -> dict[str, Any]:
+    configured = bool(app_settings.deepseek_api_key.strip())
+    return {
+        "configured": configured,
+        "provider": "deepseek",
+        "model": app_settings.deepseek_model,
+        "baseUrl": str(app_settings.deepseek_base_url).rstrip("/"),
+        "maxArchiveBytes": app_settings.source_discovery_max_archive_bytes,
+        "acceptedMediaTypes": ["application/zip"],
+        "requiredEnvironment": [] if configured else ["LOOPER_DEEPSEEK_API_KEY"],
+        "dataDisclosure": (
+            "Readable, non-sensitive source snippets selected by the harness are sent "
+            "to the configured DeepSeek endpoint."
+        ),
+    }
+
+
+@app.get("/api/v1/source-discoveries")
+def source_discovery_history(
+    session: SessionDependency,
+    _operator: OperatorDependency,
+    limit: int = Query(default=30, ge=1, le=100),
+) -> dict[str, Any]:
+    items = [discovery_view(record) for record in list_discoveries(session, limit)]
+    return {"items": items, "total": len(items)}
+
+
+@app.get("/api/v1/source-discoveries/{discovery_id}")
+def source_discovery_detail(
+    discovery_id: str,
+    session: SessionDependency,
+    _operator: OperatorDependency,
+) -> dict[str, Any]:
+    record = session.get(SourceDiscoveryRecord, discovery_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="source discovery not found")
+    return discovery_view(record)
+
+
+@app.post("/api/v1/source-discoveries", status_code=201)
+async def discover_source_interfaces(
+    session: SessionDependency,
+    app_settings: SettingsDependency,
+    _operator: OperatorDependency,
+    archive: UploadFile = File(...),
+) -> dict[str, Any]:
+    content_type = (archive.content_type or "").casefold()
+    if not archive.filename or not archive.filename.casefold().endswith(".zip"):
+        raise SourceDiscoveryError(
+            "source archive filename must end with .zip", code="invalid_archive_type"
+        )
+    if content_type and content_type not in {
+        "application/zip",
+        "application/x-zip-compressed",
+        "application/octet-stream",
+    }:
+        raise SourceDiscoveryError(
+            "only ZIP source archives are accepted", code="invalid_archive_type"
+        )
+    payload = await archive.read(app_settings.source_discovery_max_archive_bytes + 1)
+    record = await create_discovery(session, archive.filename, payload, app_settings)
+    return discovery_view(record)
+
+
+@app.get("/api/v1/source-discoveries/{discovery_id}/contract")
+def export_source_discovery_contract(
+    discovery_id: str,
+    session: SessionDependency,
+    _operator: OperatorDependency,
+) -> JSONResponse:
+    record = session.get(SourceDiscoveryRecord, discovery_id)
+    if record is None or record.contract_json is None:
+        raise HTTPException(status_code=404, detail="completed interface contract not found")
+    return JSONResponse(
+        content=record.contract_json,
+        media_type="application/json",
+        headers={
+            "Content-Disposition": f'attachment; filename="{discovery_id}.interface-contract.json"'
+        },
+    )
 
 
 @app.get("/api/v1/cloud/auth/status")
@@ -1124,9 +1211,7 @@ def get_analysis(experiment_id: str, session: SessionDependency) -> dict[str, An
 
 
 @app.get("/api/v1/experiments/{experiment_id}/post-optimization")
-def get_post_optimization(
-    experiment_id: str, session: SessionDependency
-) -> dict[str, Any]:
+def get_post_optimization(experiment_id: str, session: SessionDependency) -> dict[str, Any]:
     experiment = session.get(ExperimentRecord, experiment_id)
     if experiment is None:
         raise HTTPException(status_code=404, detail="experiment not found")
@@ -1134,9 +1219,7 @@ def get_post_optimization(
 
 
 @app.post("/api/v1/experiments/{experiment_id}/post-optimization", status_code=201)
-def create_post_optimization(
-    experiment_id: str, session: SessionDependency
-) -> dict[str, Any]:
+def create_post_optimization(experiment_id: str, session: SessionDependency) -> dict[str, Any]:
     experiment = session.get(ExperimentRecord, experiment_id)
     if experiment is None:
         raise HTTPException(status_code=404, detail="experiment not found")

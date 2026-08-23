@@ -1,4 +1,4 @@
-import { Activity, Boxes, ChevronLeft, ClipboardList, Cloud, Gauge, GitCompareArrows, Menu, Plus, Server } from 'lucide-react';
+import { Activity, Boxes, Braces, ChevronLeft, ClipboardList, Cloud, Gauge, GitCompareArrows, Menu, Plus, Server } from 'lucide-react';
 import { useLayoutEffect, useState } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import { GlobalSearchBox } from './GlobalSearchBox';
@@ -9,6 +9,7 @@ const nav = [
   { to: '/experiments', label: '选型研究', icon: GitCompareArrows },
   { to: '/benchmarks', label: '场景目录', icon: Boxes },
   { to: '/targets', label: '候选资源', icon: Server },
+  { to: '/interfaces', label: '动态接口发现', icon: Braces },
   { to: '/cloud/market', label: '云资源市场', icon: Cloud },
   { to: '/cloud/orders', label: '云订单', icon: ClipboardList },
 ];
