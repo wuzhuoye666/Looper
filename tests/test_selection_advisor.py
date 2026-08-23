@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+
 import pytest
-from looper_api.cloud_contracts import InstanceTypeInfo, ProviderId
+from looper_api.app import cloud_selection_advisor
+from looper_api.cloud_contracts import CatalogResponse, InstanceTypeInfo, ProviderId
 from looper_api.selection_advisor import SelectionAdvisorRequest, advise_instance_types
 from pydantic import ValidationError
 
@@ -18,9 +21,11 @@ def instance(
     local_storage: int = 0,
     bandwidth: float = 10,
     pps: int = 1_000_000,
+    provider: ProviderId = ProviderId.ALIBABA,
+    attributes: dict[str, object] | None = None,
 ) -> InstanceTypeInfo:
     return InstanceTypeInfo(
-        provider=ProviderId.ALIBABA,
+        provider=provider,
         region="cn-test",
         id=instance_id,
         family=family,
@@ -35,6 +40,7 @@ def instance(
         networkPpsRx=pps,
         networkPpsTx=pps,
         zones=["cn-test-a"],
+        attributes=attributes or {},
     )
 
 
@@ -171,3 +177,127 @@ def test_zero_result_reports_the_most_restrictive_stage_without_relaxing() -> No
 def test_exact_sizing_requires_both_cpu_and_memory() -> None:
     with pytest.raises(ValidationError, match="exact sizing requires"):
         request(sizingMode="exact", exactCpu=8)
+
+
+def test_tencent_scenario_ranking_uses_cvm_families_without_excluding() -> None:
+    items = [
+        instance("M8.LARGE32", "M8", provider=ProviderId.TENCENT),
+        instance("S8.LARGE32", "S8", provider=ProviderId.TENCENT),
+        instance("C7.LARGE32", "C7", provider=ProviderId.TENCENT),
+    ]
+
+    result = advise(
+        request(provider="tencent", primaryScenario="database", codeAvailability="available"),
+        items,
+    )
+
+    assert result.provider == ProviderId.TENCENT
+    assert result.total == 3
+    assert [item.id for item in result.items] == ["M8.LARGE32", "S8.LARGE32", "C7.LARGE32"]
+
+
+def test_tencent_region_aggregation_requires_one_zone_to_satisfy_all_constraints() -> None:
+    split_capabilities = [
+        {
+            "zone": "ap-test-1",
+            "available": True,
+            "gpu": 1,
+            "networkBandwidthGbps": 20,
+            "networkPps": 2_000_000,
+        },
+        {
+            "zone": "ap-test-2",
+            "available": True,
+            "gpu": 0,
+            "localStorageCategory": "LOCAL_SSD",
+            "localStorageCapacityGib": 1000,
+            "networkBandwidthGbps": 20,
+            "networkPps": 2_000_000,
+        },
+    ]
+    matching_capabilities = [
+        {
+            "zone": "ap-test-3",
+            "available": True,
+            "gpu": 1,
+            "localStorageCategory": "LOCAL_SSD",
+            "localStorageCapacityGib": 1000,
+            "networkBandwidthGbps": 20,
+            "networkPps": 2_000_000,
+        }
+    ]
+    items = [
+        instance(
+            "GN7.SPLIT",
+            "GN7",
+            provider=ProviderId.TENCENT,
+            gpu=1,
+            local_storage=1,
+            bandwidth=20,
+            pps=2_000_000,
+            attributes={"zoneCapabilities": split_capabilities},
+        ),
+        instance(
+            "GN7.MATCH",
+            "GN7",
+            provider=ProviderId.TENCENT,
+            gpu=1,
+            local_storage=1,
+            bandwidth=20,
+            pps=2_000_000,
+            attributes={"zoneCapabilities": matching_capabilities},
+        ),
+    ]
+
+    result = advise(
+        request(
+            provider="tencent",
+            zone=None,
+            primaryScenario="ai",
+            minimumGpuCount=1,
+            localStorage="required",
+            minimumNetworkBandwidthGbps=10,
+            minimumNetworkPps=1_000_000,
+        ),
+        items,
+    )
+
+    assert [item.id for item in result.items] == ["GN7.MATCH"]
+    assert "当前匹配：ap-test-3" in result.items[0].warnings[0]
+    assert {stage.code: stage.removed for stage in result.exclusion_stages}["local-storage"] == 1
+
+
+def test_selection_advisor_route_uses_requested_provider(monkeypatch, db_session) -> None:
+    requested: list[ProviderId] = []
+    now = datetime.now(UTC)
+
+    def catalog_search_stub(
+        _session: object,
+        _settings: object,
+        _registry: object,
+        provider: ProviderId,
+        _resource_type: str,
+        _filters: object,
+    ) -> CatalogResponse:
+        requested.append(provider)
+        item = instance("S8.LARGE32", "S8", provider=ProviderId.TENCENT)
+        return CatalogResponse(
+            provider=provider,
+            resourceType="instance-type",
+            items=[item.model_dump(mode="json", by_alias=True)],
+            total=1,
+            source="live",
+            fetchedAt=now,
+            expiresAt=now + timedelta(minutes=5),
+        )
+
+    monkeypatch.setattr("looper_api.app.catalog_search", catalog_search_stub)
+    response = cloud_selection_advisor(
+        request(provider="tencent", codeAvailability="available"),
+        db_session,
+        object(),
+        object(),
+    )
+
+    assert requested == [ProviderId.TENCENT]
+    assert response["provider"] == "tencent"

@@ -464,7 +464,7 @@ def cloud_selection_advisor(
         session,
         app_settings,
         registry,
-        ProviderId.ALIBABA,
+        ProviderId(request.provider),
         "instance-type",
         CatalogFilters(region=request.region, zone=request.zone, limit=500),
     )

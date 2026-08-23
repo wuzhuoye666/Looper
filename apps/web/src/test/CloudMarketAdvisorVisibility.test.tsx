@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { App } from '../App';
@@ -57,13 +57,28 @@ describe('阿里云选型助手入口', () => {
     vi.unstubAllGlobals();
   });
 
-  it('未配置阿里云凭据时仍展示需求问卷', async () => {
+  it('未配置阿里云凭据时按需打开问卷并阻止候选请求', async () => {
     renderMarket();
     fireEvent.click(await screen.findByRole('button', { name: /阿里云 ECS.*等待凭证/ }));
 
-    const advisor = await screen.findByRole('region', { name: '阿里云 ECS 选型助手' });
+    expect(screen.queryByRole('region', { name: '阿里云 ECS 选型助手' })).not.toBeInTheDocument();
+    const openButton = screen.getByRole('button', { name: '打开选型助手' });
+    expect(openButton).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.click(openButton);
+
+    const advisor = screen.getByRole('region', { name: '阿里云 ECS 选型助手' });
     expect(within(advisor).getByRole('heading', { name: '选型助手' })).toBeInTheDocument();
     expect(within(advisor).getByRole('heading', { name: '主要使用场景是什么？' })).toBeInTheDocument();
+    expect(within(advisor).getByRole('status')).toHaveTextContent('连接凭证后才能读取地域并生成候选');
     expect(screen.getByText('阿里云 ECS 尚未连接')).toBeInTheDocument();
+    expect(vi.mocked(fetch).mock.calls.some(([request]) => String(request).includes('/cloud/selection-advisor/search'))).toBe(false);
+
+    fireEvent.click(screen.getByRole('button', { name: '返回手动选型' }));
+    expect(screen.queryByRole('region', { name: '阿里云 ECS 选型助手' })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '打开选型助手' }));
+    fireEvent.click(screen.getByRole('button', { name: /腾讯云 CVM.*等待凭证/ }));
+    await waitFor(() => expect(screen.queryByRole('region', { name: '腾讯云 CVM 选型助手' })).not.toBeInTheDocument());
+    expect(screen.getByRole('button', { name: '打开选型助手' })).toHaveAttribute('aria-expanded', 'false');
   });
 });

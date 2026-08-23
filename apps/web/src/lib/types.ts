@@ -171,7 +171,7 @@ export interface CloudInstanceType {
 export type SelectionScenario = 'web-api' | 'microservices-rpc' | 'database' | 'cache' | 'search-logs' |
   'big-data-messaging' | 'game' | 'video' | 'ai' | 'development-test' | 'other';
 export interface SelectionAdvisorRequest {
-  provider: 'alibaba'; region: string; zone?: string; primaryScenario: SelectionScenario;
+  provider: 'alibaba' | 'tencent'; region: string; zone?: string; primaryScenario: SelectionScenario;
   coLocatedComponents: SelectionScenario[]; sizingMode: 'exact' | 'unknown'; exactCpu?: number;
   exactMemoryGib?: number; workloadScale?: string; minimumGpuCount: number;
   localStorage: 'required' | 'not-required' | 'unknown'; minimumNetworkBandwidthGbps?: number;
@@ -185,7 +185,7 @@ export interface AdvisedCloudInstanceType extends CloudInstanceType {
   matchTier: 'preferred' | 'suitable' | 'other'; reasons: string[]; warnings: string[];
 }
 export interface SelectionAdvisorResponse {
-  provider: 'alibaba'; region: string; zone?: string; items: AdvisedCloudInstanceType[]; total: number;
+  provider: 'alibaba' | 'tencent'; region: string; zone?: string; items: AdvisedCloudInstanceType[]; total: number;
   offset: number; limit: number; nextOffset?: number; exclusionStages: SelectionExclusionStage[];
   mostRestrictiveStage?: SelectionExclusionStage; source: 'live' | 'cache' | 'stale-cache';
   fetchedAt: string; expiresAt: string; stale: boolean; warning?: string;

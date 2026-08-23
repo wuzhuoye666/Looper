@@ -73,6 +73,72 @@ def _tag_map(tags: Any) -> dict[str, str]:
     }
 
 
+def _number(value: Any) -> float | None:
+    try:
+        return float(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _tencent_architecture(instance_type: str, cpu_type: Any) -> str:
+    family = instance_type.split(".", 1)[0].upper()
+    normalized_cpu = str(cpu_type or "").casefold().replace("-", "")
+    if family.startswith("SR") or "arm" in normalized_cpu:
+        return "ARM"
+    return "X86"
+
+
+def _local_disk_details(item: Any) -> tuple[str | None, float | None, list[dict[str, Any]]]:
+    details: list[dict[str, Any]] = []
+    for disk in list(attr(item, "LocalDiskTypeList", default=[]) or []):
+        disk_type = str(attr(disk, "Type", default="") or "")
+        minimum = _number(attr(disk, "MinSize"))
+        maximum = _number(attr(disk, "MaxSize"))
+        details.append(
+            {
+                "type": disk_type,
+                "minSizeGib": minimum,
+                "maxSizeGib": maximum,
+                "required": str(attr(disk, "Required", default="") or "").upper()
+                == "REQUIRED",
+            }
+        )
+    categories = sorted({str(detail["type"]) for detail in details if detail["type"]})
+    capacities = [float(detail["maxSizeGib"]) for detail in details if detail["maxSizeGib"]]
+    return ", ".join(categories) or None, max(capacities, default=None), details
+
+
+def _quota_capability(item: Any) -> dict[str, Any]:
+    status = str(attr(item, "Status", default="") or "").upper()
+    disk_category, disk_capacity, disk_details = _local_disk_details(item)
+    gpu_count = _number(attr(item, "GpuCount"))
+    if gpu_count is None:
+        gpu_count = _number(attr(item, "Gpu")) or 0
+    return {
+        "zone": str(attr(item, "Zone", default="") or ""),
+        "status": status or None,
+        "available": True if status == "SELL" else False if status == "SOLD_OUT" else None,
+        "statusCategory": attr(item, "StatusCategory"),
+        "soldOutReason": attr(item, "SoldOutReason"),
+        "gpu": gpu_count,
+        "networkBandwidthGbps": _number(attr(item, "InstanceBandwidth")),
+        "networkPps": (
+            (_number(attr(item, "InstancePps")) or 0) * 10_000
+            if attr(item, "InstancePps") is not None
+            else None
+        ),
+        "localStorageCategory": disk_category,
+        "localStorageCapacityGib": disk_capacity,
+        "localStorageCount": int(attr(item, "StorageBlockAmount", default=0) or 0),
+        "localDiskTypes": disk_details,
+    }
+
+
+def _maximum(capabilities: list[dict[str, Any]], key: str) -> float | None:
+    values = [float(value) for item in capabilities if (value := item.get(key)) is not None]
+    return max(values, default=None)
+
+
 class TencentCvmProvider(CloudProvider):
     id = ProviderId.TENCENT
     display_name = "腾讯云 CVM"
@@ -382,23 +448,82 @@ class TencentCvmProvider(CloudProvider):
             raise CloudProviderError("region is required", code="invalid_request")
         from tencentcloud.cvm.v20170312 import models
 
-        request = models.DescribeInstanceTypeConfigsRequest()
-        response = self._call("DescribeInstanceTypeConfigs", filters.region, request)
-        items = []
-        for item in list(response.InstanceTypeConfigSet or []):
-            zone = attr(item, "Zone")
+        provider_filters = [
+            {"Name": "instance-charge-type", "Values": ["POSTPAID_BY_HOUR"]}
+        ]
+        if filters.zone:
+            provider_filters.append({"Name": "zone", "Values": [filters.zone]})
+        request = models.DescribeZoneInstanceConfigInfosRequest()
+        request.from_json_string(canonical_json({"Filters": provider_filters}))
+        response = self._call("DescribeZoneInstanceConfigInfos", filters.region, request)
+        rows = list(attr(response, "InstanceTypeQuotaSet", default=[]) or [])
+
+        grouped: dict[str, list[Any]] = {}
+        for item in rows:
+            instance_type = str(attr(item, "InstanceType", default="") or "")
+            if instance_type:
+                grouped.setdefault(instance_type, []).append(item)
+
+        items: list[InstanceTypeInfo] = []
+        for instance_type, quota_items in grouped.items():
+            representative = quota_items[0]
+            capabilities = [_quota_capability(item) for item in quota_items]
+            available_capabilities = [
+                capability for capability in capabilities if capability["available"] is True
+            ]
+            metric_capabilities = available_capabilities or capabilities
+            statuses = {capability["available"] for capability in capabilities}
+            available = True if True in statuses else False if statuses == {False} else None
+            gpu = _maximum(metric_capabilities, "gpu") or 0
+            bandwidth = _maximum(metric_capabilities, "networkBandwidthGbps")
+            pps = _maximum(metric_capabilities, "networkPps")
+            disk_categories = sorted(
+                {
+                    str(capability["localStorageCategory"])
+                    for capability in metric_capabilities
+                    if capability.get("localStorageCategory")
+                }
+            )
+            gpu_model = attr(representative, "GpuType", "GPUType", "GpuModel")
             items.append(
                 InstanceTypeInfo(
                     provider=self.id,
                     region=filters.region,
-                    id=str(item.InstanceType),
-                    family=attr(item, "InstanceFamily"),
-                    cpu=int(item.CPU),
-                    memoryGib=float(item.Memory),
-                    gpu=int(attr(item, "GPU", default=0) or 0),
-                    zones=[str(zone)] if zone else [],
-                    available=None,
-                    attributes={"fpga": int(attr(item, "FPGA", default=0) or 0)},
+                    id=instance_type,
+                    family=attr(representative, "InstanceFamily"),
+                    cpu=int(attr(representative, "Cpu", "CPU", default=0) or 0),
+                    memoryGib=float(attr(representative, "Memory", default=0) or 0),
+                    gpu=gpu,
+                    gpuModel=str(gpu_model) if gpu_model else None,
+                    architecture=_tencent_architecture(
+                        instance_type, attr(representative, "CpuType", "CPUType")
+                    ),
+                    networkBandwidthRxGbps=bandwidth,
+                    networkBandwidthTxGbps=bandwidth,
+                    networkPpsRx=int(pps) if pps is not None else None,
+                    networkPpsTx=int(pps) if pps is not None else None,
+                    localStorageCapacityGib=_maximum(
+                        metric_capabilities, "localStorageCapacityGib"
+                    ),
+                    localStorageCount=(
+                        int(_maximum(metric_capabilities, "localStorageCount") or 0) or None
+                    ),
+                    localStorageCategory=", ".join(disk_categories) or None,
+                    zones=sorted(
+                        {
+                            str(capability["zone"])
+                            for capability in capabilities
+                            if capability.get("zone")
+                        }
+                    ),
+                    available=available,
+                    attributes={
+                        "typeName": attr(representative, "TypeName"),
+                        "cpuType": attr(representative, "CpuType", "CPUType"),
+                        "fpga": int(attr(representative, "Fpga", "FPGA", default=0) or 0),
+                        "gpuCores": _number(attr(representative, "Gpu", "GPU")) or 0,
+                        "zoneCapabilities": capabilities,
+                    },
                 )
             )
         return filter_instance_types(items, filters)
