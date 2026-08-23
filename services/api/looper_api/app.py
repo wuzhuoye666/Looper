@@ -771,7 +771,7 @@ def list_targets(
     include_inactive: bool = Query(default=True),
 ) -> dict[str, Any]:
     expire_stale_workers(session, app_settings)
-    statement = select(TargetRecord).where(TargetRecord.provider != "local")
+    statement = select(TargetRecord)
     if not include_inactive:
         statement = statement.where(TargetRecord.lifecycle_status == "active")
     records = list(session.scalars(statement.order_by(TargetRecord.name)))
