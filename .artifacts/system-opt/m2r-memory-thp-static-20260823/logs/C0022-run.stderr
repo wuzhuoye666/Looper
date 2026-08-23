@@ -1,0 +1,50 @@
+╭───────────────────── Traceback (most recent call last) ──────────────────────╮
+│ /opt/looper-system-opt-4298aa0/services/api/looper_api/cli.py:871 in         │
+│ run_linux_system_optimization                                                │
+│                                                                              │
+│    868 │   │   │   domains,                                                  │
+│    869 │   │   │   backend,                                                  │
+│    870 │   │   │   state_evidence_digest=state_evidence.digest,              │
+│ ❱  871 │   │   ).run(                                                        │
+│    872 │   │   │   baseline_parameters=baseline,                             │
+│    873 │   │   │   measure=measure,                                          │
+│    874 │   │   │   fencing_token=lease.fencing_token,                        │
+│                                                                              │
+│ /opt/looper-system-opt-4298aa0/packages/core/looper_core/system_opt/tuning.p │
+│ y:237 in run                                                                 │
+│                                                                              │
+│   234 │   │   selected_parameters: Mapping[str, Any] | None = None,          │
+│   235 │   ) -> OptimizationRun:                                              │
+│   236 │   │   started = time.monotonic()                                     │
+│ ❱ 237 │   │   baseline = measure(self.policy.statistics.baseline_repeats)    │
+│   238 │   │   current_baseline = baseline                                    │
+│   239 │   │   baseline_history = [baseline]                                  │
+│   240 │   │   priorities: list[DiagnosticPriority] = []                      │
+│                                                                              │
+│ /opt/looper-system-opt-4298aa0/packages/core/looper_core/system_opt/pressure │
+│ /__init__.py:817 in __call__                                                 │
+│                                                                              │
+│   814 │   │   │   │   or f"pressure cleanup {cleanup.id}                     │
+│       {cleanup_result.status.value}"                                         │
+│   815 │   │   │   )                                                          │
+│   816 │   │   if error is not None:                                          │
+│ ❱ 817 │   │   │   raise error                                                │
+│   818 │   │   if batch is None:                                              │
+│   819 │   │   │   raise RuntimeError("pressure protocol produced no          │
+│       measurement batch")                                                    │
+│   820 │   │   if (                                                           │
+│                                                                              │
+│ /opt/looper-system-opt-4298aa0/packages/core/looper_core/system_opt/pressure │
+│ /__init__.py:786 in __call__                                                 │
+│                                                                              │
+│   783 │   │   │   │   │   )                                                  │
+│   784 │   │   │   │   )                                                      │
+│   785 │   │   │   │   if result.status != OperationStatus.SUCCEEDED:         │
+│ ❱ 786 │   │   │   │   │   raise RuntimeError(                                │
+│   787 │   │   │   │   │   │   result.stderr or f"pressure phase {phase.id}   │
+│       {result.status.value}"                                                 │
+│   788 │   │   │   │   │   )                                                  │
+│   789 │   │   │   │   if phase.kind == PressurePhaseKind.MEASURE:            │
+╰──────────────────────────────────────────────────────────────────────────────╯
+RuntimeError: exclusive pressure window is busy: ['python']
+

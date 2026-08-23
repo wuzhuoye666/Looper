@@ -1,0 +1,9 @@
+{
+ "ts": "2026-08-23T14:00:05.556473+00:00",
+ "host": "8.138.5.244",
+ "cmd": "ls -a /opt/looper-system-opt-78f2f4f/ | head -8; find /opt -maxdepth 2 -name 'pyvenv.cfg' 2>/dev/null; pip3 show typer 2>&1 | head -3; python3 -c 'import typer' 2>&1 | tail -1; ls /opt/looper-system-opt-m2-working 2>/dev/null | head -6",
+ "exit_code": 0,
+ "stdout_sha256": "a07a4c7a156b36eb9136d690b73fc8b278a857d4c7879c59560e78d98e40caf6",
+ "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+ "stdout_bytes": 182
+}

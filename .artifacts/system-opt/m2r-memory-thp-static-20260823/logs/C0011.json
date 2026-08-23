@@ -1,0 +1,9 @@
+{
+ "ts": "2026-08-23T14:02:51.568697+00:00",
+ "host": "8.138.5.244",
+ "cmd": "sysbench --version 2>&1 | head -1; ls /opt/looper-system-opt-53faa7b/.venv/bin/python 2>&1; grep -n 'wall_time_seconds\\|max_candidates\\|no_improvement_limit\\|target_improvement' examples/system-optimizer/aliyun-ecs-memory-thp-policy.yaml 2>/dev/null; grep -c '' /opt/looper-system-opt-4298aa0/examples/system-optimizer/aliyun-ecs-memory-thp-policy.yaml",
+ "exit_code": 0,
+ "stdout_sha256": "850fba7bb47eda529aa4d5a0e8d381ee24e597eb5be6796cd1c2a8ebb769f980",
+ "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+ "stdout_bytes": 67
+}

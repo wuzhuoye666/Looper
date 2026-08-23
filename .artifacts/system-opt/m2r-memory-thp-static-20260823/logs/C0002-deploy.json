@@ -1,0 +1,7 @@
+{
+ "ts": "2026-08-23T13:58:53.184521+00:00",
+ "host": "8.138.5.244",
+ "cmd": "sha256sum /opt/looper-system-opt-4298aa0.tar.gz; mkdir -p /opt/looper-system-opt-4298aa0 && tar -xzf /opt/looper-system-opt-4298aa0.tar.gz -C /opt/looper-system-opt-4298aa0 && ls /opt/looper-system-opt-4298aa0",
+ "uploaded_bytes": 339830,
+ "stdout_sha256": "959be686105f5bedaae1cbe0ba440282baa41a1acc747062f4a4fd876277db91"
+}

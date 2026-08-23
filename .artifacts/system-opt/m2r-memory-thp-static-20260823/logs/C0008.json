@@ -1,0 +1,9 @@
+{
+ "ts": "2026-08-23T14:00:46.234283+00:00",
+ "host": "8.138.5.244",
+ "cmd": "/root/.looper-worker/venv/bin/pip list 2>/dev/null | head -20; cat /root/.looper-worker/venv/pyvenv.cfg",
+ "exit_code": 0,
+ "stdout_sha256": "b1fcd0c2a9fef78e78da70afe97aaf5b1a906afc5db0f87e1c861856c88a47af",
+ "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+ "stdout_bytes": 826
+}

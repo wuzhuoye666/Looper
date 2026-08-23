@@ -1,0 +1,9 @@
+{
+ "ts": "2026-08-23T14:04:49.805617+00:00",
+ "host": "8.138.5.244",
+ "cmd": "cd /opt/looper-system-opt-4298aa0 && PYTHONPATH=packages/core:services/api /root/.looper-worker/venv/bin/python -m looper_api.cli system-opt derive-pressure-gate --measurement-batch .artifacts/system-opt/m2r-memory-thp-static-20260823/calibration-batch.json --metric-id memory.bandwidth-mib-per-second --confidence-level 0.95 --bootstrap-resamples 2000 --random-seed 20260823 --target-scope 'Alibaba ECS iZ7xvcxcry1ejfjcd1d7igZ, Linux 6.8.0-137-generic, fixed memory protocol, rerun on 4298aa0' --portability 'Target-local initial gate; recalibrate on Tencent Cloud CVM and after any protocol or environment identity change.' --output .artifacts/system-opt/m2r-memory-thp-static-20260823/stability-gate.json",
+ "exit_code": 0,
+ "stdout_sha256": "194beac8825a2f7120a6faab46f66a5dec0bd1aa937eeb7de34f488fdf8ba948",
+ "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+ "stdout_bytes": 314
+}

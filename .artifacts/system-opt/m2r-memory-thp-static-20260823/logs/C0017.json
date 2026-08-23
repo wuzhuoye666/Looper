@@ -1,0 +1,9 @@
+{
+ "ts": "2026-08-23T14:08:46.080794+00:00",
+ "host": "8.138.5.244",
+ "cmd": "ls /opt/looper-system-opt-4298aa0/.artifacts/system-opt/m2r-memory-thp-static-20260823/ | head -20; echo ---interference---; cat /opt/looper-system-opt-4298aa0/.artifacts/system-opt/m2r-memory-thp-static-20260823/interference-*.json 2>/dev/null | head -12; echo ---当前top---; ps aux --sort=-%cpu | head -6",
+ "exit_code": 0,
+ "stdout_sha256": "bd0d2975d54d77890935a3dc6594804d4ab080cf7f5ef2fccdcb500ea69ef412",
+ "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+ "stdout_bytes": 1891
+}

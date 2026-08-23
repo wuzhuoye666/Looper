@@ -1,0 +1,3 @@
+133433 bash -c pgrep -af 'python.*benchmark-packages' | head -3; echo RC=$?; uptime | tail -1
+RC=0
+ 22:21:11 up 1 day,  1:16,  5 users,  load average: 0.00, 0.10, 0.25

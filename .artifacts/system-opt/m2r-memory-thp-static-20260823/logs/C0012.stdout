@@ -1,0 +1,16 @@
+{
+  "protocol_id": "memory-sysbench-write-calibration-20260823",
+  "protocol_digest": "sha256:bdacf0baafbb42d53a1333d8bec0269b7fa3be17693afe30583a79c84abea451",
+  "component": "memory",
+  "stability": {
+    "metric_id": "memory.bandwidth-mib-per-second",
+    "statistic": "cv",
+    "formula_id": "F-PROJECT-PRESSURE-CV/v1alpha1",
+    "sample_count": 7,
+    "value": 0.027051757336186377,
+    "enforcement": "report-only",
+    "acceptance_limit": null,
+    "accepted": null
+  },
+  "output": "/opt/looper-system-opt-4298aa0/.artifacts/system-opt/m2r-memory-thp-static-20260823/calibration-batch.json"
+}

@@ -1,0 +1,8 @@
+{
+ "ts": "2026-08-23T14:22:58.169787+00:00",
+ "host": "8.138.5.244",
+ "cmd": "cd /opt/looper-system-opt-4298aa0 && PYTHONPATH=packages/core:services/api /root/.looper-worker/venv/bin/python -m looper_api.cli system-opt run --manifest examples/system-optimizer/aliyun-ecs-memory-thp-manifest.yaml --policy examples/system-optimizer/aliyun-ecs-memory-thp-policy.yaml --capability-domains examples/system-optimizer/aliyun-ecs-memory-thp-capability-domains.json --authorized-domains examples/system-optimizer/aliyun-ecs-memory-thp-authorized-domains.json --baseline-parameters examples/system-optimizer/aliyun-ecs-memory-thp-baseline.json --pressure-protocol examples/system-optimizer/session-assets/m2r-memory-hard-gate-protocol.yaml --target-id external:8.138.5.244 --owner-id m2r-static-session --lease-root .artifacts/system-opt/m2r-memory-thp-static-20260823/leases --lease-ttl-seconds 1200 --allow-executable python3 --allow-executable /root/.looper-worker/venv/bin/python --allow-executable read-file --allow-executable write-file --writable-root .artifacts/system-opt/m2r-memory-thp-static-20260823 --writable-root /sys/kernel/mm/transparent_hugepage --state-evidence .artifacts/system-opt/m2r-memory-thp-static-20260823/state-evidence.json --enable-real --confirmation I_UNDERSTAND_LINUX_CONFIG_WRITES --output .artifacts/system-opt/m2r-memory-thp-static-20260823/optimization-run.json",
+ "exit_code": 1,
+ "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+ "stderr_sha256": "91702626cb32904d998feb8c1849ff4938e99f1a39dd889aaeda4a6d11f7a1d2"
+}

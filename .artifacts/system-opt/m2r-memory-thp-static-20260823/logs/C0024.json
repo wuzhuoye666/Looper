@@ -1,0 +1,9 @@
+{
+ "ts": "2026-08-23T14:23:43.968635+00:00",
+ "host": "8.138.5.244",
+ "cmd": "systemctl list-units --all 2>/dev/null | grep -i looper | head -3; systemctl status looper-worker 2>&1 | head -5; cat /proc/133353/stat 2>/dev/null | awk '{print $1,$2,$3}'; ls /etc/systemd/system/ | grep -i looper",
+ "exit_code": 1,
+ "stdout_sha256": "c9b81757415e9835fd0858c3da1bad07f64474a040dd4b50ce6a28dbbc0d21ed",
+ "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+ "stdout_bytes": 65
+}

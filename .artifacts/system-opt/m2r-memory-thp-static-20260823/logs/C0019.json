@@ -1,0 +1,9 @@
+{
+ "ts": "2026-08-23T14:21:11.543615+00:00",
+ "host": "8.138.5.244",
+ "cmd": "pgrep -af 'python.*benchmark-packages' | head -3; echo RC=$?; uptime | tail -1",
+ "exit_code": 0,
+ "stdout_sha256": "03c15575de01bc504212fb830fd3a5887ff28c2455ab0be165776f002ece490c",
+ "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+ "stdout_bytes": 168
+}

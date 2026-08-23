@@ -1,0 +1,9 @@
+{
+ "ts": "2026-08-23T13:59:45.705093+00:00",
+ "host": "8.138.5.244",
+ "cmd": "ls /opt/looper-system-opt-78f2f4f/ | head; ls /opt/ | grep -i venv; pip3 list 2>/dev/null | grep -iE 'typer|pydantic|yaml|sqlalchemy|paramiko' | head; ls /root/.local/lib/python3.12/site-packages 2>/dev/null | grep -iE 'typer|pydantic' | head -4; which python3.12; ls /usr/lib/python3/dist-packages | grep -iE '^typer|^pydantic' | head -4",
+ "exit_code": 0,
+ "stdout_sha256": "bf6b8af8a4c7bcf78a718755b0b87c2875dd79af6203b82d2ccfc2d4a22286b5",
+ "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+ "stdout_bytes": 147
+}

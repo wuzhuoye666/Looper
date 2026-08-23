@@ -1,0 +1,29 @@
+                                                                                
+ Usage: python -m looper_api.cli system-opt [OPTIONS] COMMAND [ARGS]...         
+                                                                                
+ Linux System Optimizer closed-loop tools                                       
+                                                                                
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --help          Show this message and exit.                                  │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Commands ───────────────────────────────────────────────────────────────────╮
+│ validate                                                                     │
+│ demo                                                                         │
+│ inventory                                                                    │
+│ state-inventory                                                              │
+│ reconcile-expired-lease                                                      │
+│ authorize-state                                                              │
+│ recover-attention                                                            │
+│ raw-inventory                                                                │
+│ tool-inventory                                                               │
+│ manual                                                                       │
+│ run                                                                          │
+│ calibrate-pressure                                                           │
+│ derive-pressure-gate     Derive an explicit target-local CV gate from a      │
+│                          frozen calibration batch.                           │
+│ engine-demo              Run the L8 engine loop over a synthetic             │
+│                          multi-component demo.                               │
+│ cache-inspect            Summarize an append-only negative result cache      │
+│                          (L7).                                               │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

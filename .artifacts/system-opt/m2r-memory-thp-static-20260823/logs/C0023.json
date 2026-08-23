@@ -1,0 +1,9 @@
+{
+ "ts": "2026-08-23T14:23:15.549160+00:00",
+ "host": "8.138.5.244",
+ "cmd": "cat /opt/looper-system-opt-4298aa0/.artifacts/system-opt/m2r-memory-thp-static-20260823/interference-preflight.json; echo ---; pgrep -a python | head -5; pgrep -a python3 | head -3",
+ "exit_code": 0,
+ "stdout_sha256": "60626e373dff9bd3f87884fc586529412fd3b290237e6605c80d914201d0c886",
+ "stderr_sha256": "24b72d67fc17c777ad86c84029bfe2d56a16a25c483387c435cd618403dd88c3",
+ "stdout_bytes": 625
+}

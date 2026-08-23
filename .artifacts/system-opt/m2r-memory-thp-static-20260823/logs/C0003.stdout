@@ -1,0 +1,6 @@
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/opt/looper-system-opt-4298aa0/services/api/looper_api/cli.py", line 12, in <module>
+    import typer
+ModuleNotFoundError: No module named 'typer'

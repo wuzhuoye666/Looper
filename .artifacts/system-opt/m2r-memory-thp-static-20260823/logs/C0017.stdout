@@ -1,0 +1,28 @@
+calibration-batch.json
+latest-batch.json
+leases
+memory-20260823T140745.022792Z-1.stderr.log
+memory-20260823T140745.022792Z-1.txt
+memory-20260823T140745.022792Z-2.stderr.log
+memory-20260823T140745.022792Z-2.txt
+memory-20260823T140745.022792Z-3.stderr.log
+memory-20260823T140745.022792Z-3.txt
+memory-20260823T140745.022792Z-4.stderr.log
+memory-20260823T140745.022792Z-4.txt
+memory-20260823T140745.022792Z-5.stderr.log
+memory-20260823T140745.022792Z-5.txt
+memory-20260823T140745.022792Z-6.stderr.log
+memory-20260823T140745.022792Z-6.txt
+memory-20260823T140745.022792Z-7.stderr.log
+memory-20260823T140745.022792Z-7.txt
+preflight.json
+stability-gate.json
+state-evidence.json
+---interference---
+---当前top---
+USER         PID %CPU %MEM    VSZ   RSS TTY      STAT START   TIME COMMAND
+root      131574  0.3  0.3  56912 46852 ?        S    22:07   0:00 /root/.looper-worker/venv/bin/python -m looper_worker.main --api-url http://127.0.0.1:43743 --worker-id remote-f11c5d752da26d34 --target-id cloud:alibaba:cn-guangzhou:i-7xvcxcry1ejfjcd1d7ig --work-dir /root/.looper-worker/work
+root      131709  0.2  0.1  33788 26396 ?        Ss   22:08   0:00 /root/.looper-worker/venv/bin/python /root/.looper-worker/work/benchmark-packages/43720a9295640781bbeca21eabb3b254367512995b92ac2aabbe17301ab10d5e/prepare.py --benchmark-root /root/.looper-worker/work/benchmark-packages/43720a9295640781bbeca21eabb3b254367512995b92ac2aabbe17301ab10d5e --cache /root/.looper-worker/work/dependency-cache/dcperf.mediawiki.closed-loop/2026.08-pilot4
+root        1720  0.2  0.3 165276 56016 ?        Ssl  Aug22   3:01 /usr/local/aegis/aegis_client/aegis_12_93/AliYunDunMonitor
+root        1530  0.0  0.2 124272 35196 ?        Ssl  Aug22   1:21 /usr/local/aegis/aegis_client/aegis_12_93/AliYunDun
+root           1  0.0  0.0  22700 13956 ?        Ss   Aug22   0:40 /usr/lib/systemd/systemd --system --deserialize=78 noibrs

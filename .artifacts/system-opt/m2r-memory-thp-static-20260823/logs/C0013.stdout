@@ -1,0 +1,6 @@
+{
+  "metric_id": "memory.bandwidth-mib-per-second",
+  "acceptance_limit": 0.03281284476115616,
+  "calibration_digest": "sha256:7e8acfd7548cdac6852900578e03c909a37c4d56db195d24df38bd590942cefb",
+  "output": "/opt/looper-system-opt-4298aa0/.artifacts/system-opt/m2r-memory-thp-static-20260823/stability-gate.json"
+}

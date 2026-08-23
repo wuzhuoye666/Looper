@@ -1,0 +1,9 @@
+{
+ "ts": "2026-08-23T14:01:34.189991+00:00",
+ "host": "8.138.5.244",
+ "cmd": "/root/.looper-worker/venv/bin/pip install -q -i https://mirrors.aliyun.com/pypi/simple/ typer rich sqlalchemy alembic fastapi uvicorn optuna cryptography pydantic-settings 2>&1 | tail -3; /root/.looper-worker/venv/bin/python -c 'import typer; print(\"typer\", typer.__version__)'",
+ "exit_code": 0,
+ "stdout_sha256": "abd105f91703ac62ec35fa1bc79af5e8d278a9c604c2c6e2c1946efe0a850828",
+ "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+ "stdout_bytes": 13
+}

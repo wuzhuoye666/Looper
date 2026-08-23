@@ -1,0 +1,9 @@
+{
+ "ts": "2026-08-23T14:01:46.917437+00:00",
+ "host": "8.138.5.244",
+ "cmd": "PYTHONPATH=/opt/looper-system-opt-4298aa0/packages/core:/opt/looper-system-opt-4298aa0/services/api /root/.looper-worker/venv/bin/python -m looper_api.cli system-opt --help 2>&1 | tail -30",
+ "exit_code": 0,
+ "stdout_sha256": "572cee4197b0cd3e547c5067b35a1e0ac04989dad63402db15c65b78ef494f83",
+ "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+ "stdout_bytes": 2947
+}

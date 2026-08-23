@@ -1,0 +1,9 @@
+{
+ "ts": "2026-08-23T14:00:23.520108+00:00",
+ "host": "8.138.5.244",
+ "cmd": "pip3 --version; ls /usr/local/lib/python3.12/dist-packages 2>/dev/null | head -12; find /root /home /usr/local -maxdepth 3 -name pyvenv.cfg 2>/dev/null | head -4; python3 -m pip list 2>/dev/null | grep -icE 'typer|pydantic'",
+ "exit_code": 1,
+ "stdout_sha256": "ceaeaeb578513692c45d24f4b72eff8c1466077ad7ba0b66e675c05ea8d49574",
+ "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+ "stdout_bytes": 102
+}

@@ -1,0 +1,3 @@
+---
+133353 /root/.looper-worker/venv/bin/python -m looper_worker.main --api-url http://127.0.0.1:45397 --worker-id remote-f11c5d752da26d34 --target-id cloud:alibaba:cn-guangzhou:i-7xvcxcry1ejfjcd1d7ig --work-dir /root/.looper-worker/work
+133576 /root/.looper-worker/venv/bin/python /root/.looper-worker/work/benchmark-packages/43720a9295640781bbeca21eabb3b254367512995b92ac2aabbe17301ab10d5e/prepare.py --benchmark-root /root/.looper-worker/work/benchmark-packages/43720a9295640781bbeca21eabb3b254367512995b92ac2aabbe17301ab10d5e --cache /root/.looper-worker/work/dependency-cache/dcperf.mediawiki.closed-loop/2026.08-pilot4
