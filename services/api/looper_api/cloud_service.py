@@ -441,12 +441,56 @@ def _natural_catalog_key(value: str) -> tuple[tuple[int, int | str], ...]:
     )
 
 
-def _inventory_sort_rank(available: bool | None) -> int:
-    if available is True:
+def _instance_purchase_sort_rank(item: InstanceTypeInfo) -> int:
+    if item.available is True and item.attributes.get("purchaseCompatible") is not False:
         return 0
-    if available is False:
+    if item.attributes.get("purchaseCompatible") is False:
         return 1
-    return 2
+    if item.available is False:
+        return 2
+    return 3
+
+
+def _image_preference_key(
+    item: ImageInfo,
+) -> tuple[int, int, tuple[tuple[int, int | str], ...], str]:
+    text = f"{item.name} {item.id} {item.platform or ''}".casefold()
+    unavailable_rank = 1 if item.available is False else 0
+    if "ubuntu" in text:
+        if re.search(r"(?<!\d)24[._-]?04", text):
+            platform_rank = 0
+        elif re.search(r"(?<!\d)22[._-]?04", text):
+            platform_rank = 1
+        elif re.search(r"(?<!\d)20[._-]?04", text):
+            platform_rank = 2
+        else:
+            platform_rank = 3
+    elif "windows" in text:
+        platform_rank = 6
+    elif any(
+        token in text
+        for token in (
+            "linux",
+            "debian",
+            "centos",
+            "rocky",
+            "alma",
+            "fedora",
+            "opensuse",
+            "tencentos",
+            "alinux",
+            "anolis",
+        )
+    ):
+        platform_rank = 4
+    else:
+        platform_rank = 5
+    return (
+        unavailable_rank,
+        platform_rank,
+        _natural_catalog_key(f"{item.name} {item.id}"),
+        item.id,
+    )
 
 
 def _architecture_group(value: str | None) -> str | None:
@@ -472,16 +516,15 @@ def catalog_search(
         models = filter_instance_types(
             [InstanceTypeInfo.model_validate(item) for item in items], filters
         )
-        if provider_id in {ProviderId.TENCENT, ProviderId.ALIBABA}:
-            models.sort(
-                key=lambda item: (
-                    _inventory_sort_rank(item.available),
-                    _natural_catalog_key(item.id),
-                    item.id,
-                )
+        models.sort(
+            key=lambda item: (
+                _instance_purchase_sort_rank(item),
+                item.cpu,
+                item.memory_gib,
+                _natural_catalog_key(item.id),
+                item.id,
             )
-        else:
-            models.sort(key=lambda item: (_natural_catalog_key(item.id), item.id))
+        )
         items = [item.model_dump(mode="json", by_alias=True) for item in models]
     elif kind == "image":
         models = filter_images([ImageInfo.model_validate(item) for item in items], filters)
@@ -513,6 +556,7 @@ def catalog_search(
                         for image in models
                         if _architecture_group(image.architecture) in {None, architecture}
                     ]
+        models.sort(key=_image_preference_key)
         items = [item.model_dump(mode="json", by_alias=True) for item in models]
 
     total = len(items)
