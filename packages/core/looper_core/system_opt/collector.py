@@ -6,15 +6,23 @@ score components, infer tuning benefit, or invent values for guest blind spots.
 
 from __future__ import annotations
 
+import hashlib
+import io
+import json
 import re
+import stat
 import time
-from collections.abc import Callable
+import zipfile
+from threading import Event, Lock, Thread
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
 from math import isfinite
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Literal, Protocol
 
+import yaml
 from pydantic import Field, field_validator, model_validator
 
 from looper_core.canonical import canonical_digest
@@ -22,10 +30,14 @@ from looper_core.contracts import StrictModel
 from looper_core.system_opt.scoring import MeasurementBatch, MetricEvidence
 
 COLLECTOR_SCHEMA = "looper.component-metric-snapshot/v1alpha1"
+COLLECTION_PLAN_SCHEMA = "looper.component-collection-plan/v1alpha1"
 COLLECTION_REQUEST_SCHEMA = "looper.component-collection-request/v1alpha1"
 COLLECTION_RUN_SCHEMA = "looper.component-collection-run/v1alpha1"
 COLLECTION_ENVELOPE_SCHEMA = "looper.collection-measurement-envelope/v1alpha1"
 COLLECTION_OVERHEAD_SCHEMA = "looper.collection-overhead-ab-evidence/v1alpha1"
+COLLECTION_BUNDLE_MANIFEST_SCHEMA = "looper.collection-artifact-bundle-manifest/v1alpha1"
+COLLECTION_BUNDLE_MANIFEST_NAME = "manifest.json"
+COLLECTION_BUNDLE_MEDIA_TYPE = "application/vnd.looper.collection-artifact-bundle+zip"
 
 ComponentName = Literal["cpu", "memory", "storage", "network", "numa"]
 _SUPPORTED_COMPONENTS = frozenset({"cpu", "memory", "storage", "network", "numa"})
@@ -118,6 +130,421 @@ class ComponentCollectionScope(StrictModel):
         return value
 
 
+class ComponentCollectionPlan(StrictModel):
+    """Artifact-independent L4 window identity known before the workload starts."""
+
+    schema_version: Literal[COLLECTION_PLAN_SCHEMA] = COLLECTION_PLAN_SCHEMA
+    component: ComponentName
+    target_id: str = Field(min_length=1, max_length=160)
+    environment_digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    workload_phase_id: str = Field(min_length=1, max_length=160)
+    workload_source: str = Field(min_length=1, max_length=300)
+    collector_id: str = Field(min_length=1, max_length=160)
+    requested_metrics: list[str] = Field(min_length=1)
+    interval_seconds: float = Field(gt=0)
+    scope: ComponentCollectionScope
+
+    @field_validator("requested_metrics")
+    @classmethod
+    def validate_requested_metrics(cls, value: list[str]) -> list[str]:
+        if len(set(value)) != len(value):
+            raise ValueError("requested_metrics must be unique")
+        pattern = re.compile(r"^[a-z][a-z0-9.-]*$")
+        if any(pattern.fullmatch(metric) is None for metric in value):
+            raise ValueError("requested_metrics contain an invalid metric name")
+        return value
+
+    @field_validator("interval_seconds")
+    @classmethod
+    def require_finite_interval(cls, value: float) -> float:
+        if not isfinite(value):
+            raise ValueError("interval_seconds must be finite")
+        return value
+
+    @model_validator(mode="after")
+    def validate_component_scope(self) -> ComponentCollectionPlan:
+        prefix = f"{self.component}."
+        if any(not metric.startswith(prefix) for metric in self.requested_metrics):
+            raise ValueError("requested_metrics must belong to the requested component")
+        network = self.scope.network_interfaces
+        storage = self.scope.storage_devices
+        if self.component == "network":
+            if network is None:
+                raise ValueError("network collection requires explicit network_interfaces")
+            if storage is not None:
+                raise ValueError("network collection cannot carry storage_devices")
+        elif self.component == "storage":
+            if storage is None:
+                raise ValueError("storage collection requires explicit storage_devices")
+            if network is not None:
+                raise ValueError("storage collection cannot carry network_interfaces")
+        elif network is not None or storage is not None:
+            raise ValueError(f"{self.component} collection does not accept network/storage scope")
+        return self
+
+    @property
+    def digest(self) -> str:
+        return canonical_digest(self.model_dump(mode="json", exclude_none=False))
+
+
+class CollectionArtifactBundleMember(StrictModel):
+    """One raw member whose bytes, type, and size are bound by the bundle manifest."""
+
+    path: str = Field(min_length=1, max_length=500)
+    media_type: str = Field(min_length=1, max_length=120)
+    size_bytes: int = Field(ge=0)
+    digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+
+    @field_validator("path")
+    @classmethod
+    def require_safe_relative_posix_path(cls, value: str) -> str:
+        path = PurePosixPath(value)
+        if (
+            value == COLLECTION_BUNDLE_MANIFEST_NAME
+            or "\\" in value
+            or value.startswith("/")
+            or path.is_absolute()
+            or any(part in {"", ".", ".."} for part in path.parts)
+            or path.as_posix() != value
+        ):
+            raise ValueError("bundle member path must be a safe relative POSIX path")
+        return value
+
+
+class CollectionArtifactBundleManifest(StrictModel):
+    """Canonical identity of one measure execution; ZIP container bytes are not identity."""
+
+    schema_version: Literal[COLLECTION_BUNDLE_MANIFEST_SCHEMA] = (
+        COLLECTION_BUNDLE_MANIFEST_SCHEMA
+    )
+    members: list[CollectionArtifactBundleMember] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def require_unique_member_paths(self) -> CollectionArtifactBundleManifest:
+        paths = [member.path for member in self.members]
+        if len(paths) != len(set(paths)):
+            raise ValueError("bundle manifest member paths must be unique")
+        return self
+
+    @property
+    def digest(self) -> str:
+        payload = self.model_dump(mode="json")
+        payload["members"] = sorted(payload["members"], key=lambda item: item["path"])
+        return canonical_digest(payload)
+
+
+@dataclass(frozen=True)
+class VerifiedCollectionArtifactBundle:
+    """Verified raw bytes indexed by the manifest's exact member paths."""
+
+    manifest: CollectionArtifactBundleManifest
+    members: Mapping[str, bytes]
+    bundle_bytes: bytes
+
+
+def verify_collection_artifact_bundle(
+    content: bytes, *, expected_digest: str
+) -> VerifiedCollectionArtifactBundle:
+    """Fail closed unless ZIP members exactly match a canonical, content-hashed manifest."""
+
+    try:
+        archive = zipfile.ZipFile(io.BytesIO(content), "r")
+    except (OSError, zipfile.BadZipFile) as error:
+        raise ValueError("collection artifact bundle is not a readable ZIP archive") from error
+    with archive:
+        infos = archive.infolist()
+        names = [info.filename for info in infos]
+        if len(names) != len(set(names)):
+            raise ValueError("collection artifact bundle contains a duplicate ZIP member path")
+        for info in infos:
+            path = PurePosixPath(info.filename)
+            if (
+                "\\" in info.filename
+                or info.filename.startswith("/")
+                or path.is_absolute()
+                or any(part in {"", ".", ".."} for part in path.parts)
+                or path.as_posix() != info.filename
+            ):
+                raise ValueError("collection artifact bundle contains an unsafe ZIP member path")
+            if info.is_dir():
+                raise ValueError("collection artifact bundle must not contain directory entries")
+            mode = (info.external_attr >> 16) & 0o170000
+            if mode == stat.S_IFLNK:
+                raise ValueError("collection artifact bundle must not contain symbolic links")
+            if info.flag_bits & 0x1:
+                raise ValueError("collection artifact bundle must not contain encrypted members")
+        if names.count(COLLECTION_BUNDLE_MANIFEST_NAME) != 1:
+            raise ValueError("collection artifact bundle requires exactly one manifest.json")
+        try:
+            manifest = CollectionArtifactBundleManifest.model_validate_json(
+                archive.read(COLLECTION_BUNDLE_MANIFEST_NAME)
+            )
+        except (KeyError, UnicodeDecodeError, ValueError) as error:
+            raise ValueError("collection artifact bundle manifest is invalid") from error
+        if manifest.digest != expected_digest:
+            raise ValueError("collection artifact bundle manifest digest mismatch")
+        expected_names = {COLLECTION_BUNDLE_MANIFEST_NAME} | {
+            member.path for member in manifest.members
+        }
+        if set(names) != expected_names:
+            raise ValueError(
+                "collection artifact bundle ZIP member set does not exactly match manifest"
+            )
+        verified: dict[str, bytes] = {}
+        for member in manifest.members:
+            raw = archive.read(member.path)
+            if len(raw) != member.size_bytes:
+                raise ValueError(
+                    f"collection artifact bundle member size mismatch: {member.path}"
+                )
+            actual_digest = "sha256:" + hashlib.sha256(raw).hexdigest()
+            if actual_digest != member.digest:
+                raise ValueError(
+                    f"collection artifact bundle member digest mismatch: {member.path}"
+                )
+            verified[member.path] = raw
+    return VerifiedCollectionArtifactBundle(
+        manifest=manifest,
+        members=verified,
+        bundle_bytes=content,
+    )
+
+
+_STRESS_NG_MEDIA_TYPE = "application/vnd.stress-ng.metrics+yaml"
+_SYSBENCH_MEMORY_MEDIA_TYPE = "text/vnd.sysbench.memory"
+_IPERF3_MEDIA_TYPE = "application/vnd.iperf3+json"
+_FIO_MEDIA_TYPE = "application/vnd.fio+json"
+_SYSBENCH_THROUGHPUT = re.compile(
+    r"[0-9.]+ MiB transferred \((?P<rate>[0-9.]+) MiB/sec\)"
+)
+_SYSBENCH_P95 = re.compile(r"95th percentile:\s+(?P<p95>[0-9.]+)")
+
+
+def _finite_non_negative(value: object, label: str, *, positive: bool = False) -> float:
+    try:
+        parsed = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"{label} is not numeric") from error
+    if not isfinite(parsed) or parsed < 0 or (positive and parsed <= 0):
+        qualifier = "positive finite" if positive else "finite and non-negative"
+        raise ValueError(f"{label} must be {qualifier}")
+    return parsed
+
+
+def _parse_stress_ng_cpu(raw: bytes) -> float:
+    try:
+        payload = yaml.safe_load(raw.decode("utf-8"))
+    except (UnicodeError, yaml.YAMLError) as error:
+        raise ValueError("stress-ng YAML is invalid") from error
+    metrics = payload.get("metrics") if isinstance(payload, dict) else None
+    if not isinstance(metrics, list):
+        raise ValueError("stress-ng YAML contains no metrics list")
+    cpu = next(
+        (item for item in metrics if isinstance(item, dict) and item.get("stressor") == "cpu"),
+        None,
+    )
+    if cpu is None:
+        raise ValueError("stress-ng YAML contains no cpu metric")
+    return _finite_non_negative(
+        cpu.get("bogo-ops-per-second-real-time"),
+        "stress-ng CPU throughput",
+        positive=True,
+    )
+
+
+def _parse_sysbench_memory(raw: bytes) -> tuple[float, float]:
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeError as error:
+        raise ValueError("sysbench memory output is not UTF-8") from error
+    throughput = _SYSBENCH_THROUGHPUT.search(text)
+    latency = _SYSBENCH_P95.search(text)
+    if throughput is None or latency is None:
+        raise ValueError("sysbench memory output is missing throughput or p95 latency")
+    return (
+        _finite_non_negative(
+            throughput.group("rate"), "sysbench memory throughput", positive=True
+        ),
+        _finite_non_negative(latency.group("p95"), "sysbench memory p95 latency"),
+    )
+
+
+def _json_object(raw: bytes, label: str) -> dict[str, object]:
+    try:
+        payload = json.loads(raw)
+    except (UnicodeError, json.JSONDecodeError) as error:
+        raise ValueError(f"{label} is not valid JSON") from error
+    if not isinstance(payload, dict):
+        raise ValueError(f"{label} root is not an object")
+    return payload
+
+
+def _parse_iperf3(raw: bytes) -> tuple[float, float]:
+    payload = _json_object(raw, "iperf3 output")
+    if payload.get("error"):
+        raise ValueError(f"iperf3 reported an error: {payload['error']}")
+    end = payload.get("end")
+    if not isinstance(end, dict):
+        raise ValueError("iperf3 JSON contains no end object")
+    received = end.get("sum_received")
+    sent = end.get("sum_sent")
+    if not isinstance(received, dict) or not isinstance(sent, dict):
+        raise ValueError("iperf3 JSON contains no aggregate send/receive metrics")
+    bits = _finite_non_negative(
+        received.get("bits_per_second"), "iperf3 receive throughput", positive=True
+    )
+    retransmits = _finite_non_negative(sent.get("retransmits", 0), "iperf3 retransmits")
+    return bits / 1_000_000_000, retransmits
+
+
+def _parse_fio(raw: bytes) -> tuple[float, float]:
+    payload = _json_object(raw, "fio output")
+    jobs = payload.get("jobs")
+    if not isinstance(jobs, list) or not jobs:
+        raise ValueError("fio JSON contains no jobs")
+    total_iops = 0.0
+    p99_values: list[float] = []
+    for job in jobs:
+        if not isinstance(job, dict):
+            raise ValueError("fio job must be an object")
+        read = job.get("read")
+        if not isinstance(read, dict):
+            raise ValueError("fio job has no read metrics")
+        total_iops += _finite_non_negative(read.get("iops"), "fio read IOPS")
+        clat = read.get("clat_ns")
+        percentiles = clat.get("percentile") if isinstance(clat, dict) else None
+        if not isinstance(percentiles, dict):
+            raise ValueError("fio job has no completion-latency percentiles")
+        p99_values.append(
+            _finite_non_negative(
+                percentiles.get("99.000000"), "fio read clat p99 nanoseconds"
+            )
+            / 1000.0
+        )
+    if total_iops <= 0:
+        raise ValueError("fio total read IOPS must be positive")
+    return total_iops, max(p99_values)
+
+
+def parse_collection_artifact_bundle_metrics(
+    bundle: VerifiedCollectionArtifactBundle,
+    *,
+    component: ComponentName,
+    requested_metrics: list[str],
+    gate_values: Mapping[str, float | bool | None],
+) -> dict[str, CollectedMetric]:
+    """Parse only requested L4 facts; gate values are copied, never adjudicated here."""
+
+    requested = set(requested_metrics)
+    metrics: dict[str, CollectedMetric] = {}
+    sources: dict[str, list[tuple[str, bytes]]] = {}
+    member_by_path = {member.path: member for member in bundle.manifest.members}
+    for path, raw in bundle.members.items():
+        sources.setdefault(member_by_path[path].media_type, []).append((path, raw))
+    bundle_source = f"manifest:{bundle.manifest.digest}"
+
+    def add(name: str, unit: str, values: list[float], paths: list[str]) -> None:
+        if name in requested and values:
+            metrics[name] = _readable(name, unit, f"{bundle_source} members={','.join(paths)}", values)
+
+    if component == "cpu" and "cpu.bogo-ops-per-second" in requested:
+        entries = sources.get(_STRESS_NG_MEDIA_TYPE, [])
+        add(
+            "cpu.bogo-ops-per-second",
+            "bogo-ops/s",
+            [_parse_stress_ng_cpu(raw) for _, raw in entries],
+            [path for path, _ in entries],
+        )
+    elif component == "memory" and requested & {
+        "memory.bandwidth-mib-per-second",
+        "memory.latency-p95-ms",
+    }:
+        entries = sources.get(_SYSBENCH_MEMORY_MEDIA_TYPE, [])
+        parsed = [_parse_sysbench_memory(raw) for _, raw in entries]
+        add(
+            "memory.bandwidth-mib-per-second",
+            "MiB/s",
+            [item[0] for item in parsed],
+            [path for path, _ in entries],
+        )
+        add(
+            "memory.latency-p95-ms",
+            "ms",
+            [item[1] for item in parsed],
+            [path for path, _ in entries],
+        )
+    elif component == "network" and requested & {
+        "network.receive-throughput-gbps",
+        "network.retransmits",
+    }:
+        entries = sources.get(_IPERF3_MEDIA_TYPE, [])
+        parsed = [_parse_iperf3(raw) for _, raw in entries]
+        add(
+            "network.receive-throughput-gbps",
+            "Gbps",
+            [item[0] for item in parsed],
+            [path for path, _ in entries],
+        )
+        add(
+            "network.retransmits",
+            "count",
+            [item[1] for item in parsed],
+            [path for path, _ in entries],
+        )
+    elif component == "storage" and requested & {
+        "storage.read-iops",
+        "storage.read-clat-p99-us",
+    }:
+        entries = sources.get(_FIO_MEDIA_TYPE, [])
+        parsed = [_parse_fio(raw) for _, raw in entries]
+        add(
+            "storage.read-iops",
+            "IOPS",
+            [item[0] for item in parsed],
+            [path for path, _ in entries],
+        )
+        add(
+            "storage.read-clat-p99-us",
+            "us",
+            [item[1] for item in parsed],
+            [path for path, _ in entries],
+        )
+
+    for name, value in gate_values.items():
+        if name not in requested:
+            continue
+        if isinstance(value, bool):
+            numeric = 1.0 if value else 0.0
+        elif value is None:
+            metrics[name] = _unavailable(
+                name,
+                "boolean",
+                "pressure execution gate evidence",
+                "pressure execution gate value is null",
+            )
+            continue
+        else:
+            numeric = _finite_non_negative(value, f"gate {name}")
+        metrics[name] = _readable(
+            name, "boolean", "pressure execution gate evidence", [numeric]
+        )
+
+    artifact_metric_names = {
+        "cpu.bogo-ops-per-second",
+        "memory.bandwidth-mib-per-second",
+        "memory.latency-p95-ms",
+        "network.receive-throughput-gbps",
+        "network.retransmits",
+        "storage.read-iops",
+        "storage.read-clat-p99-us",
+        *gate_values.keys(),
+    }
+    missing = sorted((requested & artifact_metric_names) - set(metrics))
+    if missing:
+        raise ValueError(f"requested artifact metrics are unavailable: {missing}")
+    return metrics
+
+
 class CollectionInputArtifact(StrictModel):
     """Digest-bound raw input made available to an L4 collector implementation."""
 
@@ -137,6 +564,7 @@ class ComponentCollectionRequest(StrictModel):
     collector_id: str = Field(min_length=1, max_length=160)
     requested_metrics: list[str] = Field(min_length=1)
     input_artifacts: list[CollectionInputArtifact]
+    gate_values: dict[str, float | bool | None] = Field(default_factory=dict)
     interval_seconds: float = Field(gt=0)
     scope: ComponentCollectionScope
     measurement_identity: dict[str, str] = Field(min_length=1)
@@ -187,12 +615,26 @@ class ComponentCollectionRequest(StrictModel):
         return self
 
     @property
+    def plan(self) -> ComponentCollectionPlan:
+        return ComponentCollectionPlan(
+            component=self.component,
+            target_id=self.target_id,
+            environment_digest=self.environment_digest,
+            workload_phase_id=self.workload_phase_id,
+            workload_source=self.workload_source,
+            collector_id=self.collector_id,
+            requested_metrics=self.requested_metrics,
+            interval_seconds=self.interval_seconds,
+            scope=self.scope,
+        )
+
+    @property
     def digest(self) -> str:
         return canonical_digest(self.model_dump(mode="json", exclude_none=False))
 
 
 class ComponentCollector(Protocol):
-    """Replaceable L4 collector boundary.  L3 is not part of this interface."""
+    """Replaceable synchronous L4 collector boundary."""
 
     collector_id: str
     collector_version: str
@@ -200,10 +642,98 @@ class ComponentCollector(Protocol):
     def collect(self, request: ComponentCollectionRequest) -> ComponentMetricSnapshot: ...
 
 
+class ComponentCollectorSession(Protocol):
+    """One L4 collection window opened before, and finished after, an L3 workload."""
+
+    def finish(self, request: ComponentCollectionRequest) -> ComponentMetricSnapshot: ...
+
+    def cancel(self) -> None: ...
+
+
+class WindowedComponentCollector(Protocol):
+    """Replaceable collector capable of observing the actual workload window."""
+
+    collector_id: str
+    collector_version: str
+
+    def begin_collection(self, plan: ComponentCollectionPlan) -> ComponentCollectorSession: ...
+
+
 def _require_aware(value: datetime, field_name: str) -> datetime:
     if value.tzinfo is None or value.utcoffset() is None:
         raise ValueError(f"{field_name} must be timezone-aware")
     return value
+
+
+class ComponentCollectionWindow:
+    """Runtime handle that preserves one exact plan across a workload boundary."""
+
+    def __init__(
+        self,
+        *,
+        plan: ComponentCollectionPlan,
+        collector: WindowedComponentCollector,
+        enabled: bool,
+        started_at: datetime,
+        wall_clock: Callable[[], datetime],
+        session: ComponentCollectorSession | None,
+    ) -> None:
+        self.plan = plan
+        self.collector = collector
+        self.enabled = enabled
+        self.started_at = _require_aware(started_at, "started_at")
+        self.wall_clock = wall_clock
+        self.session = session
+        self._closed = False
+
+    def finish(self, request: ComponentCollectionRequest) -> ComponentCollectionRun:
+        if self._closed:
+            raise RuntimeError("component collection window is already closed")
+        if request.plan != self.plan:
+            mismatch = ValueError("collection request does not match the opened collection plan")
+            try:
+                self.cancel()
+            except Exception as cancel_error:
+                mismatch.add_note(
+                    "L4 collection cancellation also failed: "
+                    f"{type(cancel_error).__name__}: {cancel_error}"
+                )
+            raise mismatch
+        snapshot: ComponentMetricSnapshot | None = None
+        if self.enabled:
+            assert self.session is not None
+            try:
+                snapshot = self.session.finish(request)
+            except Exception as finish_error:
+                try:
+                    self.session.cancel()
+                except Exception as cancel_error:
+                    finish_error.add_note(
+                        "L4 collection cancellation also failed: "
+                        f"{type(cancel_error).__name__}: {cancel_error}"
+                    )
+                finally:
+                    self._closed = True
+                raise
+        self._closed = True
+        return ComponentCollectionRun(
+            request=request,
+            collector_id=self.collector.collector_id,
+            collector_version=self.collector.collector_version,
+            enabled=self.enabled,
+            started_at=self.started_at,
+            finished_at=self.wall_clock(),
+            snapshot=snapshot,
+        )
+
+    def cancel(self) -> None:
+        if self._closed:
+            return
+        try:
+            if self.session is not None:
+                self.session.cancel()
+        finally:
+            self._closed = True
 
 
 class ComponentCollectionRun(StrictModel):
@@ -746,6 +1276,203 @@ _COUNTING_BASIS = {
 }
 
 
+class _BuiltinLinuxGuestCollectionSession:
+    def __init__(self, collector: BuiltinLinuxGuestCollector, plan: ComponentCollectionPlan) -> None:
+        self.collector = collector
+        self.plan = plan
+        self._stop = Event()
+        self._lock = Lock()
+        self._closed = False
+        self._samples: list[object] = []
+        self._started = collector.monotonic()
+        self._append_sample()
+        self._thread = Thread(
+            target=self._sample_periodically,
+            name=f"looper-l4-{plan.component}-collector",
+            daemon=True,
+        )
+        self._thread.start()
+
+    def _sample(self) -> object:
+        component = self.plan.component
+        if component == "cpu":
+            return _read_text(self.collector.proc_root / "stat")
+        if component == "memory":
+            return _collect_memory(self.collector.proc_root)
+        if component == "network":
+            assert self.plan.scope.network_interfaces is not None
+            return _parse_network_counters(
+                _read_text(self.collector.proc_root / "net" / "dev"),
+                self.plan.scope.network_interfaces,
+            )
+        if component == "storage":
+            assert self.plan.scope.storage_devices is not None
+            return _parse_storage_counters(
+                _read_text(self.collector.proc_root / "diskstats"),
+                self.plan.scope.storage_devices,
+            )
+        return _collect_numa(self.collector.sys_root)
+
+    def _append_sample(self) -> None:
+        sample = self._sample()
+        with self._lock:
+            self._samples.append(sample)
+
+    def _sample_periodically(self) -> None:
+        while not self._stop.wait(self.plan.interval_seconds):
+            self._append_sample()
+
+    def _stop_thread(self) -> None:
+        self._stop.set()
+        self._thread.join()
+
+    def _guest_metrics(self, elapsed: float) -> dict[str, CollectedMetric]:
+        with self._lock:
+            samples = list(self._samples)
+        component = self.plan.component
+        if component == "cpu":
+            first = samples[0]
+            second = samples[-1]
+            source = f"{self.collector.proc_root}/stat actual monotonic window={elapsed}s"
+            if not isinstance(first, str) or not isinstance(second, str):
+                busy = _unavailable(
+                    "cpu.busy-ratio",
+                    "ratio",
+                    source,
+                    f"{self.collector.proc_root}/stat is unreadable in this environment",
+                )
+            else:
+                ratio, reason = _cpu_busy_ratio(first, second)
+                busy = (
+                    _readable("cpu.busy-ratio", "ratio", source, ratio)
+                    if ratio is not None
+                    else _unavailable("cpu.busy-ratio", "ratio", source, reason)
+                )
+            # Preserve existing static probes without opening another timed sub-window.
+            static = _collect_cpu(
+                self.collector.proc_root,
+                self.collector.sys_root,
+                self.plan.interval_seconds,
+                lambda _: None,
+            )
+            static["cpu.busy-ratio"] = busy
+            return static
+        if component == "memory":
+            readable_values: list[float] = []
+            last_metric: CollectedMetric | None = None
+            for sample in samples:
+                if not isinstance(sample, dict):
+                    continue
+                candidate = sample.get("memory.available-ratio")
+                if isinstance(candidate, CollectedMetric):
+                    last_metric = candidate
+                    if candidate.availability == MetricAvailability.READABLE:
+                        values = candidate.value if isinstance(candidate.value, list) else [candidate.value]
+                        readable_values.extend(float(value) for value in values if value is not None)
+            if readable_values:
+                return {
+                    "memory.available-ratio": _readable(
+                        "memory.available-ratio",
+                        "ratio",
+                        f"{self.collector.proc_root}/meminfo periodic interval={self.plan.interval_seconds}s",
+                        readable_values,
+                    )
+                }
+            if last_metric is not None:
+                return {"memory.available-ratio": last_metric}
+            return _collect_memory(self.collector.proc_root)
+        if component in {"network", "storage"}:
+            first, first_reason = samples[0]  # type: ignore[misc]
+            second, second_reason = samples[-1]  # type: ignore[misc]
+            if component == "network":
+                assert self.plan.scope.network_interfaces is not None
+                source = (
+                    f"{self.collector.proc_root}/net/dev "
+                    f"interfaces={','.join(self.plan.scope.network_interfaces)} "
+                    f"actual monotonic window={elapsed}s"
+                )
+                definitions = (("rx", "rx-bytes", "bytes"), ("tx", "tx-bytes", "bytes"))
+            else:
+                assert self.plan.scope.storage_devices is not None
+                source = (
+                    f"{self.collector.proc_root}/diskstats "
+                    f"devices={','.join(self.plan.scope.storage_devices)} "
+                    f"actual monotonic window={elapsed}s"
+                )
+                definitions = (
+                    ("reads", "reads-completed", "count"),
+                    ("writes", "writes-completed", "count"),
+                    ("io_ms", "io-ms", "ms"),
+                )
+            return _window_metrics(
+                component=component,
+                first=first,
+                second=second,
+                first_reason=first_reason,
+                second_reason=second_reason,
+                interval_seconds=elapsed,
+                source=source,
+                definitions=definitions,
+            )
+        sample = samples[-1]
+        return sample if isinstance(sample, dict) else _collect_numa(self.collector.sys_root)
+
+    def finish(self, request: ComponentCollectionRequest) -> ComponentMetricSnapshot:
+        if self._closed:
+            raise RuntimeError("builtin collection session is already closed")
+        if request.plan != self.plan:
+            raise ValueError("collection request does not match builtin collection plan")
+        try:
+            self._stop_thread()
+            self._append_sample()
+            elapsed = self.collector.monotonic() - self._started
+            if not isfinite(elapsed) or elapsed <= 0:
+                raise ValueError("actual monotonic collection window must be finite and positive")
+            metrics = self._guest_metrics(elapsed)
+            if request.input_artifacts:
+                if len(request.input_artifacts) != 1:
+                    raise ValueError("one measure execution requires exactly one artifact bundle")
+                artifact = request.input_artifacts[0]
+                if artifact.media_type != COLLECTION_BUNDLE_MEDIA_TYPE:
+                    raise ValueError("collection input artifact is not a pressure bundle")
+                raw = self.collector.artifact_reader(artifact)
+                bundle = verify_collection_artifact_bundle(raw, expected_digest=artifact.digest)
+                metrics.update(
+                    parse_collection_artifact_bundle_metrics(
+                        bundle,
+                        component=request.component,
+                        requested_metrics=request.requested_metrics,
+                        gate_values=request.gate_values,
+                    )
+                )
+            selected = {name: metrics[name] for name in request.requested_metrics if name in metrics}
+            missing = sorted(set(request.requested_metrics) - set(selected))
+            if missing:
+                raise ValueError(f"builtin collector cannot provide requested metrics: {missing}")
+            return ComponentMetricSnapshot(
+                component=request.component,
+                target_id=request.target_id,
+                environment_digest=request.environment_digest,
+                collected_at=self.collector.wall_clock(),
+                metrics=selected,
+                counting_basis=(
+                    f"{_COUNTING_BASIS[request.component]}; periodic sampling "
+                    f"interval={request.interval_seconds}s; actual monotonic window={elapsed}s; "
+                    "pressure artifact identity is canonical manifest digest"
+                ),
+            )
+        finally:
+            self._closed = True
+
+    def cancel(self) -> None:
+        if self._closed:
+            return
+        try:
+            self._stop_thread()
+        finally:
+            self._closed = True
+
+
 class BuiltinLinuxGuestCollector:
     """Standard-library Linux guest collector with injectable I/O timing for tests."""
 
@@ -759,11 +1486,22 @@ class BuiltinLinuxGuestCollector:
         sys_root: Path = Path("/sys"),
         sleep_fn: Callable[[float], None] = time.sleep,
         wall_clock: Callable[[], datetime] | None = None,
+        monotonic: Callable[[], float] = time.perf_counter,
+        artifact_reader: Callable[[CollectionInputArtifact], bytes] | None = None,
     ) -> None:
         self.proc_root = proc_root
         self.sys_root = sys_root
         self.sleep_fn = sleep_fn
         self.wall_clock = wall_clock or (lambda: datetime.now(UTC))
+        self.monotonic = monotonic
+        self.artifact_reader = artifact_reader or (lambda artifact: Path(artifact.source).read_bytes())
+
+    def begin_collection(
+        self, plan: ComponentCollectionPlan
+    ) -> _BuiltinLinuxGuestCollectionSession:
+        if plan.collector_id != self.collector_id:
+            raise ValueError("collection plan collector_id does not select this collector")
+        return _BuiltinLinuxGuestCollectionSession(self, plan)
 
     def collect(self, request: ComponentCollectionRequest) -> ComponentMetricSnapshot:
         if request.collector_id != self.collector_id:
@@ -804,6 +1542,31 @@ class BuiltinLinuxGuestCollector:
             metrics=metrics,
             counting_basis=_COUNTING_BASIS[request.component],
         )
+
+
+def begin_component_collection(
+    plan: ComponentCollectionPlan,
+    *,
+    collector: WindowedComponentCollector,
+    enabled: bool,
+    wall_clock: Callable[[], datetime] | None = None,
+) -> ComponentCollectionWindow:
+    """Open L4 before L3 starts its measure command; disabled mode calls no collector code."""
+
+    selected = collector
+    if selected.collector_id != plan.collector_id:
+        raise ValueError("injected collector_id does not match collection plan")
+    clock = wall_clock or (lambda: datetime.now(UTC))
+    started_at = clock()
+    session = selected.begin_collection(plan) if enabled else None
+    return ComponentCollectionWindow(
+        plan=plan,
+        collector=selected,
+        enabled=enabled,
+        started_at=started_at,
+        wall_clock=clock,
+        session=session,
+    )
 
 
 def run_component_collection(
@@ -1026,14 +1789,19 @@ __all__ = [
     "BuiltinLinuxGuestCollector",
     "CollectedMetric",
     "CollectionInputArtifact",
+    "ComponentCollectionPlan",
+    "ComponentCollectionWindow",
     "CollectionMeasurementEnvelope",
     "CollectionOverheadABEvidence",
     "ComponentCollectionRequest",
     "ComponentCollectionRun",
     "ComponentCollectionScope",
     "ComponentCollector",
+    "ComponentCollectorSession",
     "ComponentMetricSnapshot",
     "MetricAvailability",
+    "WindowedComponentCollector",
+    "begin_component_collection",
     "bind_collection_to_measurement_batch",
     "collect_component_snapshot",
     "run_component_collection",
