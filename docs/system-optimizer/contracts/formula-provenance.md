@@ -125,6 +125,11 @@ Priority_m=(P_m,D_m,Persistence_m,Confidence_m)
 
 第一版采用确定性的 Pareto 层和词典序决胜，不将该向量加权为跨组件总分。target、range、近零、负值、计数器回绕和跨阶段指标必须使用各自合同中的绝对尺度或超限距离。
 
+实现契约（fail-closed，无隐式分母）：target/range 指标的不利变化为
+`D_m=(distance(C_m)-distance(B_m))/scale_m`，`scale_m` 缺失时 fail-closed；
+压力变换 `PressureTransform_m`（EXCESS/DEFICIT/TARGET_DISTANCE/RANGE_EXCESS）同样要求显式 `scale_m`，
+不再以 `abs(reference)` 或 `1.0` 作为隐式分母。
+
 ### S5：动态合法搜索域
 
 来源类型：PROJECT-CONTRACT。
@@ -153,6 +158,8 @@ I_m(x)=
 target 指标使用到目标距离的减少量，range 指标使用到合法区间超限距离的减少量。必须同时保存原始值、估计值、不确定性、公式 ID、公式版本和输入摘要。
 
 `I_m(x)` 的符号已方向归一化（改善为正）：后续搜索生成器与 Pareto 排名一律把改善量当作最大化目标，不得再次叠加指标自身方向（否则方向被双重编码）。
+
+实现契约（fail-closed，无隐式分母）：target/range 指标的 `I_m(x)` 使用到目标/区间距离的减少量除以显式 `scale_m`；`scale_m` 缺失时 fail-closed，不再使用隐式 `1.0` 分母。
 
 ### S7：稳健接受条件
 
