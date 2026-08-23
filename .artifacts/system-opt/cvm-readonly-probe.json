@@ -1,10 +1,11 @@
 {
   "schema_version": "looper.system-opt-cvm-readonly-probe/v1alpha1",
   "collected_at": "2026-08-23T09:52:15.766853+08:00",
-  "scope": "Read-only CVM preflight; no configuration writes, package installation, or stress workload.",
+  "scope": "Read-only Alibaba Cloud ECS preflight; no configuration writes, package installation, or stress workload.",
   "collector": "Python 3 standard-library probe, not the Looper system-opt CLI",
   "metadata": {
     "target_os": "linux",
+    "provider_observed": "Alibaba Cloud ECS",
     "kernel": "6.8.0-137-generic",
     "architecture": "x86_64",
     "distribution_id": "ubuntu",
@@ -19,7 +20,8 @@
     "numa_nodes": 1,
     "network_interface": "eth0",
     "scope_limitations": [
-      "Facts apply only to this CVM at collection time.",
+      "Facts apply only to this Alibaba Cloud ECS instance at collection time.",
+      "This evidence must not be labeled as Tencent Cloud CVM evidence.",
       "No configuration write safety, persistence, rollback, workload stability, or benefit was verified.",
       "The WSL manifest selectors were retained without silent remapping."
     ]
