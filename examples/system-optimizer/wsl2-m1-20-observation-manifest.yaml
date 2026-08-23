@@ -16,6 +16,7 @@ items:
     primary_component: memory
     related_components: []
     target: /proc/sys/vm/swappiness
+    persistent_keys: [vm.swappiness]
     value_type: integer
     domain: &unknown_numeric {minimum: null, maximum: null, step: null, choices: null, log: false}
     default: null
@@ -41,6 +42,7 @@ items:
     primary_component: memory
     related_components: [storage]
     target: /proc/sys/vm/dirty_ratio
+    persistent_keys: [vm.dirty_ratio]
     value_type: integer
     domain: *unknown_numeric
     default: null
@@ -62,6 +64,7 @@ items:
     primary_component: memory
     related_components: [storage]
     target: /proc/sys/vm/dirty_background_ratio
+    persistent_keys: [vm.dirty_background_ratio]
     value_type: integer
     domain: *unknown_numeric
     default: null
@@ -280,6 +283,7 @@ items:
     primary_component: numa
     related_components: [memory]
     target: /proc/sys/kernel/numa_balancing
+    persistent_keys: [kernel.numa_balancing]
     value_type: boolean
     domain: {minimum: null, maximum: null, step: null, choices: null, log: false}
     default: null
@@ -305,6 +309,7 @@ items:
     primary_component: numa
     related_components: [memory]
     target: /proc/sys/kernel/numa_balancing_scan_period_min_ms
+    persistent_keys: [kernel.numa_balancing_scan_period_min_ms]
     value_type: integer
     domain: *unknown_numeric
     default: null
@@ -326,6 +331,7 @@ items:
     primary_component: numa
     related_components: [memory]
     target: /proc/sys/kernel/numa_balancing_scan_period_max_ms
+    persistent_keys: [kernel.numa_balancing_scan_period_max_ms]
     value_type: integer
     domain: *unknown_numeric
     default: null
@@ -347,6 +353,7 @@ items:
     primary_component: network
     related_components: []
     target: /proc/sys/net/core/somaxconn
+    persistent_keys: [net.core.somaxconn]
     value_type: integer
     domain: *unknown_numeric
     default: null
@@ -368,6 +375,7 @@ items:
     primary_component: network
     related_components: []
     target: /proc/sys/net/ipv4/tcp_max_syn_backlog
+    persistent_keys: [net.ipv4.tcp_max_syn_backlog]
     value_type: integer
     domain: *unknown_numeric
     default: null
@@ -389,6 +397,7 @@ items:
     primary_component: network
     related_components: []
     target: /proc/sys/net/ipv4/tcp_congestion_control
+    persistent_keys: [net.ipv4.tcp_congestion_control]
     value_type: categorical
     domain: *unknown_categorical
     default: null

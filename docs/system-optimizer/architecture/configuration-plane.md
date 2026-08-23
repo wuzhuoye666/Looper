@@ -52,7 +52,8 @@ WSL2 只用于验证上述状态分支。CVM 必须重新采集全部能力，�
 
 自动写入前还必须提供与 target、manifest 和当前环境指纹同时绑定的状态证据：
 
-- 显式源文件采集保留全部可解析 `key=value`，只做目标键精确匹配，不推断同名字段语义。
+- 显式源文件采集保留全部可解析 `key=value`，只做 target 或 manifest 显式
+  `persistent_keys` 精确匹配，不从路径/同名字段猜测语义等价。
 - 单一外部声明记为 `external-writer`；重复声明不猜测发行版优先级，记为 ownership conflict。
 - 没有证据的项保持 unknown；external、conflict、unknown 和 pinned 均 fail-closed。
 - 操作者只能通过显式 `authorize-state` 声明，把逐项运行时写所有权授予指定 actor；

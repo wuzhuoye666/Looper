@@ -1,6 +1,6 @@
 # M1 配置状态、所有权与崩溃恢复合同（2026-08-23）
 
-> 状态：implemented locally, CVM acceptance pending  
+> 状态：implemented locally, CVM acceptance pending
 > 范围：离线或受控 Linux guest；不代表生产常驻控制器。
 
 ## 本次关闭的两个实现缺口
@@ -15,7 +15,9 @@
 - 同时绑定 target、manifest digest、环境指纹和采集时间。
 - 保存显式 source scope、每个可解析 assignment、原文件 SHA-256、行号和 raw value。
 - 对 manifest 每项给出 persistent/ownership disposition；缺记录即 unknown。
-- source 文件只做精确键匹配。重复声明保留全部证据并标 conflict，不臆测优先级。
+- source 文件只匹配 target 或 manifest 显式 `persistent_keys`。例如
+  `/proc/sys/vm/swappiness` 与 `vm.swappiness` 的关系必须写入 manifest，采集器不猜测。
+  重复声明保留全部证据并标 conflict，不臆测优先级。
 - inventory 和 optimization run 均保存 state evidence digest。
 
 自动采集发现单一外部声明时标记 `external-writer`，不会因为“当前值看起来像默认值”而

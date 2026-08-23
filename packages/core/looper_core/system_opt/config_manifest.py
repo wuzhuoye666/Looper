@@ -236,6 +236,7 @@ class ConfigItem(StrictModel):
     primary_component: ConfigComponent
     related_components: list[ConfigComponent]
     target: str = Field(min_length=1, max_length=500)
+    persistent_keys: list[str] = Field(default_factory=list)
     value_type: ConfigValueType
     domain: ValueDomain
     default: Any | None = None
@@ -296,6 +297,15 @@ class ConfigItem(StrictModel):
         ):
             raise ValueError("searchable boolean items require explicit false/true value aliases")
         return self
+
+    @field_validator("persistent_keys")
+    @classmethod
+    def validate_persistent_keys(cls, values: list[str]) -> list[str]:
+        if any(not value.strip() for value in values):
+            raise ValueError("persistent keys cannot be blank")
+        if len(values) != len(set(values)):
+            raise ValueError("persistent keys must be unique")
+        return values
 
     @property
     def parameter_id(self) -> str:

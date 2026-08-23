@@ -85,6 +85,36 @@ def test_single_exact_assignment_is_external_and_blocks_automatic_write(
     assert {item.id for item in manifest.items} == blocked
 
 
+def test_manifest_declares_path_to_persistent_key_mapping(tmp_path: Path) -> None:
+    source_manifest = build_demo_manifest()
+    mapped = source_manifest.item("vm-swappiness").model_copy(
+        update={
+            "target": "/proc/sys/vm/swappiness",
+            "persistent_keys": ["vm.swappiness"],
+        }
+    )
+    manifest = source_manifest.model_copy(
+        update={
+            "items": [mapped if item.id == mapped.id else item for item in source_manifest.items]
+        }
+    )
+    source = tmp_path / "90-admin.conf"
+    source.write_text("vm.swappiness = 10\n", encoding="utf-8")
+
+    evidence = LinuxExactAssignmentCollector().collect(
+        manifest,
+        target_id="target-1",
+        environment_digest="sha256:" + "b" * 64,
+        source_paths=[source],
+        collected_at=datetime(2026, 8, 23, tzinfo=UTC),
+    )
+
+    record = evidence.records_by_item()["vm-swappiness"]
+    assert record.persistence == PersistenceDisposition.DECLARED
+    assert record.persistent_value == 10
+    assert record.sources[0].locator == str(source.resolve())
+
+
 def test_explicit_unowned_evidence_allows_only_the_identified_item() -> None:
     manifest = build_demo_manifest()
     item = manifest.item("vm-swappiness")

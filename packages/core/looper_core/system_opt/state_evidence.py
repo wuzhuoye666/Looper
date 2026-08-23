@@ -340,7 +340,8 @@ class LinuxExactAssignmentCollector:
 
     @staticmethod
     def _record(item: Any, assignments: list[AssignmentObservation]) -> ConfigStateRecord:
-        matches = [assignment for assignment in assignments if assignment.key == item.target]
+        exact_keys = {item.target, *item.persistent_keys}
+        matches = [assignment for assignment in assignments if assignment.key in exact_keys]
         if not matches:
             return ConfigStateRecord(
                 item_id=item.id,
@@ -351,7 +352,10 @@ class LinuxExactAssignmentCollector:
                 owner_id=None,
                 pinned=False,
                 sources=[],
-                reason="no exact target-key assignment was found in the explicit source scope",
+                reason=(
+                    "no exact target or manifest-declared persistent-key assignment was "
+                    "found in the explicit source scope"
+                ),
             )
         parsed: list[Any] = []
         try:
