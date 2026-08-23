@@ -20,6 +20,7 @@ export function OperatorAccessProvider({ children }: { children: ReactNode }) {
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState('');
   const [error, setError] = useState('');
+  const [localPending, setLocalPending] = useState(false);
   const status = useQuery({
     queryKey: ['operator-session'],
     queryFn: api.operatorSession,
@@ -78,6 +79,22 @@ export function OperatorAccessProvider({ children }: { children: ReactNode }) {
     window.dispatchEvent(new Event(OPERATOR_ACCESS_CHANGED_EVENT));
     void queryClient.invalidateQueries();
   };
+  const localLogin = async () => {
+    setLocalPending(true); setError('');
+    try {
+      const issued = await api.localOperatorSession();
+      setOperatorToken(issued.token);
+      const next = await api.operatorSession();
+      if (!next.authenticated) throw new Error('本机操作员会话验证失败');
+      queryClient.setQueryData(['operator-session'], next);
+      await queryClient.invalidateQueries();
+      window.dispatchEvent(new Event(OPERATOR_ACCESS_CHANGED_EVENT));
+      setDraft(''); setOpen(false);
+    } catch (nextError) {
+      setOperatorToken('');
+      setError(nextError instanceof Error ? nextError.message : '本机认证失败');
+    } finally { setLocalPending(false); }
+  };
 
   return <OperatorAccessContext.Provider value={{ authenticated, show }}>
     {children}
@@ -89,6 +106,7 @@ export function OperatorAccessProvider({ children }: { children: ReactNode }) {
         </div>
         <label><span>Bearer token</span><input type="password" value={draft} onChange={event => setDraft(event.target.value)} autoFocus autoComplete="off" /></label>
         {error && <div className="error-banner">{error}</div>}
+        {status.data?.localBootstrapAvailable && !authenticated && <button className="button primary local-operator-button" type="button" disabled={localPending} onClick={() => void localLogin()}><ShieldCheck size={16}/>{localPending ? '正在建立本机会话…' : '本机一键认证'}</button>}
         <div className="operator-dialog-state">
           <span className={authenticated ? 'status-dot success' : 'status-dot'} />
           {status.data?.required ? authenticated ? '已认证' : '服务器要求认证' : '购买锁未启用'}

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hmac
 import io
+import ipaddress
 import json
 import logging
 import zipfile
@@ -441,21 +442,60 @@ def cloud_purchase_readiness(
 def operator_session_status(
     credentials: OperatorCredentials,
     app_settings: SettingsDependency,
+    *,
+    local_bootstrap_available: bool = False,
 ) -> dict[str, bool]:
     return {
         "required": operator_auth_required(app_settings),
         "configured": operator_token_ready(app_settings),
         "authenticated": _operator_authenticated(credentials, app_settings),
         "operatorGateReady": operator_token_ready(app_settings),
+        "localBootstrapAvailable": local_bootstrap_available,
     }
+
+
+def local_operator_bootstrap_available(request: Request, app_settings: Settings) -> bool:
+    if app_settings.host.strip().casefold() not in {"127.0.0.1", "::1", "localhost"}:
+        return False
+    if request.client is None:
+        return False
+    try:
+        return ipaddress.ip_address(request.client.host).is_loopback
+    except ValueError:
+        return request.client.host.casefold() == "localhost"
 
 
 @app.get("/api/v1/operator/session")
 def operator_session(
+    request: Request,
     credentials: OperatorCredentials,
     app_settings: SettingsDependency,
 ) -> dict[str, bool]:
-    return operator_session_status(credentials, app_settings)
+    return operator_session_status(
+        credentials,
+        app_settings,
+        local_bootstrap_available=local_operator_bootstrap_available(request, app_settings),
+    )
+
+
+@app.post("/api/v1/operator/local-session")
+def create_local_operator_session(
+    request: Request,
+    app_settings: SettingsDependency,
+) -> dict[str, str]:
+    if not local_operator_bootstrap_available(request, app_settings):
+        raise CloudWorkflowError(
+            "local operator bootstrap is available only on a loopback-bound control plane",
+            status_code=403,
+            code="local_operator_bootstrap_forbidden",
+        )
+    if not operator_token_ready(app_settings):
+        raise CloudWorkflowError(
+            "operator authentication is not configured",
+            status_code=503,
+            code="operator_auth_not_configured",
+        )
+    return {"token": app_settings.operator_token}
 
 
 @app.get("/api/v1/source-discoveries/readiness")
