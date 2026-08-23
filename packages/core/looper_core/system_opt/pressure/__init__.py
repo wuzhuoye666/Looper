@@ -9,7 +9,6 @@ S1.1 CV 门限派生；直接调用现成压力工具（stress-ng/sysbench/fio/i
 
 from __future__ import annotations
 
-import hashlib
 import random
 import time
 from collections.abc import Callable, Sequence
@@ -82,11 +81,15 @@ class PressurePhaseSpec(StrictModel):
 
     @model_validator(mode="after")
     def validate_duration(self) -> PressurePhaseSpec:
-        if self.kind in {
-            PressurePhaseKind.WARMUP,
-            PressurePhaseKind.MEASURE,
-            PressurePhaseKind.COOLDOWN,
-        } and self.declared_duration_seconds <= 0:
+        if (
+            self.kind
+            in {
+                PressurePhaseKind.WARMUP,
+                PressurePhaseKind.MEASURE,
+                PressurePhaseKind.COOLDOWN,
+            }
+            and self.declared_duration_seconds <= 0
+        ):
             raise ValueError(f"{self.kind.value} requires an explicit positive duration")
         if self.command.timeout_seconds <= self.declared_duration_seconds:
             raise ValueError("phase command timeout must exceed its declared duration")
@@ -179,9 +182,7 @@ class PressureCollectionContract(StrictModel):
 class PressureExecutionEvidence(StrictModel):
     """Raw measure-phase handoff: identities, digests, and gates, but no metric parsing."""
 
-    schema_version: Literal[PRESSURE_EXECUTION_EVIDENCE_SCHEMA] = (
-        PRESSURE_EXECUTION_EVIDENCE_SCHEMA
-    )
+    schema_version: Literal[PRESSURE_EXECUTION_EVIDENCE_SCHEMA] = PRESSURE_EXECUTION_EVIDENCE_SCHEMA
     protocol_id: str = Field(min_length=1, max_length=160)
     component: ConfigComponent
     workload_phase_id: str = Field(min_length=1, max_length=160)
@@ -248,7 +249,9 @@ class StandardPressureProtocol(StrictModel):
             requested = set(self.collection.requested_metrics)
             prefix = f"{self.component.value}."
             if any(not metric.startswith(prefix) for metric in requested):
-                raise ValueError("collection requested_metrics must belong to the protocol component")
+                raise ValueError(
+                    "collection requested_metrics must belong to the protocol component"
+                )
             if not set(self.metric_ids) <= requested:
                 raise ValueError("metric_ids must be included in collection requested_metrics")
             # Reuse the authoritative L4 scope contract instead of guessing interface/device scope.
@@ -323,9 +326,7 @@ def evaluate_measurement_stability(
     try:
         values = batch.metrics[contract.metric_id].values
     except KeyError as error:
-        raise PressureProtocolError(
-            f"stability metric is missing: {contract.metric_id}"
-        ) from error
+        raise PressureProtocolError(f"stability metric is missing: {contract.metric_id}") from error
     if not contract.minimum_repeats <= len(values) <= contract.maximum_repeats:
         raise PressureProtocolError("measurement count is outside the calibrated repeat range")
     if contract.statistic == "cv":
@@ -349,9 +350,7 @@ def evaluate_measurement_stability(
         enforcement=contract.enforcement,
         acceptance_limit=contract.acceptance_limit,
         accepted=(
-            value <= contract.acceptance_limit
-            if contract.acceptance_limit is not None
-            else None
+            value <= contract.acceptance_limit if contract.acceptance_limit is not None else None
         ),
     )
 
@@ -643,7 +642,11 @@ class PhasedPressureCollectionAdapter:
         )
         records.append(self._phase_record(cleanup, repeats, cleanup_result))
         elapsed_seconds = self.monotonic() - started
-        if elapsed_seconds < 0 or elapsed_seconds == float("inf") or elapsed_seconds != elapsed_seconds:
+        if (
+            elapsed_seconds < 0
+            or elapsed_seconds == float("inf")
+            or elapsed_seconds != elapsed_seconds
+        ):
             raise RuntimeError("pressure collection elapsed time must be finite and non-negative")
         if cleanup_result.status != OperationStatus.SUCCEEDED:
             raise RuntimeError(
@@ -661,7 +664,9 @@ class PhasedPressureCollectionAdapter:
                 collection_run,
                 gate_values=execution.gate_values,
             )
-            missing_main = sorted(set(self.protocol.metric_ids) - set(base.measurement_batch.metrics))
+            missing_main = sorted(
+                set(self.protocol.metric_ids) - set(base.measurement_batch.metrics)
+            )
             if missing_main:
                 raise PressureProtocolError(
                     f"required pressure metrics are unavailable: {missing_main}"
@@ -721,9 +726,7 @@ def build_collection_overhead_evidence(
     identity = {
         "protocol_id": first.protocol_id,
         "protocol_digest": first.protocol_digest,
-        "measurement_identity_digest": canonical_digest(
-            reference_request.measurement_identity
-        ),
+        "measurement_identity_digest": canonical_digest(reference_request.measurement_identity),
     }
     for run in [*disabled_runs, *enabled_runs]:
         request = run.collection_run.request
@@ -787,8 +790,9 @@ class PhasedPressureMeasurementAdapter:
                     try:
                         batch = MeasurementBatch.model_validate_json(result.stdout)
                     except ValueError as parse_error:
-                        raise ValueError("pressure measurement stdout is not a MeasurementBatch") \
-                            from parse_error
+                        raise ValueError(
+                            "pressure measurement stdout is not a MeasurementBatch"
+                        ) from parse_error
         except Exception as caught:  # cleanup must run for every failure class
             error = caught
         cleanup_result = self.runner.run(

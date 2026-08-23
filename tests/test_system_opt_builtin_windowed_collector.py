@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import io
 import json
 import zipfile
 from datetime import UTC, datetime
@@ -122,9 +121,7 @@ def test_builtin_window_cancel_is_idempotent(tmp_path: Path) -> None:
     sys = tmp_path / "sys"
     proc.mkdir()
     sys.mkdir()
-    (proc / "meminfo").write_text(
-        "MemTotal: 100 kB\nMemAvailable: 50 kB\n", encoding="utf-8"
-    )
+    (proc / "meminfo").write_text("MemTotal: 100 kB\nMemAvailable: 50 kB\n", encoding="utf-8")
     collector = BuiltinLinuxGuestCollector(proc_root=proc, sys_root=sys)
     plan = ComponentCollectionPlan(
         component="memory",

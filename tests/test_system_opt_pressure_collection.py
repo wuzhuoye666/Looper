@@ -4,7 +4,7 @@ import hashlib
 import io
 import json
 import zipfile
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Any
 
 import pytest
@@ -30,7 +30,6 @@ from looper_core.system_opt.pressure import (
     parse_standard_pressure_protocol_yaml,
 )
 from pydantic import ValidationError
-
 
 _RAW_MEMBER = b'{"fixture":"cpu-pressure","samples":[100.0,101.0,99.0]}'
 _RAW_MANIFEST = CollectionArtifactBundleManifest(
@@ -280,9 +279,9 @@ def _adapter(
         target_id="fixture-target",
         environment_digest=_ENVIRONMENT_DIGEST,
         collection_enabled=enabled,
-        artifact_reader=lambda artifact: _RAW_ARTIFACT
-        if artifact.digest == digest
-        else b"not-the-declared-artifact",
+        artifact_reader=lambda artifact: (
+            _RAW_ARTIFACT if artifact.digest == digest else b"not-the-declared-artifact"
+        ),
         monotonic=lambda: next(times),
         wall_clock=iter(
             [

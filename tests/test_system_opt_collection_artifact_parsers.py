@@ -7,7 +7,6 @@ from hashlib import sha256
 
 import pytest
 import yaml
-
 from looper_core.system_opt.collector import (
     COLLECTION_BUNDLE_MANIFEST_NAME,
     CollectionArtifactBundleManifest,
@@ -72,9 +71,7 @@ def test_stress_ng_yaml_is_parsed_as_cpu_distribution() -> None:
 
 def test_sysbench_text_is_parsed_as_memory_distributions() -> None:
     output = b"1024.00 MiB transferred (512.25 MiB/sec)\n95th percentile: 3.75\n"
-    bundle = _verified(
-        {"raw/memory-1.txt": ("text/vnd.sysbench.memory", output)}
-    )
+    bundle = _verified({"raw/memory-1.txt": ("text/vnd.sysbench.memory", output)})
 
     metrics = parse_collection_artifact_bundle_metrics(
         bundle,
@@ -159,9 +156,7 @@ def test_fio_json_uses_storage_names_and_max_job_p99() -> None:
 
 
 def test_gate_false_is_preserved_as_numeric_evidence_without_parsing_a_verdict() -> None:
-    output = json.dumps(
-        {"end": {"sum_received": {"bits_per_second": 1}, "sum_sent": {}}}
-    ).encode()
+    output = json.dumps({"end": {"sum_received": {"bits_per_second": 1}, "sum_sent": {}}}).encode()
     bundle = _verified({"raw/net.json": ("application/vnd.iperf3+json", output)})
 
     metrics = parse_collection_artifact_bundle_metrics(

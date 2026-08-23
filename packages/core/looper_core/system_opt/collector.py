@@ -13,13 +13,13 @@ import re
 import stat
 import time
 import zipfile
-from threading import Event, Lock, Thread
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
 from math import isfinite
 from pathlib import Path, PurePosixPath
+from threading import Event, Lock, Thread
 from typing import Literal, Protocol
 
 import yaml
@@ -214,9 +214,7 @@ class CollectionArtifactBundleMember(StrictModel):
 class CollectionArtifactBundleManifest(StrictModel):
     """Canonical identity of one measure execution; ZIP container bytes are not identity."""
 
-    schema_version: Literal[COLLECTION_BUNDLE_MANIFEST_SCHEMA] = (
-        COLLECTION_BUNDLE_MANIFEST_SCHEMA
-    )
+    schema_version: Literal[COLLECTION_BUNDLE_MANIFEST_SCHEMA] = COLLECTION_BUNDLE_MANIFEST_SCHEMA
     members: list[CollectionArtifactBundleMember] = Field(min_length=1)
 
     @model_validator(mode="after")
@@ -294,9 +292,7 @@ def verify_collection_artifact_bundle(
         for member in manifest.members:
             raw = archive.read(member.path)
             if len(raw) != member.size_bytes:
-                raise ValueError(
-                    f"collection artifact bundle member size mismatch: {member.path}"
-                )
+                raise ValueError(f"collection artifact bundle member size mismatch: {member.path}")
             actual_digest = "sha256:" + hashlib.sha256(raw).hexdigest()
             if actual_digest != member.digest:
                 raise ValueError(
@@ -314,9 +310,7 @@ _STRESS_NG_MEDIA_TYPE = "application/vnd.stress-ng.metrics+yaml"
 _SYSBENCH_MEMORY_MEDIA_TYPE = "text/vnd.sysbench.memory"
 _IPERF3_MEDIA_TYPE = "application/vnd.iperf3+json"
 _FIO_MEDIA_TYPE = "application/vnd.fio+json"
-_SYSBENCH_THROUGHPUT = re.compile(
-    r"[0-9.]+ MiB transferred \((?P<rate>[0-9.]+) MiB/sec\)"
-)
+_SYSBENCH_THROUGHPUT = re.compile(r"[0-9.]+ MiB transferred \((?P<rate>[0-9.]+) MiB/sec\)")
 _SYSBENCH_P95 = re.compile(r"95th percentile:\s+(?P<p95>[0-9.]+)")
 
 
@@ -362,9 +356,7 @@ def _parse_sysbench_memory(raw: bytes) -> tuple[float, float]:
     if throughput is None or latency is None:
         raise ValueError("sysbench memory output is missing throughput or p95 latency")
     return (
-        _finite_non_negative(
-            throughput.group("rate"), "sysbench memory throughput", positive=True
-        ),
+        _finite_non_negative(throughput.group("rate"), "sysbench memory throughput", positive=True),
         _finite_non_negative(latency.group("p95"), "sysbench memory p95 latency"),
     )
 
@@ -416,9 +408,7 @@ def _parse_fio(raw: bytes) -> tuple[float, float]:
         if not isinstance(percentiles, dict):
             raise ValueError("fio job has no completion-latency percentiles")
         p99_values.append(
-            _finite_non_negative(
-                percentiles.get("99.000000"), "fio read clat p99 nanoseconds"
-            )
+            _finite_non_negative(percentiles.get("99.000000"), "fio read clat p99 nanoseconds")
             / 1000.0
         )
     if total_iops <= 0:
@@ -445,7 +435,9 @@ def parse_collection_artifact_bundle_metrics(
 
     def add(name: str, unit: str, values: list[float], paths: list[str]) -> None:
         if name in requested and values:
-            metrics[name] = _readable(name, unit, f"{bundle_source} members={','.join(paths)}", values)
+            metrics[name] = _readable(
+                name, unit, f"{bundle_source} members={','.join(paths)}", values
+            )
 
     if component == "cpu" and "cpu.bogo-ops-per-second" in requested:
         entries = sources.get(_STRESS_NG_MEDIA_TYPE, [])
@@ -525,9 +517,7 @@ def parse_collection_artifact_bundle_metrics(
             continue
         else:
             numeric = _finite_non_negative(value, f"gate {name}")
-        metrics[name] = _readable(
-            name, "boolean", "pressure execution gate evidence", [numeric]
-        )
+        metrics[name] = _readable(name, "boolean", "pressure execution gate evidence", [numeric])
 
     artifact_metric_names = {
         "cpu.bogo-ops-per-second",
@@ -1277,7 +1267,9 @@ _COUNTING_BASIS = {
 
 
 class _BuiltinLinuxGuestCollectionSession:
-    def __init__(self, collector: BuiltinLinuxGuestCollector, plan: ComponentCollectionPlan) -> None:
+    def __init__(
+        self, collector: BuiltinLinuxGuestCollector, plan: ComponentCollectionPlan
+    ) -> None:
         self.collector = collector
         self.plan = plan
         self._stop = Event()
@@ -1367,14 +1359,21 @@ class _BuiltinLinuxGuestCollectionSession:
                 if isinstance(candidate, CollectedMetric):
                     last_metric = candidate
                     if candidate.availability == MetricAvailability.READABLE:
-                        values = candidate.value if isinstance(candidate.value, list) else [candidate.value]
-                        readable_values.extend(float(value) for value in values if value is not None)
+                        values = (
+                            candidate.value
+                            if isinstance(candidate.value, list)
+                            else [candidate.value]
+                        )
+                        readable_values.extend(
+                            float(value) for value in values if value is not None
+                        )
             if readable_values:
                 return {
                     "memory.available-ratio": _readable(
                         "memory.available-ratio",
                         "ratio",
-                        f"{self.collector.proc_root}/meminfo periodic interval={self.plan.interval_seconds}s",
+                        f"{self.collector.proc_root}/meminfo periodic "
+                        f"interval={self.plan.interval_seconds}s",
                         readable_values,
                     )
                 }
@@ -1445,7 +1444,9 @@ class _BuiltinLinuxGuestCollectionSession:
                         gate_values=request.gate_values,
                     )
                 )
-            selected = {name: metrics[name] for name in request.requested_metrics if name in metrics}
+            selected = {
+                name: metrics[name] for name in request.requested_metrics if name in metrics
+            }
             missing = sorted(set(request.requested_metrics) - set(selected))
             if missing:
                 raise ValueError(f"builtin collector cannot provide requested metrics: {missing}")
@@ -1494,7 +1495,9 @@ class BuiltinLinuxGuestCollector:
         self.sleep_fn = sleep_fn
         self.wall_clock = wall_clock or (lambda: datetime.now(UTC))
         self.monotonic = monotonic
-        self.artifact_reader = artifact_reader or (lambda artifact: Path(artifact.source).read_bytes())
+        self.artifact_reader = artifact_reader or (
+            lambda artifact: Path(artifact.source).read_bytes()
+        )
 
     def begin_collection(
         self, plan: ComponentCollectionPlan

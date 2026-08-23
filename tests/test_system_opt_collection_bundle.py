@@ -6,7 +6,6 @@ import zipfile
 from hashlib import sha256
 
 import pytest
-
 from looper_core.canonical import canonical_digest
 from looper_core.system_opt.collector import (
     COLLECTION_BUNDLE_MANIFEST_NAME,
@@ -97,9 +96,7 @@ def test_bundle_rejects_manifest_identity_tampering() -> None:
     tampered = CollectionArtifactBundleManifest.model_validate(tampered_payload)
 
     with pytest.raises(ValueError, match="manifest digest mismatch"):
-        verify_collection_artifact_bundle(
-            _bundle(tampered, files), expected_digest=manifest.digest
-        )
+        verify_collection_artifact_bundle(_bundle(tampered, files), expected_digest=manifest.digest)
 
 
 @pytest.mark.parametrize("path", ["../escape.json", "/absolute.json", "raw\\escape.json"])
