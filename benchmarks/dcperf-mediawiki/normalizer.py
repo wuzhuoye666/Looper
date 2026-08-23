@@ -127,6 +127,14 @@ def main() -> int:
         if not native_path.is_file():
             native_path = output / "benchpress-result.json"
         native = read_object(native_path)
+        native_run_path = output / "native-run.json"
+        native_run = read_object(native_run_path) if native_run_path.is_file() else {}
+        run_parameters = native_run.get("parameters")
+        profile_requested = (
+            bool(run_parameters.get("profile"))
+            if isinstance(run_parameters, dict) and isinstance(run_parameters.get("profile"), bool)
+            else True
+        )
         if native.get("benchmark_name") != JOB_NAME:
             raise NormalizerError(
                 f"native benchmark_name must be {JOB_NAME}, got {native.get('benchmark_name')!r}"
@@ -327,7 +335,7 @@ def main() -> int:
         write_json(output / "result.json", result)
         profile_present = (output / "perf.data").is_file()
         (output / "profile-status.txt").write_text(
-            "profile_requested=true\n"
+            f"profile_requested={'true' if profile_requested else 'false'}\n"
             + f"perf_data_present={'true' if profile_present else 'false'}\n"
             + "profile_source=DCPerf packages/mediawiki/perf-record.sh\n",
             encoding="utf-8",

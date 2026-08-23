@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import hashlib
 import io
+import os
+import secrets
 import shutil
 import stat
-import tempfile
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -108,7 +109,8 @@ def install_benchmark_package(
         return manifest_path
 
     package_root.parent.mkdir(parents=True, exist_ok=True)
-    temporary = Path(tempfile.mkdtemp(prefix=f".{digest[:12]}-", dir=package_root.parent))
+    temporary = package_root.parent / f".{digest[:12]}-{secrets.token_hex(8)}"
+    temporary.mkdir(mode=0o777 if os.name == "nt" else 0o700)
     try:
         with zipfile.ZipFile(io.BytesIO(parsed.archive_bytes)) as archive:
             for member in archive.infolist():

@@ -162,6 +162,7 @@ class TencentCvmProvider(CloudProvider):
                 "images",
                 "vpcs",
                 "subnets",
+                "managed-subnet",
                 "security-groups",
                 "key-pairs",
                 "managed-security-group",
@@ -294,12 +295,19 @@ class TencentCvmProvider(CloudProvider):
         return items
 
     def list_subnets(self, region: str, zone: str, vpc_id: str) -> list[SubnetInfo]:
+        return self._list_subnets(region, vpc_id=vpc_id, zone=zone)
+
+    def list_vpc_subnets(self, region: str, vpc_id: str) -> list[SubnetInfo]:
+        return self._list_subnets(region, vpc_id=vpc_id, zone=None)
+
+    def _list_subnets(
+        self, region: str, *, vpc_id: str, zone: str | None
+    ) -> list[SubnetInfo]:
         from tencentcloud.vpc.v20170312 import models
 
-        filters = [
-            {"Name": "vpc-id", "Values": [vpc_id]},
-            {"Name": "zone", "Values": [zone]},
-        ]
+        filters = [{"Name": "vpc-id", "Values": [vpc_id]}]
+        if zone:
+            filters.append({"Name": "zone", "Values": [zone]})
         items: list[SubnetInfo] = []
         offset = 0
         while True:
@@ -311,8 +319,9 @@ class TencentCvmProvider(CloudProvider):
             )
             response = self._vpc_call("DescribeSubnets", region, request)
             rows = list(response.SubnetSet or [])
-            items.extend(
-                SubnetInfo(
+            for item in rows:
+                tags = _tag_map(attr(item, "TagSet", default=[]))
+                items.append(SubnetInfo(
                     provider=self.id,
                     region=region,
                     zone=str(item.Zone),
@@ -322,14 +331,67 @@ class TencentCvmProvider(CloudProvider):
                     cidrBlock=attr(item, "CidrBlock"),
                     availableIpCount=attr(item, "AvailableIpAddressCount"),
                     isDefault=bool(attr(item, "IsDefault", default=False)),
-                )
-                for item in rows
-            )
+                    tags=tags,
+                    managed=tags.get("managedBy", "").casefold() == "looper",
+                ))
             offset += len(rows)
             total = attr(response, "TotalCount")
             if not rows or len(rows) < 100 or (total is not None and offset >= int(total)):
                 break
         return items
+
+    def create_managed_subnet(
+        self,
+        *,
+        region: str,
+        zone: str,
+        vpc_id: str,
+        cidr_block: str,
+        name: str,
+        client_token: str,
+    ) -> SubnetInfo:
+        del client_token
+        from tencentcloud.vpc.v20170312 import models
+
+        request = models.CreateSubnetRequest()
+        request.from_json_string(
+            canonical_json(
+                {
+                    "VpcId": vpc_id,
+                    "SubnetName": name,
+                    "CidrBlock": cidr_block,
+                    "Zone": zone,
+                    "Tags": [
+                        {"Key": "managedBy", "Value": "looper"},
+                        {"Key": "purpose", "Value": "cloud-purchase"},
+                    ],
+                }
+            )
+        )
+        response = self._vpc_call("CreateSubnet", region, request)
+        item = response.Subnet
+        if item is None or not attr(item, "SubnetId"):
+            raise CloudProviderError(
+                "Tencent Cloud created a subnet without returning its id",
+                code="ambiguous_response",
+                ambiguous=True,
+            )
+        tags = _tag_map(attr(item, "TagSet", default=[]))
+        tags.setdefault("managedBy", "looper")
+        tags.setdefault("purpose", "cloud-purchase")
+        return SubnetInfo(
+            provider=self.id,
+            region=region,
+            zone=str(attr(item, "Zone", default=zone)),
+            vpcId=str(attr(item, "VpcId", default=vpc_id)),
+            id=str(item.SubnetId),
+            name=str(attr(item, "SubnetName", default=name) or name),
+            cidrBlock=attr(item, "CidrBlock", default=cidr_block),
+            availableIpCount=attr(item, "AvailableIpAddressCount"),
+            isDefault=bool(attr(item, "IsDefault", default=False)),
+            tags=tags,
+            managed=True,
+        )
 
     def list_security_groups(self, region: str) -> list[SecurityGroupInfo]:
         from tencentcloud.vpc.v20170312 import models
@@ -549,9 +611,14 @@ class TencentCvmProvider(CloudProvider):
         page_size = 100
         while True:
             request = models.DescribeImagesRequest()
-            request.from_json_string(
-                canonical_json({"Filters": provider_filters, "Offset": offset, "Limit": page_size})
-            )
+            payload: dict[str, Any] = {
+                "Filters": provider_filters,
+                "Offset": offset,
+                "Limit": page_size,
+            }
+            if filters.instance_type:
+                payload["InstanceType"] = filters.instance_type
+            request.from_json_string(canonical_json(payload))
             response = self._call("DescribeImages", filters.region, request)
             rows = list(response.ImageSet or [])
             items.extend(

@@ -5,9 +5,10 @@ from __future__ import annotations
 import base64
 import hashlib
 import io
+import os
+import secrets
 import shutil
 import stat
-import tempfile
 import zipfile
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -41,7 +42,8 @@ def materialize_package(bundle: dict[str, Any], cache_root: Path) -> Path:
     if (destination / ".ready").is_file():
         return destination
     destination.parent.mkdir(parents=True, exist_ok=True)
-    temporary = Path(tempfile.mkdtemp(prefix=".package-", dir=destination.parent)).resolve()
+    temporary = destination.parent / f".package-{secrets.token_hex(8)}"
+    temporary.mkdir(mode=0o777 if os.name == "nt" else 0o700)
     try:
         try:
             with zipfile.ZipFile(io.BytesIO(archive_bytes)) as archive:

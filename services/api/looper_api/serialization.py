@@ -93,6 +93,9 @@ def benchmark_view(
         and package_ready
         and (record.trusted or runtime.get("type") == "container")
     )
+    selectable = bool(extensions.get("selectable", runnable)) and runnable
+    execution_blocker = extensions.get("executionBlocker")
+    execution_blocker_reason = extensions.get("executionBlockerReason")
     metadata_extensions = metadata.get("x-extensions") or {}
     explicit_category = metadata_extensions.get("category") or extensions.get("category")
     return {
@@ -104,7 +107,8 @@ def benchmark_view(
         # A scenario only appears in the experiment picker when it can really
         # be delivered to a target and executed. Stage-0 contracts remain in
         # the catalog for research, but are never presented as runnable choices.
-        "selectionReady": scenario is not None and runnable,
+        "selectionReady": scenario is not None and selectable,
+        "selectable": selectable,
         "executionModel": adapter.get("executionModel", "custom"),
         "inputs": adapter.get("inputs", []),
         "infrastructure": spec.get("infrastructure"),
@@ -127,6 +131,8 @@ def benchmark_view(
         "trusted": record.trusted,
         "executionStatus": execution_status,
         "runnable": runnable,
+        "executionBlocker": execution_blocker,
+        "executionBlockerReason": execution_blocker_reason,
         "registrationId": registration.id if registration else None,
         "registrationStatus": registration.status if registration else None,
         "auditStatus": "registered-not-admitted" if registration else "legacy-unreviewed",

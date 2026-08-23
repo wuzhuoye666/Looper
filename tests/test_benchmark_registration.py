@@ -284,6 +284,7 @@ def test_generic_container_adapter_can_register_without_backend_plugin(db_sessio
     draft.manifest["spec"].pop("scenario", None)
     draft.manifest["spec"].pop("infrastructure", None)
     draft.manifest["spec"]["x-extensions"]["executionStatus"] = "executable"
+    draft.manifest["spec"]["x-extensions"]["selectable"] = True
     record = create_registration(db_session, draft)
 
     assert record.constraints_json

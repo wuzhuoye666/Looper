@@ -235,6 +235,19 @@ wheels = [
 ]
 
 [[package]]
+name = "alibabacloud-vpc20160428"
+version = "7.1.6"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "alibabacloud-tea-openapi" },
+    { name = "darabonba-core" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/a1/f8/f13d257cccbd57a2e8edfd8b712a6e3d7c86ba2e79422d45c91c8a37b83f/alibabacloud_vpc20160428-7.1.6.tar.gz", hash = "sha256:10913fd03d4425d0cae80ec5a49a3bda6fd09a4cc5c110d41c4f74bdbe809980", size = 536568, upload-time = "2026-08-14T19:36:20.071Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/5d/a8/b648245e2e934df5569db0c1c4b7ff87b665902b4158deed493a5696eca2/alibabacloud_vpc20160428-7.1.6-py3-none-any.whl", hash = "sha256:c29ccb0544f81263b6be3ef6065ef7b32da0a76aef959b370692654a87a43784", size = 1512331, upload-time = "2026-08-14T19:36:18.307Z" },
+]
+
+[[package]]
 name = "annotated-doc"
 version = "0.0.5"
 source = { registry = "https://pypi.org/simple" }
@@ -1034,6 +1047,7 @@ source = { editable = "." }
 dependencies = [
     { name = "alembic" },
     { name = "alibabacloud-ecs20140526" },
+    { name = "alibabacloud-vpc20160428" },
     { name = "bce-python-sdk" },
     { name = "cryptography" },
     { name = "fastapi" },
@@ -1068,6 +1082,7 @@ dev = [
 requires-dist = [
     { name = "alembic", specifier = ">=1.16,<2" },
     { name = "alibabacloud-ecs20140526", specifier = ">=7.9.6,<8" },
+    { name = "alibabacloud-vpc20160428", specifier = ">=7.1.1,<8" },
     { name = "bce-python-sdk", specifier = ">=0.9.76,<1" },
     { name = "cryptography", specifier = ">=50,<51" },
     { name = "fastapi", specifier = ">=0.116,<1" },

@@ -66,13 +66,13 @@ spec:
   runtime:
     type: local-process
     workingDirectory: .
-    dependencyLockDigest: sha256:8cf2c7552e088e561fd5e5ca90cb0226cd7e38f8e2fd5abea7468f222932d943
+    dependencyLockDigest: sha256:bea0448bdbc381cb6fffc15deefce1288b91e0f7543e12cc430aa632101ce6da
     dependencies: []
     provisioning:
       mode: managed
       hostCapabilities: [python, local-process]
       provides: [config-driven-adapter]
-      cacheKey: sha256:8cf2c7552e088e561fd5e5ca90cb0226cd7e38f8e2fd5abea7468f222932d943
+      cacheKey: sha256:bea0448bdbc381cb6fffc15deefce1288b91e0f7543e12cc430aa632101ce6da
       requiresNetwork: false
       privilege: none
     commands:

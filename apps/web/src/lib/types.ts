@@ -79,7 +79,8 @@ export interface Benchmark {
   infrastructure?: Record<string, unknown>;
   auditPolicy?: Record<string, unknown>;
   executionPolicy?: Record<string, unknown>;
-  cases?: number; updatedAt?: string; tags?: string[]; license?: string; runnable?: boolean; executionStatus?: string;
+  cases?: number; updatedAt?: string; tags?: string[]; license?: string; runnable?: boolean; selectable?: boolean; executionStatus?: string;
+  executionBlocker?: string; executionBlockerReason?: string;
   deploymentRequirements?: string[]; provisionedCapabilities?: string[]; provisioning?: Record<string, unknown>; packageReady?: boolean; packageDigest?: string;
   decisionQuestion?: string; primaryMetric?: string; scenario?: ScenarioContract;
   selectionReady?: boolean;
@@ -260,7 +261,15 @@ export interface CloudVpc {
 }
 export interface CloudSubnet {
   provider: CloudProviderId; region: string; zone: string; vpcId: string; id: string; name: string;
-  cidrBlock?: string; availableIpCount?: number; isDefault: boolean;
+  cidrBlock?: string; availableIpCount?: number; isDefault: boolean; tags: Record<string, string>; managed: boolean;
+}
+export interface InstanceNetworkResolveRequest {
+  region: string; instanceType: string; zone?: string; vpcId?: string; subnetId?: string;
+}
+export interface InstanceNetworkResolution {
+  provider: CloudProviderId; region: string; instanceType: string; zone: string; eligibleZones: string[];
+  vpc: CloudVpc; subnet: CloudSubnet; zoneAutomaticallySelected: boolean;
+  subnetAction: 'reused' | 'created'; warnings: string[];
 }
 export interface CloudSecurityGroup {
   provider: CloudProviderId; region: string; id: string; name: string; description?: string;

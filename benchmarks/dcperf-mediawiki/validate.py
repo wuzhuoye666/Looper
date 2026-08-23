@@ -21,6 +21,22 @@ REQUIRED_METRICS = {
     "latency_p99_ms",
     "cpu_utilization_p95",
 }
+REQUIRED_CHECKS = {
+    "native-identity",
+    "request-accounting",
+    "failure-budget",
+    "timeout-budget",
+    "tail-sample-count",
+    "cpu-saturation",
+}
+REQUIRED_ARTIFACTS = {
+    "benchpress-result.json",
+    "native-result-enriched.json",
+    "native-system-specs.json",
+    "native-run.json",
+    "benchmark.log",
+    "profile-status.txt",
+}
 
 
 def main() -> int:
@@ -41,11 +57,21 @@ def main() -> int:
         missing = sorted(REQUIRED_METRICS - names)
         if missing:
             raise ValueError(f"missing normalized metrics: {missing}")
-        if not (output / "benchpress-result.json").is_file():
-            raise ValueError("native Benchpress result was not preserved")
+        missing_artifacts = sorted(
+            name for name in REQUIRED_ARTIFACTS if not (output / name).is_file()
+        )
+        if missing_artifacts:
+            raise ValueError(f"missing required native evidence: {missing_artifacts}")
+        check_ids = {item.get("id") for item in result.get("checks", []) if isinstance(item, dict)}
+        missing_checks = sorted(REQUIRED_CHECKS - check_ids)
+        if missing_checks:
+            raise ValueError(f"missing required result checks: {missing_checks}")
         if result.get("status") != "succeeded":
             raise ValueError(result.get("message") or "normalized result failed a suite gate")
-        if not all(item.get("passed") is True for item in result.get("checks", [])):
+        checks = result.get("checks")
+        if not isinstance(checks, list) or not checks or not all(
+            isinstance(item, dict) and item.get("passed") is True for item in checks
+        ):
             raise ValueError("normalized result contains a failed check")
         print("[dcperf-validate] result contract passed", flush=True)
         return 0

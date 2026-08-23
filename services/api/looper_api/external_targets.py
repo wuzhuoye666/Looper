@@ -84,6 +84,7 @@ class ConnectExternalTargetRequest(BaseModel):
     expected_host_key_sha256: str | None = None
     timeout_seconds: int = Field(default=10, ge=3, le=30)
     deploy_worker: bool = True
+    remember_credentials: bool = True
 
     @field_validator("expected_host_key_sha256", mode="before")
     @classmethod

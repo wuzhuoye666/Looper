@@ -30,9 +30,13 @@ alibabacloud-tea==0.4.3
     #   alibabacloud-tea-util
     #   darabonba-core
 alibabacloud-tea-openapi==0.4.6
-    # via alibabacloud-ecs20140526
+    # via
+    #   alibabacloud-ecs20140526
+    #   alibabacloud-vpc20160428
 alibabacloud-tea-util==0.3.15
     # via alibabacloud-tea-openapi
+alibabacloud-vpc20160428==7.1.6
+    # via looper-platform
 annotated-doc==0.0.5
     # via
     #   fastapi
@@ -91,6 +95,7 @@ darabonba-core==1.0.8
     # via
     #   alibabacloud-ecs20140526
     #   alibabacloud-tea-openapi
+    #   alibabacloud-vpc20160428
 fastapi==0.141.1
     # via looper-platform
 frozenlist==1.8.0

@@ -175,6 +175,7 @@ def test_selection_analysis_pairs_time_blocks_by_target_variant(db_session: obje
     )
     assert benchmark is not None
     benchmark.manifest_json["spec"]["x-extensions"]["executionStatus"] = "executable"
+    benchmark.manifest_json["spec"]["x-extensions"]["selectable"] = True
     benchmark.manifest_json["spec"]["scenario"].pop("load_search", None)
     benchmark.manifest_json["spec"]["runtime"]["image"] = (
         "example.invalid/benchbase@sha256:" + "0" * 64
@@ -294,6 +295,7 @@ def _create_frontier_fixture(
     )
     assert benchmark is not None
     benchmark.manifest_json["spec"]["x-extensions"]["executionStatus"] = "executable"
+    benchmark.manifest_json["spec"]["x-extensions"]["selectable"] = True
     benchmark.manifest_json["spec"]["runtime"]["image"] = (
         "example.invalid/benchbase@sha256:" + "3" * 64
     )

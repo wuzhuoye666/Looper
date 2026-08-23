@@ -84,13 +84,13 @@ spec:
   runtime:
     type: local-process
     workingDirectory: .
-    dependencyLockDigest: sha256:f47b2faa6b960438f77d821ef0bf2158ea942ddb3d6958d2065ff6018eebc03a
+    dependencyLockDigest: sha256:08f60c4b02361a22c6250df182aaa08c11648176ebdfdffe9c1602bc42de7f74
     dependencies: []
     provisioning:
       mode: managed
       hostCapabilities: [python, local-process]
       provides: [python-zlib]
-      cacheKey: sha256:f47b2faa6b960438f77d821ef0bf2158ea942ddb3d6958d2065ff6018eebc03a
+      cacheKey: sha256:08f60c4b02361a22c6250df182aaa08c11648176ebdfdffe9c1602bc42de7f74
       requiresNetwork: false
       privilege: none
     commands:

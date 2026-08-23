@@ -72,6 +72,7 @@ from looper_api.benchmark_registration import (
 from looper_api.benchmark_runs import BenchmarkSmokeRunRequest, create_benchmark_smoke_run
 from looper_api.cloud_contracts import (
     CatalogFilters,
+    InstanceNetworkResolveRequest,
     InstanceTypeInfo,
     OrderPrepareRequest,
     OrderResolveRequest,
@@ -100,6 +101,7 @@ from looper_api.cloud_service import (
     purchase_quote,
     purchase_readiness,
     recover_interrupted_orders,
+    resolve_instance_network,
     resolve_unknown_order,
 )
 from looper_api.config import Settings, get_settings
@@ -467,6 +469,7 @@ def cloud_catalog(
     max_memory_gib: float | None = Query(default=None, ge=0.25, le=65536),
     image_type: str | None = Query(default=None, max_length=60),
     platform: str | None = Query(default=None, max_length=80),
+    instance_type: str | None = Query(default=None, max_length=120),
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=100, ge=1, le=500),
 ) -> dict[str, Any]:
@@ -492,6 +495,7 @@ def cloud_catalog(
         maxMemoryGib=max_memory_gib,
         imageType=image_type,
         platform=platform,
+        instanceType=instance_type,
         offset=offset,
         limit=limit,
     )
@@ -546,6 +550,30 @@ def cloud_managed_security_group(
     result = ensure_managed_security_group(session, registry, provider, region)
     session.commit()
     return result
+
+
+@app.post("/api/v1/cloud/network/{provider}/resolve-instance-network")
+def cloud_resolve_instance_network(
+    provider: ProviderId,
+    request: InstanceNetworkResolveRequest,
+    session: SessionDependency,
+    app_settings: SettingsDependency,
+    registry: ProviderRegistryDependency,
+    _operator: OperatorDependency,
+    idempotency_key: Annotated[
+        str, Header(alias="Idempotency-Key", min_length=8, max_length=160)
+    ],
+) -> dict[str, Any]:
+    result = resolve_instance_network(
+        session,
+        app_settings,
+        registry,
+        provider,
+        request,
+        idempotency_key=idempotency_key,
+    )
+    session.commit()
+    return result.model_dump(mode="json", by_alias=True)
 
 
 @app.post("/api/v1/cloud/quotes", status_code=201)
@@ -908,10 +936,10 @@ def connect_target(
     if payload.deploy_worker:
         deployment = deploy_remote_worker(payload, record, app_settings)
         host_key = str(record.fingerprint_json.get("host_key_sha256") or "")
-        remembered = EncryptedSshCredentialStore(app_settings).save(
-            record.id,
-            payload,
-            host_key,
+        remembered = (
+            EncryptedSshCredentialStore(app_settings).save(record.id, payload, host_key)
+            if payload.remember_credentials
+            else False
         )
         # Mark the target as available and runnable after successful Worker deployment
         record.status = "available"
@@ -987,8 +1015,10 @@ def connect_existing_target_ssh(
     refreshed = connect_existing_target(session, target, payload)
     deployment = deploy_remote_worker(payload, refreshed, app_settings)
     host_key = str(refreshed.fingerprint_json.get("host_key_sha256") or "")
-    remembered = EncryptedSshCredentialStore(app_settings).save(
-        refreshed.id, payload, host_key
+    remembered = (
+        EncryptedSshCredentialStore(app_settings).save(refreshed.id, payload, host_key)
+        if payload.remember_credentials
+        else False
     )
     refreshed.status = "available"
     refreshed.runnable = True

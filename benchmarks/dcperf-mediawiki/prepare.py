@@ -320,18 +320,9 @@ def install_hhvm(archive: Path) -> None:
                 shutil.copytree(library_root, HHVM_LIB, dirs_exist_ok=True)
     finally:
         shutil.rmtree(stage, ignore_errors=True)
-    if not HHVM_BIN.is_file():
-        fail("HHVM installation completed without /usr/local/hphpi/legacy/bin/hhvm")
-    version = subprocess.run(
-        [str(HHVM_BIN), "--version"], text=True, capture_output=True, check=False
-    )
-    first_line = (
-        (version.stdout or version.stderr).splitlines()[0]
-        if (version.stdout or version.stderr)
-        else ""
-    )
+    first_line = hhvm_version()
     if "3.30" not in first_line:
-        fail(f"unexpected HHVM version: {first_line}")
+        fail(f"unexpected HHVM version: {first_line or 'unavailable'}")
 
 
 def configure_database(dcperf_root: Path) -> None:
@@ -424,6 +415,23 @@ def build_dependencies(lock: dict[str, Any], cache: Path) -> Path:
     return dcperf_root
 
 
+def prepared_cache_valid(cache: Path) -> bool:
+    marker = cache / MARKER_NAME
+    try:
+        state = json.loads(marker.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    root = Path(str(state.get("root", "")))
+    return bool(
+        state.get("schemaVersion") == "looper.dcperf.prepare/v1"
+        and state.get("sourceRevision") == SOURCE_REVISION
+        and root.is_dir()
+        and (cache / "runtime/dcperf/benchpress_cli.py").is_file()
+        and (cache / "runtime/dcperf/benchmarks/oss_performance_mediawiki/wrk/wrk").is_file()
+        and "3.30" in hhvm_version()
+    )
+
+
 def write_marker(cache: Path, dcperf_root: Path, lock: dict[str, Any]) -> None:
     marker = cache / MARKER_NAME
     marker.write_text(
@@ -455,11 +463,7 @@ def main() -> int:
         cache = arguments.cache.resolve()
         cache.mkdir(parents=True, exist_ok=True)
         marker = cache / MARKER_NAME
-        if (
-            marker.is_file()
-            and HHVM_BIN.is_file()
-            and (cache / "runtime/dcperf/benchpress_cli.py").is_file()
-        ):
+        if prepared_cache_valid(cache):
             log("verified managed DCPerf environment is already prepared")
             return 0
         install_system_packages(lock, marker)

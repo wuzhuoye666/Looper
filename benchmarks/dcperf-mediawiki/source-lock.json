@@ -3,7 +3,7 @@
   "files": [
     {
       "path": "prepare.py",
-      "sha256": "sha256:2018c0aab310b49a05dc797d8c361741ff80066cb358f8a90c054922eaf45a8e"
+      "sha256": "sha256:b40bedd862ee0dbf3ed51250ac0620dbe73350f22b805616592e3e0d0139eaff"
     },
     {
       "path": "producer.py",
@@ -11,11 +11,11 @@
     },
     {
       "path": "normalizer.py",
-      "sha256": "sha256:5b3849df8086426f5bd04f95bcf435e18aad25c44f9c368fb732cd8690fd9ef5"
+      "sha256": "sha256:6213d3571924e6a4d5e401e13db0e978b1ce4ba6c703e8af1c3af1b1b532f237"
     },
     {
       "path": "validate.py",
-      "sha256": "sha256:9ab25a2f74f2810ebb09389875af5c116a47b4f46b7b690866a2a4c5ceab43b3"
+      "sha256": "sha256:80c0637987df7e4e9b8d001ccf404aed9029dff8db59b200bd7c4f19c467bede"
     },
     {
       "path": "cleanup.py",
