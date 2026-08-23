@@ -108,9 +108,12 @@ def parse_sysbench_output(text: str) -> dict[str, object]:
 def build_argv(
     bin_path: str, test: str, threads: int, duration: int, extra: list[str]
 ) -> list[str]:
+    # The Looper workload keeps the stable singular id ``thread`` while
+    # sysbench 1.0 exposes the native built-in as ``threads``.
+    native_test = "threads" if test == "thread" else test
     return [
         bin_path,
-        test,
+        native_test,
         f"--threads={threads}",
         f"--time={duration}",
         "--events=0",

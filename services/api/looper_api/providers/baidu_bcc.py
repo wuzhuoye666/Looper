@@ -12,6 +12,7 @@ from looper_api.cloud_contracts import (
     CloudPurchaseSpec,
     ImageInfo,
     InstanceTypeInfo,
+    ProviderDestroyResult,
     ProviderId,
     ProviderInfo,
     ProviderPurchaseResult,
@@ -29,7 +30,6 @@ from looper_api.providers.utils import (
     environment_credentials,
     filter_images,
     filter_instance_types,
-    image_scan_limit,
     optional_environment,
     parse_datetime,
     sdk_installed,
@@ -217,14 +217,14 @@ class BaiduBccProvider(CloudProvider):
             raise CloudProviderError("region is required", code="invalid_request")
         marker: str | None = None
         rows: list[Any] = []
-        scan_limit = image_scan_limit(filters)
-        while len(rows) < scan_limit:
+        seen_markers: set[str] = set()
+        while True:
             response = self._call(
                 "list_images",
                 filters.region,
                 image_type=filters.image_type or "System",
                 marker=marker,
-                max_keys=min(100, scan_limit - len(rows)),
+                max_keys=100,
                 image_name=filters.query,
             )
             batch = as_list(attr(response, "images", "image", default=[]))
@@ -232,6 +232,12 @@ class BaiduBccProvider(CloudProvider):
             marker = attr(response, "next_marker", "nextMarker")
             if not marker or not batch:
                 break
+            if marker in seen_markers:
+                raise CloudProviderError(
+                    "Baidu image pagination repeated a marker",
+                    code="pagination_stalled",
+                )
+            seen_markers.add(marker)
         items = [
             ImageInfo(
                 provider=self.id,
@@ -349,4 +355,10 @@ class BaiduBccProvider(CloudProvider):
                 for item in as_list(ids)
             ],
             details={"requestId": request_id},
+        )
+
+    def destroy(self, *, region: str, instance_ids: list[str]) -> ProviderDestroyResult:
+        raise CloudProviderError(
+            "instance destroy is not supported for Baidu BCC yet",
+            code="unsupported_operation",
         )

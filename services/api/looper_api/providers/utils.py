@@ -13,22 +13,6 @@ from dotenv import dotenv_values
 from looper_api.cloud_contracts import CatalogFilters, ImageInfo, InstanceTypeInfo
 
 
-def instance_scan_limit(filters: CatalogFilters, *, maximum: int = 1000) -> int:
-    locally_filtered = bool(
-        filters.query
-        or filters.min_cpu is not None
-        or filters.max_cpu is not None
-        or filters.min_memory_gib is not None
-        or filters.max_memory_gib is not None
-    )
-    return max(filters.limit, maximum if locally_filtered else filters.limit)
-
-
-def image_scan_limit(filters: CatalogFilters, *, maximum: int = 1000) -> int:
-    locally_filtered = bool(filters.query or filters.platform or filters.image_type)
-    return max(filters.limit, maximum if locally_filtered else filters.limit)
-
-
 def sdk_installed(module: str) -> bool:
     return importlib.util.find_spec(module) is not None
 
@@ -195,8 +179,6 @@ def filter_instance_types(
         if filters.max_memory_gib is not None and item.memory_gib > filters.max_memory_gib:
             continue
         result.append(item)
-        if len(result) >= filters.limit:
-            break
     return result
 
 
@@ -214,6 +196,4 @@ def filter_images(items: list[ImageInfo], filters: CatalogFilters) -> list[Image
         if image_type and image_type != (item.image_type or "").casefold():
             continue
         result.append(item)
-        if len(result) >= filters.limit:
-            break
     return result

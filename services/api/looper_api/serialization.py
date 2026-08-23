@@ -10,6 +10,12 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from looper_api.analysis_service import build_analysis_snapshot
+from looper_api.benchmark_registration import selection_scenario_document
+from looper_api.benchmark_runtime import (
+    deployment_capabilities,
+    provisioned_capabilities,
+    provisioning_contract,
+)
 from looper_api.models import (
     ArtifactLinkRecord,
     AttemptRecord,
@@ -26,6 +32,48 @@ def _iso(value: datetime | None) -> str | None:
     return value.isoformat() if value else None
 
 
+_METRIC_DECLARATION_FIELDS = (
+    "unit",
+    "direction",
+    "kind",
+    "required",
+    "minimumSamples",
+    "description",
+    "presentation",
+)
+
+
+def _metric_definition(declaration: dict[str, Any]) -> dict[str, Any]:
+    """Project a metric declaration to its API shape without inventing fields.
+
+    Spec-level metrics declare ``unit``/``direction``/``kind`` while a
+    workload-level override may declare only ``presentation``. Pass through
+    exactly what the author wrote so the consumer can distinguish an absent
+    measurement field from a missing metric.
+    """
+    return {
+        field: declaration[field]
+        for field in _METRIC_DECLARATION_FIELDS
+        if field in declaration
+    }
+
+
+def _metric_definitions(metrics: dict[str, Any]) -> dict[str, Any]:
+    return {name: _metric_definition(decl) for name, decl in metrics.items()}
+
+
+def _workload_views(workloads: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    views: list[dict[str, Any]] = []
+    for item in workloads:
+        view: dict[str, Any] = {"id": item["id"], "name": item["name"]}
+        if "metrics" in item:
+            view["metrics"] = {
+                name: _metric_definition(decl) for name, decl in item["metrics"].items()
+            }
+        views.append(view)
+    return views
+
+
 def benchmark_view(
     record: BenchmarkRecord,
     registration: BenchmarkRegistrationRecord | None = None,
@@ -33,10 +81,23 @@ def benchmark_view(
     manifest = record.manifest_json
     metadata = manifest["metadata"]
     spec = manifest["spec"]
-    scenario = spec.get("scenario")
+    scenario = selection_scenario_document(record, registration)
     adapter = spec.get("adapter") or {}
     extensions = spec.get("x-extensions", {})
     execution_status = extensions.get("executionStatus", "executable")
+    runtime = spec["runtime"]
+    package_ready = bool(
+        record.manifest_path
+        or (
+            runtime.get("type") == "container"
+            and "@sha256:" in str(runtime.get("image") or "")
+        )
+    )
+    runnable = bool(
+        execution_status == "executable"
+        and package_ready
+        and (record.trusted or runtime.get("type") == "container")
+    )
     metadata_extensions = metadata.get("x-extensions") or {}
     explicit_category = metadata_extensions.get("category") or extensions.get("category")
     return {
@@ -45,20 +106,32 @@ def benchmark_view(
         "name": record.name,
         "description": record.description,
         "category": explicit_category or ("scenario" if scenario else "unclassified"),
+        # A scenario only appears in the experiment picker when it can really
+        # be delivered to a target and executed. Stage-0 contracts remain in
+        # the catalog for research, but are never presented as runnable choices.
+        "selectionReady": scenario is not None and runnable,
         "executionModel": adapter.get("executionModel", "custom"),
         "inputs": adapter.get("inputs", []),
+        "infrastructure": spec.get("infrastructure"),
+        "auditPolicy": spec.get("audit"),
         "executionPolicy": spec.get("runtime", {}).get("executionPolicy"),
         "version": record.version,
         "license": record.license,
         "manifestDigest": record.manifest_digest,
-        "metrics": list(manifest["spec"]["metrics"]),
-        "cases": len(manifest["spec"]["workloads"]),
+        "metrics": list(spec["metrics"]),
+        "metricDefinitions": _metric_definitions(spec.get("metrics", {})),
+        "workloads": _workload_views(spec.get("workloads", [])),
+        "cases": len(spec["workloads"]),
         "updatedAt": _iso(record.installed_at),
         "tags": manifest["spec"].get("capabilities", []),
+        "deploymentRequirements": sorted(deployment_capabilities(manifest)),
+        "provisionedCapabilities": sorted(provisioned_capabilities(manifest)),
+        "provisioning": provisioning_contract(manifest),
+        "packageReady": package_ready,
+        "packageDigest": record.package_digest,
         "trusted": record.trusted,
         "executionStatus": execution_status,
-        "runnable": execution_status == "executable"
-        and (record.trusted or manifest["spec"]["runtime"].get("type") == "container"),
+        "runnable": runnable,
         "registrationId": registration.id if registration else None,
         "registrationStatus": registration.status if registration else None,
         "auditStatus": "registered-not-admitted" if registration else "legacy-unreviewed",
@@ -82,16 +155,56 @@ def target_view(record: TargetRecord) -> dict[str, Any]:
     status = status_map.get(record.status, "unknown")
     if record.lifecycle_status in {"missing", "archived"}:
         status = "offline"
-    if record.status == "inventory-only" and provider_state == "RUNNING":
+    if (
+        record.status == "inventory-only"
+        and inventory.get("source") == "ssh-discovery"
+        and record.lifecycle_status == "active"
+    ):
+        # SSH discovery is a persisted, verified inventory observation. A
+        # missing Worker means execution is not ready; it does not make the
+        # already-probed machine an unknown resource.
+        status = "inventory"
+    elif record.status == "inventory-only" and provider_state == "RUNNING":
         status = "inventory" if record.lifecycle_status == "active" else "offline"
     elif record.status == "inventory-only" and provider_state in {"STOPPED", "TERMINATED"}:
         status = "offline"
     fingerprint = record.fingerprint_json
+
+    # Architecture-like strings that are not real processor names
+    _ARCH_LIKE = {
+        "x86_64", "amd64", "AMD64", "aarch64", "arm64",
+        "armv7l", "armv8l", "i386", "i686",
+    }
+    processor = fingerprint.get("processor")
+    if processor and str(processor).strip() in _ARCH_LIKE:
+        processor = None
+
+    # CPU: real processor name, or cloud instance type
+    cpu = processor or fingerprint.get("instance_type") or ""
+
+    # Architecture: from fingerprint, or machine, or platform
+    arch = (
+        fingerprint.get("architecture")
+        or fingerprint.get("machine")
+        or fingerprint.get("platform")
+        or ""
+    )
+
+    # Cores
+    cores = fingerprint.get("logical_cpu_count")
+
+    # Memory: prefer memory_gib, fallback to memory_bytes
+    memory_gib = fingerprint.get("memory_gib")
+    if memory_gib is None:
+        memory_bytes = fingerprint.get("memory_bytes")
+        if memory_bytes:
+            memory_gib = round(memory_bytes / (1024 ** 3), 1)
+
     hardware_parts = [
-        fingerprint.get("processor") or fingerprint.get("instance_type"),
-        f"{fingerprint.get('logical_cpu_count')} vCPU"
-        if fingerprint.get("logical_cpu_count")
-        else None,
+        cpu if cpu else None,
+        arch if arch else None,
+        f"{cores} vCPU" if cores else None,
+        f"{memory_gib:g} GiB" if memory_gib else None,
     ]
     return {
         "id": record.id,
@@ -193,6 +306,19 @@ def experiment_view(
             AttemptStatus.LOST,
         }
     )
+    budget_terminal_attempts = sum(
+        1
+        for attempt in attempts
+        if attempt.retry_index == 0
+        and AttemptStatus(attempt.status)
+        in {
+            AttemptStatus.SUCCEEDED,
+            AttemptStatus.FAILED,
+            AttemptStatus.TIMED_OUT,
+            AttemptStatus.CANCELLED,
+            AttemptStatus.LOST,
+        }
+    )
     terminal_candidates = sum(
         1
         for candidate in candidates
@@ -203,6 +329,16 @@ def experiment_view(
             CandidateStatus.INCONCLUSIVE,
             CandidateStatus.FAILED,
         }
+    )
+    active_attempt = max(
+        (
+            attempt
+            for attempt in attempts
+            if AttemptStatus(attempt.status)
+            in {AttemptStatus.LEASED, AttemptStatus.RUNNING, AttemptStatus.UPLOADING}
+        ),
+        key=lambda item: item.leased_at or item.created_at,
+        default=None,
     )
     analysis_map, analysis = _analysis_by_candidate(session, record)
     is_selection = spec.mode.value == "selection"
@@ -247,7 +383,7 @@ def experiment_view(
         "progress": round(
             100
             * (
-                terminal_attempts / spec.budget.max_attempts
+                budget_terminal_attempts / spec.budget.max_attempts
                 if is_selection
                 else terminal_candidates / spec.budget.max_candidates
             ),
@@ -261,7 +397,8 @@ def experiment_view(
         else None,
         "createdAt": _iso(record.created_at),
         "updatedAt": _iso(record.updated_at),
-        "attempts": terminal_attempts,
+        "attempts": budget_terminal_attempts,
+        "actualAttempts": terminal_attempts,
         "maxAttempts": spec.budget.max_attempts,
         "objective": spec.objectives[0].metric,
         "decisionQuestion": spec.scenario.decision_question if spec.scenario else None,
@@ -273,6 +410,8 @@ def experiment_view(
         "candidateCount": len(candidates),
         "revision": record.revision,
         "analysisStatus": analysis.get("status") if analysis else None,
+        "activePhase": active_attempt.phase if active_attempt else None,
+        "activePhaseDetail": active_attempt.phase_detail if active_attempt else None,
     }
     if not detail:
         return response
@@ -337,6 +476,8 @@ def experiment_view(
                 "candidateId": candidate.id if candidate else None,
                 "parameters": candidate.parameters_json if candidate else {},
                 "status": status_map[CandidateStatus(evaluation.status)],
+                "phase": latest.phase if latest else None,
+                "phaseDetail": latest.phase_detail if latest else None,
                 "score": objective_rows[0].get("raw") if objective_rows else None,
                 "duration": duration,
                 "createdAt": _iso(evaluation.created_at),

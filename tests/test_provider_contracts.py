@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from decimal import Decimal
 from types import SimpleNamespace
 
@@ -336,8 +337,109 @@ def test_alibaba_quote_and_run_use_postpaid_network_disk_and_token(monkeypatch) 
     ]
 
 
+def test_alibaba_blocks_generation_one_instance_before_quote_or_purchase(monkeypatch) -> None:
+    provider = AlibabaEcsProvider()
+    legacy_spec = purchase_spec("alibaba").model_copy(
+        update={"instance_type": "ecs.s2.small"}
+    )
+    provider_call = pytest.fail
+    monkeypatch.setattr(provider, "_call", provider_call)
+
+    with pytest.raises(CloudProviderError) as quote_error:
+        provider.quote(legacy_spec)
+    with pytest.raises(CloudProviderError) as purchase_error:
+        provider.purchase(legacy_spec, client_token="stable-token")
+
+    assert quote_error.value.code == "instance_type_vpc_incompatible"
+    assert purchase_error.value.code == "instance_type_vpc_incompatible"
+
+
+def test_alibaba_network_catalog_maps_vpc_resources(monkeypatch) -> None:
+    provider = AlibabaEcsProvider()
+    calls: list[tuple[str, object]] = []
+
+    def call(method: str, _region: str, request: object):
+        calls.append((method, request))
+        if method == "describe_vpcs":
+            return SimpleNamespace(
+                body=SimpleNamespace(
+                    total_count=1,
+                    vpcs=SimpleNamespace(
+                        vpc=[SimpleNamespace(
+                            vpc_id="vpc-test", vpc_name="production-vpc",
+                            cidr_block="10.0.0.0/16", is_default=True,
+                        )]
+                    ),
+                )
+            )
+        if method == "describe_vswitches":
+            return SimpleNamespace(
+                body=SimpleNamespace(
+                    total_count=1,
+                    v_switches=SimpleNamespace(
+                        v_switch=[SimpleNamespace(
+                            vpc_id="vpc-test", v_switch_id="vsw-test",
+                            v_switch_name="production-vswitch", zone_id="cn-test-a",
+                            cidr_block="10.0.1.0/24", available_ip_address_count=240,
+                            is_default=True,
+                        )]
+                    ),
+                )
+            )
+        if method == "describe_security_groups":
+            return SimpleNamespace(
+                body=SimpleNamespace(
+                    total_count=1,
+                    security_groups=SimpleNamespace(
+                        security_group=[SimpleNamespace(
+                            security_group_id="sg-test",
+                            security_group_name="looper-private",
+                            description="managed",
+                            tags=SimpleNamespace(tag=[SimpleNamespace(
+                                tag_key="managedBy", tag_value="looper"
+                            )]),
+                        )]
+                    ),
+                )
+            )
+        return SimpleNamespace(
+            body=SimpleNamespace(
+                total_count=1,
+                key_pairs=SimpleNamespace(
+                    key_pair=[SimpleNamespace(
+                        key_pair_name="operator-key",
+                        creation_time="2026-08-20T00:00:00Z",
+                    )]
+                ),
+            )
+        )
+
+    monkeypatch.setattr(provider, "_call", call)
+
+    vpcs = provider.list_vpcs("cn-test")
+    subnets = provider.list_subnets("cn-test", "cn-test-a", "vpc-test")
+    groups = provider.list_security_groups("cn-test")
+    keys = provider.list_key_pairs("cn-test")
+
+    assert vpcs[0].is_default is True
+    assert subnets[0].available_ip_count == 240
+    assert groups[0].recommended is True
+    assert groups[0].tags == {"managedBy": "looper"}
+    assert keys[0].id == "operator-key"
+    assert calls[1][1].zone_id == "cn-test-a"
+    assert calls[1][1].vpc_id == "vpc-test"
+    assert calls[2][1].network_type == "vpc"
+
+
 def test_alibaba_catalog_search_scans_later_pages(monkeypatch) -> None:
     provider = AlibabaEcsProvider()
+    monkeypatch.setattr(
+        provider,
+        "_availability",
+        lambda _filters: {
+            "ecs.target.large": [{"zone": "cn-test-a", "available": True}]
+        },
+    )
     calls: list[tuple[str, object]] = []
     first_types = [
         SimpleNamespace(
@@ -405,6 +507,263 @@ def test_alibaba_catalog_search_scans_later_pages(monkeypatch) -> None:
     assert len([method for method, _ in calls if method == "describe_images"]) == 2
 
 
+def test_alibaba_instance_catalog_reads_every_page_and_rejects_stalled_tokens(
+    monkeypatch,
+) -> None:
+    provider = AlibabaEcsProvider()
+    calls: list[str | None] = []
+    inventory = {
+        f"ecs.full.{index}": [{"zone": "cn-test-a", "available": True}]
+        for index in range(620)
+    }
+    inventory.update(
+        {
+            "ecs.stalled.first": [{"zone": "cn-test-a", "available": True}],
+            "ecs.stalled.same-token": [{"zone": "cn-test-a", "available": True}],
+        }
+    )
+    monkeypatch.setattr(provider, "_availability", lambda _filters: inventory)
+
+    def call(_method: str, _region: str, request: object):
+        calls.append(request.next_token)
+        offset = int(request.next_token or 0)
+        rows = [
+            SimpleNamespace(
+                instance_type_id=f"ecs.full.{index}",
+                instance_type_family="ecs.full",
+                cpu_core_count=2,
+                memory_size=4,
+            )
+            for index in range(offset, min(offset + 100, 620))
+        ]
+        next_token = str(offset + 100) if offset + 100 < 620 else None
+        return SimpleNamespace(
+            body=SimpleNamespace(
+                next_token=next_token,
+                instance_types=SimpleNamespace(instance_type=rows),
+            )
+        )
+
+    monkeypatch.setattr(provider, "_call", call)
+    result = provider.search_instance_types(CatalogFilters(region="cn-test", limit=20))
+    assert len(result) == 620
+    assert calls == [None, "100", "200", "300", "400", "500", "600"]
+
+    def stalled(_method: str, _region: str, request: object):
+        return SimpleNamespace(
+            body=SimpleNamespace(
+                next_token="same-token",
+                instance_types=SimpleNamespace(
+                    instance_type=[
+                        SimpleNamespace(
+                            instance_type_id=f"ecs.stalled.{request.next_token or 'first'}",
+                            instance_type_family="ecs.stalled",
+                            cpu_core_count=2,
+                            memory_size=4,
+                        )
+                    ]
+                ),
+            )
+        )
+
+    monkeypatch.setattr(provider, "_call", stalled)
+    with pytest.raises(CloudProviderError, match="repeated a token"):
+        provider.search_instance_types(CatalogFilters(region="cn-test", limit=20))
+
+
+def test_alibaba_instance_catalog_normalizes_selection_attributes(monkeypatch) -> None:
+    provider = AlibabaEcsProvider()
+    monkeypatch.setattr(
+        provider,
+        "_availability",
+        lambda _filters: {
+            "ecs.gn9i.xlarge": [
+                {
+                    "zone": "cn-test-a",
+                    "available": True,
+                    "status": "Available",
+                    "statusCategory": "WithStock",
+                }
+            ]
+        },
+    )
+
+    def call(_method: str, _region: str, _request: object):
+        return SimpleNamespace(
+            body=SimpleNamespace(
+                next_token=None,
+                instance_types=SimpleNamespace(
+                    instance_type=[
+                        SimpleNamespace(
+                            instance_type_id="ecs.gn9i.xlarge",
+                            instance_type_family="ecs.gn9i",
+                            cpu_core_count=8,
+                            memory_size=32,
+                            gpuamount=1,
+                            gpuspec="NVIDIA Test",
+                            gpumemory_size=24,
+                            cpu_architecture="X86",
+                            instance_bandwidth_rx=25_000_000,
+                            instance_bandwidth_tx=20_000_000,
+                            instance_pps_rx=3_000_000,
+                            instance_pps_tx=2_500_000,
+                            local_storage_amount=2,
+                            local_storage_capacity=1900,
+                            local_storage_category="local_ssd_pro",
+                        )
+                    ]
+                ),
+            )
+        )
+
+    monkeypatch.setattr(provider, "_call", call)
+    item = provider.search_instance_types(
+        CatalogFilters(region="cn-test", zone="cn-test-a", limit=20)
+    )[0]
+
+    assert item.gpu == 1
+    assert item.gpu_model == "NVIDIA Test"
+    assert item.gpu_memory_gib == 24
+    assert item.network_bandwidth_rx_gbps == 25
+    assert item.network_bandwidth_tx_gbps == 20
+    assert item.network_pps_tx == 2_500_000
+    assert item.local_storage_count == 2
+    assert item.local_storage_capacity_gib == 1900
+    assert item.local_storage_category == "local_ssd_pro"
+    assert item.zones == ["cn-test-a"]
+    capability = item.attributes["zoneCapabilities"][0]
+    assert capability["available"] is True
+    assert capability["networkBandwidthGbps"] == 20
+    assert capability["networkPps"] == 2_500_000
+    assert capability["localStorageCategory"] == "local_ssd_pro"
+
+
+def test_alibaba_instance_catalog_aggregates_regional_inventory_and_hides_absent_types(
+    monkeypatch,
+) -> None:
+    provider = AlibabaEcsProvider()
+    calls: list[tuple[str, str | None]] = []
+    type_rows = [
+        SimpleNamespace(
+            instance_type_id=instance_type,
+            instance_type_family="ecs.g6",
+            cpu_core_count=cpu,
+            memory_size=cpu * 4,
+        )
+        for instance_type, cpu in [
+            ("ecs.g6.2xlarge", 8),
+            ("ecs.g6.13xlarge", 52),
+            ("ecs.g6.20xlarge", 80),
+            ("ecs.g6.32xlarge", 128),
+        ]
+    ]
+    inventory = {
+        "cn-test-a": [
+            ("ecs.g6.2xlarge", "Available", "WithStock"),
+            ("ecs.g6.13xlarge", "SoldOut", "WithoutStock"),
+            ("ecs.g6.20xlarge", "FutureStatus", "FutureCategory"),
+        ],
+        "cn-test-b": [
+            ("ecs.g6.2xlarge", "SoldOut", "WithoutStock"),
+            ("ecs.g6.13xlarge", "SoldOut", "ClosedWithoutStock"),
+        ],
+    }
+
+    def available_resource_response(zone: str) -> SimpleNamespace:
+        supported = [
+            SimpleNamespace(value=value, status=status, status_category=category)
+            for value, status, category in inventory[zone]
+        ]
+        return SimpleNamespace(
+            body=SimpleNamespace(
+                available_zones=SimpleNamespace(
+                    available_zone=[
+                        SimpleNamespace(
+                            zone_id=zone,
+                            available_resources=SimpleNamespace(
+                                available_resource=[
+                                    SimpleNamespace(
+                                        supported_resources=SimpleNamespace(
+                                            supported_resource=supported
+                                        )
+                                    )
+                                ]
+                            ),
+                        )
+                    ]
+                )
+            )
+        )
+
+    def call(method: str, _region: str, request: object):
+        calls.append((method, getattr(request, "zone_id", None)))
+        if method == "describe_zones":
+            return SimpleNamespace(
+                body=SimpleNamespace(
+                    zones=SimpleNamespace(
+                        zone=[
+                            SimpleNamespace(
+                                zone_id="cn-test-a",
+                                local_name="测试一区",
+                                zone_type="AvailabilityZone",
+                            ),
+                            SimpleNamespace(
+                                zone_id="cn-test-b",
+                                local_name="测试二区",
+                                zone_type="AvailabilityZone",
+                            ),
+                            SimpleNamespace(
+                                zone_id="cn-test-cloudbox",
+                                local_name="云盒测试区",
+                                zone_type="CloudBoxZone",
+                            ),
+                        ]
+                    )
+                )
+            )
+        if method == "describe_available_resource":
+            return available_resource_response(request.zone_id)
+        return SimpleNamespace(
+            body=SimpleNamespace(
+                next_token=None,
+                instance_types=SimpleNamespace(instance_type=type_rows),
+            )
+        )
+
+    monkeypatch.setattr(provider, "_call", call)
+    regional = provider.search_instance_types(CatalogFilters(region="cn-test"))
+
+    assert [item.id for item in regional] == [
+        "ecs.g6.2xlarge",
+        "ecs.g6.13xlarge",
+        "ecs.g6.20xlarge",
+    ]
+    assert [item.available for item in regional] == [True, False, None]
+    assert regional[0].zones == ["cn-test-a", "cn-test-b"]
+    assert [
+        capability["available"]
+        for capability in regional[0].attributes["zoneCapabilities"]
+    ] == [True, False]
+    assert calls[:3] == [
+        ("describe_zones", None),
+        ("describe_available_resource", "cn-test-a"),
+        ("describe_available_resource", "cn-test-b"),
+    ]
+
+    calls.clear()
+    selected_zone = provider.search_instance_types(
+        CatalogFilters(region="cn-test", zone="cn-test-a")
+    )
+    assert [item.id for item in selected_zone] == [
+        "ecs.g6.2xlarge",
+        "ecs.g6.13xlarge",
+        "ecs.g6.20xlarge",
+    ]
+    assert all(item.zones == ["cn-test-a"] for item in selected_zone)
+    assert calls[0] == ("describe_available_resource", "cn-test-a")
+    assert not any(method == "describe_zones" for method, _zone in calls)
+
+
 def test_tencent_image_search_scans_later_pages(monkeypatch) -> None:
     provider = TencentCvmProvider()
     offsets: list[int] = []
@@ -428,6 +787,99 @@ def test_tencent_image_search_scans_later_pages(monkeypatch) -> None:
     results = provider.search_images(CatalogFilters(region="ap-test", query="target", limit=10))
     assert [item.id for item in results] == ["img-target"]
     assert offsets == [0, 100]
+
+
+def test_tencent_instance_catalog_maps_zone_quota_capabilities(monkeypatch) -> None:
+    provider = TencentCvmProvider()
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    local_disk = SimpleNamespace(
+        Type="LOCAL_SSD", MinSize=100, MaxSize=1900, Required="OPTIONAL"
+    )
+    rows = [
+        SimpleNamespace(
+            Zone="ap-test-1",
+            InstanceType="GN7.TEST",
+            InstanceFamily="GN7",
+            TypeName="GPU 计算型 GN7",
+            CpuType="Intel",
+            Cpu=8,
+            Memory=32,
+            Status="SELL",
+            InstanceBandwidth=25,
+            InstancePps=300,
+            Gpu=16,
+            GpuCount=0.5,
+            GpuType="NVIDIA Test",
+            Fpga=0,
+            StorageBlockAmount=2,
+            StatusCategory="EnoughStock",
+            SoldOutReason=None,
+            LocalDiskTypeList=[local_disk],
+        ),
+        SimpleNamespace(
+            Zone="ap-test-2",
+            InstanceType="GN7.TEST",
+            InstanceFamily="GN7",
+            TypeName="GPU 计算型 GN7",
+            CpuType="Intel",
+            Cpu=8,
+            Memory=32,
+            Status="SOLD_OUT",
+            InstanceBandwidth=10,
+            InstancePps=100,
+            Gpu=16,
+            GpuCount=0.5,
+            Fpga=0,
+            StorageBlockAmount=0,
+            StatusCategory="WithoutStock",
+            SoldOutReason="quota",
+            LocalDiskTypeList=[],
+        ),
+        SimpleNamespace(
+            Zone="ap-test-1",
+            InstanceType="SR1.TEST",
+            InstanceFamily="SR1",
+            TypeName="标准型 SR1",
+            CpuType="ARM",
+            Cpu=4,
+            Memory=8,
+            Status="SELL",
+            InstanceBandwidth=5,
+            InstancePps=50,
+            Gpu=0,
+            GpuCount=0,
+            Fpga=0,
+            StorageBlockAmount=0,
+            StatusCategory="EnoughStock",
+            SoldOutReason=None,
+            LocalDiskTypeList=[],
+        ),
+    ]
+
+    def call(method: str, _region: str, request: object):
+        calls.append((method, json.loads(request.to_json_string())))
+        return SimpleNamespace(InstanceTypeQuotaSet=rows, TotalCount=len(rows))
+
+    monkeypatch.setattr(provider, "_call", call)
+    items = provider.search_instance_types(CatalogFilters(region="ap-test", limit=20))
+
+    assert calls[0][0] == "DescribeZoneInstanceConfigInfos"
+    assert calls[0][1]["Filters"] == [
+        {"Name": "instance-charge-type", "Values": ["POSTPAID_BY_HOUR"]}
+    ]
+    gpu = next(item for item in items if item.id == "GN7.TEST")
+    assert gpu.available is True
+    assert gpu.gpu == 0.5
+    assert gpu.gpu_model == "NVIDIA Test"
+    assert gpu.network_bandwidth_rx_gbps == 25
+    assert gpu.network_pps_rx == 3_000_000
+    assert gpu.local_storage_category == "LOCAL_SSD"
+    assert gpu.local_storage_capacity_gib == 1900
+    assert gpu.local_storage_count == 2
+    assert len(gpu.attributes["zoneCapabilities"]) == 2
+    arm = next(item for item in items if item.id == "SR1.TEST")
+    assert arm.architecture == "ARM"
 
 
 def test_volcengine_catalog_search_scans_later_pages(monkeypatch) -> None:

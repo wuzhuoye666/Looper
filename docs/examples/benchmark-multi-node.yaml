@@ -1,0 +1,192 @@
+apiVersion: looper.dev/v1alpha1
+kind: Benchmark
+metadata:
+  id: example.multi-node
+  name: Example adapter-orchestrated multi-node benchmark
+  version: 0.1.0
+  description: The Adapter starts from the controller and consumes a bound topology document.
+  license: INTERNAL
+  source:
+    url: https://example.invalid/benchmark
+    commit: "0000000000000000000000000000000000000000"
+    digest: null
+  x-extensions:
+    category: online-service
+spec:
+  trust: untrusted
+  capabilities: [linux, container]
+  parameters:
+    offered_qps:
+      type: integer
+      minimum: 100
+      maximum: 1000000
+      default: 1000
+  workloads:
+    - id: dynamic-service
+      name: Dynamic service workload
+      weight: 1
+  scenario:
+    id: example.multi-node.slo-frontier
+    name: Example multi-node SLO frontier
+    decision_question: Which server group sustains more successful requests inside the p99 latency SLO?
+    user_value: Compare server capacity without counting errors or timeouts as useful work.
+    workload_class: multi-node-service-example
+    topology: multi-node
+    roles:
+      - id: server
+        kind: target
+        count: 2
+        included_in_score: true
+      - id: client
+        kind: load-generator
+        count: 1
+        included_in_score: false
+    primary_metric: slo_goodput
+    slo_gates:
+      - id: p99-latency
+        kind: slo
+        scope: block
+        metric: latency_p99_ms
+        operator: lte
+        threshold: 50
+        hard: true
+      - id: request-accounting
+        kind: correctness
+        scope: block
+        metric: error_ratio
+        operator: lt
+        threshold: 0.001
+        hard: true
+  infrastructure:
+    orchestration: adapter
+    primaryNodeGroup: server
+    nodeGroups:
+      - id: server
+        role: target
+        count: {minimum: 2, default: 2, maximum: 16}
+        includedInScore: true
+        requirements:
+          osFamilies: [linux]
+          architectures: [x86_64, aarch64]
+          capabilities: [container]
+          cpu: {minimumLogicalCpus: 16, minimumNumaNodes: 1}
+          memory: {minimumGiB: 64}
+          network: {minimumGbps: 25, fabrics: [ethernet, roce]}
+        placement:
+          separateFrom: [client]
+          sameZone: true
+          dedicated: true
+      - id: client
+        role: load-generator
+        count: {minimum: 1, default: 2, maximum: 8}
+        includedInScore: false
+        requirements:
+          osFamilies: [linux]
+          cpu: {minimumLogicalCpus: 8}
+          memory: {minimumGiB: 16}
+          network: {minimumGbps: 10}
+        placement:
+          separateFrom: [server]
+          sameZone: true
+          dedicated: true
+    links:
+      - source: client
+        target: server
+        purpose: benchmark request traffic
+        protocol: tcp
+        minimumGbps: 10
+        maximumRttMs: 1
+  adapter:
+    protocol: looper-adapter/v1
+    executionModel: service-stack
+    primaryMetric: slo_goodput
+    requiredChecks: [p99-latency, request-accounting, topology-ready]
+    inputs:
+      - id: cluster-topology
+        kind: topology
+        required: true
+        mediaType: application/json
+        mountPath: /looper/input/topology/cluster.json
+        digestRequired: true
+        description: Role-to-node mapping and endpoints; contains no plaintext credentials.
+      - id: cluster-credentials
+        kind: secret
+        required: true
+        digestRequired: false
+        description: Managed secret reference used by the Adapter orchestrator.
+    canonicalOutputs:
+      metrics: metrics.jsonl
+      result: result.json
+  runtime:
+    type: container
+    image: null
+    engine: docker
+    networkMode: bridge
+    workingDirectory: .
+    commands:
+      prepare:
+        argv: [benchmark-prepare, --envelope, "{envelope}", --output, "{output}"]
+        timeoutSeconds: 1800
+        allowedExitCodes: [0]
+      run:
+        argv: [benchmark-run, --envelope, "{envelope}", --output, "{output}"]
+        timeoutSeconds: 86400
+        allowedExitCodes: [0]
+      normalize:
+        argv: [benchmark-normalize, --envelope, "{envelope}", --output, "{output}"]
+        timeoutSeconds: 600
+        allowedExitCodes: [0]
+      cleanup:
+        argv: [benchmark-cleanup, --envelope, "{envelope}", --output, "{output}"]
+        timeoutSeconds: 1800
+        allowedExitCodes: [0]
+  metrics:
+    slo_goodput:
+      unit: requests/second
+      direction: maximize
+      kind: aggregate
+      required: true
+      minimumSamples: 1
+    latency_p99_ms:
+      unit: ms
+      direction: minimize
+      kind: aggregate
+      required: true
+      minimumSamples: 100000
+    error_ratio:
+      unit: ratio
+      direction: minimize
+      kind: aggregate
+      required: true
+      minimumSamples: 1
+  outputs:
+    maxBytes: 5368709120
+    maxMetricLines: 1000000
+    artifacts:
+      - path: raw-result.json
+        role: raw-result
+        mediaType: application/json
+        required: true
+      - path: request-histogram.hdr
+        role: histogram
+        mediaType: application/octet-stream
+        required: true
+      - path: topology-evidence.json
+        role: result
+        mediaType: application/json
+        required: true
+      - path: result.json
+        role: result
+        mediaType: application/json
+        required: true
+      - path: benchmark.log
+        role: log
+        mediaType: text/plain
+        required: true
+  audit:
+    minimumRepeats: 5
+    referencePolicy: required
+    environmentAxes: [machine, day, placement]
+    requiredEvidence: [system-fingerprint, raw-result, histogram, topology, log]
+  x-extensions:
+    executionStatus: stage0-adapter-only

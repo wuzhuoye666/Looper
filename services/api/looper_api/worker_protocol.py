@@ -27,6 +27,8 @@ class WorkerClaim(ProtocolModel):
 class AttemptHeartbeat(ProtocolModel):
     worker_id: str = Field(alias="workerId")
     fencing_token: int = Field(alias="fencingToken", ge=1)
+    phase: str | None = Field(default=None, min_length=1, max_length=40)
+    phase_detail: str | None = Field(default=None, alias="phaseDetail", max_length=500)
 
 
 class AttemptStart(AttemptHeartbeat):

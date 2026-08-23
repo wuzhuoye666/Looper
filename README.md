@@ -59,6 +59,8 @@ Web 的“新建选型研究”按以下对象建立不可变 spec：
 
 完成一个 `optimization` 实验后，实验详情页会读取 Benchmark manifest 中的 `postBenchmarkActions` 低风险白名单并显示“优化并重新测试”。点击后，Looper 以原实验最佳可行配置为基线，只修改一个声明参数，创建关联的复测实验；复测完成后显示建议保留、保留原配置或证据不足。原实验和原始证据不会被覆盖。当前 Web 流程只支持 `benchmark-parameter` 动作并输出配置决策，不会把配置自动部署到生产目标。
 
+候选资源页的“连接外部机器”支持通过 SSH 密码、私钥或 API 进程 SSH Agent 连接 Linux 主机，自动读取主机名、系统、内核、架构、CPU 与内存，并部署绑定到该目标的 Looper Worker。连接成功后，SSH 凭据会保存在数据库之外的本机加密仓库；后端重启会校验已固定的主机指纹并自动重建反向隧道。Windows 上的加密密钥还会通过 DPAPI 绑定当前服务账户。也可以配置 `LOOPER_REMOTE_WORKER_API_URL`，让 Worker 通过稳定地址直接重连。完整安全边界和停用开关见 `docs/operations.md`。
+
 ## 多云目录与受保护购买
 
 云资源市场通过腾讯云 CVM、阿里云 ECS、火山引擎 ECS 和百度智能云 BCC 官方 SDK 提供目录检索和报价能力。凭证只存在于 API 进程环境，不写入数据库、API 响应或浏览器。

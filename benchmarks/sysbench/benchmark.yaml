@@ -3,14 +3,16 @@ kind: Benchmark
 metadata:
   id: looper.sysbench
   name: Sysbench
-  version: 1.0.0
-  description: "Sysbench 1.0 通用系统性能套件：CPU 素数、内存带宽、线程调度与互斥锁竞争。由套件自带 producer 调用本地 sysbench 二进制，normalizer 将原生文本报告转换为标准观测。"
+  version: 1.0.1
+  description: "Sysbench 1.0 通用系统性能套件：选择目标机器后由 Looper 自动下发 Adapter、安装或复用 sysbench，再运行 CPU、内存、线程调度与互斥锁测试。"
   license: GPL-2.0
   source:
     url: https://github.com/akopytov/sysbench
+    commit: 3ceba0b1e115f8c50d1d045a4574d8ed643bd497
+    digest: null
 spec:
   trust: trusted
-  capabilities: [python, local-process, sysbench]
+  capabilities: [python, local-process, linux, sysbench]
   parameters:
     threads:
       type: integer
@@ -28,21 +30,107 @@ spec:
       metadata:
         test: cpu
         extraArgs: []
+      metrics:
+        events_per_sec:
+          presentation:
+            roles: [primary_outcome]
+            defaultVisibility: summary
     - id: memory
       name: Memory throughput
       metadata:
         test: memory
         extraArgs: ["--memory-block-size=1K", "--memory-total-size=100G"]
+      metrics:
+        throughput_mib_s:
+          presentation:
+            roles: [primary_outcome]
+            defaultVisibility: summary
     - id: thread
       name: Thread scheduling
       metadata:
         test: thread
         extraArgs: []
+      metrics:
+        events_per_sec:
+          presentation:
+            roles: [primary_outcome]
+            defaultVisibility: summary
     - id: mutex
       name: Mutex contention
       metadata:
         test: mutex
         extraArgs: ["--mutex-num=4096", "--mutex-locks=100000"]
+      metrics:
+        events_per_sec:
+          presentation:
+            roles: [primary_outcome]
+            defaultVisibility: summary
+  scenario:
+    id: microbenchmark.sysbench.suite
+    name: Sysbench microbenchmark suite
+    decision_question: Which target SKU delivers better CPU throughput, memory bandwidth, thread scheduling, and mutex contention performance under controlled microbenchmark conditions?
+    user_value: Characterize raw system performance across CPU, memory, threading, and synchronization primitives without application-layer overhead.
+    workload_class: microbenchmark
+    topology: single-node
+    roles:
+      - id: target
+        kind: target
+        included_in_score: true
+        description: Target machine under benchmark
+      - id: benchmark-runner
+        kind: load-generator
+        co_located_with: target
+        included_in_score: true
+        description: Local sysbench binary co-located with target
+    primary_metric: events_per_sec
+    slo_gates:
+      - id: sysbench-execution
+        kind: correctness
+        scope: block
+        metric: sysbench_run_ok
+        operator: eq
+        threshold: 1
+        hard: true
+      - id: minimum-events
+        kind: slo
+        scope: block
+        metric: events_per_sec
+        operator: gt
+        threshold: 0
+        hard: true
+    goodput:
+      metric: events_per_sec
+      unit: events/second
+      committed_outcome: successful
+      excluded_outcomes: [error, timeout]
+      maximum_error_ratio: 0
+      maximum_abort_ratio: 0
+      maximum_timeout_ratio: 0
+    tail_evidence:
+      metric: latency_p95_ms
+      unit: ms
+      minimum_samples: 100
+      required_statistics: [p95, maximum]
+      histogram_format: upstream-summary
+      timeout_accounting: separate
+  infrastructure:
+    orchestration: adapter
+    primaryNodeGroup: target
+    nodeGroups:
+      - id: target
+        role: target
+        count: {minimum: 1, default: 1, maximum: 1}
+        includedInScore: true
+        requirements:
+          osFamilies: [linux]
+          capabilities: [python, local-process, linux]
+          cpu: {minimumLogicalCpus: 1}
+          software:
+            - name: sysbench
+              versionConstraint: ">=1.0,<1.1"
+        placement:
+          sameZone: true
+          dedicated: true
   adapter:
     protocol: looper-adapter/v1
     executionModel: batch-suite
@@ -55,7 +143,19 @@ spec:
   runtime:
     type: local-process
     workingDirectory: .
+    dependencyLockDigest: "sha256:24312a4f48a6635524f17b4ab84dc2869b014c1885e3aa2fb1c2c28150881064"
+    provisioning:
+      mode: managed
+      hostCapabilities: [python, local-process, linux]
+      provides: [sysbench]
+      cacheKey: "sha256:24312a4f48a6635524f17b4ab84dc2869b014c1885e3aa2fb1c2c28150881064"
+      requiresNetwork: true
+      privilege: sudo
     commands:
+      prepare:
+        argv: ["{python}", "{benchmarkRoot}/prepare.py", "--cache", "{cache}"]
+        timeoutSeconds: 900
+        allowedExitCodes: [0]
       run:
         argv: ["{python}", "{benchmarkRoot}/producer.py", "--envelope", "{envelope}", "--output", "{output}"]
         timeoutSeconds: 360
@@ -71,26 +171,72 @@ spec:
       kind: aggregate
       required: true
       minimumSamples: 1
+      presentation:
+        userLabel: 每秒事件数
+        userDescription: 单位时间完成的事件数量，是 CPU、线程与互斥负载下的主结果。
+        roles: [primary_outcome]
+        defaultVisibility: summary
+        displayFormat: throughput
+        displayPrecision: 2
     latency_avg_ms:
       unit: ms
       direction: minimize
       kind: aggregate
       minimumSamples: 1
+      presentation:
+        userLabel: 平均延迟
+        userDescription: 事件处理的平均耗时，用于监督吞吐提升未以延迟恶化为代价。
+        roles: [guardrail]
+        defaultVisibility: detail
+        displayFormat: duration
+        displayPrecision: 2
     latency_p95_ms:
       unit: ms
       direction: minimize
       kind: aggregate
       minimumSamples: 1
+      presentation:
+        userLabel: P95 延迟
+        userDescription: 事件处理的 P95 耗时，是尾延迟保护指标。
+        roles: [guardrail]
+        defaultVisibility: detail
+        displayFormat: duration
+        displayPrecision: 2
     latency_max_ms:
       unit: ms
       direction: minimize
       kind: aggregate
       minimumSamples: 1
+      presentation:
+        userLabel: 最大延迟
+        userDescription: 事件处理的最大耗时，仅用于问题定位。
+        roles: [diagnostic]
+        defaultVisibility: expert
+        displayFormat: duration
+        displayPrecision: 2
     throughput_mib_s:
       unit: MiB/s
       direction: maximize
       kind: aggregate
       minimumSamples: 1
+      presentation:
+        userLabel: 内存吞吐量
+        userDescription: 内存带宽结果，仅在 memory 负载下作为主结果；其它负载中无业务含义。
+        roles: [context]
+        defaultVisibility: detail
+        displayFormat: throughput
+        displayPrecision: 2
+    sysbench_run_ok:
+      unit: flag
+      direction: maximize
+      kind: aggregate
+      minimumSamples: 1
+      presentation:
+        userLabel: 运行成功标志
+        userDescription: sysbench 是否正常结束并产出有效结果，必须为真。
+        roles: [hard_gate]
+        defaultVisibility: hidden
+        displayFormat: boolean
   outputs:
     maxBytes: 4194304
     maxMetricLines: 20
@@ -107,5 +253,11 @@ spec:
         role: log
         mediaType: text/plain
         required: true
+  audit:
+    minimumRepeats: 5
+    referencePolicy: required
+    environmentAxes: [machine, day]
+    requiredEvidence: [system-fingerprint, raw-result, log]
   x-extensions:
+    bootstrapCatalog: true
     executionStatus: executable

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
 from looper_core.analysis import (
+    BENCHTRUST_METHOD_VERSION,
     InsufficientEvidence,
     aggregate,
     bootstrap_improvement,
@@ -12,7 +14,8 @@ from looper_core.analysis import (
     gate_passes,
     paired_bootstrap_improvement,
     pareto_ranks,
-    rank_stability,
+    rank_stability_by_axes,
+    ranking_groups,
     reference_validity_rate,
     summarize,
     task_leverage,
@@ -42,9 +45,10 @@ from looper_api.models import (
     ExperimentRecord,
     ObservationRecord,
     SelectionLoadPointRecord,
+    TargetRecord,
 )
 
-ANALYSIS_CODE_VERSION = "0.4.0"
+ANALYSIS_CODE_VERSION = "0.5.0"
 
 
 def _observation_value(record: ObservationRecord) -> float | bool | None:
@@ -87,6 +91,7 @@ def _input_facts(session: Session, experiment_id: str) -> list[dict[str, Any]]:
                 "retry_index": attempt.retry_index,
                 "queue_sequence": attempt.queue_sequence,
                 "status": attempt.status,
+                "error_message": attempt.error_message,
                 "fencing_token": attempt.fencing_token,
                 "envelope_digest": attempt.envelope_digest,
                 "observations": [
@@ -386,17 +391,50 @@ def _selection_analysis(
                 }
             )
 
-    analyzed_point = session.scalar(
-        select(SelectionLoadPointRecord)
-        .where(SelectionLoadPointRecord.experiment_id == experiment.id)
-        .order_by(SelectionLoadPointRecord.sequence.desc())
-        .limit(1)
+    load_points = list(
+        session.scalars(
+            select(SelectionLoadPointRecord)
+            .where(SelectionLoadPointRecord.experiment_id == experiment.id)
+            .order_by(SelectionLoadPointRecord.sequence)
+        )
     )
+    analyzed_point = load_points[-1] if load_points else None
+    frontier_summary = analyzed_point.analysis_json if analyzed_point is not None else {}
     persisted_frontiers = (
-        analyzed_point.analysis_json.get("target_frontiers", {})
-        if analyzed_point is not None
-        else {}
+        frontier_summary.get("target_frontiers", {}) if analyzed_point is not None else {}
     )
+    facts_by_point: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for fact in facts:
+        point_id = fact.get("selection_load_point_id")
+        if isinstance(point_id, str):
+            facts_by_point[point_id].append(fact)
+    search_trajectory = [
+        {
+            "load_point_id": point.id,
+            "sequence": point.sequence,
+            "workload_id": point.workload_id,
+            "offered_load": float(point.offered_load),
+            "origin": point.origin,
+            "status": point.status,
+            "required_repeats": point.required_repeats,
+            "reason": (point.analysis_json or {}).get("reason"),
+            "attempts": [
+                {
+                    "attempt_id": fact["attempt_id"],
+                    "target_id": fact["target_id"],
+                    "repeat_index": fact["repeat_index"],
+                    "retry_index": fact["retry_index"],
+                    "queue_sequence": fact["queue_sequence"],
+                    "status": fact["status"],
+                    "error_message": fact["error_message"],
+                }
+                for fact in sorted(
+                    facts_by_point.get(point.id, []), key=lambda item: item["queue_sequence"]
+                )
+            ],
+        }
+        for point in load_points
+    ]
     target_results: list[dict[str, Any]] = []
     for binding in spec.selection.target_bindings:
         target_blocks = [item for item in blocks if item["target_id"] == binding.target_id]
@@ -506,9 +544,7 @@ def _selection_analysis(
                     pair[baseline_variant],
                     minimum_effect_ratio=minimum_effect,
                 )
-                interval_comparisons.append(
-                    {"placement_pair_id": placement_pair_id, **comparison}
-                )
+                interval_comparisons.append({"placement_pair_id": placement_pair_id, **comparison})
             winners = {
                 item.get("winner")
                 for item in interval_comparisons
@@ -687,25 +723,389 @@ def _selection_analysis(
         "code_version": ANALYSIS_CODE_VERSION,
         "status": "available" if target_results else "insufficient_evidence",
         "scenario": spec.scenario.model_dump(mode="json"),
+        "frontier": {
+            "status": frontier_summary.get("frontier_status"),
+            "termination_reason": frontier_summary.get("termination_reason"),
+            "adaptive_points_used": sum(point.origin == "adaptive" for point in load_points),
+            "trajectory": search_trajectory,
+        }
+        if spec.scenario.load_search
+        else None,
         "targets": target_results,
         "comparisons": comparisons,
         "blocks": blocks,
         "candidates": [],
         "pareto": [],
-        "benchtrust": {
-            "placement_pair_count": len(
-                {binding.placement_pair_id for binding in spec.selection.target_bindings}
-            ),
-            "conclusion_strength": comparisons[0]["conclusion_strength"]
-            if comparisons
-            else "availability-only",
-        },
+        "benchtrust": _build_benchtrust(
+            session,
+            experiment,
+            spec,
+            input_digest=input_digest,
+            policy_digest=policy_digest,
+        ),
         "evidence": {
             "attempt_count": len(facts),
             "observation_count": sum(len(item["observations"]) for item in facts),
             "artifact_count": artifact_count,
             "all_artifacts_content_addressed": True,
         },
+    }
+
+
+def _benchtrust_samples(
+    session: Session, experiment: ExperimentRecord, spec: ExperimentSpec
+) -> list[dict[str, Any]]:
+    first = spec.objectives[0]
+    targets = {item.id: item for item in session.scalars(select(TargetRecord))}
+    evaluations = list(
+        session.scalars(
+            select(EvaluationRecord).where(EvaluationRecord.experiment_id == experiment.id)
+        )
+    )
+    candidate_by_id = {
+        item.id: item
+        for item in session.scalars(
+            select(CandidateRecord).where(CandidateRecord.experiment_id == experiment.id)
+        )
+    }
+    bindings = {
+        item.target_id: item
+        for item in (spec.selection.target_bindings if spec.selection else [])
+    }
+    variants = sorted(
+        {item.variant_id for item in (spec.selection.target_bindings if spec.selection else [])}
+    )
+    baseline_variant = variants[0] if variants else None
+    candidate_variant = variants[1] if len(variants) > 1 else None
+    samples: list[dict[str, Any]] = []
+    for evaluation in evaluations:
+        attempts = list(
+            session.scalars(
+                select(AttemptRecord).where(
+                    AttemptRecord.evaluation_id == evaluation.id,
+                    AttemptRecord.status == AttemptStatus.SUCCEEDED,
+                )
+            )
+        )
+        target = targets.get(evaluation.target_id)
+        fingerprint = (target.fingerprint_json or {}) if target else {}
+        candidate = candidate_by_id.get(evaluation.candidate_id)
+        binding = bindings.get(evaluation.target_id)
+        variant_id = binding.variant_id if binding else None
+        placement_id = binding.placement_pair_id if binding else None
+        if binding is not None:
+            is_baseline = variant_id == baseline_variant
+            is_reference = (
+                variant_id == candidate_variant
+                if candidate_variant is not None
+                else not is_baseline
+            )
+        else:
+            is_baseline = bool(candidate and candidate.role == "baseline")
+            is_reference = bool(candidate and candidate.role != "baseline")
+        for attempt in attempts:
+            observations = list(
+                session.scalars(
+                    select(ObservationRecord).where(ObservationRecord.attempt_id == attempt.id)
+                )
+            )
+            values = [
+                float(_observation_value(item))
+                for item in observations
+                if item.metric == first.metric
+                and item.unit == first.unit
+                and item.phase != "warmup"
+                and not isinstance(_observation_value(item), bool)
+                and _observation_value(item) is not None
+            ]
+            if not values:
+                continue
+            checks = list(
+                session.scalars(
+                    select(CheckRecord).where(CheckRecord.attempt_id == attempt.id)
+                )
+            )
+            validity = all(check.passed for check in checks) if checks else True
+            envelope = attempt.envelope_json or {}
+            extensions = envelope.get("extensions", {})
+            samples.append(
+                {
+                    "target_id": evaluation.target_id,
+                    "candidate_id": evaluation.candidate_id,
+                    "variant_id": variant_id,
+                    "placement_pair_id": placement_id,
+                    "is_baseline": is_baseline,
+                    "is_reference": is_reference,
+                    "workload_id": evaluation.workload_id,
+                    "value": aggregate(values, first.aggregation),
+                    "date": attempt.created_at.date().isoformat() if attempt.created_at else None,
+                    "time_block_id": extensions.get("timeBlockId")
+                    or extensions.get("time_block_id"),
+                    "validity": validity,
+                    "environment_fingerprint": fingerprint,
+                }
+            )
+    return samples
+
+
+def _environment_factors(fingerprint: Mapping[str, Any], target_id: str) -> dict[str, Any]:
+    return {
+        "cpu_model": fingerprint.get("processor") or fingerprint.get("instance_type"),
+        "kernel": fingerprint.get("release"),
+        "virtualization": fingerprint.get("system"),
+        "host": fingerprint.get("host_key_sha256") or fingerprint.get("processor") or target_id,
+    }
+
+
+def _reference_validity_records(
+    samples: Sequence[dict[str, Any]], spec: ExperimentSpec
+) -> list[dict[str, Any]]:
+    first = spec.objectives[0]
+    minimum_effect = (
+        spec.scenario.load_search.minimum_effect_ratio
+        if spec.scenario is not None and spec.scenario.load_search is not None
+        else 0.05
+    )
+    by_target: dict[str, dict[str, list[float]]] = defaultdict(
+        lambda: {"baseline": [], "reference": []}
+    )
+    validity_by_target: dict[str, list[bool]] = defaultdict(list)
+    fingerprint_by_target: dict[str, Mapping[str, Any]] = {}
+    for sample in samples:
+        target_id = sample["target_id"]
+        if sample["is_baseline"]:
+            by_target[target_id]["baseline"].append(sample["value"])
+        elif sample["is_reference"]:
+            by_target[target_id]["reference"].append(sample["value"])
+        validity_by_target[target_id].append(bool(sample["validity"]))
+        fingerprint_by_target.setdefault(
+            target_id, sample.get("environment_fingerprint") or {"target_id": target_id}
+        )
+    records: list[dict[str, Any]] = []
+    for target_id in sorted(by_target):
+        baseline_values = by_target[target_id]["baseline"]
+        reference_values = by_target[target_id]["reference"]
+        fingerprint = fingerprint_by_target[target_id]
+        if not baseline_values or not reference_values:
+            records.append(
+                {
+                    "environment_id": target_id,
+                    "environment_fingerprint": fingerprint,
+                    "eligible": False,
+                    "excluded_reason": "缺少 Reference 或 Baseline 的配对结果",
+                    "valid": None,
+                    "invalid_reason": None,
+                    "reference_value": None,
+                    "baseline_value": None,
+                    "benefit": None,
+                    "benefit_lower": None,
+                    "benefit_upper": None,
+                    "repeat_count": len(reference_values),
+                }
+            )
+            continue
+        valid_gate = all(validity_by_target[target_id])
+        try:
+            confidence = bootstrap_improvement(
+                reference_values,
+                baseline_values,
+                first.direction,
+                first.aggregation,
+                first.comparison,
+                spec.design.confidence_level,
+                spec.design.bootstrap_resamples,
+                spec.design.random_seed,
+            )
+        except InsufficientEvidence as error:
+            records.append(
+                {
+                    "environment_id": target_id,
+                    "environment_fingerprint": fingerprint,
+                    "eligible": False,
+                    "excluded_reason": str(error),
+                    "valid": None,
+                    "invalid_reason": None,
+                    "reference_value": None,
+                    "baseline_value": None,
+                    "benefit": None,
+                    "benefit_lower": None,
+                    "benefit_upper": None,
+                    "repeat_count": len(reference_values),
+                }
+            )
+            continue
+        estimate = confidence["estimate"]
+        lower = confidence["lower"]
+        direction_consistent = estimate is not None and lower is not None and lower > minimum_effect
+        valid = bool(
+            direction_consistent
+            and valid_gate
+            and len(reference_values) >= spec.design.min_repeats
+        )
+        if valid:
+            invalid_reason = None
+        elif not valid_gate:
+            invalid_reason = "有效性/正确性门禁未通过"
+        elif len(reference_values) < spec.design.min_repeats:
+            invalid_reason = f"重复数 {len(reference_values)} 低于 {spec.design.min_repeats}"
+        else:
+            invalid_reason = "参考收益方向与声明方向不一致或未达到最小效果"
+        records.append(
+            {
+                "environment_id": target_id,
+                "environment_fingerprint": fingerprint,
+                "eligible": True,
+                "excluded_reason": None,
+                "valid": valid,
+                "invalid_reason": invalid_reason,
+                "reference_value": aggregate(reference_values, first.aggregation),
+                "baseline_value": aggregate(baseline_values, first.aggregation),
+                "benefit": estimate,
+                "benefit_lower": lower,
+                "benefit_upper": confidence["upper"],
+                "repeat_count": len(reference_values),
+            }
+        )
+    return records
+
+
+def _build_benchtrust(
+    session: Session,
+    experiment: ExperimentRecord,
+    spec: ExperimentSpec,
+    *,
+    task_scores: Mapping[str, Mapping[str, float]] | None = None,
+    task_weights: Mapping[str, float] | None = None,
+    input_digest: str,
+    policy_digest: str,
+) -> dict[str, Any]:
+    first = spec.objectives[0]
+    maximize = first.direction.value == "maximize"
+    samples = _benchtrust_samples(session, experiment, spec)
+
+    environment_records = []
+    for sample in samples:
+        factors = _environment_factors(sample["environment_fingerprint"], sample["target_id"])
+        environment_records.append(
+            {
+                "value": sample["value"],
+                "workload": sample["workload_id"],
+                "candidate": sample["variant_id"] or sample["candidate_id"],
+                "cpu_model": factors["cpu_model"],
+                "kernel": factors["kernel"],
+                "virtualization": factors["virtualization"],
+                "host": factors["host"],
+                "placement": sample["placement_pair_id"],
+                "date": sample["date"],
+                "time_block": sample["time_block_id"],
+            }
+        )
+    environment_sensitivity_result = environment_sensitivity(
+        environment_records,
+        ["cpu_model", "kernel", "virtualization", "host", "placement", "date", "time_block"],
+        controls=("workload", "candidate"),
+    )
+
+    def _rank_unit(sample: Mapping[str, Any]) -> str:
+        return str(sample["variant_id"] or sample["candidate_id"])
+
+    def _slices_for(group_key: Callable[[Mapping[str, Any]], Any]) -> list[list[list[str]]]:
+        sliced: list[list[list[str]]] = []
+        keys = sorted({group_key(sample) for sample in samples if group_key(sample) is not None})
+        for key in keys:
+            scored: dict[str, list[float]] = defaultdict(list)
+            for sample in samples:
+                if group_key(sample) == key:
+                    scored[_rank_unit(sample)].append(sample["value"])
+            if len(scored) >= 2:
+                aggregate_map = {
+                    unit: aggregate(values, first.aggregation) for unit, values in scored.items()
+                }
+                sliced.append(ranking_groups(aggregate_map, maximize=maximize))
+        return sliced
+
+    rank_axes = [
+        {
+            "axis": "machine",
+            "scoring_formula_ids": None,
+            "rankings": _slices_for(lambda sample: sample["target_id"]),
+            "limitations": [],
+        },
+        {
+            "axis": "day",
+            "scoring_formula_ids": None,
+            "rankings": _slices_for(lambda sample: sample["date"]),
+            "limitations": [],
+        },
+        {
+            "axis": "scoring_formula",
+            "scoring_formula_ids": ["looper.v1alpha1:objectives"],
+            "rankings": [],
+            "limitations": ["单一计分公式，缺少跨计分公式的排名切片"],
+        },
+    ]
+    rank_stability_result = rank_stability_by_axes(rank_axes)
+
+    reference_validity_result = reference_validity_rate(
+        _reference_validity_records(samples, spec),
+        expected_direction=first.direction.value,
+        minimum_effect=(
+            spec.scenario.load_search.minimum_effect_ratio
+            if spec.scenario is not None and spec.scenario.load_search is not None
+            else 0.05
+        ),
+        min_repeats=spec.design.min_repeats,
+    )
+
+    if task_scores is not None:
+        task_leverage_result = task_leverage(
+            task_scores,
+            task_weights or {},
+            scoring_formula="objectives weighted-sum (relative improvement vs baseline)",
+            aggregation_method="weighted-sum",
+            decomposable=True,
+        )
+    else:
+        task_leverage_result = task_leverage(
+            {}, scoring_formula=None, aggregation_method=None, decomposable=False
+        )
+
+    statuses = {
+        reference_validity_result["status"],
+        rank_stability_result["status"],
+        task_leverage_result["status"],
+        environment_sensitivity_result["status"],
+    }
+    if any(status == "available" for status in statuses):
+        overall = "available"
+    elif any(status == "partial" for status in statuses):
+        overall = "partial"
+    elif statuses == {"unavailable"}:
+        overall = "unavailable"
+    else:
+        overall = "insufficient_evidence"
+
+    return {
+        "schemaVersion": "v1alpha1",
+        "methodVersion": BENCHTRUST_METHOD_VERSION,
+        "status": overall,
+        "referenceValidityRate": reference_validity_result,
+        "rankStability": rank_stability_result,
+        "taskLeverage": task_leverage_result,
+        "environmentSensitivity": environment_sensitivity_result,
+        "evidence": {
+            "sample_count": len(samples),
+            "target_count": len({item["target_id"] for item in samples}),
+            "distinct_dates": len({item["date"] for item in samples if item["date"]}),
+            "distinct_workloads": len({item["workload_id"] for item in samples}),
+        },
+        "limitations": [
+            "BenchTrust 元指标是证据，不作为硬门禁",
+            "仅当 audit policy 声明阈值时才输出 pass/warning/fail；当前未声明阈值",
+            "单项指标不可互相补偿（如 Task Leverage 高不被 Reference Validity 高抵消）",
+        ],
+        "inputDigest": input_digest,
+        "policyDigest": policy_digest,
     }
 
 
@@ -729,6 +1129,7 @@ def build_analysis_snapshot(
         "scenario": spec.scenario.model_dump(mode="json") if spec.scenario else None,
         "selection": spec.selection.model_dump(mode="json") if spec.selection else None,
         "code_version": ANALYSIS_CODE_VERSION,
+        "benchtrust_method_version": BENCHTRUST_METHOD_VERSION,
     }
     policy_digest = canonical_digest(policy)
     existing = session.scalar(
@@ -779,10 +1180,8 @@ def build_analysis_snapshot(
         _, baseline_observations, _ = _candidate_observations(session, baseline)
 
     rendered_candidates: list[dict[str, Any]] = []
-    candidate_observations: dict[str, list[ObservationRecord]] = {}
     for candidate in candidates:
         attempts, observations, checks = _candidate_observations(session, candidate)
-        candidate_observations[candidate.id] = observations
         objective_results: list[dict[str, Any]] = []
         for objective_index, objective in enumerate(spec.objectives):
             values = _metric_values(observations, objective.metric, objective.unit)
@@ -887,9 +1286,7 @@ def build_analysis_snapshot(
         }
         for candidate in rendered_candidates
     ]
-    objective_directions = {
-        objective.metric: objective.direction for objective in spec.objectives
-    }
+    objective_directions = {objective.metric: objective.direction for objective in spec.objectives}
     objective_epsilons = {objective.metric: objective.epsilon for objective in spec.objectives}
     for stability_objective in spec.stability_objectives:
         if stability_objective.hard:
@@ -909,49 +1306,18 @@ def build_analysis_snapshot(
     for candidate in rendered_candidates:
         candidate["pareto_rank"] = ranks.get(candidate["id"])
 
-    first_objective = spec.objectives[0]
-    rankings: list[list[str]] = []
-    workload_scores: dict[str, dict[str, float]] = defaultdict(dict)
-    environment_groups: dict[str, list[float]] = defaultdict(list)
-    evaluations = list(
-        session.scalars(
-            select(EvaluationRecord).where(EvaluationRecord.experiment_id == experiment_id)
-        )
-    )
-    for evaluation in evaluations:
-        observations = candidate_observations.get(evaluation.candidate_id, [])
-        scoped = [
-            item
-            for item in observations
-            if item.workload == evaluation.workload_id
-            and item.metric == first_objective.metric
-            and item.unit == first_objective.unit
-            and not isinstance(_observation_value(item), bool)
-        ]
-        values = [
-            float(_observation_value(item))
-            for item in scoped
-            if _observation_value(item) is not None
-        ]
-        if values:
-            raw = aggregate(values, first_objective.aggregation)
-            normalized = raw if first_objective.direction.value == "maximize" else -raw
-            workload_scores[evaluation.workload_id][evaluation.candidate_id] = normalized
-            environment_groups[evaluation.target_id].extend(values)
-    for scores in workload_scores.values():
-        rankings.append(sorted(scores, key=lambda item: (-scores[item], item)))
-
-    leverage_input: dict[str, dict[str, float]] = defaultdict(dict)
-    for workload, scores in workload_scores.items():
-        for candidate_id, value in scores.items():
-            leverage_input[candidate_id][workload] = value
-    validity = [
-        bool(candidate["objectives"][0].get("lower", 0) > 0)
-        for candidate in rendered_candidates
-        if candidate["role"] != "baseline"
-        and candidate["objectives"]
-        and candidate["objectives"][0]["status"] == "available"
-    ]
+    objective_weights = {objective.metric: objective.weight for objective in spec.objectives}
+    task_scores: dict[str, dict[str, float]] = {}
+    for candidate in rendered_candidates:
+        row: dict[str, float] = {}
+        for objective in candidate["objectives"]:
+            improvement = objective.get("improvement")
+            if improvement is None:
+                row = {}
+                break
+            row[objective["metric"]] = float(improvement)
+        if row:
+            task_scores[candidate["id"]] = row
     artifact_count = int(
         session.scalar(
             select(func.count(ArtifactLinkRecord.id))
@@ -978,12 +1344,15 @@ def build_analysis_snapshot(
             }
             for candidate in rendered_candidates
         ],
-        "benchtrust": {
-            "reference_validity_rate": reference_validity_rate(validity),
-            "rank_stability": rank_stability(rankings),
-            "task_leverage": task_leverage(leverage_input),
-            "environment_sensitivity": environment_sensitivity(environment_groups),
-        },
+        "benchtrust": _build_benchtrust(
+            session,
+            experiment,
+            spec,
+            task_scores=task_scores,
+            task_weights=objective_weights,
+            input_digest=input_digest,
+            policy_digest=policy_digest,
+        ),
         "evidence": {
             "attempt_count": len(facts),
             "observation_count": observation_count,

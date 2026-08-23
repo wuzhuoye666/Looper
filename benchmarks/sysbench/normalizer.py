@@ -33,6 +33,16 @@ def main(argv: list[str] | None = None) -> int:
     has_events = isinstance(events_per_second, (int, float))
     valid = exit_code == 0 and has_events
 
+    # Always emit the run-ok flag metric so the scenario SLO gate can evaluate.
+    emit_metric(
+        output,
+        "sysbench_run_ok",
+        1.0 if valid else 0.0,
+        "flag",
+        workload=workload_id,
+        statistic="sample",
+    )
+
     if valid:
         emit_metric(
             output,

@@ -106,8 +106,17 @@ class InstanceTypeInfo(ApiModel):
     family: str | None = None
     cpu: int
     memory_gib: float
-    gpu: int | None = None
+    gpu: float | None = None
+    gpu_model: str | None = None
+    gpu_memory_gib: float | None = None
     architecture: str | None = None
+    network_bandwidth_rx_gbps: float | None = None
+    network_bandwidth_tx_gbps: float | None = None
+    network_pps_rx: int | None = None
+    network_pps_tx: int | None = None
+    local_storage_count: int | None = None
+    local_storage_capacity_gib: float | None = None
+    local_storage_category: str | None = None
     zones: list[str] = Field(default_factory=list)
     available: bool | None = None
     attributes: dict[str, Any] = Field(default_factory=dict)
@@ -141,6 +150,9 @@ class CatalogResponse(ApiModel):
     ]
     items: list[dict[str, Any]]
     total: int
+    offset: int = 0
+    limit: int = 100
+    next_offset: int | None = None
     source: Literal["live", "cache", "stale-cache"]
     fetched_at: datetime
     expires_at: datetime
@@ -159,6 +171,7 @@ class CatalogFilters(ApiModel):
     max_memory_gib: float | None = Field(default=None, ge=0.25, le=65536)
     image_type: str | None = Field(default=None, max_length=60)
     platform: str | None = Field(default=None, max_length=80)
+    offset: int = Field(default=0, ge=0)
     limit: int = Field(default=100, ge=1, le=500)
 
 
@@ -219,6 +232,7 @@ class ProvisionedInstance(ApiModel):
     zone: str | None = None
     status: str
     private_ip: str | None = None
+    public_ip: str | None = None
     public_ip_present: bool = False
 
 
@@ -276,3 +290,33 @@ class SearchResult(ApiModel):
     url: str
     updated_at: datetime | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class DestroyedResource(ApiModel):
+    kind: Literal[
+        "instance", "system-disk", "local-disk", "public-ip", "subnet", "security-group"
+    ]
+    id: str = Field(min_length=1, max_length=180)
+    released: bool = True
+    note: str | None = Field(default=None, max_length=500)
+
+
+class ProviderDestroyResult(ApiModel):
+    request_id: str | None = None
+    instance_ids: list[str] = Field(default_factory=list)
+    released_resources: list[DestroyedResource] = Field(default_factory=list)
+    details: dict[str, Any] = Field(default_factory=dict)
+
+
+class TargetDestroyRequest(ApiModel):
+    acknowledgement: str = Field(min_length=8, max_length=300)
+
+
+class TargetDestroyPreview(ApiModel):
+    target_id: str
+    provider: ProviderId
+    region: str
+    instance_id: str
+    instance_name: str
+    acknowledgement: str
+    resources: list[DestroyedResource]

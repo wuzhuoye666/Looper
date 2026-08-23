@@ -8,10 +8,17 @@ import time
 from pathlib import Path
 
 import httpx
+from dotenv import load_dotenv
 
 from looper_worker.client import ControlPlaneClient
 from looper_worker.fingerprint import worker_capabilities, worker_fingerprint
 from looper_worker.runner import LocalAttemptRunner, RunnerError, cleanup_orphan_processes
+
+
+def _load_worker_environment() -> None:
+    env_file = Path(os.environ.get("LOOPER_ENV_FILE", ".env"))
+    if env_file.is_file():
+        load_dotenv(env_file, override=False)
 
 
 def run_worker(
@@ -28,43 +35,53 @@ def run_worker(
     cleanup_orphan_processes(work_dir)
     try:
         while True:
-            try:
-                client.register(
-                    name=f"{socket.gethostname()} local worker",
-                    capabilities=worker_capabilities(),
-                    fingerprint=worker_fingerprint(),
-                    target_ids=target_ids or ["local"],
-                )
-                break
-            except httpx.HTTPError as error:
-                if once:
-                    raise
-                print(f"worker registration waiting: {error}", flush=True)
-                time.sleep(1)
+            while True:
+                try:
+                    client.register(
+                        name=f"{socket.gethostname()} local worker",
+                        capabilities=worker_capabilities(),
+                        fingerprint=worker_fingerprint(),
+                        target_ids=target_ids or ["local"],
+                    )
+                    break
+                except httpx.HTTPError as error:
+                    if once:
+                        raise
+                    print(f"worker registration waiting: {error}", flush=True)
+                    time.sleep(1)
 
-        while True:
-            try:
-                claim = client.claim()
-                if claim is None:
+            while True:
+                try:
+                    claim = client.claim()
+                    if claim is None:
+                        if once:
+                            return 0
+                        time.sleep(0.75)
+                        continue
+                    print(f"claimed {claim['attemptId']}", flush=True)
+                    response = runner.run_claim(claim)
+                    print(f"completed {claim['attemptId']} as {response['status']}", flush=True)
                     if once:
                         return 0
-                    time.sleep(0.75)
-                    continue
-                print(f"claimed {claim['attemptId']}", flush=True)
-                response = runner.run_claim(claim)
-                print(f"completed {claim['attemptId']} as {response['status']}", flush=True)
-                if once:
-                    return 0
-            except (httpx.HTTPError, RunnerError, OSError, ValueError) as error:
-                print(f"worker error: {error}", flush=True)
-                if once:
-                    return 1
-                time.sleep(1)
+                except httpx.HTTPError as error:
+                    print(f"worker connection lost: {error}", flush=True)
+                    if once:
+                        return 1
+                    time.sleep(1)
+                    # Registration restores both the Worker row and every
+                    # bound target's runnable projection after an API outage.
+                    break
+                except (RunnerError, OSError, ValueError) as error:
+                    print(f"worker error: {error}", flush=True)
+                    if once:
+                        return 1
+                    time.sleep(1)
     finally:
         client.close()
 
 
 def cli() -> None:
+    _load_worker_environment()
     parser = argparse.ArgumentParser(description="Run a Looper benchmark worker")
     parser.add_argument("--api-url", default="http://127.0.0.1:8000")
     parser.add_argument(

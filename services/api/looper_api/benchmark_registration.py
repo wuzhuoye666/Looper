@@ -85,6 +85,65 @@ class RegistrationError(RuntimeError):
         self.constraints = constraints
 
 
+def selection_scenario_document(
+    benchmark: BenchmarkRecord,
+    registration: BenchmarkRegistrationRecord | None,
+) -> dict[str, Any] | None:
+    """Return an explicit or registration-derived selection contract.
+
+    Generic Adapter benchmarks historically registered successfully without a
+    ``spec.scenario`` section. Their audited registration still contains the
+    decision question, primary metric and workload class needed by the
+    selection workflow, so expose a conservative single-target contract rather
+    than silently hiding them from the experiment form.
+    """
+
+    declared = benchmark.manifest_json["spec"].get("scenario")
+    if isinstance(declared, dict):
+        return declared
+    if registration is None or registration.status != "registered":
+        return None
+    draft = BenchmarkRegistrationDraft.model_validate(registration.draft_json)
+    spec = benchmark.manifest_json["spec"]
+    adapter = spec.get("adapter") or {}
+    primary_metric = draft.primary_metric or adapter.get("primaryMetric")
+    if not (
+        draft.decision_question
+        and primary_metric
+        and primary_metric in (spec.get("metrics") or {})
+        and spec.get("workloads")
+    ):
+        return None
+    topology = (
+        "multi-node"
+        if draft.execution_model == "distributed"
+        else "client-server"
+        if draft.execution_model in {"service-stack", "database", "network"}
+        else "single-node"
+    )
+    workload_class = (
+        draft.category if draft.category != "unclassified" else draft.execution_model
+    )
+    return {
+        "id": benchmark.benchmark_id,
+        "name": benchmark.name,
+        "decision_question": draft.decision_question,
+        "user_value": draft.decision_question,
+        "workload_class": workload_class,
+        "topology": topology,
+        "roles": [
+            {
+                "id": "target",
+                "kind": "target",
+                "included_in_score": True,
+                "description": "Candidate target executing the registered Benchmark Adapter",
+            }
+        ],
+        "primary_metric": primary_metric,
+        "slo_gates": [],
+    }
+
+
 def _constraint(
     code: str,
     group: str,
@@ -106,6 +165,9 @@ def _constraint(
 
 def evaluate_registration_constraints(
     draft: BenchmarkRegistrationDraft,
+    *,
+    session: Session | None = None,
+    package_ready: bool = False,
 ) -> tuple[list[dict[str, Any]], str | None]:
     constraints: list[dict[str, Any]] = []
     identifier_ok = bool(re.fullmatch(r"[a-z][a-z0-9.-]{2,63}", draft.benchmark_id))
@@ -181,8 +243,89 @@ def evaluate_registration_constraints(
     required_checks = adapter.get("requiredChecks") or []
     constraints.append(_constraint(
         "contract.hard-gates", "合同", "声明不可补偿的正确性、安全或 SLO 门禁",
-        bool(draft.correctness_contract and (hard_gates or required_checks)),
-        "页面门禁说明非空，且 scenario.slo_gates 或 adapter.requiredChecks 至少声明一项。",
+        bool(hard_gates or required_checks),
+        "门禁只从 manifest 的 scenario.slo_gates 或 adapter.requiredChecks 读取，"
+        "页面不再维护第二份说明。",
+    ))
+
+    infrastructure = spec.get("infrastructure") or {}
+    node_groups = infrastructure.get("nodeGroups") or []
+    node_group_ids = [item.get("id") for item in node_groups]
+    primary_node_group = infrastructure.get("primaryNodeGroup")
+    count_ranges_ok = all(
+        isinstance(item.get("count"), dict)
+        and item["count"].get("minimum", 0)
+        <= item["count"].get("default", 0)
+        <= item["count"].get("maximum", 0)
+        for item in node_groups
+    )
+    placement_references = [
+        reference
+        for item in node_groups
+        for key in ("coLocateWith", "separateFrom")
+        for reference in (item.get("placement") or {}).get(key, [])
+    ]
+    link_references = [
+        reference
+        for link in infrastructure.get("links", [])
+        for reference in (link.get("source"), link.get("target"))
+    ]
+    topology_input = next(
+        (
+            item
+            for item in adapter.get("inputs", [])
+            if item.get("kind") == "topology" and item.get("required") is True
+        ),
+        None,
+    )
+    adapter_managed_multi_node = bool(
+        infrastructure.get("orchestration") == "adapter"
+        and sum(item.get("count", {}).get("minimum", 0) for item in node_groups) > 1
+    )
+    infrastructure_consistent = bool(
+        not infrastructure
+        or (
+            len(node_group_ids) == len(set(node_group_ids))
+            and all(node_group_ids)
+            and primary_node_group in node_group_ids
+            and count_ranges_ok
+            and all(reference in node_group_ids for reference in placement_references)
+            and all(reference in node_group_ids for reference in link_references)
+            and (not adapter_managed_multi_node or topology_input is not None)
+        )
+    )
+    topology_requires_machine_contract = bool(
+        scenario.get("topology") in {"client-server", "multi-node"}
+        or adapter.get("executionModel") in {"distributed", "storage", "network"}
+    )
+    constraints.append(_constraint(
+        "contract.infrastructure-present",
+        "基础设施",
+        "多机或分布式套件声明每类机器及最低配置",
+        not topology_requires_machine_contract or bool(infrastructure),
+        "单机套件可以省略；client-server、multi-node、distributed、storage 和 network "
+        "套件应声明 spec.infrastructure。",
+        blocking=False,
+    ))
+    constraints.append(_constraint(
+        "contract.infrastructure-consistency",
+        "基础设施",
+        "机器组、数量范围、放置关系和拓扑输入相互一致",
+        infrastructure_consistent,
+        "primaryNodeGroup 和所有连接/放置引用必须存在；minimum ≤ default ≤ maximum；"
+        "Adapter 自编排多机时必须声明 required topology 输入。",
+    ))
+    looper_managed_multi_node = bool(
+        infrastructure.get("orchestration") == "looper"
+        and sum(item.get("count", {}).get("minimum", 0) for item in node_groups) > 1
+    )
+    constraints.append(_constraint(
+        "execution.orchestration-support",
+        "执行",
+        "所选多机编排方式已由当前 Worker 实现",
+        not looper_managed_multi_node or draft.execution_status == "stage0-adapter-only",
+        "当前可执行多机包必须使用 Adapter 自编排和 required topology 输入；"
+        "Looper 多角色调度仍只允许 Stage 0 合同。",
     ))
 
     runtime = spec.get("runtime") or {}
@@ -212,7 +355,42 @@ def evaluate_registration_constraints(
         isolation_ok,
         "executable 容器必须固定 @sha256；untrusted 不得使用 local-process。",
     ))
+    local_package_ready = draft.runtime_type != "local-process" or package_ready
+    constraints.append(_constraint(
+        "execution.package-bundle",
+        "执行",
+        "本地进程套件包含可自动下发的脚本包",
+        draft.execution_status == "stage0-adapter-only" or local_package_ready,
+        "可执行 local-process Benchmark 必须以 ZIP 接入包注册，不能只上传 manifest。",
+    ))
     commands = runtime.get("commands") or {}
+    provisioning = runtime.get("provisioning")
+    managed_provisioning = (
+        isinstance(provisioning, dict) and provisioning.get("mode") == "managed"
+    )
+    host_capabilities = (
+        set(provisioning.get("hostCapabilities", [])) if managed_provisioning else set()
+    )
+    provided_capabilities = (
+        set(provisioning.get("provides", [])) if managed_provisioning else set()
+    )
+    benchmark_capabilities = set(spec.get("capabilities", []))
+    provisioning_ok = bool(
+        not managed_provisioning
+        or (
+            commands.get("prepare")
+            and benchmark_capabilities <= host_capabilities | provided_capabilities
+            and provisioning.get("cacheKey") == runtime.get("dependencyLockDigest")
+        )
+    )
+    constraints.append(_constraint(
+        "execution.managed-provisioning",
+        "执行",
+        "自动部署声明覆盖运行依赖并绑定锁文件",
+        provisioning_ok,
+        "managed provisioning 必须有 prepare、覆盖 spec.capabilities，"
+        "且 cacheKey 等于 dependencyLockDigest。",
+    ))
     adapter_protocol_ok = bool(
         adapter.get("protocol") == "looper-adapter/v1"
         and adapter.get("executionModel")
@@ -228,16 +406,25 @@ def evaluate_registration_constraints(
         draft.execution_status == "stage0-adapter-only" or adapter_ready,
         "可执行配置必须声明 looper-adapter/v1，并通过 normalize 阶段生成标准输出。",
     ))
+    managed_local_process = bool(
+        draft.runtime_type == "local-process"
+        and spec.get("trust") == "trusted"
+        and package_ready
+        and managed_provisioning
+        and provisioning_ok
+    )
     install_safe = draft.execution_status == "stage0-adapter-only" or bool(
         draft.execution_status == "executable"
-        and draft.runtime_type == "container"
-        and pinned_image
         and adapter_ready
+        and (
+            (draft.runtime_type == "container" and pinned_image)
+            or managed_local_process
+        )
     )
     constraints.append(_constraint(
         "execution.install-boundary", "执行", "导入配置不会执行宿主机代码",
         install_safe,
-        "Stage 0 可直接登记；可执行配置只允许 digest 固定的容器和通用 Adapter。",
+        "Stage 0 可直接登记；可执行配置需要 digest 固定容器，或包含幂等自动部署的受信任 ZIP。",
     ))
 
     policy = runtime.get("executionPolicy") or {}
@@ -270,20 +457,23 @@ def evaluate_registration_constraints(
         and storage_input.get("required") is True
     )
     policy_ready = bool(
-        policy
-        and runtime.get("dependencyLockDigest")
-        and placement_policy.get("mode") == "isolated-container"
-        and runtime.get("type") == "container"
-        and network_consistent
-        and storage_consistent
-        and evidence_policy.get("profile") == "looper.system-fingerprint/v1alpha1"
-        and evidence_policy.get("requiredFields")
+        (managed_local_process and runtime.get("dependencyLockDigest"))
+        or (
+            policy
+            and runtime.get("dependencyLockDigest")
+            and placement_policy.get("mode") == "isolated-container"
+            and runtime.get("type") == "container"
+            and network_consistent
+            and storage_consistent
+            and evidence_policy.get("profile") == "looper.system-fingerprint/v1alpha1"
+            and evidence_policy.get("requiredFields")
+        )
     )
     constraints.append(_constraint(
         "execution.production-policy", "执行", "生产执行策略完整且可机读",
         draft.execution_status == "stage0-adapter-only" or policy_ready,
-        "Executable 必须固定 dependency lock，并声明一致的容器放置、网络预算、"
-        "存储边界和必需环境指纹字段。",
+        "Executable 必须固定 dependency lock；容器需声明完整策略，"
+        "受信任本地进程需使用含自动部署声明的完整 ZIP。",
     ))
     input_ids = [item.get("id") for item in adapter.get("inputs", [])]
     input_contract_ok = len(input_ids) == len(set(input_ids)) and all(input_ids)
@@ -314,10 +504,11 @@ def evaluate_registration_constraints(
         "原始证据声明必须有对应必需 artifact。",
     ))
     constraints.append(_constraint(
-        "audit.cross-environment", "审计", "Base/Reference 与跨环境审计已声明",
+        "audit.cross-environment", "审计", "Base/Reference 与跨环境审计计划已声明",
         draft.has_reference and draft.cross_environment_audit,
-        "正式准入前必须生成 Reference Validity、Rank Stability、"
-        "Task Leverage 和 Environment Sensitivity。",
+        "这不再阻止进入场景目录；正式选型准入前仍须生成 Reference Validity、Rank Stability、"
+        "Task Leverage 和 Environment Sensitivity。可在 spec.audit 中声明默认计划。",
+        blocking=False,
     ))
     constraints.append(_constraint(
         "trust.local-approval", "信任", "注册不自动授予本地执行信任",
@@ -326,6 +517,36 @@ def evaluate_registration_constraints(
         blocking=False,
     ))
     digest = canonical_digest(manifest) if manifest_error is None and manifest is not None else None
+    if session is not None:
+        benchmark_key = f"{draft.benchmark_id}@{draft.version}"
+        version_owner = session.get(BenchmarkRecord, benchmark_key)
+        constraints.insert(2, _constraint(
+            "identity.version-available",
+            "身份",
+            "Benchmark ID 与版本尚未被占用",
+            version_owner is None,
+            (
+                f"{benchmark_key} 可以登记。"
+                if version_owner is None
+                else f"{benchmark_key} 已存在；请提升版本号。新版本会成为目录中的当前版本，"
+                "旧版本仅供已有实验追溯。"
+            ),
+        ))
+        if digest is not None:
+            digest_owner = session.scalar(
+                select(BenchmarkRecord).where(BenchmarkRecord.manifest_digest == digest)
+            )
+            constraints.insert(5, _constraint(
+                "contract.digest-available",
+                "合同",
+                "manifest 内容不是已登记版本的重复副本",
+                digest_owner is None,
+                (
+                    "manifest 摘要尚未登记。"
+                    if digest_owner is None
+                    else f"配置内容与 {digest_owner.key} 完全相同；请确认版本和内容确实有变化。"
+                ),
+            ))
     return constraints, digest
 
 
@@ -382,6 +603,26 @@ def draft_from_manifest_bytes(
     primary = spec.get("metrics", {}).get(primary_metric, {})
     runtime = spec["runtime"]
     artifacts = spec["outputs"].get("artifacts", [])
+    hard_gate_ids = [
+        str(item.get("id"))
+        for item in scenario.get("slo_gates", [])
+        if item.get("hard", True)
+        and item.get("kind") in {"correctness", "safety", "slo"}
+        and item.get("id")
+    ]
+    required_check_ids = [str(item) for item in adapter.get("requiredChecks", [])]
+    correctness_parts = []
+    if hard_gate_ids:
+        correctness_parts.append("hard gates: " + ", ".join(hard_gate_ids))
+    if required_check_ids:
+        correctness_parts.append("adapter checks: " + ", ".join(required_check_ids))
+    audit = spec.get("audit") or {}
+    reference_policy = audit.get("referencePolicy")
+    environment_axes = set(audit.get("environmentAxes") or [])
+    cross_environment_axes = {
+        "machine", "day", "placement", "compiler", "runtime", "driver",
+        "region", "zone", "network", "storage",
+    }
     return BenchmarkRegistrationDraft(
         name=str(metadata["name"]),
         benchmark_id=str(metadata["id"]),
@@ -398,21 +639,21 @@ def draft_from_manifest_bytes(
         decision_question=str(scenario.get("decision_question") or ""),
         primary_metric=primary_metric,
         primary_unit=str(primary.get("unit") or ""),
-        correctness_contract="",
+        correctness_contract="; ".join(correctness_parts),
         runtime_type=str(runtime["type"]),
         execution_status=str(
             spec.get("x-extensions", {}).get("executionStatus", "executable")
         ),
         image=str(runtime.get("image") or ""),
         minimum_samples=int(primary.get("minimumSamples", 1)),
-        repeats=3,
-        has_reference=False,
+        repeats=int(audit.get("minimumRepeats", 3)),
+        has_reference=reference_policy in {"required", "recommended"},
         retains_raw_evidence=any(
             item.get("required")
             and item.get("role") in {"raw-result", "trace", "profile", "dataset", "histogram"}
             for item in artifacts
         ),
-        cross_environment_audit=False,
+        cross_environment_audit=bool(environment_axes & cross_environment_axes),
         manifest=document,
     )
 
@@ -426,6 +667,7 @@ def _event_payload(record: BenchmarkRegistrationRecord) -> dict[str, Any]:
         "revision": record.revision,
         "draftDigest": canonical_digest(record.draft_json),
         "manifestDigest": record.manifest_digest,
+        "packageDigest": record.package_digest,
         "constraintResults": {
             item["code"]: item["status"] for item in record.constraints_json
         },
@@ -442,6 +684,8 @@ def registration_view(record: BenchmarkRegistrationRecord) -> dict[str, Any]:
         "constraints": record.constraints_json,
         "readyToRegister": registration_ready(record.constraints_json),
         "manifestDigest": record.manifest_digest,
+        "packageDigest": record.package_digest,
+        "packageReady": bool(record.package_path),
         "benchmarkKey": record.benchmark_key,
         "createdAt": record.created_at.isoformat(),
         "updatedAt": record.updated_at.isoformat(),
@@ -450,9 +694,15 @@ def registration_view(record: BenchmarkRegistrationRecord) -> dict[str, Any]:
 
 
 def create_registration(
-    session: Session, draft: BenchmarkRegistrationDraft
+    session: Session,
+    draft: BenchmarkRegistrationDraft,
+    *,
+    package_digest: str | None = None,
+    package_path: str | None = None,
 ) -> BenchmarkRegistrationRecord:
-    constraints, manifest_digest = evaluate_registration_constraints(draft)
+    constraints, manifest_digest = evaluate_registration_constraints(
+        draft, session=session, package_ready=bool(package_path)
+    )
     now = utc_now()
     record = BenchmarkRegistrationRecord(
         id=new_id("breg"),
@@ -461,6 +711,8 @@ def create_registration(
         draft_json=draft.model_dump(mode="json", by_alias=True),
         constraints_json=constraints,
         manifest_digest=manifest_digest,
+        package_digest=package_digest,
+        package_path=package_path,
         created_at=now,
         updated_at=now,
     )
@@ -492,7 +744,12 @@ def update_registration(
     registration_id: str,
     request: BenchmarkRegistrationUpdate,
 ) -> BenchmarkRegistrationRecord:
-    constraints, manifest_digest = evaluate_registration_constraints(request.draft)
+    existing = get_registration(session, registration_id)
+    constraints, manifest_digest = evaluate_registration_constraints(
+        request.draft,
+        session=session,
+        package_ready=bool(existing.package_path),
+    )
     result = session.execute(
         update(BenchmarkRegistrationRecord)
         .where(
@@ -540,7 +797,9 @@ def register_benchmark(
     if record.revision != request.expected_revision:
         raise RegistrationError("registration revision conflict", code="revision_conflict")
     draft = BenchmarkRegistrationDraft.model_validate(record.draft_json)
-    constraints, manifest_digest = evaluate_registration_constraints(draft)
+    constraints, manifest_digest = evaluate_registration_constraints(
+        draft, session=session, package_ready=bool(record.package_path)
+    )
     record.constraints_json = constraints
     record.manifest_digest = manifest_digest
     if not registration_ready(constraints) or draft.manifest is None or manifest_digest is None:
@@ -586,6 +845,11 @@ def register_benchmark(
     now = utc_now()
     manifest = draft.manifest
     metadata = manifest["metadata"]
+    trusted_package = bool(
+        record.package_path
+        and draft.runtime_type == "local-process"
+        and manifest["spec"].get("trust") == "trusted"
+    )
     session.add(BenchmarkRecord(
         key=key,
         benchmark_id=draft.benchmark_id,
@@ -595,8 +859,9 @@ def register_benchmark(
         license=draft.license,
         manifest_digest=manifest_digest,
         manifest_json=manifest,
-        manifest_path=None,
-        trusted=False,
+        manifest_path=record.package_path,
+        package_digest=record.package_digest,
+        trusted=trusted_package,
         installed_at=now,
     ))
     session.expire(record)
@@ -613,8 +878,9 @@ def register_benchmark(
     )
     payload.update({
         "benchmarkKey": key,
-        "trusted": False,
-        "runnable": execution_status == "executable" and runtime.get("type") == "container",
+        "trusted": trusted_package,
+        "runnable": execution_status == "executable"
+        and (trusted_package or runtime.get("type") == "container"),
     })
     append_event(
         session,

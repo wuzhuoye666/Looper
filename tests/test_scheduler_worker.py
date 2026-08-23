@@ -62,6 +62,7 @@ def test_fencing_token_rejects_stale_worker(db_session: object, tmp_path: Path) 
     )
     claim = claim_attempt(session, settings, worker)
     assert claim and claim["fencingToken"] == 1
+    assert claim["benchmarkRelativeRoot"] == "benchmarks/demo"
     attempt = session.get(AttemptRecord, claim["attemptId"])
     assert attempt and attempt.status == AttemptStatus.LEASED
     attempt.fencing_token = 2
