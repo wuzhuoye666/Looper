@@ -1,0 +1,38 @@
+{
+  "gate_values": {
+    "cpu.success": true
+  },
+  "identity": {
+    "phase": "steady-state-after-discarded-warmup",
+    "statistics": "repeats=7;duration=5s;workers=8;method=matrixprod",
+    "target": "sha256:9fb11d6a5ce5de3e7398a82e723dd6a73adf432939250f30baa80dc185683922",
+    "tool": "stress-ng, version 0.17.06 (gcc 13.2.0, x86_64 Linux 6.8.0-137-generic)",
+    "workload": "stress-ng-cpu-matrixprod-workers8"
+  },
+  "metrics": {
+    "cpu.bogo-ops-per-second": {
+      "metric_id": "cpu.bogo-ops-per-second",
+      "values": [
+        9495.536015,
+        9471.028209,
+        9441.300287,
+        9442.667864,
+        9443.243797,
+        9465.93402,
+        9482.651073
+      ]
+    },
+    "cpu.success": {
+      "metric_id": "cpu.success",
+      "values": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ]
+    }
+  }
+}

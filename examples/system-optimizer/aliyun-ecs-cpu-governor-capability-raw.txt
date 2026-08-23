@@ -1,0 +1,10 @@
+driver: intel_cpufreq
+available_governors: conservative ondemand userspace powersave performance schedutil 
+policy0: schedutil
+policy1: schedutil
+policy2: schedutil
+policy3: schedutil
+policy4: schedutil
+policy5: schedutil
+policy6: schedutil
+policy7: schedutil

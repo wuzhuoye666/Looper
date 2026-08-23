@@ -1,2 +1,4 @@
 .artifacts/system-opt/m2-component-calibration-20260823/** -diff
 .artifacts/system-opt/m2-memory-thp-search-20260823/** -diff
+.artifacts/system-opt/m2-cpu-governor-calibration-20260823/** -diff
+.artifacts/system-opt/m2-cpu-governor-search-20260823/** -diff

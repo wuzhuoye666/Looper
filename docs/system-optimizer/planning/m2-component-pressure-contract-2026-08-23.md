@@ -37,11 +37,11 @@ IRQ、THP、sysctl、cpufreq、I/O queue、MTU 是配置接口或配置类别，
 
 | 组件 | 当前探针/证据 | 当前状态 | 仍缺 |
 |---|---|---|---|
-| CPU | stress-ng 固定 matrixprod，8 worker，bogo ops/s | 阿里云 ECS 稳定出数；已派生 target-local CV gate | governor 被 active tuned 管理，所有权移交前不进入真实搜索；PMU 仅作后续诊断 |
+| CPU | stress-ng 固定 matrixprod，8 worker，bogo ops/s | tuned 所有权交接完成（stop 后 governor=schedutil 即真实基线）；schedutil 基线重校准 CV gate；governor 候选闭环完成：powersave 批次 CV 超门禁被拒、performance LCB95≤0 未采纳，全部回滚 | 换 workload/环境必须重校准；powersave 波动来源未归因；不能宣称 governor 优化收益 |
 | Memory | sysbench global sequential write，带宽与事件 p95 | target-local gate 生效；THP 两候选真实闭环，无接受候选 | 组合复验；换 workload/环境必须重校准；不是 MESS loaded latency |
-| NUMA | numactl 拓扑与绑定探针 | 当前 ECS 明确 unavailable | 至少 2 个 NUMA node 的目标机；本地/远端绑定和候选复验 |
-| Storage | fio 4K direct randread，多轮 scheduler/nomerges 实录 | 真实多轮已完成 | 纳入统一阶段协议；与其他组件组合复验 |
-| Network | iperf3 两流 loopback，吞吐与重传 | 仅协议栈稳定出数；已派生 loopback-only CV gate | 第二台受控 peer；NIC/VPC/RTT/loss 证据；真实网络候选闭环 |
+| NUMA | numactl 拓扑与绑定探针 | 两台可用 ECS（8C 与 24C）均单 NUMA node，unavailable 有双机证据 | 至少 2 个 NUMA node 的目标机；本地/远端绑定和候选复验 |
+| Storage | fio 4K direct randread，多轮 scheduler/nomerges 实录 | 真实多轮已完成 | 与其他组件组合复验 |
+| Network | iperf3 两流 loopback，吞吐与重传 | 仅协议栈稳定出数；loopback-only CV gate | 第二台受控 peer 于 2026-08-23 会话中途失联（实例不可达），真实网络候选闭环仍开放；NIC/VPC/RTT/loss 证据 |
 
 ## 4. 指标来源边界
 

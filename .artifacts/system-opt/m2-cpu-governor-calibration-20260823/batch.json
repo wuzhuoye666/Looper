@@ -1,0 +1,86 @@
+{
+  "gate_values": {
+    "cpu.success": true
+  },
+  "identity": {
+    "phase": "steady-state-after-discarded-warmup",
+    "statistics": "repeats=7;duration=5s;workers=8;method=matrixprod",
+    "target": "sha256:9fb11d6a5ce5de3e7398a82e723dd6a73adf432939250f30baa80dc185683922",
+    "tool": "stress-ng, version 0.17.06 (gcc 13.2.0, x86_64 Linux 6.8.0-137-generic)",
+    "workload": "stress-ng-cpu-matrixprod-workers8"
+  },
+  "metrics": {
+    "cpu.bogo-ops-per-second": {
+      "metric_id": "cpu.bogo-ops-per-second",
+      "values": [
+        9440.014537,
+        9443.266417,
+        9442.992488,
+        9464.90718,
+        9467.395149,
+        9453.494471,
+        9504.323764
+      ]
+    },
+    "cpu.success": {
+      "metric_id": "cpu.success",
+      "values": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ]
+    }
+  },
+  "phase_evidence": [
+    {
+      "command_digest": "sha256:bf96a85f31d5defb018acf499186d227c4d79e7859a95a3c7adf61259ee1438a",
+      "elapsed_seconds": 0.04372327000601217,
+      "kind": "prepare",
+      "phase_id": "prepare",
+      "status": "succeeded"
+    },
+    {
+      "command_digest": "sha256:4ad3ad8159b180093114816cef18691f73e72a0af8fcbb51cf22e9178c9c4c6b",
+      "elapsed_seconds": 5.2254668370005675,
+      "kind": "warmup",
+      "phase_id": "warmup",
+      "status": "succeeded"
+    },
+    {
+      "command_digest": "sha256:617c169bbc790764efee7a52afc5b1144be4ec9d8a83032bf2ebcad91851f8ef",
+      "elapsed_seconds": 36.31736621700111,
+      "kind": "measure",
+      "phase_id": "measure",
+      "status": "succeeded"
+    },
+    {
+      "command_digest": "sha256:70cfadd5f4db9f05cf024c1db730cc4b61f3af6605b92f2852555d982dc085f1",
+      "elapsed_seconds": 0.040271600999403745,
+      "kind": "verify",
+      "phase_id": "verify",
+      "status": "succeeded"
+    },
+    {
+      "command_digest": "sha256:e60a7613b4a37b78c6dc48ebc297b831c0d4a051b7eabeca539bb766e3088110",
+      "elapsed_seconds": 0.0391324230004102,
+      "kind": "cleanup",
+      "phase_id": "cleanup",
+      "status": "succeeded"
+    }
+  ],
+  "pressure_protocol_digest": "sha256:31b0ba1220e8f3d7edcf3dcec69a0184c7c3da11017b3e04cd1753b6f427725e",
+  "stability_evidence": {
+    "acceptance_limit": null,
+    "accepted": null,
+    "enforcement": "report-only",
+    "formula_id": "F-PROJECT-PRESSURE-CV/v1alpha1",
+    "metric_id": "cpu.bogo-ops-per-second",
+    "sample_count": 7,
+    "statistic": "cv",
+    "value": 0.0023844370600817704
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "acceptance_limit": 0.0031146792925256066,
+  "bootstrap_resamples": 2000,
+  "confidence_level": 0.95,
+  "formula_id": "F-PROJECT-PRESSURE-CV-BOOTSTRAP-UPPER/v1alpha1",
+  "input_batch_digest": "sha256:c9c4668a1e18753688c7ec755f335bd197de311a1feeff3716fc636a524bd1ba",
+  "metric_id": "cpu.bogo-ops-per-second",
+  "observed_value": 0.0023844370600817704,
+  "portability": "Target-local initial gate; recalibrate on Tencent Cloud CVM and after any protocol or environment identity change.",
+  "random_seed": 20260823,
+  "sample_count": 7,
+  "schema_version": "looper.pressure-stability-calibration/v1alpha1",
+  "statistic": "cv",
+  "target_scope": "Alibaba ECS iZ7xvcxcry1ejfjcd1d7igZ, Linux 6.8.0-137-generic, fixed CPU protocol under the uniform schedutil post-handover baseline"
+}

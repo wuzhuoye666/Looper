@@ -9,6 +9,8 @@
 - [阿里云 ECS M1 状态与恢复实测](aliyun-ecs-m1-state-recovery-acceptance-2026-08-23.md)
 - [阿里云 ECS M2 组件压力首次校准](aliyun-ecs-m2-component-calibration-2026-08-23.md)
 - [阿里云 ECS M2 内存 THP 候选闭环](aliyun-ecs-m2-memory-thp-closed-loop-2026-08-23.md)
+- [阿里云 ECS M2 CPU governor 候选闭环（tuned 所有权交接后）](aliyun-ecs-cpu-governor-closed-loop-2026-08-23.md)
+- [双机 NUMA 拓扑探测（unavailable 证据）](dual-host-numa-unavailable-2026-08-23.md)
 - [WSL2 能力探测记录](wsl2-capability-probe-2026-08-23.md)
 - [阿里云 ECS 首轮只读实测记录（历史文件名含 cvm）](cvm-readonly-probe-2026-08-23.md)
 - [阿里云 ECS 首轮真实闭环验收](aliyun-ecs-fio-acceptance-2026-08-23.md)

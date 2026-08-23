@@ -1,0 +1,13 @@
+[
+  {
+    "item_id": "cpufreq-governor-uniform",
+    "domain": {
+      "minimum": null,
+      "maximum": null,
+      "step": null,
+      "choices": ["schedutil", "performance", "powersave"],
+      "log": false
+    },
+    "reason": "User authorized controlled Linux optimization on 2026-08-23; the governor is searched as one uniform setting across all per-vCPU policies, must verify uniform readback, and must roll back to the schedutil baseline after every measurement."
+  }
+]

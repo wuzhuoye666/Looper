@@ -1,0 +1,55 @@
+schema_version: looper.standard-pressure-protocol/v1alpha1
+id: cpu-stress-ng-matrixprod-governor-calibration-20260823
+component: cpu
+target_scope: Alibaba ECS iZ7xvcxcry1ejfjcd1d7igZ after the tuned handover, all eight vCPUs under the uniform schedutil kernel-default governor, fixed stress-ng matrixprod method.
+limitation: Calibration only under the post-handover schedutil baseline; the earlier gate derived under the tuned performance state does not transfer, and this is not an approved candidate stability gate.
+required_executables: [python3]
+input_identity:
+  policy_id: unassigned-calibration-only
+  evidence_kind: empirical-target-local
+metric_ids: [cpu.bogo-ops-per-second, cpu.success]
+gate_metric_ids: [cpu.success]
+stability:
+  metric_id: cpu.bogo-ops-per-second
+  statistic: cv
+  enforcement: report-only
+  acceptance_limit: null
+  minimum_repeats: 7
+  maximum_repeats: 7
+  source: Recalibration contract after the tuned ownership handover changed the baseline governor state; threshold deliberately unapproved.
+phases:
+  - id: prepare
+    kind: prepare
+    command:
+      argv: [python3, examples/system-optimizer/cpu_pressure_measure.py, prepare, --output-dir, .artifacts/system-opt/m2-cpu-governor-calibration-20260823, --repeats, "{repeats}", --workers, "8", --method, matrixprod, --duration-seconds, "5"]
+      timeout_seconds: 15
+    declared_duration_seconds: 0
+    purpose: Verify Linux, stress-ng, online CPU count, and freeze all workload inputs under the schedutil baseline.
+  - id: warmup
+    kind: warmup
+    command:
+      argv: [python3, examples/system-optimizer/cpu_pressure_measure.py, warmup, --output-dir, .artifacts/system-opt/m2-cpu-governor-calibration-20260823, --repeats, "{repeats}", --workers, "8", --method, matrixprod, --duration-seconds, "5"]
+      timeout_seconds: 45
+    declared_duration_seconds: 5
+    purpose: Discard one explicit full-load warmup interval.
+  - id: measure
+    kind: measure
+    command:
+      argv: [python3, examples/system-optimizer/cpu_pressure_measure.py, measure, --output-dir, .artifacts/system-opt/m2-cpu-governor-calibration-20260823, --repeats, "{repeats}", --workers, "8", --method, matrixprod, --duration-seconds, "5"]
+      timeout_seconds: 120
+    declared_duration_seconds: 35
+    purpose: Emit seven fixed-method CPU throughput repetitions as one MeasurementBatch.
+  - id: verify
+    kind: verify
+    command:
+      argv: [python3, examples/system-optimizer/cpu_pressure_measure.py, verify, --output-dir, .artifacts/system-opt/m2-cpu-governor-calibration-20260823, --repeats, "{repeats}", --workers, "8", --method, matrixprod, --duration-seconds, "5"]
+      timeout_seconds: 15
+    declared_duration_seconds: 0
+    purpose: Require the expected sample count shape, finite positive values, and success gate.
+  - id: cleanup
+    kind: cleanup
+    command:
+      argv: [python3, examples/system-optimizer/cpu_pressure_measure.py, cleanup, --output-dir, .artifacts/system-opt/m2-cpu-governor-calibration-20260823, --repeats, "{repeats}", --workers, "8", --method, matrixprod, --duration-seconds, "5"]
+      timeout_seconds: 15
+    declared_duration_seconds: 0
+    purpose: Fail if a pressure-process marker remains.

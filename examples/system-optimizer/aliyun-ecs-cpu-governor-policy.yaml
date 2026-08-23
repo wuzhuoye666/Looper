@@ -1,0 +1,76 @@
+schema_version: looper.system-optimization-policy/v1alpha1
+id: aliyun-ecs-cpu-governor-20260823
+mode: general
+identity:
+  required_fields: [target, workload, phase, tool, statistics]
+statistics:
+  confidence_level: 0.95
+  bootstrap_resamples: 2000
+  random_seed: 20260823
+  baseline_repeats: 7
+  candidate_repeats: 7
+  baseline_every_n: 2
+search:
+  generator: grid
+  random_seed: 20260823
+  max_candidates: 2
+  max_attempts: 4
+  wall_time_seconds: 900
+  no_improvement_limit: 2
+  target_improvement: null
+  routed_component_limit: null
+  tie_break_order: [primary-lower, primary-estimate, fewer-changes, candidate-id]
+safety:
+  max_changes: 1
+  max_changes_reason: null
+  require_privileged: true
+  pinned_items: []
+  ownership_unknown_items: []
+  high_risk_waivers: []
+metrics:
+  - id: cpu.bogo-ops-per-second
+    role: business-primary
+    component: cpu
+    direction: maximize
+    unit: bogo-ops/s
+    scope: guest-visible uniform-governor stress-ng matrixprod throughput across all eight vCPUs
+    phase: steady-state after one discarded five-second warmup
+    aggregation: median
+    minimum_samples: 7
+    scale: 9453.494471
+    minimum_effect: 0
+    target: null
+    lower_bound: null
+    upper_bound: null
+    pressure_method: none
+    pressure_reference: null
+    source: stress-ng 1.0.20 matrixprod bogo-ops-per-second; scale is the frozen schedutil-baseline calibration median of 2026-08-23
+  - id: cpu.success
+    role: hard-gate
+    component: cpu
+    direction: diagnostic-only
+    unit: boolean
+    scope: all stress-ng repeats
+    phase: complete measurement batch
+    aggregation: mean
+    minimum_samples: 7
+    scale: null
+    minimum_effect: null
+    target: null
+    lower_bound: null
+    upper_bound: null
+    pressure_method: none
+    pressure_reference: null
+    source: command exit code zero plus finite positive bogo-ops values
+hard_gates:
+  - id: cpu-execution-success
+    metric: cpu.success
+    operator: "true"
+    threshold: null
+    reason: every stress-ng repeat must complete and emit valid metrics
+authorized_components: [cpu]
+metadata:
+  evidence_kind: empirical-aliyun-ecs-exploratory
+  acceptance: primary 95-percent bootstrap lower bound must be strictly above zero
+  mde_status: exploratory zero; not approved as a cross-task default
+  warning: shared one-host result; not portable to Tencent Cloud CVM

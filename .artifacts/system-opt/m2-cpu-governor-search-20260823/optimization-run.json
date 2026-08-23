@@ -1,0 +1,286 @@
+{
+  "attempt_count": 3,
+  "baseline": {
+    "gate_values": {
+      "cpu.success": true
+    },
+    "identity": {
+      "phase": "steady-state-after-discarded-warmup",
+      "statistics": "repeats=7;duration=5s;workers=8;method=matrixprod",
+      "target": "sha256:9fb11d6a5ce5de3e7398a82e723dd6a73adf432939250f30baa80dc185683922",
+      "tool": "stress-ng, version 0.17.06 (gcc 13.2.0, x86_64 Linux 6.8.0-137-generic)",
+      "workload": "stress-ng-cpu-matrixprod-workers8"
+    },
+    "metrics": {
+      "cpu.bogo-ops-per-second": {
+        "metric_id": "cpu.bogo-ops-per-second",
+        "values": [
+          9449.617499,
+          9448.668647,
+          9445.169337,
+          9464.087778,
+          9456.272974,
+          9449.837788,
+          9461.843872
+        ]
+      },
+      "cpu.success": {
+        "metric_id": "cpu.success",
+        "values": [
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ]
+      }
+    },
+    "phase_evidence": [
+      {
+        "command_digest": "sha256:2ec1a60865ed3d61fa6b767d2444ee9b3fd8a123188384213694682cf1bcb5c5",
+        "elapsed_seconds": 0.1625897880003322,
+        "kind": "prepare",
+        "phase_id": "exclusive-window",
+        "status": "succeeded"
+      },
+      {
+        "command_digest": "sha256:f1e27de3d6dc2844e3f36186cc9b52d8707d634a45c0b0b72abfa6a726d0a503",
+        "elapsed_seconds": 0.04310745099792257,
+        "kind": "prepare",
+        "phase_id": "prepare",
+        "status": "succeeded"
+      },
+      {
+        "command_digest": "sha256:c93a7859b2b9b45f8e92108a8de103ee558315db1ab400ff3e57755f6708f692",
+        "elapsed_seconds": 5.224513127992395,
+        "kind": "warmup",
+        "phase_id": "warmup",
+        "status": "succeeded"
+      },
+      {
+        "command_digest": "sha256:d8660a844e75f4cfdb167c0cf25ad650df044fa231d7e7caaa27002ce6b29684",
+        "elapsed_seconds": 36.329073072003666,
+        "kind": "measure",
+        "phase_id": "measure",
+        "status": "succeeded"
+      },
+      {
+        "command_digest": "sha256:5709e8760997cd77119ddaf290edc7775ae627b52cb800922e4049a002e520b5",
+        "elapsed_seconds": 0.1634050010034116,
+        "kind": "verify",
+        "phase_id": "exclusive-window-after",
+        "status": "succeeded"
+      },
+      {
+        "command_digest": "sha256:7e7810dc269a8dd723ed173a40cf91c37fcd020b75bc9826e0b947c00a464cae",
+        "elapsed_seconds": 0.039908559003379196,
+        "kind": "verify",
+        "phase_id": "verify",
+        "status": "succeeded"
+      },
+      {
+        "command_digest": "sha256:cd701576b4fe89d38e9a68c2e3502204bcaccc7f4e8312b4e68cc18cf04a12bf",
+        "elapsed_seconds": 0.038892069991561584,
+        "kind": "cleanup",
+        "phase_id": "cleanup",
+        "status": "succeeded"
+      }
+    ],
+    "pressure_protocol_digest": "sha256:605c5e85a0fb58a0f545290ac498a395c960fd662847c29ec8ae93747d85bb5e",
+    "stability_evidence": {
+      "acceptance_limit": 0.0031146792925256066,
+      "accepted": true,
+      "enforcement": "hard-gate",
+      "formula_id": "F-PROJECT-PRESSURE-CV/v1alpha1",
+      "metric_id": "cpu.bogo-ops-per-second",
+      "sample_count": 7,
+      "statistic": "cv",
+      "value": 0.0007609447624574013
+    }
+  },
+  "baseline_history": [
+    {
+      "gate_values": {
+        "cpu.success": true
+      },
+      "identity": {
+        "phase": "steady-state-after-discarded-warmup",
+        "statistics": "repeats=7;duration=5s;workers=8;method=matrixprod",
+        "target": "sha256:9fb11d6a5ce5de3e7398a82e723dd6a73adf432939250f30baa80dc185683922",
+        "tool": "stress-ng, version 0.17.06 (gcc 13.2.0, x86_64 Linux 6.8.0-137-generic)",
+        "workload": "stress-ng-cpu-matrixprod-workers8"
+      },
+      "metrics": {
+        "cpu.bogo-ops-per-second": {
+          "metric_id": "cpu.bogo-ops-per-second",
+          "values": [
+            9449.617499,
+            9448.668647,
+            9445.169337,
+            9464.087778,
+            9456.272974,
+            9449.837788,
+            9461.843872
+          ]
+        },
+        "cpu.success": {
+          "metric_id": "cpu.success",
+          "values": [
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ]
+        }
+      },
+      "phase_evidence": [
+        {
+          "command_digest": "sha256:2ec1a60865ed3d61fa6b767d2444ee9b3fd8a123188384213694682cf1bcb5c5",
+          "elapsed_seconds": 0.1625897880003322,
+          "kind": "prepare",
+          "phase_id": "exclusive-window",
+          "status": "succeeded"
+        },
+        {
+          "command_digest": "sha256:f1e27de3d6dc2844e3f36186cc9b52d8707d634a45c0b0b72abfa6a726d0a503",
+          "elapsed_seconds": 0.04310745099792257,
+          "kind": "prepare",
+          "phase_id": "prepare",
+          "status": "succeeded"
+        },
+        {
+          "command_digest": "sha256:c93a7859b2b9b45f8e92108a8de103ee558315db1ab400ff3e57755f6708f692",
+          "elapsed_seconds": 5.224513127992395,
+          "kind": "warmup",
+          "phase_id": "warmup",
+          "status": "succeeded"
+        },
+        {
+          "command_digest": "sha256:d8660a844e75f4cfdb167c0cf25ad650df044fa231d7e7caaa27002ce6b29684",
+          "elapsed_seconds": 36.329073072003666,
+          "kind": "measure",
+          "phase_id": "measure",
+          "status": "succeeded"
+        },
+        {
+          "command_digest": "sha256:5709e8760997cd77119ddaf290edc7775ae627b52cb800922e4049a002e520b5",
+          "elapsed_seconds": 0.1634050010034116,
+          "kind": "verify",
+          "phase_id": "exclusive-window-after",
+          "status": "succeeded"
+        },
+        {
+          "command_digest": "sha256:7e7810dc269a8dd723ed173a40cf91c37fcd020b75bc9826e0b947c00a464cae",
+          "elapsed_seconds": 0.039908559003379196,
+          "kind": "verify",
+          "phase_id": "verify",
+          "status": "succeeded"
+        },
+        {
+          "command_digest": "sha256:cd701576b4fe89d38e9a68c2e3502204bcaccc7f4e8312b4e68cc18cf04a12bf",
+          "elapsed_seconds": 0.038892069991561584,
+          "kind": "cleanup",
+          "phase_id": "cleanup",
+          "status": "succeeded"
+        }
+      ],
+      "pressure_protocol_digest": "sha256:605c5e85a0fb58a0f545290ac498a395c960fd662847c29ec8ae93747d85bb5e",
+      "stability_evidence": {
+        "acceptance_limit": 0.0031146792925256066,
+        "accepted": true,
+        "enforcement": "hard-gate",
+        "formula_id": "F-PROJECT-PRESSURE-CV/v1alpha1",
+        "metric_id": "cpu.bogo-ops-per-second",
+        "sample_count": 7,
+        "statistic": "cv",
+        "value": 0.0007609447624574013
+      }
+    }
+  ],
+  "candidates": [
+    {
+      "accepted": false,
+      "attempt_index": 2,
+      "candidate_id": "sha256:6064e32266e880f31612147225076906d992cbeb433b12d6cef4dbec3227a0e1",
+      "change_count": 1,
+      "comparable": false,
+      "comparison_baseline_digest": "sha256:3378ac869bfac952cccbcec5f4eb1d10fb8553cdaf1cba7c19c489ca41cc4fa7",
+      "feasible": false,
+      "gates": [],
+      "identity_mismatches": [
+        "measurement-missing"
+      ],
+      "improvements": {},
+      "measurement_digest": null,
+      "parameters": {
+        "system.cpufreq-governor-uniform": "powersave"
+      },
+      "pareto_rank": null,
+      "round_index": 1,
+      "safety_reason": "measurement failed",
+      "safety_state": "rolled_back"
+    },
+    {
+      "accepted": false,
+      "attempt_index": 3,
+      "candidate_id": "sha256:58d73dca5a9c0ce2d40619ca4aa79c689dad7b921486b466c8f3495c550fb4d9",
+      "change_count": 1,
+      "comparable": true,
+      "comparison_baseline_digest": "sha256:3378ac869bfac952cccbcec5f4eb1d10fb8553cdaf1cba7c19c489ca41cc4fa7",
+      "feasible": true,
+      "gates": [
+        {
+          "actual": true,
+          "gate_id": "cpu-execution-success",
+          "metric": "cpu.success",
+          "passed": true,
+          "reason": "every stress-ng repeat must complete and emit valid metrics"
+        }
+      ],
+      "identity_mismatches": [],
+      "improvements": {
+        "cpu.bogo-ops-per-second": {
+          "accepted": false,
+          "baseline_digest": "sha256:94419a07be48830b2800a7dc54d8c0635a51c72cf023c8601b2141584fca96f8",
+          "baseline_estimate": 9449.837788,
+          "candidate_digest": "sha256:0575b833b401d9c9e305b3b45cb98a2d18a1a76cff214a833c1d358e0e641500",
+          "candidate_estimate": 9465.93402,
+          "estimate": 0.0017026753492454519,
+          "formula_id": "F-PROJECT-S6-S7/v1alpha1",
+          "lower": -0.001967534339503639,
+          "metric_id": "cpu.bogo-ops-per-second",
+          "minimum_effect": 0.0,
+          "upper": 0.003494324146624971
+        }
+      },
+      "measurement_digest": "sha256:fe6fbdd8fa6176929ba3875d15761cc2c8cbf85f501267527a68585672911a65",
+      "parameters": {
+        "system.cpufreq-governor-uniform": "performance"
+      },
+      "pareto_rank": 1,
+      "round_index": 2,
+      "safety_reason": "default rollback after measurement",
+      "safety_state": "rolled_back"
+    }
+  ],
+  "diagnostic_priorities": [],
+  "diagnostic_reference": null,
+  "elapsed_seconds": 126.35586210399924,
+  "manifest_digest": "sha256:d12086efb61e10eaa1f0a931bd3f9a83ae5601d05d42eaaef32bbd751a797217",
+  "mode": "general",
+  "policy_digest": "sha256:852cb9bc17c915a499ba3fbd1b133917979ae7680b3df4083f62f1f22f325e5e",
+  "policy_id": "aliyun-ecs-cpu-governor-20260823",
+  "recommended_candidate_id": null,
+  "routed_components": [
+    "cpu"
+  ],
+  "schema_version": "looper.system-optimization-run/v1alpha1",
+  "state_evidence_digest": "sha256:58b8993ea6e8e2d267e7bb44d87952dc4297f60a0d55aefd8a0fa5f707f2158d",
+  "stop_detail": "explicit consecutive no-improvement policy triggered",
+  "stop_reason": "no-improvement-policy"
+}
