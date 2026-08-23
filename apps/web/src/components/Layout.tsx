@@ -1,4 +1,4 @@
-import { Activity, Boxes, ChevronLeft, ClipboardList, Cloud, Gauge, GitCompareArrows, Menu, Plus, Server, X } from 'lucide-react';
+import { Activity, Boxes, ChevronLeft, ClipboardList, Cloud, Gauge, GitCompareArrows, Menu, Plus, Server } from 'lucide-react';
 import { useLayoutEffect, useState } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import { GlobalSearchBox } from './GlobalSearchBox';
@@ -22,7 +22,7 @@ export function Layout() {
   }, [pathname]);
   return <OperatorAccessProvider><div className="app-shell">
     <aside className={`sidebar ${open ? 'open' : ''}`} aria-label="应用侧边栏">
-      <div className="brand"><div className="brand-mark"><Activity size={19} /></div><div><strong>Looper</strong><span>服务器选型套件</span></div><button className="mobile-close icon-button dark" onClick={() => setOpen(false)} aria-label="关闭导航"><X size={19} /></button></div>
+      <div className="brand"><div className="brand-mark"><Activity size={19} /></div><div><strong>Looper</strong><span>服务器选型套件</span></div></div>
       <nav aria-label="主导航">{nav.map(({ to, label, icon: Icon, end }) => <NavLink key={to} to={to} end={end} onClick={() => setOpen(false)}><Icon size={18} /><span>{label}</span></NavLink>)}</nav>
       <div className="sidebar-bottom"><NavLink to="/experiments/new" onClick={() => setOpen(false)}><Plus size={17} />新建选型研究</NavLink><div className="system-state"><span /><div><strong>控制平面正常</strong><small>API · {new URL(import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000').host}</small></div></div></div>
     </aside>

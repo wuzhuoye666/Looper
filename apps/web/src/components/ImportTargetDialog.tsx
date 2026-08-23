@@ -80,7 +80,7 @@ export function ImportTargetDialog({ open, onClose }: { open: boolean; onClose: 
         {connected ? <>
           <div className="target-discovery-success">
             <CheckCircle2 size={22} />
-            <div><strong>连接成功，Worker 已部署</strong><p>机器参数已读取，测试程序会在这台服务器执行；凭据已清除且不会保存。</p></div>
+            <div><strong>连接成功，Worker 已部署</strong><p>{connected.credentialsRemembered ? 'SSH 凭据已在本机加密保存；后端重启时会校验主机指纹并自动重建隧道。' : '机器参数已读取，但 SSH 凭据未保存，后端重启后需要重新连接。'}</p></div>
           </div>
           <div className="target-discovery-card">
             <div className="target-discovery-title"><Server size={20} /><div><strong>{connected.name}</strong><code>{connected.endpoint}</code></div></div>
@@ -112,7 +112,7 @@ export function ImportTargetDialog({ open, onClose }: { open: boolean; onClose: 
             </>}
             <label className="import-span"><span>预期主机指纹</span><input value={draft.expectedHostKey} onChange={event => set('expectedHostKey', event.target.value)} placeholder="可选，SHA256:…；填写后不匹配将拒绝连接" /></label>
           </div>
-          <p className="credential-note"><KeyRound size={14} />密码、私钥和口令只用于本次连接，不写入数据库。</p>
+          <p className="credential-note"><KeyRound size={14} />密码、私钥和口令不写入数据库；连接成功后会保存在本机加密凭据仓库，用于后端重启时自动恢复隧道。</p>
           {error && <div className="error-banner">{error}</div>}
           <div className="action-row">
             <button className="button" type="button" onClick={close} disabled={connect.isPending}>取消</button>

@@ -4,6 +4,7 @@ import asyncio
 import hmac
 import io
 import json
+import logging
 import zipfile
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
@@ -117,6 +118,8 @@ from looper_api.post_optimization import post_optimization_view, start_post_opti
 from looper_api.providers.base import CloudProviderError
 from looper_api.providers.registry import CloudProviderRegistry, get_provider_registry
 from looper_api.providers.tencent_cvm import TencentInventoryError, sync_cvm_inventory
+from looper_api.remote_credentials import EncryptedSshCredentialStore
+from looper_api.remote_recovery import recover_remembered_target, remembered_target_ids
 from looper_api.remote_worker import deploy_remote_worker, deployment_status
 from looper_api.scheduler import (
     SchedulerError,
@@ -200,6 +203,7 @@ def require_operator(
 
 
 OperatorDependency = Annotated[str, Depends(require_operator)]
+logger = logging.getLogger(__name__)
 
 
 async def _lease_sweeper() -> None:
@@ -214,6 +218,28 @@ async def _lease_sweeper() -> None:
                 session.rollback()
 
 
+async def _remote_worker_recovery() -> None:
+    settings = get_settings()
+    try:
+        pending = set(await asyncio.to_thread(remembered_target_ids, settings))
+    except Exception:
+        logger.exception("Unable to read remembered remote Worker credentials")
+        return
+    while pending:
+        for target_id in sorted(pending):
+            try:
+                recovered = await asyncio.to_thread(
+                    recover_remembered_target, target_id, settings
+                )
+            except Exception:
+                logger.exception("Remote Worker recovery failed for %s", target_id)
+                continue
+            if recovered:
+                pending.discard(target_id)
+        if pending:
+            await asyncio.sleep(30)
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
@@ -224,12 +250,16 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         seed_system(session)
         session.commit()
     sweeper = asyncio.create_task(_lease_sweeper())
+    remote_recovery = asyncio.create_task(_remote_worker_recovery())
     try:
         yield
     finally:
         sweeper.cancel()
+        remote_recovery.cancel()
         with suppress(asyncio.CancelledError):
             await sweeper
+        with suppress(asyncio.CancelledError):
+            await remote_recovery
 
 
 app = FastAPI(
@@ -252,7 +282,7 @@ app.add_middleware(
         "Idempotency-Key",
     ],
 )
-app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost", "testserver"])
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=settings.trusted_host_list)
 
 
 @app.middleware("http")
@@ -813,6 +843,12 @@ def connect_target(
     result = target_view(record)
     if payload.deploy_worker:
         result["deployment"] = deploy_remote_worker(payload, record, app_settings)
+        host_key = str(record.fingerprint_json.get("host_key_sha256") or "")
+        result["credentialsRemembered"] = EncryptedSshCredentialStore(app_settings).save(
+            record.id,
+            payload,
+            host_key,
+        )
     return result
 
 
