@@ -1,0 +1,342 @@
+{
+  "attempt_count": 3,
+  "baseline": {
+    "gate_values": {
+      "network.success": true
+    },
+    "identity": {
+      "phase": "steady-state-after-iperf-omit-and-discarded-warmup",
+      "statistics": "repeats=7;duration=5s;omit=2s;startup=0.1s",
+      "target": "sha256:9fb11d6a5ce5de3e7398a82e723dd6a73adf432939250f30baa80dc185683922",
+      "tool": "iperf 3.16 (cJSON 1.7.15)",
+      "workload": "iperf3-tcp-declared-remote-peer-streams2-port5201"
+    },
+    "metrics": {
+      "network.receive-throughput-gbps": {
+        "metric_id": "network.receive-throughput-gbps",
+        "values": [
+          2.0236511619306317,
+          1.939824475721115,
+          2.00852642680464,
+          1.9478976213193524,
+          2.0374679021765383,
+          2.0028056599740838,
+          2.023069780313275
+        ]
+      },
+      "network.retransmits": {
+        "metric_id": "network.retransmits",
+        "values": [
+          51521.0,
+          33910.0,
+          43850.0,
+          43032.0,
+          44918.0,
+          45970.0,
+          48761.0
+        ]
+      },
+      "network.success": {
+        "metric_id": "network.success",
+        "values": [
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ]
+      }
+    },
+    "phase_evidence": [
+      {
+        "command_digest": "sha256:9caaabc5cd735451c7a769019cf7df5ce4ccb19a56f61d8e2c6ae06d1ad98018",
+        "elapsed_seconds": 0.16177528999105562,
+        "kind": "prepare",
+        "phase_id": "exclusive-window",
+        "status": "succeeded"
+      },
+      {
+        "command_digest": "sha256:156e1a408522fac9d29b8a6d4d1b90ac290e11d9928a1108cbe9ec74e23afd92",
+        "elapsed_seconds": 0.03299509600037709,
+        "kind": "prepare",
+        "phase_id": "prepare",
+        "status": "succeeded"
+      },
+      {
+        "command_digest": "sha256:a67de1db12aa742c935ae17a3e8a8a219e28eb54fa3f20b5bc5be83b5648d985",
+        "elapsed_seconds": 7.039524191990495,
+        "kind": "warmup",
+        "phase_id": "warmup",
+        "status": "succeeded"
+      },
+      {
+        "command_digest": "sha256:d5ea41c082e6aa8a07cb6b15aff388818646c6c76bc6ad3f866d6787eae6b1a9",
+        "elapsed_seconds": 49.08558914299647,
+        "kind": "measure",
+        "phase_id": "measure",
+        "status": "succeeded"
+      },
+      {
+        "command_digest": "sha256:5989da22088722e2e7981e983a7f6243b889d6b3cc31f4f8daeb4741597e06a8",
+        "elapsed_seconds": 0.032311874005245045,
+        "kind": "verify",
+        "phase_id": "verify",
+        "status": "succeeded"
+      },
+      {
+        "command_digest": "sha256:610a85266fae31a381a8f2e791b099b1cd9c4b2d9bffd9038f4764e4a33e8efd",
+        "elapsed_seconds": 0.03137650201097131,
+        "kind": "cleanup",
+        "phase_id": "cleanup",
+        "status": "succeeded"
+      }
+    ],
+    "pressure_protocol_digest": "sha256:3aff4f97db90747f3c17985e1fadbc33371cde2bbe0e5355f8a522f7ff91aa91",
+    "stability_evidence": {
+      "acceptance_limit": 0.02671447338975931,
+      "accepted": true,
+      "enforcement": "hard-gate",
+      "formula_id": "F-PROJECT-PRESSURE-CV/v1alpha1",
+      "metric_id": "network.receive-throughput-gbps",
+      "sample_count": 7,
+      "statistic": "cv",
+      "value": 0.019249373435417206
+    }
+  },
+  "baseline_history": [
+    {
+      "gate_values": {
+        "network.success": true
+      },
+      "identity": {
+        "phase": "steady-state-after-iperf-omit-and-discarded-warmup",
+        "statistics": "repeats=7;duration=5s;omit=2s;startup=0.1s",
+        "target": "sha256:9fb11d6a5ce5de3e7398a82e723dd6a73adf432939250f30baa80dc185683922",
+        "tool": "iperf 3.16 (cJSON 1.7.15)",
+        "workload": "iperf3-tcp-declared-remote-peer-streams2-port5201"
+      },
+      "metrics": {
+        "network.receive-throughput-gbps": {
+          "metric_id": "network.receive-throughput-gbps",
+          "values": [
+            2.0236511619306317,
+            1.939824475721115,
+            2.00852642680464,
+            1.9478976213193524,
+            2.0374679021765383,
+            2.0028056599740838,
+            2.023069780313275
+          ]
+        },
+        "network.retransmits": {
+          "metric_id": "network.retransmits",
+          "values": [
+            51521.0,
+            33910.0,
+            43850.0,
+            43032.0,
+            44918.0,
+            45970.0,
+            48761.0
+          ]
+        },
+        "network.success": {
+          "metric_id": "network.success",
+          "values": [
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ]
+        }
+      },
+      "phase_evidence": [
+        {
+          "command_digest": "sha256:9caaabc5cd735451c7a769019cf7df5ce4ccb19a56f61d8e2c6ae06d1ad98018",
+          "elapsed_seconds": 0.16177528999105562,
+          "kind": "prepare",
+          "phase_id": "exclusive-window",
+          "status": "succeeded"
+        },
+        {
+          "command_digest": "sha256:156e1a408522fac9d29b8a6d4d1b90ac290e11d9928a1108cbe9ec74e23afd92",
+          "elapsed_seconds": 0.03299509600037709,
+          "kind": "prepare",
+          "phase_id": "prepare",
+          "status": "succeeded"
+        },
+        {
+          "command_digest": "sha256:a67de1db12aa742c935ae17a3e8a8a219e28eb54fa3f20b5bc5be83b5648d985",
+          "elapsed_seconds": 7.039524191990495,
+          "kind": "warmup",
+          "phase_id": "warmup",
+          "status": "succeeded"
+        },
+        {
+          "command_digest": "sha256:d5ea41c082e6aa8a07cb6b15aff388818646c6c76bc6ad3f866d6787eae6b1a9",
+          "elapsed_seconds": 49.08558914299647,
+          "kind": "measure",
+          "phase_id": "measure",
+          "status": "succeeded"
+        },
+        {
+          "command_digest": "sha256:5989da22088722e2e7981e983a7f6243b889d6b3cc31f4f8daeb4741597e06a8",
+          "elapsed_seconds": 0.032311874005245045,
+          "kind": "verify",
+          "phase_id": "verify",
+          "status": "succeeded"
+        },
+        {
+          "command_digest": "sha256:610a85266fae31a381a8f2e791b099b1cd9c4b2d9bffd9038f4764e4a33e8efd",
+          "elapsed_seconds": 0.03137650201097131,
+          "kind": "cleanup",
+          "phase_id": "cleanup",
+          "status": "succeeded"
+        }
+      ],
+      "pressure_protocol_digest": "sha256:3aff4f97db90747f3c17985e1fadbc33371cde2bbe0e5355f8a522f7ff91aa91",
+      "stability_evidence": {
+        "acceptance_limit": 0.02671447338975931,
+        "accepted": true,
+        "enforcement": "hard-gate",
+        "formula_id": "F-PROJECT-PRESSURE-CV/v1alpha1",
+        "metric_id": "network.receive-throughput-gbps",
+        "sample_count": 7,
+        "statistic": "cv",
+        "value": 0.019249373435417206
+      }
+    }
+  ],
+  "candidates": [
+    {
+      "accepted": false,
+      "attempt_index": 2,
+      "candidate_id": "sha256:ce65ffce1fa89242e958d48734404c260ead94e00afac6d2f96551735b4a55e3",
+      "change_count": 1,
+      "comparable": true,
+      "comparison_baseline_digest": "sha256:d402b757cefb3fd1df2e475af032e7a99416dc203478fa8b0510c66aea73087e",
+      "feasible": true,
+      "gates": [
+        {
+          "actual": true,
+          "gate_id": "network-execution-success",
+          "metric": "network.success",
+          "passed": true,
+          "reason": "every iperf3 repeat must complete and emit valid metrics"
+        }
+      ],
+      "identity_mismatches": [],
+      "improvements": {
+        "network.receive-throughput-gbps": {
+          "accepted": false,
+          "baseline_digest": "sha256:1d8566c494e416ae5429c7ac44b16882901c23fe9ee60e9ed9c23c2da654a70c",
+          "baseline_estimate": 2.00852642680464,
+          "candidate_digest": "sha256:a4bd9f64d58b5cd36c408fe5515501dc47396c48b8e6adf09db4bcfb115ced5c",
+          "candidate_estimate": 2.0051295145984827,
+          "estimate": -0.0016700649981107338,
+          "formula_id": "F-PROJECT-S6-S7/v1alpha1",
+          "lower": -0.009146428056888445,
+          "metric_id": "network.receive-throughput-gbps",
+          "minimum_effect": 0.0,
+          "upper": 0.02841459461304283
+        },
+        "network.retransmits": {
+          "accepted": true,
+          "baseline_digest": "sha256:d78907c88b526493d8007f263ac6d8dce4bfa3772e3feff30d06bd489a82160d",
+          "baseline_estimate": 44918.0,
+          "candidate_digest": "sha256:046ea0bc11200a32f43d8d1dded26811e2a7ae5eb19faee967ebf666f609a31e",
+          "candidate_estimate": 33657.0,
+          "estimate": 0.281525,
+          "formula_id": "F-PROJECT-S6-S7/v1alpha1",
+          "lower": 0.225925,
+          "metric_id": "network.retransmits",
+          "minimum_effect": 0.0,
+          "upper": 0.402175
+        }
+      },
+      "measurement_digest": "sha256:e1730d70509a02d533881c0da0fc51ad1132943bbbe04e12dc99b7ee3abf171a",
+      "parameters": {
+        "system.tcp-congestion-control": "reno"
+      },
+      "pareto_rank": 2,
+      "round_index": 1,
+      "safety_reason": "default rollback after measurement",
+      "safety_state": "rolled_back"
+    },
+    {
+      "accepted": false,
+      "attempt_index": 3,
+      "candidate_id": "sha256:fc66c342186effa3c00b40c6f21e4d17c8f5ddd394b8f45c0c7da28b88dea093",
+      "change_count": 1,
+      "comparable": true,
+      "comparison_baseline_digest": "sha256:d402b757cefb3fd1df2e475af032e7a99416dc203478fa8b0510c66aea73087e",
+      "feasible": true,
+      "gates": [
+        {
+          "actual": true,
+          "gate_id": "network-execution-success",
+          "metric": "network.success",
+          "passed": true,
+          "reason": "every iperf3 repeat must complete and emit valid metrics"
+        }
+      ],
+      "identity_mismatches": [],
+      "improvements": {
+        "network.receive-throughput-gbps": {
+          "accepted": false,
+          "baseline_digest": "sha256:1d8566c494e416ae5429c7ac44b16882901c23fe9ee60e9ed9c23c2da654a70c",
+          "baseline_estimate": 2.00852642680464,
+          "candidate_digest": "sha256:5fa6c95a0962e7faf847c7db276fcc22c413701fd7412ff6e8098be073c8452b",
+          "candidate_estimate": 2.0322699167098772,
+          "estimate": 0.011673298871798101,
+          "formula_id": "F-PROJECT-S6-S7/v1alpha1",
+          "lower": -0.0076248803631271175,
+          "metric_id": "network.receive-throughput-gbps",
+          "minimum_effect": 0.0,
+          "upper": 0.04241297483318946
+        },
+        "network.retransmits": {
+          "accepted": true,
+          "baseline_digest": "sha256:d78907c88b526493d8007f263ac6d8dce4bfa3772e3feff30d06bd489a82160d",
+          "baseline_estimate": 44918.0,
+          "candidate_digest": "sha256:24651977e6c9d6182c2b3ccf95e2ff17264de045126b881679a1f21413bfeeed",
+          "candidate_estimate": 21225.0,
+          "estimate": 0.592325,
+          "formula_id": "F-PROJECT-S6-S7/v1alpha1",
+          "lower": 0.420225,
+          "metric_id": "network.retransmits",
+          "minimum_effect": 0.0,
+          "upper": 0.69895
+        }
+      },
+      "measurement_digest": "sha256:d651b84b75a159527e3a1d355ae054db2136e82768aab05d9df38325adf42b78",
+      "parameters": {
+        "system.tcp-congestion-control": "bbr"
+      },
+      "pareto_rank": 1,
+      "round_index": 2,
+      "safety_reason": "default rollback after measurement",
+      "safety_state": "rolled_back"
+    }
+  ],
+  "diagnostic_priorities": [],
+  "diagnostic_reference": null,
+  "elapsed_seconds": 169.19955231199856,
+  "manifest_digest": "sha256:63cd158ffd401d8f895f5cfb6de35b684c93df5aaecae0b6ba925512a1e16764",
+  "mode": "general",
+  "policy_digest": "sha256:bb360cc05719a237534915a19c7d667af4d16d9624fa387e206a18efe43cd51c",
+  "policy_id": "aliyun-network-cc-20260823",
+  "recommended_candidate_id": null,
+  "routed_components": [
+    "network"
+  ],
+  "schema_version": "looper.system-optimization-run/v1alpha1",
+  "state_evidence_digest": "sha256:d98253b4889b96bc1f7e572c95e64bf5f6d26728b2049e25d192161acf670ff0",
+  "stop_detail": "explicit consecutive no-improvement policy triggered",
+  "stop_reason": "no-improvement-policy"
+}

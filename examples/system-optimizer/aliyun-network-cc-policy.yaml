@@ -1,0 +1,93 @@
+schema_version: looper.system-optimization-policy/v1alpha1
+id: aliyun-network-cc-20260823
+mode: general
+identity:
+  required_fields: [target, workload, phase, tool, statistics]
+statistics:
+  confidence_level: 0.95
+  bootstrap_resamples: 2000
+  random_seed: 20260823
+  baseline_repeats: 7
+  candidate_repeats: 7
+  baseline_every_n: 2
+search:
+  generator: grid
+  random_seed: 20260823
+  max_candidates: 2
+  max_attempts: 4
+  wall_time_seconds: 1200
+  no_improvement_limit: 2
+  target_improvement: null
+  routed_component_limit: null
+  tie_break_order: [primary-lower, primary-estimate, fewer-changes, candidate-id]
+safety:
+  max_changes: 1
+  max_changes_reason: null
+  require_privileged: true
+  pinned_items: []
+  ownership_unknown_items: []
+  high_risk_waivers: []
+metrics:
+  - id: network.receive-throughput-gbps
+    role: business-primary
+    component: network
+    direction: maximize
+    unit: Gbit/s
+    scope: guest-received two-stream iperf3 throughput toward VPC intranet peer
+    phase: steady-state after 2s omit
+    aggregation: median
+    minimum_samples: 7
+    scale: 2.034
+    minimum_effect: 0
+    target: null
+    lower_bound: null
+    upper_bound: null
+    pressure_method: none
+    pressure_reference: null
+    source: iperf3 3.16 receive aggregate; scale is the frozen intranet cubic-baseline calibration median of 2026-08-23
+  - id: network.retransmits
+    role: business-secondary
+    component: network
+    direction: minimize
+    unit: count
+    scope: sender retransmits over the same measurement batch
+    phase: same measurement batch
+    aggregation: median
+    minimum_samples: 7
+    scale: 40000
+    minimum_effect: 0
+    target: null
+    lower_bound: null
+    upper_bound: null
+    pressure_method: none
+    pressure_reference: null
+    source: iperf3 3.16 sum_sent retransmits
+  - id: network.success
+    role: hard-gate
+    component: network
+    direction: diagnostic-only
+    unit: boolean
+    scope: all iperf3 repeats
+    phase: complete measurement batch
+    aggregation: mean
+    minimum_samples: 7
+    scale: null
+    minimum_effect: null
+    target: null
+    lower_bound: null
+    upper_bound: null
+    pressure_method: none
+    pressure_reference: null
+    source: command exit code zero plus finite positive throughput
+hard_gates:
+  - id: network-execution-success
+    metric: network.success
+    operator: "true"
+    threshold: null
+    reason: every iperf3 repeat must complete and emit valid metrics
+authorized_components: [network]
+metadata:
+  evidence_kind: empirical-aliyun-ecs-exploratory
+  acceptance: primary 95-percent bootstrap lower bound must be strictly above zero
+  mde_status: exploratory zero; not approved as a cross-task default
+  warning: shared VPC intranet result; not portable to Tencent Cloud CVM or public paths

@@ -1,0 +1,98 @@
+{
+  "gate_values": {
+    "network.success": true
+  },
+  "identity": {
+    "phase": "steady-state-after-iperf-omit-and-discarded-warmup",
+    "statistics": "repeats=7;duration=5s;omit=2s;startup=0.1s",
+    "target": "sha256:9fb11d6a5ce5de3e7398a82e723dd6a73adf432939250f30baa80dc185683922",
+    "tool": "iperf 3.16 (cJSON 1.7.15)",
+    "workload": "iperf3-tcp-declared-remote-peer-streams2-port5201"
+  },
+  "metrics": {
+    "network.receive-throughput-gbps": {
+      "metric_id": "network.receive-throughput-gbps",
+      "values": [
+        2.0741428752558315,
+        1.9970675697076046,
+        1.9613437291722782,
+        1.9877665837197571,
+        2.0592031094577607,
+        2.0808769961032376,
+        2.0335524276529484
+      ]
+    },
+    "network.retransmits": {
+      "metric_id": "network.retransmits",
+      "values": [
+        48869.0,
+        35312.0,
+        41903.0,
+        50422.0,
+        49110.0,
+        41796.0,
+        42716.0
+      ]
+    },
+    "network.success": {
+      "metric_id": "network.success",
+      "values": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ]
+    }
+  },
+  "phase_evidence": [
+    {
+      "command_digest": "sha256:082bc67bcbfa4616c06c8d56db6a410e15d26f1735b935d88c388db00c2da7c2",
+      "elapsed_seconds": 0.03306837999843992,
+      "kind": "prepare",
+      "phase_id": "prepare",
+      "status": "succeeded"
+    },
+    {
+      "command_digest": "sha256:56f206e2ae1d15af352d315718fee7a07edae32a5465054193f062c5e3bdff7e",
+      "elapsed_seconds": 7.044541805997142,
+      "kind": "warmup",
+      "phase_id": "warmup",
+      "status": "succeeded"
+    },
+    {
+      "command_digest": "sha256:0929d59f85f5e6b88ad952669d2c80680ae666c197fc6551de83e65601428801",
+      "elapsed_seconds": 49.085953791989596,
+      "kind": "measure",
+      "phase_id": "measure",
+      "status": "succeeded"
+    },
+    {
+      "command_digest": "sha256:7e367a1244f4c2711395a2ba16ee477cacedc2c3ec9da2c7f2a977ce1931886b",
+      "elapsed_seconds": 0.03146277599444147,
+      "kind": "verify",
+      "phase_id": "verify",
+      "status": "succeeded"
+    },
+    {
+      "command_digest": "sha256:569e3b14829090bdb1249500ad4ae7988cbd73c73125976b92d883b1473df43a",
+      "elapsed_seconds": 0.03163303100154735,
+      "kind": "cleanup",
+      "phase_id": "cleanup",
+      "status": "succeeded"
+    }
+  ],
+  "pressure_protocol_digest": "sha256:03d84ba84475159e28043be66cc36b2376136d6c3e16765857158e0bd07f9b80",
+  "stability_evidence": {
+    "acceptance_limit": null,
+    "accepted": null,
+    "enforcement": "report-only",
+    "formula_id": "F-PROJECT-PRESSURE-CV/v1alpha1",
+    "metric_id": "network.receive-throughput-gbps",
+    "sample_count": 7,
+    "statistic": "cv",
+    "value": 0.022909405392677926
+  }
+}

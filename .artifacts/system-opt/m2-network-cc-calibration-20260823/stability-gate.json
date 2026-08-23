@@ -1,0 +1,15 @@
+{
+  "acceptance_limit": 0.02671447338975931,
+  "bootstrap_resamples": 2000,
+  "confidence_level": 0.95,
+  "formula_id": "F-PROJECT-PRESSURE-CV-BOOTSTRAP-UPPER/v1alpha1",
+  "input_batch_digest": "sha256:0025815b2fe3a121311df7f7f824145d917086b6dd0633a40ca23bc14496ac46",
+  "metric_id": "network.receive-throughput-gbps",
+  "observed_value": 0.022909405392677926,
+  "portability": "Target-local initial gate; recalibrate on peer or protocol identity change",
+  "random_seed": 20260823,
+  "sample_count": 7,
+  "schema_version": "looper.pressure-stability-calibration/v1alpha1",
+  "statistic": "cv",
+  "target_scope": "Alibaba ECS iZ7xvcxcry1ejfjcd1d7igZ to VPC intranet peer 172.28.106.37, fixed two-stream cubic-baseline protocol"
+}

@@ -1,0 +1,50 @@
+{
+  "gate_values": {
+    "network.success": true
+  },
+  "identity": {
+    "phase": "steady-state-after-iperf-omit-and-discarded-warmup",
+    "statistics": "repeats=7;duration=5s;omit=2s;startup=0.1s",
+    "target": "sha256:9fb11d6a5ce5de3e7398a82e723dd6a73adf432939250f30baa80dc185683922",
+    "tool": "iperf 3.16 (cJSON 1.7.15)",
+    "workload": "iperf3-tcp-declared-remote-peer-streams2-port5201"
+  },
+  "metrics": {
+    "network.receive-throughput-gbps": {
+      "metric_id": "network.receive-throughput-gbps",
+      "values": [
+        2.0741428752558315,
+        1.9970675697076046,
+        1.9613437291722782,
+        1.9877665837197571,
+        2.0592031094577607,
+        2.0808769961032376,
+        2.0335524276529484
+      ]
+    },
+    "network.retransmits": {
+      "metric_id": "network.retransmits",
+      "values": [
+        48869.0,
+        35312.0,
+        41903.0,
+        50422.0,
+        49110.0,
+        41796.0,
+        42716.0
+      ]
+    },
+    "network.success": {
+      "metric_id": "network.success",
+      "values": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ]
+    }
+  }
+}

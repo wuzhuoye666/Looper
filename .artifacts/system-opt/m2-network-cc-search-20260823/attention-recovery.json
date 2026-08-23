@@ -1,0 +1,32 @@
+{
+  "actual_snapshot": {
+    "entries": {
+      "tcp-congestion-control": {
+        "item_id": "tcp-congestion-control",
+        "message": null,
+        "raw_output": "cubic\n",
+        "status": "succeeded",
+        "target": "/proc/sys/net/ipv4/tcp_congestion_control",
+        "value": "cubic"
+      }
+    },
+    "target_id": "aliyun-ecs-iz7xvcxcry1ejfjcd1d7igZ"
+  },
+  "approved_snapshot": {
+    "entries": {
+      "tcp-congestion-control": {
+        "item_id": "tcp-congestion-control",
+        "message": null,
+        "raw_output": "cubic\n",
+        "status": "succeeded",
+        "target": "/proc/sys/net/ipv4/tcp_congestion_control",
+        "value": "cubic"
+      }
+    },
+    "target_id": "aliyun-ecs-iz7xvcxcry1ejfjcd1d7igZ"
+  },
+  "attention_evidence_digest": "sha256:2e52e93341af9bdbcc559da82bebee73ec7b1069904c769e1a549c634a4ead5b",
+  "reason": "actual target snapshot matches the operator-approved recovery state",
+  "recorded_at": "2026-08-23T11:03:41.024508Z",
+  "target_id": "aliyun-ecs-iz7xvcxcry1ejfjcd1d7igZ"
+}

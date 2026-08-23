@@ -8,7 +8,7 @@ metadata:
   portability: not valid for Tencent Cloud CVM without independent capability validation
 items:
   - id: tcp-congestion-control
-    category: network
+    category: net
     primary_component: network
     related_components: []
     target: /proc/sys/net/ipv4/tcp_congestion_control
