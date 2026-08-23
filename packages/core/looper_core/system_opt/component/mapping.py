@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+import math
 import random
 from collections.abc import Mapping
 from enum import StrEnum
@@ -273,14 +274,47 @@ def validate_suggestions_in_domain(
             if name not in domains:
                 problems.append(f"parameter '{name}' is not in the resolved search space")
                 continue
+            domain = domains[name]
             parameter = (
-                domains[name].to_search_parameter()
-                if hasattr(domains[name], "to_search_parameter")
-                else None
+                domain.to_search_parameter()
+                if hasattr(domain, "to_search_parameter")
+                else domain if hasattr(domain, "type") else None
             )
-            choices = getattr(parameter, "choices", None) if parameter is not None else None
-            if choices is not None and value not in choices:
-                problems.append(f"value {value!r} outside authorized choices {choices}")
+            if parameter is None:
+                problems.append(f"parameter '{name}' has no searchable domain")
+                continue
+            parameter_type = getattr(parameter, "type", None)
+            choices = getattr(parameter, "choices", None)
+            if parameter_type is None and choices is not None:
+                parameter_type = "categorical"
+            if parameter_type == "boolean":
+                if type(value) is not bool:
+                    problems.append(f"value {value!r} is not boolean")
+            elif parameter_type == "categorical":
+                choices = list(choices or [])
+                if value not in choices:
+                    problems.append(f"value {value!r} outside authorized choices {choices}")
+            elif parameter_type in {"integer", "number"}:
+                if isinstance(value, bool) or not isinstance(value, (int, float)):
+                    problems.append(f"value {value!r} is not numeric")
+                    continue
+                numeric = float(value)
+                if parameter_type == "integer" and type(value) is not int:
+                    problems.append(f"value {value!r} is not an integer")
+                    continue
+                assert parameter.minimum is not None and parameter.maximum is not None
+                if numeric < parameter.minimum or numeric > parameter.maximum:
+                    problems.append(
+                        f"value {value!r} outside authorized range "
+                        f"[{parameter.minimum}, {parameter.maximum}]"
+                    )
+                    continue
+                if parameter.step is not None:
+                    steps = (numeric - parameter.minimum) / parameter.step
+                    if not math.isclose(steps, round(steps), abs_tol=1e-9):
+                        problems.append(
+                            f"value {value!r} is not aligned to step {parameter.step}"
+                        )
         if problems:
             rejected.append(
                 RuleRejection(rule_id=suggestion.formula_id, reason="; ".join(problems))

@@ -13,8 +13,8 @@
   ``verify_phase_restoration`` 验证系统已回基线；未提供时显式记录"跳过 +
   原因"，绝不静默宣称已恢复。
 
-候选/公式映射直连执行（scheduler 选中具体候选后定向执行）属于 PKG-B
-公式映射落地后的扩展；当前 scheduler 的选中候选仅决定执行哪个组件。
+scheduler 选中具体候选后，L8 将同一参数身份定向交给 L5；L5 只执行该候选，
+不得重新生成另一个候选。公式映射证据必须由调用方显式提供，越域建议留痕拒绝。
 """
 
 from __future__ import annotations
@@ -26,9 +26,14 @@ from typing import Any, Literal
 
 from pydantic import Field
 
-from looper_core.canonical import canonical_digest
+from looper_core.canonical import canonical_digest, canonical_json
 from looper_core.contracts import StrictModel
-from looper_core.system_opt.component import CandidateSuggestion, ComponentOptimizer
+from looper_core.system_opt.collector import ComponentMetricSnapshot
+from looper_core.system_opt.component import ComponentOptimizer
+from looper_core.system_opt.component.mapping import (
+    RuleRejection,
+    validate_suggestions_in_domain,
+)
 from looper_core.system_opt.engine.incumbent import IncumbentTracker, ScreenVerdict
 from looper_core.system_opt.engine.judge import CandidateVerdict, evaluate_candidate
 from looper_core.system_opt.engine.scheduler import (
@@ -46,8 +51,13 @@ from looper_core.system_opt.negative_cache import (
     formula_versions_digest,
 )
 from looper_core.system_opt.result_vector import PromotionContract, VerificationObservation
-from looper_core.system_opt.rollback import PhaseRestoration, verify_phase_restoration
+from looper_core.system_opt.rollback import (
+    PhaseRestoration,
+    RestorationStatus,
+    verify_phase_restoration,
+)
 from looper_core.system_opt.safety import SafetyState
+from looper_core.system_opt.scoring import MeasurementBatch
 
 ENGINE_LOOP_SCHEMA = "looper.engine-loop-result/v1alpha1"
 
@@ -56,7 +66,9 @@ class EngineStopReason(StrEnum):
     COMPLETED = "completed-all-components"
     ROUND_BUDGET = "round-budget-exhausted"
     ALL_CACHED = "all-candidates-negative-cached"
+    NO_ACTIONABLE_CANDIDATES = "no-actionable-candidates"
     SAFETY_STOP = "safety-stop-needs-attention"
+    PHASE_RESTORATION_FAILED = "phase-restoration-failed"
 
 
 class EngineLoopConfig(StrictModel):
@@ -83,6 +95,7 @@ class EngineRoundRecord(StrictModel):
     # values from different components are not comparable and never share a tracker.
     incumbent_utility_after: float | None = None
     promotion_observations: list[VerificationObservation] = Field(default_factory=list)
+    formula_rejections: list[RuleRejection] = Field(default_factory=list)
     note: str | None = Field(default=None, min_length=1, max_length=500)
 
 
@@ -95,6 +108,7 @@ class EngineLoopResult(StrictModel):
     stop_detail: str = Field(min_length=1, max_length=1000)
     phase_restoration: PhaseRestoration | None = None
     phase_verification_note: str = Field(min_length=1, max_length=500)
+    formula_rejections: dict[str, list[RuleRejection]] = Field(default_factory=dict)
     started_at: datetime
     finished_at: datetime
 
@@ -184,6 +198,8 @@ def run_engine_loop(
     component_scores: Sequence[ComponentScore] | None = None,
     phase_baseline_snapshot: ConfigSnapshot | None = None,
     current_snapshot: Callable[[], ConfigSnapshot] | None = None,
+    component_snapshots: Mapping[str, ComponentMetricSnapshot | None] | None = None,
+    formula_baselines: Mapping[str, MeasurementBatch | None] | None = None,
 ) -> EngineLoopResult:
     """Run the L8 orchestration loop over per-component optimizers."""
 
@@ -215,30 +231,55 @@ def run_engine_loop(
     stop_detail = "explicit round budget exhausted"
 
     promotion_observations: list[VerificationObservation] = []
+    all_formula_rejections: dict[str, list[RuleRejection]] = {}
     for round_index in range(1, config.max_rounds + 1):
         active = [by_component[name] for name in components if name not in completed]
         if not active:
             stop_reason = EngineStopReason.COMPLETED
             stop_detail = "every component optimizer finished one engine round"
             break
-        suggestions: dict[str, list[CandidateSuggestion]] = {
-            optimizer.component: optimizer.suggest_candidates() for optimizer in active
-        }
+        formula_rejections: dict[str, list[RuleRejection]] = {}
         pools: dict[str, list[dict[str, Any]]] = {}
         for optimizer in active:
             component = optimizer.component
-            pool = optimizer.candidate_pool()
-            if len(pool) > config.max_pool_size:
-                raise ValueError(
-                    f"component '{component}' candidate pool {len(pool)} exceeds the "
-                    f"task cap max_pool_size={config.max_pool_size}; raise the cap "
-                    "explicitly or narrow the authorized domain"
-                )
-            pool_with_suggestions = list(pool)
-            for suggestion in suggestions[component]:
+            proposed = optimizer.suggest_candidates(
+                (component_snapshots or {}).get(component),
+                (formula_baselines or {}).get(component),
+            )
+            accepted, domain_rejections = validate_suggestions_in_domain(
+                proposed, optimizer.engine.search_space({component})
+            )
+            mapping_rejections = list(
+                getattr(optimizer.formula_mapping, "last_rejections", ())
+            )
+            rejected = [*mapping_rejections, *domain_rejections]
+            formula_rejections[component] = rejected
+            all_formula_rejections[component] = rejected
+            optimizer.retain_formula_suggestions(accepted)
+            baseline_candidate = {
+                name: baseline_parameters[component][name]
+                for name in optimizer.engine.search_space({component})
+            }
+            pool_with_suggestions = optimizer.candidate_pool()
+            for suggestion in accepted:
                 if suggestion.parameters not in pool_with_suggestions:
                     pool_with_suggestions.append(suggestion.parameters)
-            pools[component] = pool_with_suggestions
+            if len(pool_with_suggestions) > config.max_pool_size:
+                raise ValueError(
+                    f"component '{component}' final candidate pool "
+                    f"{len(pool_with_suggestions)} exceeds the task cap "
+                    f"max_pool_size={config.max_pool_size}; raise the cap explicitly "
+                    "or narrow the authorized domain/formula suggestions"
+                )
+            pools[component] = [
+                candidate
+                for candidate in pool_with_suggestions
+                if any(
+                    canonical_json(value)
+                    != canonical_json(baseline_candidate.get(name))
+                    for name, value in candidate.items()
+                )
+            ]
         decision: SchedulerDecision = select_next_candidate(
             [score for score in scores if score.component in pools],
             pools,
@@ -248,11 +289,16 @@ def run_engine_loop(
             formula_versions=config.formula_versions,
         )
         if decision.selection is None:
-            stop_reason = EngineStopReason.ALL_CACHED
-            stop_detail = (
-                "every remaining component candidate pool is fully blocked "
-                "by the negative cache"
-            )
+            if decision.skipped:
+                stop_reason = EngineStopReason.ALL_CACHED
+                stop_detail = (
+                    "every remaining actionable candidate is blocked by the negative cache"
+                )
+            else:
+                stop_reason = EngineStopReason.NO_ACTIONABLE_CANDIDATES
+                stop_detail = (
+                    "remaining candidate pools contain no change from the declared baselines"
+                )
             break
         component = decision.selection.component
         optimizer = by_component[component]
@@ -268,27 +314,16 @@ def run_engine_loop(
             measure=measures[component],
             fencing_token=fencing_token,
             preexisting=exclusions,
+            selected_parameters=decision.selection.parameters,
         )
-        if (
-            not report.candidates
-            and exclusions
-            and report.stop_reason == "search-space-exhausted"
+        if len(report.candidates) != 1 or (
+            report.candidates[0].parameters != decision.selection.parameters
         ):
-            rounds.append(
-                EngineRoundRecord(
-                    round_index=round_index,
-                    component=component,
-                    report_digest=report.digest,
-                    selected_parameters=decision.selection.parameters,
-                    skipped=decision.skipped,
-                    verdicts=[],
-                    cached_exclusion_count=len(exclusions),
-                    note="search space fully excluded by the negative cache; "
-                    "component counts as covered without new measurements",
-                )
+            raise ValueError(
+                f"component '{component}' violated the scheduler selection identity: "
+                f"selected={decision.selection.parameters!r}, "
+                f"evaluated={[candidate.parameters for candidate in report.candidates]!r}"
             )
-            completed.add(component)
-            continue
         primary = optimizer.engine.policy.primary_metric
         verdicts = [
             evaluate_candidate(
@@ -368,6 +403,7 @@ def run_engine_loop(
                     tracker.best.utility if tracker is not None and tracker.best else None
                 ),
                 promotion_observations=round_observations,
+                formula_rejections=formula_rejections[component],
             )
         )
         if any(
@@ -387,7 +423,18 @@ def run_engine_loop(
         phase_restoration = verify_phase_restoration(
             current_snapshot(), phase_baseline_snapshot
         )
-        phase_note = "phase ending gate verified via L6 phase restoration"
+        if phase_restoration.status is RestorationStatus.RESTORED:
+            phase_note = "phase ending gate verified via L6 phase restoration"
+        else:
+            stop_reason = EngineStopReason.PHASE_RESTORATION_FAILED
+            prior_stop = f"{stop_reason.value}: {stop_detail}"
+            stop_detail = (
+                "phase ending gate failed closed: "
+                f"{phase_restoration.reason}; prior engine stop was {prior_stop}"
+            )
+            phase_note = (
+                "phase ending gate did not verify restoration; engine result requires attention"
+            )
     else:
         phase_restoration = None
         phase_note = (
@@ -401,6 +448,7 @@ def run_engine_loop(
         stop_detail=stop_detail,
         phase_restoration=phase_restoration,
         phase_verification_note=phase_note,
+        formula_rejections=all_formula_rejections,
         started_at=started_at,
         finished_at=finished_at,
     )
