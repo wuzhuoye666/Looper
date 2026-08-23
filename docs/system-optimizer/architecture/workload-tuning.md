@@ -231,7 +231,7 @@ VerificationWindow（复验窗口）:
 |---|---|---|
 | O1 观察窗口 | ✅ M3-2 完成 2026-08-23：`observation.py`（ObservationWindow + `record_window` 组装 + O0 解析器注册表：stress-ng YAML / fio JSON / iperf3 JSON，**真实 2026-08-23 阿里云会话输出做夹具钉数值**）+ 身份漂移 WorkloadIdentityDrift fail-closed | O1 活体采集（接 GPT 窗口化 builtin）、O2/O3 开窗、sysbench 解析器、window 编排进引擎循环 |
 | 开销 A/B | `build_collection_overhead_evidence`（L4 合同） | 动态相位把它接进观察窗口的 overhead_digest |
-| 假设路由 | S4 `diagnostic_priorities`（静态侧） | ComponentHypothesis 记录、竞争假设登记、L7 第二条目类型（open） |
+| 假设路由 | ✅ M3-4 完成 2026-08-23：`hypothesis.py`（SymptomRecord/ComponentHypothesis/HypothesisLedger；三条 D2 硬规则代码化：≥2 竞争假设才许干预、O2 只推进到 probing、confirmed 唯一走 accepted 业务复测并自动 supersede 兄弟假设；(rank,id) 确定性 probe_queue，top_k 任务注入） | L7 桥接（refuted 假设入负缓存的第二条目类型）按 SO-D019 留 open；接入动态循环 |
 | S9 复验生产者 | `PromotionContract`/`evaluate_promotion`（合同齐） | VerificationWindow 执行器 + passed 由重测 S7 产生 |
 | 结束门禁合同 | ✅ M3-3 完成 2026-08-23：`phase_gate.py`（DynamicPhaseGateContract 五类停止全字段化 + PhaseGateState + `evaluate_phase_gate` 固定判定顺序：安全→身份→预算→目标→收敛；GateDecision 必须引用触发字段+证据 digest；防振荡字段 reactivation_holdout_windows/single_change_per_window）| 接入动态循环（M3-4/5）与 D5 重激活资格判定 |
 | 重激活 | 无 | 全新；等 A/B 案确认 |
