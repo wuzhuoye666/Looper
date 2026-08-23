@@ -145,7 +145,7 @@
 
 | 项 | 一句话 | 状态 / 归属 | 阻塞点 |
 |---|---|---|---|
-| C1 | L5/L8 双写裁决、终裁上收未完成 | 主 agent（PKG-A 后续阶段，已登记 layer-spec §1） | 无，排期问题；特征测试先行 |
+| C1 | L5/L8 双写裁决、终裁上收未完成 | 主 agent；✅ 特征测试先行完成 2026-08-23（verdict characterization 6 测试：一致性不变式 + 安全语义分歧钉死 + S6/S7 黄金数值），重构本体排期中 | 无，排期问题 |
 | C2 | 压/采解耦（老 adapter 直解 MeasurementBatch） | **GPT PKG-B**（SO-D016） | 等 GPT 新 L4 合同 |
 | C3 | 预筛跨组件混比 | ✅ 已修（SO-D018，2026-08-23）：tracker 按组件隔离 + 回归测试 | 无；"轮级整体效用"聚合仍 open |
 | C4 | 路由逻辑三处散落 | 主 agent，随 C1 重构一并收敛 | 依附 C1 |
@@ -178,7 +178,7 @@
 | PKG-D | ✅ 完成 2026-08-23 | 主 agent（zcode） | engine/loop.py 主循环（调度→组件执行→终裁→负缓存→S10 停止→相位门禁）+ 6 测试 |
 | PKG-E | 🟡 大部分完成 2026-08-23 | 主 agent | 盲区双机实测✅ + tuned 恢复✅ + 网络会话资产就绪✅；真实 peer 闭环✅（用户点出改走 VPC 内网后完成：bbr/reno 均未达显著，全部回滚；公网路径不适合作吞吐通道）|
 | PKG-F | ✅ 完成 2026-08-23 | 主 agent（zcode） | engine-demo/cache-inspect 命令 + 4 测试；Windows 全流程 demo 一条命令可复现 |
-| PKG-G | 待领（低优先） | — | |
+| PKG-G | ✅ 设计稿完成 2026-08-23 | 主 agent（zcode） | workload-tuning.md 扩写 D0-D6：**D0 负载供给边界（SO-D020：基础套件只作测试给的压力，引擎动态相位永不主动造载）**、O0-O3 观察分层、S3 多假设路由、S9 复验窗口生产者（M11 设计缺口闭合）、门禁参数化合同、重激活三案（A+B 已确认）；全部数值占位待校准，未写实现 |
 | PKG-H | 🟡 第一批进行中 2026-08-23 | DeepSeek agent | M7/M12/C6/C7/§4 杂项；治理见 PKG-H 节；第二批（M1-M8/M10 等）按分诊表逐步解锁 |
 
 ## 登记补充（2026-08-23 A 级审计）
@@ -187,13 +187,18 @@
   同时采集主指标+分布+微指标（含压力工具输出解析）。修复责任：GPT agent。
   PKG-B 解耦子项、PKG-A 公式映射钩子的实际供数均等待新 L4 合同。
 - 主 agent 不接触其他工作区的未提交修改。
-- 🟡 **误放事故（2026-08-23 晚，用户确认非人工搬运）**：GPT agent 执行 PKG-B
-  期间把工作目录误配到主 agent worktree（`Looper-system-optimizer/`），
-  多波写入未提交文件（collector.py / pressure/__init__.py 修改 +
-  4 个 collection 测试文件，18:56-19:55+）。其指派 worktree（`Looper-l4-fix/`）
-  干净，**误放文件是其 PKG-B 工作唯一副本，暂停后需字节级保全搬迁**。
-  处置规则见工作区 `AGENTS.md` §十四。主 agent 当晚回归已用 `--ignore`
-  隔离不完整文件集，未吸收、未删除、未提交任何外来文件。
+- 🟡→✅ **误放事故（2026-08-23 晚，已处置）**：GPT agent 执行 PKG-B 期间把
+  工作目录误配到主 agent worktree（`Looper-system-optimizer/`），多波写入
+  未提交文件（18:56-19:55+）。处置记录（用户授权，按 AGENTS.md §十四流程）：
+  ①确认写入方停止（源文件哈希两次采样不变）；②字节级保全搬迁——6 个源文件
+  （collector.py eb3754d7…、pressure/__init__.py ce1b63ef…、4 个 collection
+  测试）+ `.artifacts/test-tmp/`（5 个 pkg-b-* 证据目录）复制至
+  `Looper-l4-fix/`，前后 sha256 逐一核对一致；③因误放 WIP 叠在集成分支
+  布局上（旧分支 f7aca16 为单文件旧布局且无独有内容），该 worktree 已切至
+  新分支 **`system-optimizer-pkg-b`**（基于 origin/system-optimizer-impl@cfe9ff5，
+  旧分支 system-optimizer-l4-fix 保留不动）；④搬迁后其 29 项 PKG-B 测试
+  在新位置全部通过（WIP 自洽完整）；⑤主 agent 工作树已恢复干净，
+  全量回归无 ignore 全绿。
 
 ## 冲突与协调
 
