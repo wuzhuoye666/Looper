@@ -1,0 +1,15 @@
+{
+  "acceptance_limit": 0.046861490584115324,
+  "bootstrap_resamples": 2000,
+  "confidence_level": 0.95,
+  "formula_id": "F-PROJECT-PRESSURE-CV-BOOTSTRAP-UPPER/v1alpha1",
+  "input_batch_digest": "sha256:1814d800315ba5281d89660b9b6216cffb5c7d234afb6df6c9725b033dc13a77",
+  "metric_id": "network.receive-throughput-gbps",
+  "observed_value": 0.036689176016749155,
+  "portability": "Target-local loopback-only initial gate; never use as a NIC, VPC, cross-host, or Tencent Cloud CVM gate.",
+  "random_seed": 20260823,
+  "sample_count": 7,
+  "schema_version": "looper.pressure-stability-calibration/v1alpha1",
+  "statistic": "cv",
+  "target_scope": "Alibaba ECS iZ7xvcxcry1ejfjcd1d7igZ, Linux loopback TCP stack only"
+}

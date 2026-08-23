@@ -1,0 +1,70 @@
+schema_version: looper.standard-pressure-protocol/v1alpha1
+id: memory-sysbench-write-aliyun-hard-gate-20260823
+component: memory
+target_scope: Alibaba ECS iZ7xvcxcry1ejfjcd1d7igZ, Linux 6.8.0-137-generic, eight threads, global sequential 1-MiB writes.
+limitation: Target-local exploratory THP search; not MESS loaded-latency evidence and not portable to Tencent Cloud CVM.
+required_executables: [python3, /opt/looper-system-opt-53faa7b/.venv/bin/python]
+input_identity:
+  policy_id: aliyun-ecs-memory-thp-20260823
+  evidence_kind: empirical-target-local
+  stability_calibration_digest: sha256:aefc231eb854663f9b6544936cc1f47884d4fd3febc8fccc4a4ce8bd0a0b22d7
+metric_ids: [memory.bandwidth-mib-per-second, memory.latency-p95-ms, memory.success]
+gate_metric_ids: [memory.success]
+stability:
+  metric_id: memory.bandwidth-mib-per-second
+  statistic: cv
+  enforcement: hard-gate
+  acceptance_limit: 0.02922585447690954
+  minimum_repeats: 7
+  maximum_repeats: 7
+  source: Target-local one-sided 95-percent bootstrap upper CV from seven frozen baseline samples, 2000 resamples, seed 20260823.
+phases:
+  - id: exclusive-window
+    kind: prepare
+    command:
+      argv: [/opt/looper-system-opt-53faa7b/.venv/bin/python, -m, looper_core.system_opt.interference, --forbid-regex, "Phoronix Test Suite", --forbid-regex, phpbench, --forbid-regex, "benchmark-packages/.*/producer.py", --forbid-regex, stress-ng, --forbid-regex, sysbench, --forbid-regex, "(^|/)fio( |$)", --forbid-regex, iperf3, --forbid-regex, pytest, --output, .artifacts/system-opt/m2-memory-thp-search-20260823/interference-preflight.json]
+      timeout_seconds: 15
+    declared_duration_seconds: 0
+    purpose: Fail before warmup when another benchmark or pressure tool owns the shared target window; raw command lines are not retained.
+  - id: prepare
+    kind: prepare
+    command:
+      argv: [python3, examples/system-optimizer/memory_pressure_measure.py, prepare, --output-dir, .artifacts/system-opt/m2-memory-thp-search-20260823, --repeats, "{repeats}", --threads, "8", --duration-seconds, "5", --block-size, 1M, --total-size, 1T, --scope, global, --operation, write, --access-mode, seq]
+      timeout_seconds: 15
+    declared_duration_seconds: 0
+    purpose: Verify Linux, sysbench, thread count, and frozen workload inputs.
+  - id: warmup
+    kind: warmup
+    command:
+      argv: [python3, examples/system-optimizer/memory_pressure_measure.py, warmup, --output-dir, .artifacts/system-opt/m2-memory-thp-search-20260823, --repeats, "{repeats}", --threads, "8", --duration-seconds, "5", --block-size, 1M, --total-size, 1T, --scope, global, --operation, write, --access-mode, seq]
+      timeout_seconds: 45
+    declared_duration_seconds: 5
+    purpose: Discard one complete memory-write warmup interval.
+  - id: measure
+    kind: measure
+    command:
+      argv: [python3, examples/system-optimizer/memory_pressure_measure.py, measure, --output-dir, .artifacts/system-opt/m2-memory-thp-search-20260823, --repeats, "{repeats}", --threads, "8", --duration-seconds, "5", --block-size, 1M, --total-size, 1T, --scope, global, --operation, write, --access-mode, seq]
+      timeout_seconds: 120
+    declared_duration_seconds: 35
+    purpose: Emit seven bandwidth and event-latency repetitions.
+  - id: exclusive-window-after
+    kind: verify
+    command:
+      argv: [/opt/looper-system-opt-53faa7b/.venv/bin/python, -m, looper_core.system_opt.interference, --forbid-regex, "Phoronix Test Suite", --forbid-regex, phpbench, --forbid-regex, "benchmark-packages/.*/producer.py", --forbid-regex, stress-ng, --forbid-regex, sysbench, --forbid-regex, "(^|/)fio( |$)", --forbid-regex, iperf3, --forbid-regex, pytest, --output, .artifacts/system-opt/m2-memory-thp-search-20260823/interference-postflight.json]
+      timeout_seconds: 15
+    declared_duration_seconds: 0
+    purpose: Invalidate the batch if another benchmark or pressure tool entered the shared target during measurement.
+  - id: verify
+    kind: verify
+    command:
+      argv: [python3, examples/system-optimizer/memory_pressure_measure.py, verify, --output-dir, .artifacts/system-opt/m2-memory-thp-search-20260823, --repeats, "{repeats}", --threads, "8", --duration-seconds, "5", --block-size, 1M, --total-size, 1T, --scope, global, --operation, write, --access-mode, seq]
+      timeout_seconds: 15
+    declared_duration_seconds: 0
+    purpose: Require the expected finite arrays and success gate.
+  - id: cleanup
+    kind: cleanup
+    command:
+      argv: [python3, examples/system-optimizer/memory_pressure_measure.py, cleanup, --output-dir, .artifacts/system-opt/m2-memory-thp-search-20260823, --repeats, "{repeats}", --threads, "8", --duration-seconds, "5", --block-size, 1M, --total-size, 1T, --scope, global, --operation, write, --access-mode, seq]
+      timeout_seconds: 15
+    declared_duration_seconds: 0
+    purpose: Fail if a memory-pressure process marker remains.

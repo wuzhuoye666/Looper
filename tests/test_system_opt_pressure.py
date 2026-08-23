@@ -1,21 +1,24 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
 import pytest
 from looper_core.system_opt.demo import build_demo_policy
 from looper_core.system_opt.executor import CommandResult, OperationStatus
-from looper_core.system_opt.policy import OptimizationMode
+from looper_core.system_opt.policy import OptimizationMode, parse_optimization_policy_yaml
 from looper_core.system_opt.pressure import (
     PhasedPressureMeasurementAdapter,
     PressureProtocolError,
     StandardPressureProtocol,
+    calibrate_cv_acceptance_limit,
     evaluate_measurement_stability,
     parse_standard_pressure_protocol_yaml,
     validate_pressure_policy,
 )
 from looper_core.system_opt.scoring import MeasurementBatch
+from looper_core.system_opt.tuning import OptimizationRun
 from pydantic import ValidationError
 
 
@@ -185,6 +188,67 @@ def test_cv_stability_fails_when_explicit_limit_is_exceeded() -> None:
     assert evidence.value > evidence.acceptance_limit
 
 
+def test_cv_limit_bootstrap_uses_one_shared_resample_for_mean_and_stdev() -> None:
+    batch = MeasurementBatch.model_validate(
+        {
+            "identity": {"target": "t"},
+            "metrics": {
+                "cpu.score": {
+                    "metric_id": "cpu.score",
+                    "values": [9.0, 10.0, 11.0, 10.0, 9.5, 10.5, 10.0],
+                }
+            },
+            "gate_values": {},
+        }
+    )
+
+    first = calibrate_cv_acceptance_limit(
+        batch,
+        "cpu.score",
+        confidence_level=0.95,
+        bootstrap_resamples=2000,
+        random_seed=20260823,
+        target_scope="one test target",
+        portability="test-only",
+    )
+    second = calibrate_cv_acceptance_limit(
+        batch,
+        "cpu.score",
+        confidence_level=0.95,
+        bootstrap_resamples=2000,
+        random_seed=20260823,
+        target_scope="one test target",
+        portability="test-only",
+    )
+
+    assert first == second
+    assert first.acceptance_limit == pytest.approx(0.08321378679337135)
+    assert first.input_batch_digest == batch.digest
+
+
+def test_cv_limit_bootstrap_rejects_zero_mean() -> None:
+    batch = MeasurementBatch.model_validate(
+        {
+            "identity": {"target": "t"},
+            "metrics": {
+                "zero": {"metric_id": "zero", "values": [-1.0, 0.0, 1.0]}
+            },
+            "gate_values": {},
+        }
+    )
+
+    with pytest.raises(PressureProtocolError, match="zero mean"):
+        calibrate_cv_acceptance_limit(
+            batch,
+            "zero",
+            confidence_level=0.95,
+            bootstrap_resamples=100,
+            random_seed=1,
+            target_scope="one test target",
+            portability="test-only",
+        )
+
+
 def test_report_only_calibration_forbids_an_unapproved_threshold() -> None:
     payload = _payload()
     payload["stability"]["enforcement"] = "report-only"  # type: ignore[index]
@@ -221,6 +285,83 @@ def test_repository_calibration_protocols_are_report_only(
     assert protocol.component.value == component
     assert protocol.stability.enforcement == "report-only"
     assert protocol.stability.acceptance_limit is None
+
+
+def test_aliyun_memory_capability_digest_binds_the_raw_readback() -> None:
+    root = Path(__file__).parents[1] / "examples" / "system-optimizer"
+    raw = (root / "aliyun-ecs-memory-thp-capability-raw.txt").read_bytes()
+    domains = json.loads(
+        (root / "aliyun-ecs-memory-thp-capability-domains.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    assert domains[0]["evidence_digest"] == "sha256:" + hashlib.sha256(raw).hexdigest()
+
+
+def test_aliyun_memory_hard_gate_protocol_binds_the_task_policy() -> None:
+    root = Path(__file__).parents[1] / "examples" / "system-optimizer"
+    protocol = parse_standard_pressure_protocol_yaml(
+        (root / "memory-pressure-hard-gate-protocol.yaml").read_text(encoding="utf-8")
+    )
+    policy = parse_optimization_policy_yaml(
+        (root / "aliyun-ecs-memory-thp-policy.yaml").read_text(encoding="utf-8")
+    )
+
+    validate_pressure_policy(protocol, policy)
+    assert protocol.stability.enforcement == "hard-gate"
+    assert protocol.stability.acceptance_limit == pytest.approx(0.02922585447690954)
+    assert [phase.id for phase in protocol.phases] == [
+        "exclusive-window",
+        "prepare",
+        "warmup",
+        "measure",
+        "exclusive-window-after",
+        "verify",
+        "cleanup",
+    ]
+
+
+def test_aliyun_memory_acceptance_summary_binds_the_optimization_run() -> None:
+    root = (
+        Path(__file__).parents[1]
+        / ".artifacts"
+        / "system-opt"
+        / "m2-memory-thp-search-20260823"
+    )
+    summary = json.loads((root / "acceptance-summary.json").read_text(encoding="utf-8"))
+    run = OptimizationRun.model_validate_json(
+        (root / "remote-run" / "evidence" / "optimization-run.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    assert summary["identities"]["optimization_run_digest"] == run.digest
+    assert summary["closed_loop"]["stop_reason"] == run.stop_reason.value
+    assert summary["closed_loop"]["recommended_candidate_id"] is None
+
+    primary_metric = summary["closed_loop"]["primary_metric_id"]
+    assert (
+        summary["closed_loop"]["baseline"]["measurement_batch_digest"] == run.baseline.digest
+    )
+    assert (
+        summary["closed_loop"]["baseline"]["primary_metric_evidence_digest"]
+        == run.baseline.metrics[primary_metric].digest
+    )
+    summary_candidates = summary["closed_loop"]["candidates"]
+    assert [candidate["measurement_batch_digest"] for candidate in summary_candidates] == [
+        candidate.measurement_digest for candidate in run.candidates
+    ]
+    for summary_candidate, run_candidate in zip(summary_candidates, run.candidates, strict=True):
+        assert (
+            summary_candidate["primary_metric_evidence_digest"]
+            == run_candidate.improvements[primary_metric].candidate_digest
+        )
+        assert (
+            run_candidate.improvements[primary_metric].baseline_digest
+            == summary["closed_loop"]["baseline"]["primary_metric_evidence_digest"]
+        )
+    assert all(candidate.safety_state.value == "rolled_back" for candidate in run.candidates)
 
 
 def test_phased_adapter_always_cleans_up_after_measurement_failure() -> None:

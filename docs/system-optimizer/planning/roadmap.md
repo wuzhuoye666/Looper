@@ -59,7 +59,15 @@ ECS 首次 `report-only` 校准。CPU、Memory、Network-loopback 能重复出�
 明确 unavailable；详情见
 [M2 组件合同](m2-component-pressure-contract-2026-08-23.md)与
 [组件校准实录](../research/aliyun-ecs-m2-component-calibration-2026-08-23.md)。这不等于
-M2 完成：稳定阈值、三个组件的合法候选闭环、真实跨机网络和组合复验仍未关闭。
+M2 完成：CPU/Network 合法候选闭环、双节点 NUMA、真实跨机网络和组合复验仍未关闭。
+
+同日已按冻结校准数据派生 CPU、Memory 与 Network-loopback 的 target-local CV gate，并完成
+Memory THP 的 `madvise` 基线加 `always/never` 两候选真实闭环。首次正式基线被并发
+Phoronix PHPBench 污染并由硬门禁阻止；补充前后进程干扰门禁后闭环完成，两个候选均无
+显著收益且已回滚。详情见
+[内存 THP 实录](../research/aliyun-ecs-m2-memory-thp-closed-loop-2026-08-23.md)。M2 仍未完成：
+CPU 受 active tuned 所有权阻断、NUMA 单节点 unavailable、Network 仍缺第二 peer，且尚未做
+跨组件组合复验和通用 Profile。
 
 ## M3：workload 动态观测与下钻调优
 

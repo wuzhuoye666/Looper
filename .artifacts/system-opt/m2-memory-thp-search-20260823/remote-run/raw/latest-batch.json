@@ -1,0 +1,50 @@
+{
+  "gate_values": {
+    "memory.success": true
+  },
+  "identity": {
+    "phase": "steady-state-after-discarded-warmup",
+    "statistics": "repeats=7;duration=5s;total=1T;scope=global",
+    "target": "sha256:9fb11d6a5ce5de3e7398a82e723dd6a73adf432939250f30baa80dc185683922",
+    "tool": "sysbench 1.0.20",
+    "workload": "sysbench-memory-write-seq-threads8-block1M"
+  },
+  "metrics": {
+    "memory.bandwidth-mib-per-second": {
+      "metric_id": "memory.bandwidth-mib-per-second",
+      "values": [
+        99652.29,
+        95649.0,
+        95134.4,
+        96527.14,
+        97712.89,
+        98542.42,
+        96871.3
+      ]
+    },
+    "memory.latency-p95-ms": {
+      "metric_id": "memory.latency-p95-ms",
+      "values": [
+        0.1,
+        0.1,
+        0.1,
+        0.1,
+        0.1,
+        0.1,
+        0.1
+      ]
+    },
+    "memory.success": {
+      "metric_id": "memory.success",
+      "values": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ]
+    }
+  }
+}

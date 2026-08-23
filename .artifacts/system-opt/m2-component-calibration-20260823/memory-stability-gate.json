@@ -1,0 +1,15 @@
+{
+  "acceptance_limit": 0.02922585447690954,
+  "bootstrap_resamples": 2000,
+  "confidence_level": 0.95,
+  "formula_id": "F-PROJECT-PRESSURE-CV-BOOTSTRAP-UPPER/v1alpha1",
+  "input_batch_digest": "sha256:60dd38fb45a5425fef2d9bdaf7973bdbc583a9cc93aece0325a90be173f0131a",
+  "metric_id": "memory.bandwidth-mib-per-second",
+  "observed_value": 0.025381565789414234,
+  "portability": "Target-local initial gate; recalibrate on Tencent Cloud CVM and after any protocol or environment identity change.",
+  "random_seed": 20260823,
+  "sample_count": 7,
+  "schema_version": "looper.pressure-stability-calibration/v1alpha1",
+  "statistic": "cv",
+  "target_scope": "Alibaba ECS iZ7xvcxcry1ejfjcd1d7igZ, Linux 6.8.0-137-generic, fixed memory protocol"
+}

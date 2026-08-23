@@ -79,6 +79,19 @@ stderr 为 0 字节。退出码和 YAML 指标实际有效；失败批次未进�
 4. NUMA 等待至少双节点目标，不在本 ECS 上继续搜索；
 5. 各组件局部候选完成后做混合压力组合复验。
 
+## 6.1 后续状态（同日）
+
+本节只追加后续状态，不改写上面的首次校准结论：
+
+- 已按冻结样本、显式置信水平、重采样次数和随机种子，派生 CPU、Memory 与
+  Network-loopback 的 target-local CV 上界；它们不外推到腾讯云 CVM 或真实 NIC。
+- Memory 已用派生门禁完成 THP `madvise` 基线与 `always/never` 两候选闭环；两个候选
+  均未通过收益判定并已回滚，不能宣称获得优化效果。
+- CPU 仍由 active tuned profile 持有配置所有权，未实现所有权交接前禁止搜索；Network
+  缺第二受控 peer；NUMA 仍为单节点 unavailable。
+- 详细证据、干扰批次处置和验收口径见
+  [Memory THP 闭环实录](aliyun-ecs-m2-memory-thp-closed-loop-2026-08-23.md)。
+
 ## 7. 代码验证口径
 
 - System Optimizer：15 个测试文件，90 个测试函数，pytest 收集 93 个 case，93/93 通过。

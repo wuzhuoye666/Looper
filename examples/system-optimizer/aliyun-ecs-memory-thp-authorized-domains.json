@@ -1,0 +1,13 @@
+[
+  {
+    "item_id": "thp-enabled",
+    "domain": {
+      "minimum": null,
+      "maximum": null,
+      "step": null,
+      "choices": ["always", "madvise", "never"],
+      "log": false
+    },
+    "reason": "User authorized controlled Linux optimization; target-local temporary THP changes must verify and roll back after every measurement."
+  }
+]

@@ -37,11 +37,11 @@ IRQ、THP、sysctl、cpufreq、I/O queue、MTU 是配置接口或配置类别，
 
 | 组件 | 当前探针/证据 | 当前状态 | 仍缺 |
 |---|---|---|---|
-| CPU | stress-ng 固定 matrixprod，8 worker，bogo ops/s | 阿里云 ECS 稳定出数 | 批准稳定阈值；合法 CPU 候选与收益闭环；PMU 仅作后续诊断 |
-| Memory | sysbench global sequential write，带宽与事件 p95 | 阿里云 ECS 稳定出带宽 | 批准阈值；THP 等候选需确认 workload 语义和收益；不是 MESS loaded latency |
+| CPU | stress-ng 固定 matrixprod，8 worker，bogo ops/s | 阿里云 ECS 稳定出数；已派生 target-local CV gate | governor 被 active tuned 管理，所有权移交前不进入真实搜索；PMU 仅作后续诊断 |
+| Memory | sysbench global sequential write，带宽与事件 p95 | target-local gate 生效；THP 两候选真实闭环，无接受候选 | 组合复验；换 workload/环境必须重校准；不是 MESS loaded latency |
 | NUMA | numactl 拓扑与绑定探针 | 当前 ECS 明确 unavailable | 至少 2 个 NUMA node 的目标机；本地/远端绑定和候选复验 |
 | Storage | fio 4K direct randread，多轮 scheduler/nomerges 实录 | 真实多轮已完成 | 纳入统一阶段协议；与其他组件组合复验 |
-| Network | iperf3 两流 loopback，吞吐与重传 | 仅协议栈稳定出数 | 第二台受控 peer；NIC/VPC/RTT/loss 证据；真实网络候选闭环 |
+| Network | iperf3 两流 loopback，吞吐与重传 | 仅协议栈稳定出数；已派生 loopback-only CV gate | 第二台受控 peer；NIC/VPC/RTT/loss 证据；真实网络候选闭环 |
 
 ## 4. 指标来源边界
 
@@ -58,5 +58,7 @@ IRQ、THP、sysctl、cpufreq、I/O queue、MTU 是配置接口或配置类别，
 `(CPU, Memory, NUMA, Storage, Network, Stability, CrossRegression)` 向量，先过硬门禁，
 再做 Pareto 与显式决胜。组件组合后必须在混合压力下重测，才能生成通用 Profile。
 
-当前校准没有合法候选搜索，因此只定性为 `observed`，不能写成 `best observed`、
-`validated` 或“有优化效果”。
+内存 THP 已完成一次合法目标机候选搜索，但两个候选均未接受；结论是“安全闭环跑通且
+本协议未发现优化效果”，不能写成 `best observed` 或 `validated`。CPU、NUMA 和真实网络
+仍没有合法候选搜索；各组件结果不能相加。详见
+[THP 候选闭环实录](../research/aliyun-ecs-m2-memory-thp-closed-loop-2026-08-23.md)。

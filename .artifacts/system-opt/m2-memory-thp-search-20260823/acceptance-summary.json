@@ -1,0 +1,88 @@
+{
+  "schema_version": "looper.system-opt-acceptance-summary/v1alpha1",
+  "target": {
+    "hostname": "iZ7xvcxcry1ejfjcd1d7igZ",
+    "provider": "Alibaba Cloud ECS",
+    "target_os": "linux",
+    "kernel_release": "6.8.0-137-generic",
+    "portability": "Target-local evidence; not valid for Tencent Cloud CVM without independent recalibration and capability validation."
+  },
+  "identities": {
+    "manifest_digest": "sha256:66154ca0f7d9e7fe53c4d969c826b745e192d1b1d032f9868db7c928c9ef09a0",
+    "policy_digest": "sha256:e95ea6d7424822cac25af4286adeffecabbc06680619cd7fec0fd8481f7fdc70",
+    "pressure_protocol_digest": "sha256:6b246b2e3d7b4bc278311c5b4e42fe8bbeca33e8d896b5f9c3cc392dc1dbea84",
+    "optimization_run_digest": "sha256:94e45a17f6346b2e3bfae26afe2b61b3c404db436680284c71b2bfbe3d5c0bf6",
+    "optimization_run_file_sha256": "9a284e51669365c270bd3a6d04af922ee4f4f584302a90239e21d28cbfc55f7c"
+  },
+  "stability": {
+    "metric_id": "memory.bandwidth-mib-per-second",
+    "formula_id": "F-PROJECT-PRESSURE-CV-BOOTSTRAP-UPPER/v1alpha1",
+    "acceptance_limit": 0.02922585447690954,
+    "successful_baseline_cv": 0.0228065728638155,
+    "failed_contended_baseline_cv": 0.04761983713223461,
+    "failed_contended_batch_disposition": "excluded from calibration and candidate comparison"
+  },
+  "closed_loop": {
+    "baseline": {
+      "parameters": {
+        "system.thp-enabled": "madvise"
+      },
+      "median_mib_per_second": 100283.98,
+      "primary_metric_evidence_digest": "sha256:11d721c502d3c77c200c4921528ded6d30d66c17198cf855c41c36e461338917",
+      "measurement_batch_digest": "sha256:499fa84ebee2e1b7f01b80f948b30ed3ac3ab337a18f2073bf6f53669d775851"
+    },
+    "candidates": [
+      {
+        "parameters": {
+          "system.thp-enabled": "always"
+        },
+        "median_mib_per_second": 98270.29,
+        "cv": 0.01803680278659653,
+        "improvement_estimate": -0.02222004229740734,
+        "improvement_lcb95": -0.038112576957292296,
+        "accepted": false,
+        "safety_state": "rolled_back",
+        "primary_metric_evidence_digest": "sha256:81e6f3d09db46c8cb78c548d0b80ff6a074c32189eadbc07bcfa49219c64760b",
+        "measurement_batch_digest": "sha256:c09675bf1478e43233bcb638f2cf2fab38fd6a7be6cfe859deecfe8bf6aafbdb"
+      },
+      {
+        "parameters": {
+          "system.thp-enabled": "never"
+        },
+        "median_mib_per_second": 96871.3,
+        "cv": 0.016435250476882723,
+        "improvement_estimate": -0.037657183552342134,
+        "improvement_lcb95": -0.05557209196497124,
+        "accepted": false,
+        "safety_state": "rolled_back",
+        "primary_metric_evidence_digest": "sha256:be950a2b87b3e236a62ca804695df5df72dac5ce70083cc105201028c469ad80",
+        "measurement_batch_digest": "sha256:b31e6d6872203db6a779aafc0b6c0894b99c0467ad07694638e42babff6eb639"
+      }
+    ],
+    "candidate_rounds": 2,
+    "measurement_attempts": 3,
+    "baseline_measurements": 1,
+    "stop_reason": "no-improvement-policy",
+    "recommended_candidate_id": null,
+    "final_readback": "madvise",
+    "primary_metric_id": "memory.bandwidth-mib-per-second"
+  },
+  "interference": {
+    "first_failed_run": "A concurrent Looper Phoronix PHPBench producer was observed; the hard stability gate stopped before any candidate apply.",
+    "guard": "Explicit process-pattern checks before warmup and after measurement; raw command lines are redacted to digests.",
+    "successful_run_preflight_matches": 0,
+    "successful_run_postflight_matches": 0
+  },
+  "local_evidence_count": {
+    "counting_basis": "Actual local file paths, without content deduplication.",
+    "remote_raw_files": 62,
+    "remote_raw_bytes": 31036,
+    "remote_control_evidence_files": 4,
+    "remote_control_evidence_bytes": 34879,
+    "failed_baseline_copy_files": 1,
+    "failed_baseline_copy_bytes": 1030,
+    "total_files": 67,
+    "total_bytes": 66945
+  },
+  "claim": "The target-local memory THP candidate loop ran safely and found no accepted improvement; this is not a claim that THP never helps other workloads or Tencent Cloud CVM."
+}

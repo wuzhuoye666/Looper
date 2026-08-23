@@ -1,0 +1,14 @@
+{
+  "access_mode": "seq",
+  "block_size": "1M",
+  "duration_seconds": 5,
+  "meminfo_sha256": "21533c48800030331cf54594c49b755bbadbd2d3ff1a31f027dbd68fc92ff175",
+  "operation": "write",
+  "recorded_at": "2026-08-23T06:34:03.282596+00:00",
+  "schema_version": "looper.memory-pressure-preflight/v1alpha1",
+  "scope": "global",
+  "sysbench": "sysbench 1.0.20",
+  "target": "sha256:9fb11d6a5ce5de3e7398a82e723dd6a73adf432939250f30baa80dc185683922",
+  "threads": 8,
+  "total_size": "1T"
+}
