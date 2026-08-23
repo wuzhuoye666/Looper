@@ -1,39 +1,53 @@
-# 动态接口发现前端 QA 报告
+# 动态接口发现：真实 DeepSeek QA 报告
 
 - 日期：2026-08-23（Asia/Shanghai）
 - 页面：`http://127.0.0.1:5173/interfaces`
-- 范围：标准层级，桌面浏览器 741px 窄视口
-- DeepSeek 实际状态：未配置 `LOOPER_DEEPSEEK_API_KEY`
-- 随机样本：[`yenanjing/awesome-model-routing`](https://github.com/yenanjing/awesome-model-routing)，GitHub Search 结果中通过 `Get-Random` 选取，下载 ZIP 19,814 bytes
-- 修复后截图：[`screenshots/source-discovery-fixed.png`](screenshots/source-discovery-fixed.png)
+- Provider / Model：DeepSeek / `deepseek-v4-flash`
+- 输出合同：`looper.dev/interface-contract/v1`
+- 最终截图：[`screenshots/source-discovery-live-five.png`](screenshots/source-discovery-live-five.png)
+- 安全边界：ZIP 经路径、符号链接、大小和敏感文件筛选后，只允许 Harness 使用 `list_files`、`search_code`、`read_file`；不执行上传代码，不访问源码声明的目标地址。
 
-## 5 条操作路径
+## 随机样本与结果
 
-| # | 操作方式 | 结果 | 发现 |
-|---|---|---|---|
-| 1 | 打开 `/interfaces`，检查未配置状态、数据流和合同版本 | 通过 | 配置缺失原因、环境变量、只读工具和禁止执行/目标网络均可见 |
-| 2 | 文件选择器输入非 ZIP 的 `not-a-zip.py` | 通过 | 前端立即拒绝并说明不会解析 OpenAPI、单文件或其他压缩格式 |
-| 3 | 文件选择器输入随机 GitHub 源码 ZIP，再勾选发送授权 | 阻断符合预期 | 未配置 DeepSeek 时按钮禁用；原实现仍允许选择文件和授权，造成无效操作 |
-| 4 | 741px 视口通过汉堡菜单打开侧边栏抽屉 | 通过 | 抽屉层级和当前路由标识正确；原数据流横排过挤 |
-| 5 | 刷新配置与历史，检查横向溢出 | 通过 | 历史为空态稳定，`scrollWidth == clientWidth`，无横向溢出 |
+样本由 GitHub Search 返回集合中通过 `Get-Random` 选取。在下载 ZIP 前只记录仓库元数据，没有查看其源码；每次结果保存上传内容的 SHA-256、DeepSeek 工具轨迹和逐行证据。
 
-## 缺陷与修复
+| # | 仓库 | 语言 / 框架线索 | ZIP bytes | 终态 | 工具调用 | 接口数 |
+|---|---|---|---:|---|---:|---:|
+| 1 | [`DAMNDAGER/Image2-Studio`](https://github.com/DAMNDAGER/Image2-Studio) | Python / FastAPI | 40,892 | completed | 7 | 16 |
+| 2 | [`SHAROZ221/CVE-Scanner`](https://github.com/SHAROZ221/CVE-Scanner) | Python / Flask | 236,753 | completed | 4 | 9 |
+| 3 | [`colyseus/uWebSockets-express`](https://github.com/colyseus/uWebSockets-express) | TypeScript | 42,411 | completed | 17 | 67 |
+| 4 | [`elizsir/poll-service`](https://github.com/elizsir/poll-service) | Go / Gin | 66,796 | completed | 28 | 15 |
+| 5 | [`cosmiinn75/fitness-tracker-api`](https://github.com/cosmiinn75/fitness-tracker-api) | Java / Spring Boot | 186,737 | completed | 44 | 41 |
 
-| 严重度 | 问题 | 修复 | 复验 |
-|---|---|---|---|
-| High | 接口合同只有 method/path，无法为后续容量测试生成请求 | 增加参数、请求体、响应结构；HTTP 方法和副作用枚举；接口 ID 由接口与证据摘要稳定生成 | 后端协议测试通过 |
-| Medium | DeepSeek 未配置时仍可选文件和勾选授权，但永远无法提交 | 锁定上传区和授权框，按钮改为“配置 DeepSeek 后可开始” | 浏览器确认三个控件均处于阻断态 |
-| Medium | 页面声明保留排除项和工具轨迹，但记录卡片没有查看入口 | 增加可展开审计详情，展示源码摘要、模型、安全排除和只读工具轮次 | 前端构建和类型检查通过 |
-| Medium | 741px 窄屏下三段数据流横排，文字密度过高 | 760px 以下改为纵向流程和旋转箭头，统计块改为两列 | 浏览器确认单列流程且无横向溢出 |
+合计：5/5 completed，100 次受控源码工具调用，148 个接口。
 
-## 验证
+## 真实调用暴露的问题与修复
 
-- Python：完整测试套件通过（100%），Ruff 通过。
-- Web：9 个测试文件、30 个测试全部通过，生产构建通过。
-- DeepSeek Harness：使用 `httpx.MockTransport` 验证真实官方协议形状（`tool_calls`、`tool_call_id`、`response_format=json_object`）与服务端证据校验。
-- 未验证项：当前机器没有 DeepSeek API Key，因此没有声称真实 DeepSeek 推理成功，也没有产生伪造的接口发现记录。
+| 严重度 | 实际故障 | 修复 / 结果 |
+|---|---|---|
+| High | `tool_choice=auto` 时模型可能不读源码直接输出 | 首轮强制 `tool_choice=required`，且没有工具轨迹时拒绝结果 |
+| High | DeepSeek thinking 模式不支持强制工具选择，返回 HTTP 400 | 请求显式关闭 thinking；保留脱敏后的 provider code/message |
+| High | Java 项目在 8K 输出上限被截断 | 识别 `finish_reason=length` 并返回明确错误；默认上限提高到 16K，最终得到 41 个接口 |
+| High | 客户端断开或 API 重启会遗留 `running` 记录 | 捕获取消并在服务启动时把中断记录恢复为明确 failed 终态 |
+| Medium | 模型输出的位置、schema、认证、置信度存在常见类型偏差 | 做有界别名/类型归一化，并最多执行两轮合同自修复；仍不合规则失败 |
+| Medium | 文件输入控件未覆盖拖放区，点击部分区域不能弹出选择器 | 输入控件覆盖整个上传区；浏览器复验文件选择器可触发 |
+| Medium | 页面需要操作员令牌，但错误后应用令牌不会自动重取数据 | 增加认证状态变化事件，接口发现页自动重载；浏览器清除并重新应用令牌后无需点“重试”即可显示记录 |
 
-## 提交
+## 仍未解决的生产约束
+
+- 当前上传 POST 同步等待 DeepSeek；第 5 个样本耗时约 144 秒。应改为创建后台任务后立即返回 discovery ID，由前端轮询或订阅状态。
+- 接口发现只证明“从源码提取合同”，尚未执行容量测试。进入压测前还需要目标环境授权、鉴权数据、幂等/清理策略、写接口隔离、限流上限和停止条件。
+- 模型结果必须以源码证据和合同校验为信任边界；不能把置信度当作运行时正确性的证明。
+
+## 自动化验证
+
+- Python：完整测试套件通过，Ruff 通过。
+- Web：9 个测试文件、31 个测试通过，生产构建通过。
+- DeepSeek：5 个随机仓库均由真实 provider 调用完成，不是 MockTransport 或静态解析结果。
+- 密钥：仅注入服务进程环境；未写入 `.env`、报告、源码或 Git。
+
+## 关联提交
 
 - `bcc57e2 feat: add DeepSeek source interface discovery`
 - `6f4f1a6 fix: close source discovery QA gaps`
+- `a838b0c docs: record source discovery QA`
