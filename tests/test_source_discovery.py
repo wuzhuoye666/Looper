@@ -118,10 +118,19 @@ async def test_harness_executes_only_read_tools_and_validates_evidence(tmp_path:
                                     "interfaces": [
                                         {
                                             "protocol": "http",
-                                            "method": "get",
+                                            "method": "GET",
                                             "path": "/health",
                                             "summary": "Health check",
                                             "handlerSymbol": "health",
+                                            "parameters": [],
+                                            "requestBody": None,
+                                            "responses": [
+                                                {
+                                                    "statusCode": "200",
+                                                    "contentTypes": ["application/json"],
+                                                    "schema": {"type": "object"},
+                                                }
+                                            ],
                                             "authentication": [],
                                             "sideEffect": "none",
                                             "confidence": 0.99,
@@ -145,6 +154,8 @@ async def test_harness_executes_only_read_tools_and_validates_evidence(tmp_path:
 
     assert contract["apiVersion"] == CONTRACT_VERSION
     assert contract["spec"]["interfaces"][0]["path"] == "/health"
+    assert contract["spec"]["interfaces"][0]["responses"][0]["statusCode"] == "200"
+    assert contract["spec"]["interfaces"][0]["id"].startswith("interface-")
     assert contract["spec"]["interfaces"][0]["evidence"][0]["excerptDigest"].startswith("sha256:")
     assert trace == [
         {

@@ -8,11 +8,11 @@ import re
 import zipfile
 from dataclasses import dataclass
 from pathlib import PurePosixPath
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 from looper_core.canonical import canonical_digest, new_id, utc_now
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -54,18 +54,50 @@ class EvidenceInput(BaseModel):
     endLine: int = Field(ge=1)
 
 
+class ParameterInput(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+    name: str
+    location: Literal["path", "query", "header", "cookie"] = Field(alias="in")
+    required: bool = False
+    contract_schema: dict[str, Any] = Field(default_factory=dict, alias="schema")
+
+
+class RequestBodyInput(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+    required: bool = False
+    contentTypes: list[str] = Field(default_factory=list)
+    contract_schema: dict[str, Any] = Field(default_factory=dict, alias="schema")
+
+
+class ResponseInput(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+    statusCode: str
+    contentTypes: list[str] = Field(default_factory=list)
+    contract_schema: dict[str, Any] = Field(default_factory=dict, alias="schema")
+
+
 class InterfaceInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    protocol: str = "http"
-    method: str
+    protocol: Literal["http"] = "http"
+    method: Literal["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]
     path: str
     summary: str = ""
     handlerSymbol: str | None = None
+    parameters: list[ParameterInput] = Field(default_factory=list)
+    requestBody: RequestBodyInput | None = None
+    responses: list[ResponseInput] = Field(default_factory=list)
     authentication: list[str] = Field(default_factory=list)
-    sideEffect: str = "unknown"
+    sideEffect: Literal["none", "read", "write", "delete", "unknown"] = "unknown"
     confidence: float = Field(ge=0, le=1)
     evidence: list[EvidenceInput] = Field(min_length=1)
     unresolved: list[str] = Field(default_factory=list)
+
+    @field_validator("path")
+    @classmethod
+    def validate_http_path(cls, value: str) -> str:
+        if not value.startswith("/"):
+            raise ValueError("HTTP interface paths must start with /")
+        return value
 
 
 class AgentOutput(BaseModel):
@@ -277,8 +309,10 @@ async def run_deepseek_harness(
                 "without file and line evidence. Use only the supplied read-only tools. "
                 "Do not ask to execute code or access networks. Your final answer must be "
                 "one JSON object matching: {interfaces:[{protocol,method,path,summary,"
-                "handlerSymbol,authentication,sideEffect,confidence,evidence:[{file,"
-                "startLine,endLine}],unresolved:[]}],unresolved:[]}."
+                "handlerSymbol,parameters:[{name,in,required,schema}],requestBody:"
+                "{required,contentTypes,schema}|null,responses:[{statusCode,contentTypes,"
+                "schema}],authentication,sideEffect,confidence,evidence:[{file,startLine,"
+                "endLine}],unresolved:[]}],unresolved:[]}. HTTP methods must be uppercase."
             ),
         },
         {
@@ -393,7 +427,7 @@ def build_contract(
     output: AgentOutput, workspace: SourceWorkspace, settings: Settings
 ) -> dict[str, Any]:
     interfaces: list[dict[str, Any]] = []
-    for index, item in enumerate(output.interfaces, 1):
+    for item in output.interfaces:
         evidence = []
         for citation in item.evidence:
             content = workspace.files.get(citation.file)
@@ -412,14 +446,29 @@ def build_contract(
             evidence.append(
                 {**citation.model_dump(), "excerptDigest": canonical_digest({"text": excerpt})}
             )
+        identity = canonical_digest(
+            {
+                "protocol": item.protocol,
+                "method": item.method,
+                "path": item.path,
+                "evidence": evidence,
+            }
+        ).removeprefix("sha256:")[:16]
         interfaces.append(
             {
-                "id": f"interface-{index}",
+                "id": f"interface-{identity}",
                 "protocol": item.protocol,
                 "method": item.method.upper(),
                 "path": item.path,
                 "summary": item.summary,
                 "handler": {"symbol": item.handlerSymbol},
+                "parameters": [
+                    parameter.model_dump(by_alias=True) for parameter in item.parameters
+                ],
+                "requestBody": item.requestBody.model_dump(by_alias=True)
+                if item.requestBody
+                else None,
+                "responses": [response.model_dump(by_alias=True) for response in item.responses],
                 "authentication": item.authentication,
                 "sideEffect": item.sideEffect,
                 "confidence": item.confidence,
