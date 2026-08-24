@@ -20,7 +20,7 @@
 | L3 压力器 | `pressure/__init__.py` | StandardPressureProtocol（五阶段 prepare/warmup/measure/verify/cleanup）；PhasedPressureMeasurementAdapter（现役耦合路径）；PhasedPressureCollectionAdapter（PKG-B 解耦路径：measure 只产 PressureExecutionEvidence+ZIP bundle，采集走 L4） | 阶段合同 fail-closed：任何阶段失败 cleanup 必跑 |
 | L4 采集器 | `collector.py` `interference.py` | BuiltinLinuxGuestCollector（**已窗口化** begin_collection/finish/cancel）；verify_collection_artifact_bundle（ZIP 逐文件 sha256，容器字节不作身份）；干扰检查 | /proc /sys 微指标 + 压力工具产物解析；采集开销 A/B 证据（成对裸墙钟，无阈值） |
 | L5 组件优化器 | `component/__init__.py` `component/mapping.py` `component/strategy.py` + `strategies/*.yaml` | ComponentOptimizer（suggest_candidates/candidate_pool/run）；StrategyFormulaMapping（when 条件 bootstrap 置信 + 域校验） | **只建议不终裁**；越域建议拒绝并留痕（formula_rejections） |
-| L6 回退器 | `rollback/__init__.py` | 四级：候选级（每候选测完即回退，真机验证过）/ 相位级 / 退化级（依赖 S8 U_regression）/ 崩溃级 | verify_phase_restoration 三态 |
+| L6 回退器 | `rollback/__init__.py` `rollback/regression.py` | 四级：候选级（每候选测完即回退，真机验证过）/ 相位级 / 退化级（S8 U_regression 显式阈值触发并恢复 S9 last-good）/ 崩溃级 | verify_phase_restoration 三态；L6c 执行桥已落地，CLI 生命周期接线为 G5 |
 | L7 负缓存 | `negative_cache/__init__.py` | NegativeCacheEntry，身份 = 环境×候选参数×协议×公式版本 四 digest | append-only；调度器开轮前查表跳过已证无效；红线：缓存证据不是结论 |
 | L8 总引擎 | `engine/{scorer,judge,scheduler,incumbent,loop}.py` + `tuning.py` | run_engine_loop；evaluate_candidate（S0→S2→S7 固定序） | 只做调度/判断/打分三件事；SO-D017 预筛 tracker **按组件隔离**（SO-D018）；GPT 修复后 scheduler 选中候选被 L5 精确定向执行（身份违规即 raise） |
 
@@ -87,5 +87,6 @@
 | `tests/test_system_opt_external_session.py` | 外部会话 runner：身份计算、窗口落盘往返、复测请求发现与持续服务多批 |
 | `tests/test_system_opt_dynamic_cli.py` | dynamic-run CLI 端到端（simulated）+ 收敛/退化接线 + O1/O2 参数 fail-closed |
 | `tests/test_system_opt_dynamic_collection.py` | 活体 O1/O2 采集（o1_live_source/o2_component_probe）+ O2 探测证据 |
+| `tests/test_system_opt_regression_rollback.py` | L6c：S9 last-good 绑定、显式 S8 阈值、L1 精确恢复与 needs-attention 故障路径 |
 | `tests/test_system_opt_dynamic_reactivate.py` | D5 重激活 A+B 资格判定 |
 | `tests/test_system_opt_dynamic_e2e.py` | 两侧合龙握手：runner 产窗 ↔ 引擎 FileO0Source/FileLoadIdentity/BusinessRetestPlanner，症状→干预→复验→晋升 |

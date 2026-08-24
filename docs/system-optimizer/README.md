@@ -1,8 +1,8 @@
 # Looper System Optimizer 文档入口
 
 > 状态：runnable vertical slice；CVM unverified  
-> 日期：2026-08-23  
-> 当前阶段：M1 阿里云 ECS 验收完成；M2 五组件合同与首次压力校准进行中。
+> 日期：2026-08-24
+> 当前阶段：M1/M2 阿里云受控切片完成；M3 动态纵向切片已接线，真实 CVM 验收仍开放。
 > 实现口径：阿里云 ECS 已验证配置安全闭环、存储多轮和 CPU/Memory/Network-loopback
 > 压力出数；腾讯云 CVM 与正向收益仍未验证。
 
@@ -27,7 +27,7 @@ System Optimizer 是一个操作系统配置采集、人工管理和有限闭环
 - governance/decision-log.md：已确认、重新打开、待确认的架构决定。
 - governance/terminology.md：通用调优、场景调优、微指标、优先级和评分等术语。
 - governance/document-rules.md：规范状态、事实/推断、默认值和变更记录规则。
-- governance/collaboration-protocol.md：共享工作树、异常、测试隔离和用户决策边界。
+- governance/collaboration-protocol.md：独立 worktree、任务生命周期、统一集成、异常、测试隔离和用户决策边界。
 
 ### 架构
 
@@ -55,6 +55,7 @@ System Optimizer 是一个操作系统配置采集、人工管理和有限闭环
 - planning/implementation-rebaseline-2026-08-23.md：当前实际能力与原 M1–M5 对照。
 - planning/m1-state-ownership-recovery-contract-2026-08-23.md：M1 状态来源、逐项所有权授权、完整快照崩溃对账与未完成边界。
 - planning/m2-component-pressure-contract-2026-08-23.md：五组件口径、标准阶段合同、校准与正式门禁的边界。
+- planning/agent-work-ledger-2026-08-24.md：当前多 Agent 任务、依赖、交付、验收、合入和远端状态的唯一登记本。
 
 ### 调研与历史
 

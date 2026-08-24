@@ -142,11 +142,12 @@ envelope 必须校验：
 |---|---|---|
 | a 候选级 | 每个候选测完 | 现有（tuning 闭环内 safety rollback），本模块只登记记录模型 |
 | b 相位级 | 搜索结束无优化（S10 停止） | `verify_phase_restoration(actual, baseline)`：快照 digest 全等才算恢复；不等 → `needs-attention` |
-| c 退化级 | 已采纳变更后续退化（依赖 S8 的 U_regression，未实现） | **合同占位**：模型与触发字段先定义，执行体等 S8；禁止提前假装实现 |
+| c 退化级 | 已采纳变更后续退化（S8 的 U_regression 低于任务显式阈值） | `rollback/regression.py`：只接受 S9 promoted last-good 完整快照，经 L1 精确恢复；失败 needs-attention；CLI 生命周期接线属 G5 |
 | d 崩溃级 | 进程崩溃/租约过期 | 现有 reconcile-expired-lease / recover-attention 路径，本模块登记引用 |
 
 验收门禁：相位级恢复判定（全等/不等/缺项三态）纯逻辑测试；四级记录模型
-schema 测试；退化级占位显式标注"依赖 S8"。
+schema 测试；退化级覆盖 not-triggered、精确恢复、L1 异常、non-kept 与
+needs-attention；真实目标演练仍单独验收。
 
 ## 5. L7 负缓存规范（negative_cache.py）
 
