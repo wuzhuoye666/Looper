@@ -54,6 +54,7 @@ System Optimizer 是一个操作系统配置采集、人工管理和有限闭环
 - planning/acceptance-criteria.md：功能、证据、安全、指标和文档验收。
 - planning/implementation-rebaseline-2026-08-23.md：当前实际能力与原 M1–M5 对照。
 - planning/implementation-rebaseline-2026-08-24.md：动态接线、O1/O2 证据、L6c 与当前并行缺口的最新实现基线。
+- planning/unfinished-task-queue-2026-08-24.md：按依赖 DAG 分批的当前未完成任务队列，区分实现、验收、决策和 M6+ 延后项。
 - planning/m1-state-ownership-recovery-contract-2026-08-23.md：M1 状态来源、逐项所有权授权、完整快照崩溃对账与未完成边界。
 - planning/m2-component-pressure-contract-2026-08-23.md：五组件口径、标准阶段合同、校准与正式门禁的边界。
 - planning/agent-work-ledger-2026-08-24.md：当前多 Agent 任务、依赖、交付、验收、合入和远端状态的唯一登记本。

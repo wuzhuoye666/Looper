@@ -1,0 +1,171 @@
+# System Optimizer 未完成任务队列（2026-08-24）
+
+> 状态：current backlog；核验基线：`system-optimizer-impl@1854c1b`。
+> 本文只登记尚未关闭的工作和依赖关系，不代替
+> `agent-work-ledger-2026-08-24.md` 的 owner、交付、验收与 push 状态。
+> 任何任务正式分配后，必须在 agent 台账另建任务记录。
+
+## 1. 口径与边界
+
+- “实现缺口”表示当前代码或测试可以直接证明能力不存在或覆盖不足。
+- “验收缺口”表示代码存在，但没有在目标环境按可获取、可构建、稳定出数、
+  区分度四层完成实测；不能用 simulated 或其它云环境结论代替。
+- “决策缺口”表示 schema、阈值、TTL、授权或数据口径尚未由任务所有者确认；
+  不得由 agent 写入默认值。
+- M1/M2 已按现有路线图关闭；本队列不重复打开，除非新证据证明已有出口失效。
+- O3、通用缓存和结果复用仍属 M6+；它们不是当前 M3 纵向切片的完成前置。
+
+## 2. 本轮报告复核结论
+
+| 报告项 | 复核结论 | 当前证据/处置 |
+|---|---|---|
+| receipt mutex guard 崩溃后永久残留 | **确认缺口（P0）** | `intervention_receipt.py::_mutex` 仅以 `O_CREAT|O_EXCL` 建 guard，并只在正常 `finally` 删除；无 owner、liveness、expiry 或 reconciliation 合同 |
+| 无线程/进程真实竞争测试 | **确认缺口（P0）** | receipt 测试只有顺序 stale-head/幂等/故障注入，没有线程或独立进程争抢同一 operation 的用例 |
+| `_all_receipts()` 每次全局重扫，累计 O(N²) | **确认优化缺口（P1）** | `head()`/`advance()` 会重读全 store；任一 scope 损坏会阻断其它 scope。当前是保守的全局 fail-closed 语义，不能在未冻结真实性边界前直接改为局部忽略 |
+| pointer 完全缺失时启动重建无独立测试 | **确认测试缺口（P0）** | 现有 `test_content_before_pointer_crash_recovers_unique_head` 覆盖“pointer 仍指祖先”；没有删除 pointer 后由内容链独立重建的用例 |
+| D5-I2-B 尚未接线 | **过时结论，禁止重复开发** | `cli.py:1287/1375/1446` 已生产调用 `DurableReceiptStore`、`TwoStageSafetyBackedIntervention`、`run_dynamic_phase_v2`；`dynamic_adapters.py` 已调用 `execute_observed`；`8e657e5`/`2065a77` 已推远端 |
+| L5 组件优化器仍拥有终裁 | **过时结论，转文档同步** | `tuning.py` 与 `component/__init__.py` 已明确 `accepted` 只是组件晋级建议，L8 `engine.evaluate_candidate` 终裁；`engine/loop.py` 已实际消费 verdict |
+| S4 逐 metric scale、P/D/A/Q/T 迁移、E_m 完整版 | **确认决策+实现+校准缺口（P1）** | 现有 F-PROJECT-S4-PIECEWISE-LINEAR/v1alpha1 可运行；后续 schema 与真实 scale 不得默认 |
+| 从 O1 在线推导 S4 路由 | **确认实现缺口（P1）** | O1 活体源已存在，旧报告的“O1 尚待”依赖已过时；缺的是 O1 evidence → S4 vector → ranked proposals 的生产适配器 |
+| L7 refuted 假设第二条目类型 | **确认决策+实现缺口（P1）** | SO-D019 只确认方向；与候选负缓存的 schema 并存、身份键和失效规则尚未冻结 |
+| O3 时间盒 trace | **确认延后项（P3/M6+）** | 需单独授权、时间盒、开销证据和工具能力；禁止常开 |
+| F-MENTOR-002/003 | **确认校准缺口（P2）** | 公式前置条件已登记，任务参数与目标环境数据未完成 |
+| L6c 真实目标退化演练 | **确认验收缺口（P1，可独立实测）** | 纯逻辑、CLI、回放和 failure injection 已完成；真实目标尚未演练 |
+| S9 跨环境验证 | **确认验收缺口（外部前置）** | 需要至少一个真实已接受候选和两个授权环境；当前五组件实测为零接受，不能伪造样本 |
+| ssh-remote 后端 | **确认验收缺口（P2）** | 接口存在，目标环境失联/回滚/attention 行为未验收 |
+| L7 存储位置、TTL、重激活 C 案、数值校准 | **拆分处理** | 本地文件存储已实现；TTL/保留期仍是决策缺口；重激活 C 案与通用过程优化留 M6+；各阈值按目标任务单独校准 |
+| M4/M5/M6 完全未开始 | **表述不准确** | M4 已有 CLI/local-linux 切片；M5 已有多类实录、replay 与证据验证器；M6 的候选负缓存被提前实现。剩余出口仍很多，见 §4 |
+
+## 3. 依赖图：并行支线与必须串行链
+
+```text
+P0 receipt 正确性链（必须串行）
+RCP-01 锁恢复合同冻结
+  └─ RCP-02 实现 + 线程/进程竞争 + 孤儿 guard + pointer 缺失测试
+      └─ RCP-03 scoped index/增量验证性能设计与实现
+
+P1 M3 功能闭合（两支可并行，汇合点串行）
+S4-01 schema/公式版本决策 ─┬─ S4-02 显式 scale 注入与目标校准
+                            └─ S3-01 O1→S4 在线路由生产者 ─┐
+L7H-01 假设缓存 schema 决策 ── L7H-02 实现与回放 ───────┤
+                                                           └─ M3-INT 集成验收
+                                                               └─ M3-PROFILE 场景 Profile + 双基线报告
+
+真实环境验收支线（有授权时可彼此并行）
+REAL-L6C 真实退化演练
+REAL-SSH ssh-remote 能力/失联/恢复验收
+REAL-S9 = 真实 accepted candidate + 至少两个环境 → 跨环境晋升验证
+
+P2 M4 平台链（接口可并行设计，安全语义必须先于写 API）
+M4-01 API/事件/EnvironmentSnapshot 合同
+  └─ M4-02 权限与人工审批
+      └─ M4-03 远程目标/多节点生命周期
+          └─ M4-04 可选 UI
+
+P2 M5 交付链
+运行手册/迁移/schema 清单可并行起草
+  └─ 依赖 P0、M3-INT、选定的 M4 出口和真实 failure drills 后统一验收
+
+P3 M6+（必须等 M1–M5 功能与证据合同稳定）
+O3 时间盒 trace；通用采集缓存；中间测量/结果复用；增量下钻；
+重激活 C 案；L7 TTL/跨环境可信度扩展；ECDF/Z 与 E_m 后续提案。
+```
+
+依赖解释：
+
+1. RCP-03 不得抢在 RCP-02 前做。当前“全 store 损坏即全局拒绝”是安全语义；
+   若先局部索引，可能把损坏隔离误写成静默忽略。
+2. S3-01 只依赖 S4 schema/显式输入合同，不必等待每个目标环境的全部 scale
+   校准完成；但 M3-INT 的真实验收必须携带该目标的校准证据。
+3. L7H 与 S3 在线路由可以由不同 agent 并行；只有 M3-INT 同时依赖两者。
+4. REAL-S9 不是普通代码任务。没有真实 accepted candidate 时保持 blocked-by-evidence，
+   不用 simulated acceptance 冒充跨环境证据。
+5. O3 明确留在 M6+，不得为了“补齐 O0–O3 名称”提前常开 trace。
+
+## 4. 任务队列
+
+### P0：先消除安全/事实错误
+
+| ID | 类型 | 任务 | 依赖 | 可并行性与写集合 | 验收门 |
+|---|---|---|---|---|---|
+| RCP-01 | 决策/设计 | 冻结 receipt mutex 崩溃恢复合同：跨平台锁机制、owner 身份、崩溃判定、显式 reconcile；**不设置隐式 stale timeout** | D5-I2-A/B/C 已完成 | 与 DOC-01、L7H-01 并行；docs-only | 明确同 execution 是否允许恢复、谁有权清 guard、证据如何绑定；异常仍 fail-closed |
+| RCP-02 | 实现/测试 | 按 RCP-01 修复孤儿 guard；加入同 scope 线程和独立进程竞争、持锁进程退出、不同 scope 并行、pointer 完全缺失启动重建、无孤儿 guard 累积测试 | RCP-01 | 独占 `intervention_receipt.py` 与专属 tests | 恰好一个 writer 成功；loser 明确 busy；崩溃后只能按冻结合同恢复；内容/指针链仍完整；Windows/Linux 语义一致 |
+| DOC-01 | 文档 | 同步 `implementation-map.md`、`overall.md`、`workload-tuning.md` 和 2026-08-24 rebaseline：D5-I2 已接线、risk quota 已生产消费、L5 已降级、M3 真实剩余边界 | 无 | 可与所有代码 lane 并行；仅架构/规划文档 | 不改公式和阈值；所有状态可回指 commit/test；历史文档不倒改 |
+
+### P1：关闭 M3 剩余功能与高优先级真实验收
+
+| ID | 类型 | 任务 | 依赖 | 可并行性与写集合 | 验收门 |
+|---|---|---|---|---|---|
+| RCP-03 | 性能/安全 | 设计 scope-local 索引或单次扫描快照，消除每次 advance 全局 O(N) 重验；明确其它 scope 损坏时是否仍全局阻断 | RCP-02 | 与 M3 功能 lane 并行；独占 receipt store/tests | 基准证明复杂度改善；篡改/断链/分叉/孤儿仍 fail-closed；不得降低启动全局审计强度 |
+| S4-01 | 决策/合同 | 冻结 P/D/A/Q/T schema 迁移、E_m 是否及何时启用、公式版本与兼容加载 | 用户确认 | 与 L7H-01 并行；合同/公式/迁移文档 | 先列全量字段和历史工件影响；旧 digest fixture 不漂移；无默认 scale/阈值 |
+| S4-02 | 校准 | 对每个实际 metric/目标环境生成 scale 与解释阈值校准证据 | S4-01、真实目标授权 | 可按 metric/环境并行 | 四层实测；未获取数据记 unavailable，不用论文数字填充 |
+| S3-01 | 实现 | 新增 O1 evidence → S4 priority vector → 确定性 ranked proposal 的在线生产者，替换“rank 仅来自文件”的新执行路径 | S4-01；O1 live 已完成 | 可与 L7H-02 并行；独占新路由模块/tests，先不改 dynamic loop | 输入/输出 digest 全绑定；数据不足 fail-closed；声明式 v1/v2 fixture 仍可回放但不冒充在线推导 |
+| L7H-01 | 决策/合同 | 冻结 refuted hypothesis 第二条目 schema、与 candidate cache 共存方式、身份键、证据、失效和保留期 | SO-D019 方向 | 可与 S4-01 并行；docs/model proposal | 不把 measurement instability 缓存成假设 refuted；TTL 无默认值；旧 JSONL 可读 |
+| L7H-02 | 实现/回放 | 实现假设负缓存原子持久化、读取/失效/replay，并接 hypothesis ledger 的 refuted 事实 | L7H-01 | 可与 S3-01 并行；独占 negative-cache/hypothesis adapter/tests | 同身份命中、任一身份变化 miss、坏行 fail-closed、发布失败内存/磁盘不变 |
+| M3-INT | 集成 | 将在线路由与假设缓存接入 v2 dynamic loop/CLI，保留版本分派和完整 receipt/恢复链 | S3-01、L7H-02；目标 scale 用显式任务输入 | **必须串行汇合**；独占 dynamic loop/adapters/CLI | simulated E2E + 真实 workload；业务指标终裁；门禁、预算、回退、attention、replay 全链不回归 |
+| M3-PROFILE | 交付模型 | 产出场景 Profile，并同时报告相对原始基线与通用 Profile 的结果/边界 | M3-INT | 与真实演练证据整理可并行，最终汇合 | Profile 绑定环境/workload/公式/证据；不可跨环境默认复用 |
+| REAL-L6C | 真实验收 | 在已授权目标注入运行期退化，验证 S8 threshold → S9 last-good → L1 恢复/attention/回放 | 目标、阈值、last-good 证据、变更授权 | 可与代码 lane 并行；不共享同一目标租约 | 成功与失败各一条实录；所有命令/原始证据落盘；不能用 simulated 替代 |
+| REAL-SSH | 真实验收 | 验收 ssh-remote 的 capability、命令边界、断连、过期 lease、恢复和 attention | 至少一个授权远程目标 | 可与 REAL-L6C 并行，但必须不同目标或串行租约 | 四层实测 + 失联 failure drill；禁止自动购买/销毁实例 |
+| REAL-S9 | 真实验收 | 对真实 accepted candidate 做跨环境复验 | 真实 accepted candidate、至少两个授权环境 | 外部证据门；可与文档 lane 并行 | S9 identity/time-block/environment 合同全部满足；无 accepted candidate 时保持未执行 |
+
+### P2：M4、M5 与导师公式校准
+
+| ID | 类型 | 任务 | 依赖/顺序 | 说明 |
+|---|---|---|---|---|
+| M4-01 | 合同/实现 | System Optimizer API、事件投影、EnvironmentSnapshot typed 双写 | 安全/证据合同先冻结；API 与事件模型可并行设计，统一版本后实现 |
+| M4-02 | 安全 | 操作者权限、审批、真实 backend enablement | 依赖 M4-01；必须先于任何远程写 API |
+| M4-03 | 平台 | 远程目标与可选多节点生命周期 | 依赖 M4-02、REAL-SSH；不得绕过 lease/fencing/attention |
+| M4-04 | 展示 | 可选 UI | 依赖稳定 API/事件；UI 不得启用未授权真实 backend |
+| M5-01 | 交付 | 完整运行手册、三命令验收、schema 稳定承诺、迁移说明、已知限制 | 可现在并行起草；最终签收依赖 P0、M3-INT、选定 M4 出口和真实演练 |
+| M5-02 | 演练 | 跨组件、动态 receipt、L6c、远程失联 failure drill 汇总 | 依赖对应实现/目标；每个失败必须有恢复或 needs-attention 终态 |
+| CAL-MENTOR | 校准 | F-MENTOR-002/003 参数和目标环境证据 | 与真实校准活动并行；未经数据和用户确认保持禁用 |
+
+### P3：M6+ 延后队列
+
+| ID | 任务 | 启动门 |
+|---|---|---|
+| O3-TRACE | 显式授权的时间盒 perf/eBPF/抓包采集，携带 disabled→enabled 开销证据 | M1–M5 稳定 + 工具/权限/数据合规授权 |
+| CACHE-GENERAL | 采集缓存、中间测量和候选结果复用 | 身份、TTL、失效、跨环境可信度合同获确认 |
+| DRILL-INCREMENTAL | 增量下钻和快速探针选择 | 有足够同环境真实特征数据 |
+| REACT-C | workload 分布漂移重激活 C 案 | 有校准分布；资格仍不等于自动重启 |
+| S4-EM/ECDF | E_m、环境内 ECDF/Z 等后续评分提案 | 有同环境/同协议/同 metric 校准分布并完成公式版本登记 |
+
+## 5. 推荐的多 Agent 批次
+
+### Batch A：现在可四路并发
+
+1. **Receipt agent**：只做 RCP-01 设计，不写实现；输出锁恢复状态机、跨平台方案、
+   失败语义与测试矩阵。
+2. **Docs agent**：只做 DOC-01；不改代码，不修改本队列的任务状态。
+3. **L7 agent**：只做 L7H-01 schema 提案；不碰现有 negative cache 实现。
+4. **M4/M5 inventory agent**：只读盘点现有 API/事件/文档资产，输出 M4-01/M5-01
+   最小写集合和迁移矩阵；不实现写 API。
+
+### Batch B：Batch A 决策验收后并发
+
+1. RCP-02（独占 receipt store/tests）。
+2. S4-01（独占公式/schema/兼容测试；需用户确认字段和版本）。
+3. L7H-02（独占 negative cache/hypothesis cache/tests）。
+4. M5-01 文档骨架（只写 runbook/migration，不宣称未执行实测）。
+
+### Batch C：功能汇合
+
+1. S3-01 在 S4-01 后实施。
+2. M3-INT 必须等待 S3-01 与 L7H-02 均验收，不能并行改同一 dynamic loop/CLI。
+3. RCP-03 可与 S3-01/M3-INT 并行，但独占 receipt store，且必须在 RCP-02 后。
+4. REAL-L6C、REAL-SSH 在资源与授权齐备后可与代码工作并行；同一目标上的写测试必须
+   受同一个 lease 串行保护。
+
+### Batch D：里程碑出口
+
+M3-PROFILE → 选定 M4 出口 → M5 failure drills/迁移/运行手册统一验收；完成后才评估
+M6+ 的 O3、通用缓存、结果复用和增量下钻。
+
+## 6. 分派纪律
+
+- 每个 agent 开工仍需 `pwd`、`git worktree list`、`git status` 三联自证。
+- 不因为工作树当前干净就强制 rebase；只有依赖提交变化或交付前主线已前进时才同步。
+- 同一批次中不能把两个 agent 分配到相同写集合；汇合文件由主 agent 在依赖验收后接管。
+- 真机任务必须记录目标、授权、显式参数、命令、原始输出和无法测得项。
+- 所有 GitHub fetch/push 由主 agent 使用 `127.0.0.1:65532` 代理统一执行。
+- 未确认的 stale timeout、TTL、scale、阈值、保留期、跨环境信任均不得写默认值。
