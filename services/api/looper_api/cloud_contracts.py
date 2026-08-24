@@ -64,6 +64,8 @@ class VpcInfo(ApiModel):
     name: str
     cidr_block: str | None = None
     is_default: bool = False
+    tags: dict[str, str] = Field(default_factory=dict)
+    managed: bool = False
 
 
 class SubnetInfo(ApiModel):
@@ -195,6 +197,7 @@ class InstanceNetworkResolution(ApiModel):
     vpc: VpcInfo
     subnet: SubnetInfo
     zone_automatically_selected: bool = False
+    vpc_action: Literal["reused", "created"]
     subnet_action: Literal["reused", "created"]
     warnings: list[str] = Field(default_factory=list)
 
@@ -292,7 +295,21 @@ class CloudSshCredentials(ApiModel):
 class OrderPrepareRequest(ApiModel):
     quote_id: str = Field(min_length=8, max_length=100)
     ssh_credentials: CloudSshCredentials | None = None
+    ssh_auth_method: Literal["password", "private-key"] | None = None
+    ssh_password: SecretStr | None = None
     remember_credentials: bool | None = None
+
+    @model_validator(mode="after")
+    def validate_ssh_selection(self) -> OrderPrepareRequest:
+        if self.ssh_credentials is not None and (
+            self.ssh_auth_method is not None or self.ssh_password is not None
+        ):
+            raise ValueError(
+                "ssh_credentials cannot be combined with ssh_auth_method or ssh_password"
+            )
+        if self.ssh_password is not None and self.ssh_auth_method not in {None, "password"}:
+            raise ValueError("ssh_password requires password authentication")
+        return self
 
 
 class OrderConfirmRequest(ApiModel):
@@ -337,7 +354,9 @@ class SearchResult(ApiModel):
 
 
 class DestroyedResource(ApiModel):
-    kind: Literal["instance", "system-disk", "local-disk", "public-ip", "subnet", "security-group"]
+    kind: Literal[
+        "instance", "system-disk", "local-disk", "public-ip", "vpc", "subnet", "security-group"
+    ]
     id: str = Field(min_length=1, max_length=180)
     released: bool = True
     note: str | None = Field(default=None, max_length=500)

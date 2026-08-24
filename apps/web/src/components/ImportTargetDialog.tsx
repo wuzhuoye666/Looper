@@ -10,7 +10,7 @@ const emptyDraft = {
   endpoint: '',
   port: '22',
   username: 'root',
-  authMethod: 'private-key' as AuthMethod,
+  authMethod: 'password' as AuthMethod,
   password: '',
   privateKey: '',
   rememberCredentials: true,

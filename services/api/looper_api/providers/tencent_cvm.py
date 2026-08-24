@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import time
 from datetime import timedelta
 from decimal import Decimal
 from typing import Any
 
 from looper_core.canonical import canonical_digest, canonical_json, utc_now
+from pydantic import SecretStr
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -162,6 +164,8 @@ class TencentCvmProvider(CloudProvider):
                 "instance-types",
                 "images",
                 "vpcs",
+                "managed-vpc",
+                "empty-vpc-cleanup",
                 "subnets",
                 "managed-subnet",
                 "security-groups",
@@ -236,6 +240,8 @@ class TencentCvmProvider(CloudProvider):
                 f"Tencent Cloud VPC {method} failed: {message}",
                 code=str(code),
                 retryable=str(code) in {"RequestLimitExceeded", "InternalError"},
+                ambiguous=method in {"CreateVpc", "CreateSubnet"}
+                and ambiguous_create_error(provider_code, error),
                 details={"requestId": request_id} if request_id else {},
             ) from error
 
@@ -286,6 +292,8 @@ class TencentCvmProvider(CloudProvider):
                     name=str(item.VpcName or item.VpcId),
                     cidrBlock=attr(item, "CidrBlock"),
                     isDefault=bool(attr(item, "IsDefault", default=False)),
+                    tags=(tags := _tag_map(attr(item, "TagSet", default=[]))),
+                    managed=tags.get("managedBy", "").casefold() == "looper",
                 )
                 for item in rows
             )
@@ -294,6 +302,57 @@ class TencentCvmProvider(CloudProvider):
             if not rows or len(rows) < 100 or (total is not None and offset >= int(total)):
                 break
         return items
+
+    def create_managed_vpc(
+        self,
+        *,
+        region: str,
+        cidr_block: str,
+        name: str,
+        client_token: str,
+    ) -> VpcInfo:
+        del client_token  # Tencent CreateVpc has no client-token field.
+        from tencentcloud.vpc.v20170312 import models
+
+        request = models.CreateVpcRequest()
+        request.from_json_string(
+            canonical_json(
+                {
+                    "VpcName": name,
+                    "CidrBlock": cidr_block,
+                    "Tags": [
+                        {"Key": "managedBy", "Value": "looper"},
+                        {"Key": "purpose", "Value": "cloud-purchase"},
+                    ],
+                }
+            )
+        )
+        response = self._vpc_call("CreateVpc", region, request)
+        item = attr(response, "Vpc")
+        vpc_id = attr(item, "VpcId")
+        if not vpc_id:
+            raise CloudProviderError(
+                "Tencent Cloud created a VPC without returning its id",
+                code="ambiguous_response",
+                ambiguous=True,
+            )
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            visible = next(
+                (candidate for candidate in self.list_vpcs(region) if candidate.id == str(vpc_id)),
+                None,
+            )
+            if visible is not None:
+                visible.tags.setdefault("managedBy", "looper")
+                visible.tags.setdefault("purpose", "cloud-purchase")
+                visible.managed = True
+                return visible
+            time.sleep(1)
+        raise CloudProviderError(
+            "Tencent Cloud VPC creation is not yet visible",
+            code="ambiguous_response",
+            ambiguous=True,
+        )
 
     def list_subnets(self, region: str, zone: str, vpc_id: str) -> list[SubnetInfo]:
         return self._list_subnets(region, vpc_id=vpc_id, zone=zone)
@@ -711,10 +770,23 @@ class TencentCvmProvider(CloudProvider):
             },
         )
 
-    def purchase(self, spec: CloudPurchaseSpec, *, client_token: str) -> ProviderPurchaseResult:
+    def purchase(
+        self,
+        spec: CloudPurchaseSpec,
+        *,
+        client_token: str,
+        launch_password: SecretStr | None = None,
+    ) -> ProviderPurchaseResult:
         from tencentcloud.cvm.v20170312 import models
 
         payload = self._run_payload(spec)
+        if launch_password is not None:
+            if spec.key_pair_id:
+                raise CloudProviderError(
+                    "launch password and key pair cannot be used together",
+                    code="invalid_request",
+                )
+            payload["LoginSettings"] = {"Password": launch_password.get_secret_value()}
         payload.update({"ClientToken": client_token, "InstanceName": spec.instance_name})
         request = models.RunInstancesRequest()
         request.from_json_string(canonical_json(payload))
@@ -820,6 +892,37 @@ class TencentCvmProvider(CloudProvider):
                     self._delete_managed_security_group(region, security_group_id, models)
                 )
         return released
+
+    def delete_vpc_if_empty(self, *, region: str, vpc_id: str) -> DestroyedResource:
+        from tencentcloud.vpc.v20170312 import models
+
+        try:
+            vpc = next((item for item in self.list_vpcs(region) if item.id == vpc_id), None)
+            if vpc is None:
+                return DestroyedResource(kind="vpc", id=vpc_id, note="VPC 已不存在")
+            if vpc.is_default:
+                return DestroyedResource(
+                    kind="vpc", id=vpc_id, released=False, note="默认 VPC 按安全策略保留"
+                )
+            subnets = self.list_vpc_subnets(region, vpc_id)
+            if subnets:
+                return DestroyedResource(
+                    kind="vpc",
+                    id=vpc_id,
+                    released=False,
+                    note=f"VPC 仍包含 {len(subnets)} 个子网，保留不动",
+                )
+            request = models.DeleteVpcRequest()
+            request.from_json_string(canonical_json({"VpcId": vpc_id}))
+            self._vpc_call("DeleteVpc", region, request)
+            return DestroyedResource(kind="vpc", id=vpc_id, note="空闲非默认 VPC 已删除")
+        except CloudProviderError as error:
+            return DestroyedResource(
+                kind="vpc",
+                id=vpc_id,
+                released=False,
+                note=f"VPC 清理暂缓：{error}",
+            )
 
     @staticmethod
     def _delete_managed_subnet(

@@ -62,6 +62,7 @@ describe('腾讯云购买网络选择', () => {
         providers: [{ provider: 'tencent', name: '腾讯云 CVM', ready: true, missingEnvironment: [], checks: [] }],
       });
       if (url.endsWith('/operator/session')) return response({ required: true, configured: true, authenticated: true, operatorGateReady: true });
+      if (url.endsWith('/cloud/ssh-defaults')) return response({ username: 'root', port: 22, authMethod: 'password', password: 'StrongPassword1#', passwordConfigured: true, privateKeyConfigured: true });
       if (url.includes('/cloud/catalog/tencent/region')) return response(catalog('region', [
         { provider: 'tencent', id: 'ap-test', name: '测试地域', available: true },
       ]));
@@ -129,9 +130,10 @@ describe('腾讯云购买网络选择', () => {
         instanceType: 'S9.TEST',
         zone: 'ap-test-1',
         eligibleZones: ['ap-test-1'],
-        vpc: { provider: 'tencent', region: 'ap-test', id: 'vpc-default', name: 'Default-VPC', cidrBlock: '172.16.0.0/16', isDefault: true },
+        vpc: { provider: 'tencent', region: 'ap-test', id: 'vpc-default', name: 'Default-VPC', cidrBlock: '172.16.0.0/16', isDefault: true, tags: {}, managed: false },
         subnet: { provider: 'tencent', region: 'ap-test', zone: 'ap-test-1', vpcId: 'vpc-default', id: 'subnet-default', name: 'Default-Subnet', availableIpCount: 250, isDefault: true },
         zoneAutomaticallySelected: true,
+        vpcAction: 'reused',
         subnetAction: 'reused',
         warnings: [],
       });
@@ -193,6 +195,8 @@ describe('腾讯云购买网络选择', () => {
     await chooseFirstMachine();
     expect(vi.mocked(fetch).mock.calls.some(([request]) => String(request).includes('/cloud/network/tencent/resolve-instance-network'))).toBe(true);
     expect(screen.getAllByText(/ap-test-1/).length).toBeGreaterThan(0);
+    expect(screen.getByText(/已复用 VPC Default-VPC · vpc-default/)).toBeInTheDocument();
+    expect(screen.getByText(/已复用子网 Default-Subnet · subnet-default/)).toBeInTheDocument();
     expect(vi.mocked(fetch).mock.calls.some(([request]) => {
       const url = String(request);
       return url.includes('/cloud/catalog/tencent/image') && url.includes('instance_type=S9.TEST');
@@ -203,6 +207,12 @@ describe('腾讯云购买网络选择', () => {
     await waitFor(() => expect(vpc).toHaveValue('vpc-default'));
     await waitFor(() => expect(screen.getByLabelText('子网 *')).toHaveValue('subnet-default'));
     expect(await screen.findByText('已选择 1 个安全组')).toBeInTheDocument();
+    expect(screen.getByLabelText('SSH 登录方式 *')).toHaveValue('password');
+    expect(screen.getByLabelText(/SSH 默认密码/)).toHaveValue('StrongPassword1#');
+    expect(screen.queryByLabelText(/^SSH 密钥 \*/)).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('SSH 登录方式 *'), { target: { value: 'private-key' } });
+    const keyPair = await screen.findByLabelText(/^SSH 密钥 \*/);
+    await waitFor(() => expect(keyPair).toHaveValue('skey-one'));
     expect(screen.getByText('已选机型').parentElement).toHaveTextContent('S9.TEST');
     expect(screen.getByText('已选镜像').parentElement).toHaveTextContent('TencentOS Server 4 for x86_64');
   });

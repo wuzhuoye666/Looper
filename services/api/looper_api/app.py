@@ -10,6 +10,7 @@ import zipfile
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
 from importlib.resources import files
+from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import (
@@ -87,7 +88,6 @@ from looper_api.cloud_service import (
     catalog_inventory,
     catalog_search,
     create_quote,
-    delete_order,
     destroy_target,
     destroy_target_preview,
     ensure_managed_security_group,
@@ -106,7 +106,7 @@ from looper_api.cloud_service import (
     recover_interrupted_orders,
     resolve_instance_network,
     resolve_unknown_order,
-    retry_pending_cloud_ssh,
+    delete_order,
 )
 from looper_api.config import Settings, get_settings
 from looper_api.database import SessionLocal, get_session, init_database
@@ -278,47 +278,6 @@ async def _lease_sweeper() -> None:
                 session.rollback()
 
 
-def _sync_pending_cloud_targets(settings: Settings) -> None:
-    """Refresh cloud inventory and bind any encrypted purchase key that is ready."""
-    with SessionLocal() as session:
-        records = list(session.scalars(select(TargetRecord).where(
-            TargetRecord.provider.in_(["tencent", "alibaba"]),
-            TargetRecord.lifecycle_status == "active",
-        )))
-        regions = {
-            (record.provider, str((record.inventory_json or {}).get("region") or ""))
-            for record in records
-            if (record.inventory_json or {}).get("order_id")
-            and ((record.inventory_json or {}).get("region"))
-            and ((record.inventory_json or {}).get("autoSsh") or {}).get("status") != "connected"
-        }
-        for provider, region in sorted(regions):
-            try:
-                if provider == "tencent":
-                    refreshed = sync_cvm_inventory(
-                        session, region, credential_store=EncryptedSshCredentialStore(settings)
-                    )
-                else:
-                    refreshed = sync_ecs_inventory(
-                        session, region, credential_store=EncryptedSshCredentialStore(settings)
-                    )
-                retry_pending_cloud_ssh(session, settings, refreshed)
-            except Exception:
-                logger.exception(
-                    "Automatic cloud Worker bootstrap failed for %s/%s", provider, region
-                )
-        session.commit()
-
-
-async def _cloud_inventory_recovery() -> None:
-    while True:
-        await asyncio.sleep(30)
-        try:
-            await asyncio.to_thread(_sync_pending_cloud_targets, get_settings())
-        except Exception:
-            logger.exception("Automatic cloud inventory refresh failed")
-
-
 async def _remote_worker_recovery() -> None:
     settings = get_settings()
     try:
@@ -351,19 +310,15 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         session.commit()
     sweeper = asyncio.create_task(_lease_sweeper())
     remote_recovery = asyncio.create_task(_remote_worker_recovery())
-    cloud_inventory_recovery = asyncio.create_task(_cloud_inventory_recovery())
     try:
         yield
     finally:
         sweeper.cancel()
         remote_recovery.cancel()
-        cloud_inventory_recovery.cancel()
         with suppress(asyncio.CancelledError):
             await sweeper
         with suppress(asyncio.CancelledError):
             await remote_recovery
-        with suppress(asyncio.CancelledError):
-            await cloud_inventory_recovery
 
 
 app = FastAPI(
@@ -509,6 +464,32 @@ def cloud_purchase_readiness(
     registry: ProviderRegistryDependency,
 ) -> dict[str, Any]:
     return purchase_readiness(app_settings, registry)
+
+
+@app.get("/api/v1/cloud/ssh-defaults")
+def cloud_ssh_defaults(
+    app_settings: SettingsDependency,
+    _operator: ConfiguredOperatorDependency,
+) -> JSONResponse:
+    password = (
+        app_settings.default_ssh_password.get_secret_value()
+        if app_settings.default_ssh_password
+        else ""
+    )
+    key_path = Path(app_settings.default_ssh_private_key_path).expanduser()
+    return JSONResponse(
+        {
+            "username": app_settings.default_ssh_username.strip() or "root",
+            "port": app_settings.default_ssh_port,
+            "authMethod": app_settings.default_ssh_auth_method,
+            "password": password,
+            "passwordConfigured": bool(password),
+            "privateKeyConfigured": bool(
+                app_settings.default_ssh_private_key_path and key_path.is_file()
+            ),
+        },
+        headers={"Cache-Control": "no-store, private", "Pragma": "no-cache"},
+    )
 
 
 def operator_session_status(
@@ -872,6 +853,8 @@ def cloud_order_purchase(
         request.quote_id,
         idempotency_key,
         request.ssh_credentials,
+        request.ssh_auth_method,
+        request.ssh_password.get_secret_value() if request.ssh_password else None,
         request.remember_credentials,
     )
 
@@ -1165,7 +1148,6 @@ def sync_tencent_targets(
         instance_ids=instance_id,
         credential_store=EncryptedSshCredentialStore(app_settings),
     )
-    retry_pending_cloud_ssh(session, app_settings, records)
     session.commit()
     return {"items": [target_view(item) for item in records], "total": len(records)}
 
@@ -1184,7 +1166,6 @@ def sync_alibaba_targets(
         instance_ids=instance_id,
         credential_store=EncryptedSshCredentialStore(app_settings),
     )
-    retry_pending_cloud_ssh(session, app_settings, records)
     session.commit()
     return {"items": [target_view(item) for item in records], "total": len(records)}
 
@@ -1247,7 +1228,32 @@ def test_target_ssh_connection(
     target = session.get(TargetRecord, target_id)
     if target is None:
         raise HTTPException(status_code=404, detail="target not found")
-    request = remembered_target_request(target, app_settings)
+    endpoint = str((target.inventory_json or {}).get("endpoint") or "")
+    if not endpoint:
+        raise ExternalTargetError("cloud target has no reachable endpoint")
+    store = EncryptedSshCredentialStore(app_settings)
+    if target.id in store.verified_target_ids():
+        request = remembered_target_request(target, app_settings)
+    else:
+        try:
+            request = store.load_pending(target.id, endpoint)
+        except RemoteCredentialError:
+            if target.provider == "external":
+                raise
+            credentials = _default_cloud_ssh_credentials(
+                app_settings,
+                remember_credentials=True,
+                auth_method="password",
+            )
+            request = ConnectExternalTargetRequest(
+                endpoint=endpoint,
+                port=credentials.port,
+                username=credentials.username,
+                auth_method="password",
+                password=credentials.password,
+                deploy_worker=True,
+                remember_credentials=True,
+            )
     refreshed = (
         connect_external_target(session, request)
         if target.provider == "external"
@@ -1257,12 +1263,14 @@ def test_target_ssh_connection(
         raise ExternalTargetError("SSH endpoint no longer resolves to the selected target")
     session.commit()
     deployment = deploy_remote_worker(request, refreshed, app_settings)
+    host_key = str(refreshed.fingerprint_json.get("host_key_sha256") or "")
+    remembered = store.save(refreshed.id, request, host_key)
     if target.provider != "external":
         refreshed.status = "available"
         refreshed.runnable = True
         session.commit()
     result = target_view(refreshed)
-    result["credentialsRemembered"] = True
+    result["credentialsRemembered"] = remembered
     result["connectionTest"] = {
         "status": "connected",
         "testedAt": utc_now().isoformat(),

@@ -18,7 +18,7 @@ from looper_api.cloud_contracts import (
 )
 from looper_api.cloud_service import CloudWorkflowError, resolve_instance_network
 from looper_api.config import Settings
-from looper_api.providers.base import CloudProvider
+from looper_api.providers.base import CloudProvider, CloudProviderError
 from looper_api.providers.registry import CloudProviderRegistry
 
 
@@ -27,9 +27,32 @@ class NetworkProvider(CloudProvider):
     display_name = "Network test provider"
     sdk_package = "fake"
 
-    def __init__(self, *, subnets: list[SubnetInfo] | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        vpcs: list[VpcInfo] | None = None,
+        subnets: list[SubnetInfo] | None = None,
+    ) -> None:
+        self.vpcs = vpcs if vpcs is not None else [
+            VpcInfo(
+                provider=self.id,
+                region="ap-test",
+                id="vpc-a",
+                name="A",
+                cidrBlock="10.0.0.0/16",
+            ),
+            VpcInfo(
+                provider=self.id,
+                region="ap-test",
+                id="vpc-z",
+                name="Default",
+                cidrBlock="172.16.0.0/16",
+                isDefault=True,
+            ),
+        ]
         self.subnets = subnets or []
         self.created: list[tuple[str, str, str]] = []
+        self.created_vpcs: list[tuple[str, str, str]] = []
 
     def info(self, *, live_purchase_enabled: bool) -> ProviderInfo:
         return ProviderInfo(
@@ -74,23 +97,28 @@ class NetworkProvider(CloudProvider):
         return []
 
     def list_vpcs(self, region: str) -> list[VpcInfo]:
-        return [
-            VpcInfo(
-                provider=self.id,
-                region=region,
-                id="vpc-a",
-                name="A",
-                cidrBlock="10.0.0.0/16",
-            ),
-            VpcInfo(
-                provider=self.id,
-                region=region,
-                id="vpc-z",
-                name="Default",
-                cidrBlock="172.16.0.0/16",
-                isDefault=True,
-            ),
-        ]
+        return list(self.vpcs)
+
+    def create_managed_vpc(
+        self,
+        *,
+        region: str,
+        cidr_block: str,
+        name: str,
+        client_token: str,
+    ) -> VpcInfo:
+        self.created_vpcs.append((cidr_block, name, client_token))
+        item = VpcInfo(
+            provider=self.id,
+            region=region,
+            id="vpc-created",
+            name=name,
+            cidrBlock=cidr_block,
+            tags={"managedBy": "looper", "purpose": "cloud-purchase"},
+            managed=True,
+        )
+        self.vpcs.append(item)
+        return item
 
     def list_vpc_subnets(self, region: str, vpc_id: str) -> list[SubnetInfo]:
         return [item for item in self.subnets if item.vpc_id == vpc_id]
@@ -166,6 +194,7 @@ def test_resolver_prefers_zone_with_existing_subnet_and_default_vpc(db_session, 
     assert result.zone == "ap-test-2"
     assert result.vpc.id == "vpc-z"
     assert result.subnet.id == "subnet-existing"
+    assert result.vpc_action == "reused"
     assert result.subnet_action == "reused"
     assert provider.created == []
 
@@ -193,6 +222,46 @@ def test_resolver_creates_lowest_free_managed_subnet(db_session, tmp_path) -> No
     assert result.subnet.cidr_block == "10.0.1.0/24"
     assert result.subnet.managed is True
     assert provider.created == [("ap-test-1", "vpc-a", "10.0.1.0/24")]
+
+
+def test_resolver_creates_vpc_and_subnet_when_region_has_no_vpc(db_session, tmp_path) -> None:
+    provider = NetworkProvider(vpcs=[])
+
+    result = resolve(db_session, tmp_path, provider)
+
+    assert result.vpc_action == "created"
+    assert result.vpc.id == "vpc-created"
+    assert result.vpc.cidr_block == "10.0.0.0/16"
+    assert result.vpc.managed is True
+    assert result.subnet_action == "created"
+    assert result.subnet.cidr_block == "10.0.0.0/24"
+    assert len(provider.created_vpcs) == 1
+
+
+def test_resolver_recovers_vpc_after_ambiguous_create_response(db_session, tmp_path) -> None:
+    class AmbiguousNetworkProvider(NetworkProvider):
+        def create_managed_vpc(self, **kwargs) -> VpcInfo:
+            super().create_managed_vpc(**kwargs)
+            raise CloudProviderError(
+                "simulated response loss", code="ambiguous_response", ambiguous=True
+            )
+
+    provider = AmbiguousNetworkProvider(vpcs=[])
+
+    result = resolve(db_session, tmp_path, provider)
+
+    assert result.vpc_action == "created"
+    assert result.vpc.id == "vpc-created"
+    assert any("创建响应不明确" in warning for warning in result.warnings)
+    assert len(provider.created_vpcs) == 1
+    assert provider.created_vpcs[0][1].startswith("looper-vpc-")
+    assert provider.created == [("ap-test-1", "vpc-created", "10.0.0.0/24")]
+
+    retried = resolve(db_session, tmp_path, provider)
+    assert retried.vpc_action == "reused"
+    assert retried.vpc.id == "vpc-created"
+    assert retried.subnet_action == "reused"
+    assert len(provider.created_vpcs) == 1
 
 
 def test_resolver_rejects_unavailable_explicit_zone(db_session, tmp_path) -> None:

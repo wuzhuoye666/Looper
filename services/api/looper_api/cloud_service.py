@@ -7,6 +7,8 @@ import ipaddress
 import json
 import re
 import secrets
+import threading
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -59,7 +61,7 @@ from looper_api.providers.utils import (
     legacy_cloud_target_ids,
     to_plain,
 )
-from looper_api.remote_credentials import EncryptedSshCredentialStore, RemoteCredentialError
+from looper_api.remote_credentials import EncryptedSshCredentialStore
 from looper_api.remote_worker import deploy_remote_worker
 
 CatalogKind = Literal[
@@ -72,6 +74,24 @@ CatalogKind = Literal[
     "security-group",
     "key-pair",
 ]
+
+_NETWORK_PREP_LOCKS: dict[tuple[str, str], threading.Lock] = {}
+_NETWORK_PREP_LOCKS_GUARD = threading.Lock()
+
+
+@contextmanager
+def _network_prep_lock(provider_id: ProviderId, region: str):
+    """Serialize regional network creation in this local API process.
+
+    Alibaba additionally receives a provider client token. Tencent CreateVpc
+    has no token field, so this lock plus deterministic naming and recovery
+    queries prevents ordinary concurrent UI requests from creating duplicates.
+    """
+    key = (provider_id.value, region)
+    with _NETWORK_PREP_LOCKS_GUARD:
+        lock = _NETWORK_PREP_LOCKS.setdefault(key, threading.Lock())
+    with lock:
+        yield
 
 
 def _aware(value: datetime) -> datetime:
@@ -706,13 +726,41 @@ def resolve_instance_network(
             code="instance_type_zone_unavailable",
         )
 
-    vpcs = sorted(provider.list_vpcs(request.region), key=lambda item: item.id)
-    if not vpcs:
-        raise CloudWorkflowError(
-            "当前地域没有 VPC，请先在云厂商控制台创建 VPC",
-            status_code=409,
-            code="vpc_missing",
-        )
+    warnings: list[str] = []
+    token_digest = hashlib.sha256(idempotency_key.encode("utf-8")).hexdigest()
+    vpc_action: Literal["reused", "created"] = "reused"
+    with _network_prep_lock(provider_id, request.region):
+        vpcs = sorted(provider.list_vpcs(request.region), key=lambda item: item.id)
+        if not vpcs:
+            vpc_name = f"looper-vpc-{token_digest[:8]}"
+            try:
+                created_vpc = provider.create_managed_vpc(
+                    region=request.region,
+                    cidr_block="10.0.0.0/16",
+                    name=vpc_name,
+                    client_token=token_digest,
+                )
+            except CloudProviderError:
+                refreshed = sorted(provider.list_vpcs(request.region), key=lambda item: item.id)
+                recovered = [
+                    item
+                    for item in refreshed
+                    if item.name == vpc_name
+                ]
+                if not recovered:
+                    raise
+                created_vpc = recovered[0]
+                warnings.append("创建响应不明确，已通过云端目录核对并复用 Looper VPC")
+            vpcs = [created_vpc]
+            vpc_action = "created"
+            warnings.append(f"当前地域没有 VPC，已自动创建 {created_vpc.name}")
+            session.execute(
+                delete(CloudCatalogCacheRecord).where(
+                    CloudCatalogCacheRecord.provider == provider_id.value,
+                    CloudCatalogCacheRecord.resource_type.in_(["vpc", "subnet"]),
+                    CloudCatalogCacheRecord.region == request.region,
+                )
+            )
     vpc = next((item for item in vpcs if item.id == request.vpc_id), None)
     if vpc is None:
         vpc = next((item for item in vpcs if item.is_default), vpcs[0])
@@ -731,7 +779,6 @@ def resolve_instance_network(
         with_subnets = [zone for zone in eligible_zones if by_zone.get(zone)]
         chosen_zone = (with_subnets or eligible_zones)[0]
 
-    warnings: list[str] = []
     if not request.zone:
         warnings.append(f"已稳定选择可售可用区 {chosen_zone}")
     subnet_options = by_zone.get(chosen_zone, [])
@@ -740,7 +787,6 @@ def resolve_instance_network(
         action: Literal["reused", "created"] = "reused"
     else:
         cidr_block = _free_subnet_cidr(vpc, all_subnets)
-        token_digest = hashlib.sha256(idempotency_key.encode("utf-8")).hexdigest()
         subnet_name = f"looper-{chosen_zone[-24:]}-{token_digest[:8]}"[:60]
         try:
             subnet = provider.create_managed_subnet(
@@ -789,6 +835,7 @@ def resolve_instance_network(
         vpc=vpc,
         subnet=subnet,
         zoneAutomaticallySelected=not bool(request.zone),
+        vpcAction=vpc_action,
         subnetAction=action,
         warnings=warnings,
     )
@@ -1271,21 +1318,9 @@ def _auto_connect_provisioned_target(
     credentials: CloudSshCredentials,
 ) -> None:
     endpoint = instance.public_ip or instance.private_ip
-    credential_store = EncryptedSshCredentialStore(settings)
-    if credentials.remember_credentials:
-        # Keep the selected key encrypted by order until the provider exposes an IP.
-        credential_store.save_pending(order.id, ConnectExternalTargetRequest(
-            endpoint=endpoint or "pending",
-            port=credentials.port,
-            username=credentials.username,
-            auth_method=credentials.auth_method,
-            password=credentials.password,
-            private_key=credentials.private_key,
-            passphrase=credentials.passphrase,
-            deploy_worker=True,
-            remember_credentials=True,
-        ))
     if not endpoint:
+        if credentials.remember_credentials:
+            EncryptedSshCredentialStore(settings).save_pending(target.id, credentials)
         target.inventory_json = {**target.inventory_json, "autoSsh": {"status": "waiting_endpoint"}}
         return
     request = ConnectExternalTargetRequest(
@@ -1304,8 +1339,7 @@ def _auto_connect_provisioned_target(
         host_key = str(refreshed.fingerprint_json.get("host_key_sha256") or "")
         remembered = False
         if credentials.remember_credentials:
-            remembered = credential_store.save(refreshed.id, request, host_key)
-            credential_store.delete_pending(order.id)
+            remembered = EncryptedSshCredentialStore(settings).save(refreshed.id, request, host_key)
         refreshed.status = "available"
         refreshed.runnable = True
         refreshed.inventory_json = {
@@ -1326,6 +1360,9 @@ def _auto_connect_provisioned_target(
             payload={"orderId": order.id, "credentialsRemembered": remembered},
         )
     except Exception as error:
+        if credentials.remember_credentials:
+            with suppress(Exception):
+                EncryptedSshCredentialStore(settings).save_pending(target.id, credentials)
         target.inventory_json = {
             **target.inventory_json,
             "autoSsh": {"status": "failed", "message": str(error)},
@@ -1419,57 +1456,6 @@ def _upsert_provisioned_target(
         _auto_connect_provisioned_target(session, settings, order, instance, record, credentials)
 
 
-def retry_pending_cloud_ssh(
-    session: Session, settings: Settings, targets: list[TargetRecord]
-) -> int:
-    """Bind encrypted purchase keys as soon as provider inventory has an endpoint."""
-    store = EncryptedSshCredentialStore(settings)
-    connected = 0
-    for target in targets:
-        inventory = target.inventory_json or {}
-        auto_ssh = inventory.get("autoSsh") or {}
-        endpoint = (
-            inventory.get("endpoint")
-            or inventory.get("public_ip")
-            or inventory.get("private_ip")
-        )
-        order_id = inventory.get("order_id")
-        if not endpoint or auto_ssh.get("status") == "connected" or not order_id:
-            continue
-        order = session.get(CloudOrderRecord, str(order_id))
-        if order is None:
-            continue
-        try:
-            request = store.load_pending(str(order_id))
-        except RemoteCredentialError:
-            continue
-        credentials = CloudSshCredentials(
-            username=request.username,
-            port=request.port,
-            auth_method=(
-                request.auth_method if request.auth_method != "ssh-agent" else "private-key"
-            ),
-            password=request.password,
-            private_key=request.private_key,
-            passphrase=request.passphrase,
-            remember_credentials=True,
-        )
-        instance = ProvisionedInstance(
-            id=str(inventory.get("instance_id") or target.id),
-            name=target.name,
-            region=str(inventory.get("region") or order.spec_json.get("region") or ""),
-            zone=inventory.get("zone"),
-            status=str(inventory.get("instance_state") or inventory.get("status") or "RUNNING"),
-            private_ip=inventory.get("private_ip"),
-            public_ip=inventory.get("public_ip"),
-            public_ip_present=bool(inventory.get("public_ip_present")),
-        )
-        _auto_connect_provisioned_target(session, settings, order, instance, target, credentials)
-        if (target.inventory_json or {}).get("autoSsh", {}).get("status") == "connected":
-            connected += 1
-    return connected
-
-
 def confirm_order(
     session: Session,
     settings: Settings,
@@ -1559,6 +1545,17 @@ def confirm_order(
             code="provider_purchase_not_ready",
         )
     spec = CloudPurchaseSpec.model_validate(order.spec_json)
+    if ssh_credentials is not None:
+        if ssh_credentials.auth_method == "password" and spec.key_pair_id:
+            raise CloudWorkflowError(
+                "password authentication cannot be combined with a cloud key pair",
+                code="invalid_ssh_selection",
+            )
+        if ssh_credentials.auth_method == "private-key" and not spec.key_pair_id:
+            raise CloudWorkflowError(
+                "private-key authentication requires a cloud key pair",
+                code="invalid_ssh_selection",
+            )
     refreshed_quote = provider.quote(spec)
     refreshed_amount = Decimal(str(refreshed_quote.amount))
     confirmed_amount = Decimal(str(order.hourly_amount))
@@ -1629,7 +1626,15 @@ def confirm_order(
     session.refresh(order)
 
     try:
-        result = provider.purchase(spec, client_token=order.client_token)
+        launch_password = (
+            ssh_credentials.password
+            if ssh_credentials is not None and ssh_credentials.auth_method == "password"
+            else None
+        )
+        purchase_options: dict[str, Any] = {"client_token": order.client_token}
+        if launch_password is not None:
+            purchase_options["launch_password"] = launch_password
+        result = provider.purchase(spec, **purchase_options)
     except CloudProviderError as error:
         session.refresh(order)
         order.status = "unknown" if error.ambiguous else "failed"
@@ -1694,26 +1699,32 @@ def confirm_order(
 
 
 def _default_cloud_ssh_credentials(
-    settings: Settings, *, remember_credentials: bool
+    settings: Settings,
+    *,
+    remember_credentials: bool,
+    auth_method: Literal["password", "private-key"] | None = None,
+    password: str | None = None,
 ) -> CloudSshCredentials:
     username = settings.default_ssh_username.strip() or "root"
     port = settings.default_ssh_port
-    if settings.default_ssh_auth_method == "password":
-        password = (
+    selected_method = auth_method or settings.default_ssh_auth_method
+    if selected_method == "password":
+        effective_password = password or (
             settings.default_ssh_password.get_secret_value()
             if settings.default_ssh_password
             else ""
         )
-        if not password:
+        if not effective_password:
             raise CloudWorkflowError(
                 "default SSH password is not configured on the control plane",
                 code="ssh_credentials_not_configured",
             )
+        _validate_cloud_password(effective_password)
         return CloudSshCredentials(
             username=username,
             port=port,
             auth_method="password",
-            password=password,
+            password=effective_password,
             remember_credentials=remember_credentials,
         )
 
@@ -1744,6 +1755,38 @@ def _default_cloud_ssh_credentials(
     )
 
 
+def _validate_cloud_password(password: str) -> None:
+    if not 8 <= len(password) <= 30:
+        raise CloudWorkflowError(
+            "SSH password must contain 8-30 characters",
+            code="invalid_ssh_password",
+        )
+    allowed_special = "()`~!@#$%^&*-+=_|{}[]:;'<>.,?/"
+    invalid_character = any(
+        not character.isascii()
+        or (not character.isalnum() and character not in allowed_special)
+        for character in password
+    )
+    if invalid_character:
+        raise CloudWorkflowError(
+            "SSH password contains characters unsupported by the cloud providers",
+            code="invalid_ssh_password",
+        )
+    categories = sum(
+        (
+            any(character.islower() for character in password),
+            any(character.isupper() for character in password),
+            any(character.isdigit() for character in password),
+            any(not character.isalnum() for character in password),
+        )
+    )
+    if categories < 3 or password.startswith("/"):
+        raise CloudWorkflowError(
+            "SSH password must use at least three character types and cannot start with /",
+            code="invalid_ssh_password",
+        )
+
+
 def purchase_quote(
     session: Session,
     settings: Settings,
@@ -1751,6 +1794,8 @@ def purchase_quote(
     quote_id: str,
     idempotency_key: str,
     ssh_credentials: CloudSshCredentials | None = None,
+    ssh_auth_method: Literal["password", "private-key"] | None = None,
+    ssh_password: str | None = None,
     remember_credentials: bool | None = None,
 ) -> dict[str, Any]:
     """Purchase an exact quote in one user action.
@@ -1764,14 +1809,28 @@ def purchase_quote(
         return prepared
 
     effective_credentials = ssh_credentials
-    if effective_credentials is None and remember_credentials is not None:
+    if effective_credentials is None and (
+        remember_credentials is not None or ssh_auth_method is not None or ssh_password is not None
+    ):
         effective_credentials = _default_cloud_ssh_credentials(
             settings,
-            remember_credentials=remember_credentials,
+            remember_credentials=(
+                settings.remember_ssh_credentials
+                if remember_credentials is None
+                else remember_credentials
+            ),
+            auth_method=ssh_auth_method,
+            password=ssh_password,
         )
     elif effective_credentials is not None and remember_credentials is not None:
         effective_credentials = effective_credentials.model_copy(
             update={"remember_credentials": remember_credentials}
+        )
+    if effective_credentials is None and not prepared["spec"].get("keyPairId"):
+        effective_credentials = _default_cloud_ssh_credentials(
+            settings,
+            remember_credentials=settings.remember_ssh_credentials,
+            auth_method="password",
         )
 
     request = OrderConfirmRequest(
@@ -1961,7 +2020,8 @@ def _destroy_acknowledgement(provider_id: ProviderId, instance_name: str, instan
     provider_label = _PROVIDER_LABELS.get(provider_id.value, provider_id.value)
     return (
         f"确认销毁 {provider_label} 实例 {instance_name}（{instance_id}），"
-        f"并释放其系统盘、本地盘（含机械盘）、公网及 Looper 纳管的子网/安全组等随附资源"
+        f"并释放其系统盘、本地盘（含机械盘）、公网及 Looper 纳管的子网/安全组；"
+        f"机器所在的空闲非默认 VPC 也可能被删除"
     )
 
 
@@ -1986,6 +2046,16 @@ def _destroy_preview_resources(
     ]
     order = _target_order(session, target)
     if order is not None:
+        vpc_id = order.spec_json.get("vpc_id")
+        if vpc_id:
+            resources.append(
+                DestroyedResource(
+                    kind="vpc",
+                    id=str(vpc_id),
+                    released=False,
+                    note="机器销毁后若其为非默认且不含任何子网，将尝试删除",
+                )
+            )
         subnet_id = order.spec_json.get("subnet_id")
         if subnet_id:
             resources.append(
@@ -2051,12 +2121,30 @@ def destroy_target(
     network_resources: list[DestroyedResource] = []
     order = _target_order(session, target)
     if order is not None:
+        vpc_id = order.spec_json.get("vpc_id")
         network_resources = provider.cleanup_managed_network(
             region=region,
-            vpc_id=order.spec_json.get("vpc_id"),
+            vpc_id=vpc_id,
             subnet_id=order.spec_json.get("subnet_id"),
             security_group_ids=order.spec_json.get("security_group_ids") or [],
         )
+        if vpc_id:
+            network_resources.append(
+                provider.delete_vpc_if_empty(region=region, vpc_id=str(vpc_id))
+            )
+        released_network_kinds = {
+            item.kind
+            for item in network_resources
+            if item.released and item.kind in {"vpc", "subnet"}
+        }
+        if released_network_kinds:
+            session.execute(
+                delete(CloudCatalogCacheRecord).where(
+                    CloudCatalogCacheRecord.provider == provider_id.value,
+                    CloudCatalogCacheRecord.resource_type.in_(released_network_kinds),
+                    CloudCatalogCacheRecord.region == region,
+                )
+            )
 
     now = utc_now()
     target.status = "offline"

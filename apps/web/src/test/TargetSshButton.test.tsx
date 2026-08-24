@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { TargetSshButton } from '../components/TargetSshButton';
 
@@ -34,9 +34,27 @@ it('复用服务端保存的 SSH 凭据并恢复 Worker', async () => {
 it('没有保存凭据时明确提示首次连接', () => {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(<QueryClientProvider client={client}><TargetSshButton target={{
-    id: 'external:10.0.0.9', name: 'compute-02', credentialsRemembered: false,
+    id: 'external:10.0.0.9', name: 'compute-02', type: 'external', credentialsRemembered: false,
   }}/></QueryClientProvider>);
 
   expect(screen.getByText('未保存 SSH 凭据')).toBeInTheDocument();
   expect(screen.queryByRole('button')).not.toBeInTheDocument();
+});
+
+it('已购机器缺少凭据时先直接测试，失败后再打开配置', async () => {
+  vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ detail: 'SSH authentication failed' }), {
+    status: 409,
+    headers: { 'Content-Type': 'application/json' },
+  })));
+  const onConfigure = vi.fn();
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  render(<QueryClientProvider client={client}><TargetSshButton target={{
+    id: 'tencent:ap-test:ins-one', name: 'cloud-01', type: 'cloud',
+    lifecycleStatus: 'active', credentialsRemembered: false,
+  }} onConfigure={onConfigure}/></QueryClientProvider>);
+
+  fireEvent.click(screen.getByRole('button', { name: 'cloud-01 · 配置 SSH 并测试' }));
+
+  await waitFor(() => expect(onConfigure).toHaveBeenCalledTimes(1));
+  expect(String(vi.mocked(fetch).mock.calls[0][0])).toContain('/ssh-test');
 });

@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 from decimal import Decimal
 
 import pytest
+from pydantic import SecretStr
 from looper_api.cloud_contracts import (
     CatalogFilters,
     CloudPurchaseSpec,
@@ -143,7 +144,13 @@ class FakeProvider(CloudProvider):
             details={"stock": "advisory"},
         )
 
-    def purchase(self, spec: CloudPurchaseSpec, *, client_token: str) -> ProviderPurchaseResult:
+    def purchase(
+        self,
+        spec: CloudPurchaseSpec,
+        *,
+        client_token: str,
+        launch_password: SecretStr | None = None,
+    ) -> ProviderPurchaseResult:
         self.purchase_calls.append(client_token)
         if self.ambiguous:
             raise CloudProviderError("simulated timeout", code="timeout", ambiguous=True)
@@ -222,6 +229,8 @@ def settings(tmp_path, *, live: bool = False) -> Settings:
         live_purchase_providers="tencent" if live else "",
         purchase_confirmation_secret="x" * 48,
         operator_token="o" * 48 if live else "",
+        default_ssh_auth_method="password",
+        default_ssh_password="StrongPassword1#",
     )
 
 

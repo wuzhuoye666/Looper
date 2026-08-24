@@ -1,6 +1,6 @@
 import type {
   AnalysisData, Benchmark, BenchmarkRegistration, BenchmarkRegistrationDraft, CloudCatalogResponse, CloudImage, CloudInstanceType, CloudOrder,
-  CloudOrderEvent, CloudOrderEvidence, CloudProviderId, CloudProviderInfo, CloudPurchaseReadiness, CloudPurchaseSpec,
+  CloudOrderEvent, CloudOrderEvidence, CloudProviderId, CloudProviderInfo, CloudPurchaseReadiness, CloudPurchaseSpec, CloudSshDefaults,
   CloudKeyPair, CloudQuote, CloudReconciliationContext, CloudRegion, CloudSecurityGroup, CloudSubnet, CloudVpc, CloudZone,
   InstanceNetworkResolution, InstanceNetworkResolveRequest,
   DashboardData, Experiment, GlobalSearchResult, ListResponse, PostOptimizationStatus, SelectionAdvisorRequest,
@@ -164,6 +164,7 @@ export const api = {
   localOperatorSession: () => request<{ token: string }>('/operator/local-session', { method: 'POST' }),
   cloudAuthStatus: () => api.operatorSession(),
   purchaseReadiness: () => request<CloudPurchaseReadiness>('/cloud/purchase-readiness'),
+  cloudSshDefaults: () => request<CloudSshDefaults>('/cloud/ssh-defaults'),
   providers: async () => list(await request<CloudProviderInfo[] | ListResponse<CloudProviderInfo>>('/cloud/providers')),
   catalog: <T>(provider: CloudProviderId, kind: string, params: Record<string, string | number | undefined> = {}) =>
     request<CloudCatalogResponse<T>>(`/cloud/catalog/${provider}/${kind}${query(params)}`),
@@ -192,7 +193,7 @@ export const api = {
   quote: (spec: CloudPurchaseSpec, key: string) => request<CloudQuote>('/cloud/quotes', {
     method: 'POST', headers: { 'Idempotency-Key': key }, body: JSON.stringify({ spec }),
   }),
-  purchaseQuote: (quoteId: string, key: string, payload?: { rememberCredentials?: boolean }) => request<CloudOrder>('/cloud/orders/purchase', {
+  purchaseQuote: (quoteId: string, key: string, payload?: { sshAuthMethod?: 'password' | 'private-key'; sshPassword?: string; rememberCredentials?: boolean }) => request<CloudOrder>('/cloud/orders/purchase', {
     method: 'POST', headers: { 'Idempotency-Key': key }, body: JSON.stringify({ quoteId, ...payload }),
   }),
   orders: async (status = '') => list(await request<CloudOrder[] | ListResponse<CloudOrder>>(`/cloud/orders${status ? `?status=${encodeURIComponent(status)}` : ''}`)),
