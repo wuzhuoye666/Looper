@@ -36,6 +36,7 @@ export interface Experiment {
   createdAt?: string; updatedAt?: string; owner?: string; attempts?: number; maxAttempts?: number;
   objective?: string; decisionQuestion?: string; scenario?: ScenarioContract; comparison?: SelectionComparison;
   metricDefinitions?: Record<string, MetricDefinition>;
+  resultSections?: BenchmarkResultSection[];
   config?: Record<string, unknown>; evaluations?: Evaluation[]; artifacts?: Artifact[];
   activePhase?: string; activePhaseDetail?: string;
 }
@@ -72,6 +73,12 @@ export interface MetricDefinition {
   description?: string;
   presentation?: MetricPresentation;
 }
+export interface BenchmarkResultSection {
+  id: string;
+  label: string;
+  description?: string;
+  metrics: string[];
+}
 export interface BenchmarkWorkload {
   id: string;
   name: string;
@@ -86,6 +93,7 @@ export interface BenchmarkSelectionDefaults {
 export interface Benchmark {
   id: string; key?: string; name: string; description?: string; category?: string; version?: string; metrics?: string[];
   metricDefinitions?: Record<string, MetricDefinition>;
+  resultSections?: BenchmarkResultSection[];
   workloads?: BenchmarkWorkload[];
   executionModel?: BenchmarkExecutionModel;
   inputs?: BenchmarkInputDeclaration[];

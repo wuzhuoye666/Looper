@@ -65,3 +65,32 @@ def test_fetch_switches_from_a_slow_route_and_resumes(monkeypatch, tmp_path: Pat
     assert len(requests) == 2
     assert requests[0].get_header("Range") is None
     assert requests[1].get_header("Range") == f"bytes={len(first)}-"
+
+
+def test_measurement_hook_refreshes_only_fixture_timestamps(tmp_path: Path) -> None:
+    prepare = load_prepare()
+    hook = tmp_path / "packages" / "mediawiki" / "perf-record.sh"
+    hook.parent.mkdir(parents=True)
+    hook.write_text("upstream hook\n", encoding="utf-8")
+
+    prepare.configure_mediawiki_measurement_hook(tmp_path)
+
+    content = hook.read_text(encoding="utf-8")
+    assert "UPDATE recentchanges SET rc_timestamp" in content
+    assert "UTC_TIMESTAMP()" in content
+    assert "DELETE" not in content
+    assert "perf record -a -g" in content
+
+
+def test_recentchanges_uses_non_eval_renderer_in_repo_authoritative_mode(tmp_path: Path) -> None:
+    prepare = load_prepare()
+    settings = tmp_path / "oss-performance" / "targets" / "mediawiki" / "LocalSettings.php"
+    settings.parent.mkdir(parents=True)
+    settings.write_text("<?php\n$wgSitename = 'fixture';\n", encoding="utf-8")
+
+    prepare.configure_mediawiki_recentchanges_compatibility(tmp_path)
+    prepare.configure_mediawiki_recentchanges_compatibility(tmp_path)
+
+    content = settings.read_text(encoding="utf-8")
+    assert "$wgDefaultUserOptions['usenewrc'] = 0;" in content
+    assert content.count("Looper: use the non-eval RecentChanges renderer") == 1

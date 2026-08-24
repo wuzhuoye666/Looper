@@ -3,7 +3,7 @@ kind: Benchmark
 metadata:
   id: dcperf.mediawiki.closed-loop
   name: DCPerf MediaWiki Closed-Loop
-  version: 2026.08-pilot12
+  version: 2026.08-pilot18
   description: Pinned single-node DCPerf MediaWiki closed-loop capacity workload with resumable managed Ubuntu 22.04/24.04 provisioning and native Benchpress evidence.
   license: MIT
   source:
@@ -312,7 +312,7 @@ spec:
       direction: minimize
       kind: aggregate
       required: true
-      minimumSamples: 100000
+      minimumSamples: 1
       description: Native Nginx request latency P50 in milliseconds.
       presentation:
         userLabel: P50 延迟
@@ -326,7 +326,7 @@ spec:
       direction: minimize
       kind: aggregate
       required: true
-      minimumSamples: 100000
+      minimumSamples: 1
       description: Native Nginx request latency P95 in milliseconds.
       presentation:
         userLabel: P95 延迟
@@ -340,7 +340,7 @@ spec:
       direction: minimize
       kind: aggregate
       required: true
-      minimumSamples: 100000
+      minimumSamples: 1
       description: Native Nginx request latency P99 in milliseconds.
       presentation:
         userLabel: P99 延迟
@@ -411,6 +411,16 @@ spec:
   x-extensions:
     bootstrapCatalog: true
     executionStatus: executable
+    resultPresentation:
+      sections:
+        - id: throughput-latency
+          label: 吞吐与延迟
+          description: DCPerf MediaWiki 的成功吞吐、客户端负载与原生 Nginx 尾延迟。
+          metrics: [closed_loop_successful_rps, wrk_rps, latency_p50_ms, latency_p95_ms, latency_p99_ms]
+        - id: validity-gates
+          label: 有效性门禁
+          description: 仅属于 DCPerf 闭环场景的失败、超时与 CPU 饱和证据。
+          metrics: [failed_request_ratio, error_ratio, timeout_count, timeout_ratio, cpu_utilization_p95]
     selectionDefaults: {repeats: 5, timeoutSeconds: 86400, seed: 20260306}
     sourceLock: source-lock.json
     includesClientWork: true

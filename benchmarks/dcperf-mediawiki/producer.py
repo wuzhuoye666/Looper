@@ -20,6 +20,7 @@ JOB_NAME = "oss_performance_mediawiki_mlp"
 HHVM_BIN = "/usr/local/hphpi/legacy/bin/hhvm"
 HHVM_LIB = "/opt/local/hhvm-3.30/lib"
 SOURCE_REVISION = "9308c3e3c404e0466f0a2929f15ddcf62b2215f6"
+NATIVE_SETUP_TIMEOUT_SECONDS = 900
 
 
 class ProducerError(RuntimeError):
@@ -107,18 +108,34 @@ def run_process(
     stdout_path = output / "benchpress.stdout.log"
     stderr_path = output / "benchpress.stderr.log"
     log("running pinned Benchpress job")
-    with (
-        stdout_path.open("w", encoding="utf-8", newline="\n") as stdout,
-        stderr_path.open("w", encoding="utf-8", newline="\n") as stderr,
-    ):
+    with stdout_path.open("w", encoding="utf-8", newline="\n") as stdout, stderr_path.open(
+        "w", encoding="utf-8", newline="\n"
+    ) as stderr:
         process = subprocess.Popen(
             command,
             cwd=str(cwd),
             env=env,
-            stdout=stdout,
-            stderr=stderr,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
             start_new_session=True,
         )
+        assert process.stdout is not None and process.stderr is not None
+        pumps = [
+            threading.Thread(
+                target=tee_stream,
+                args=(process.stdout, stdout, sys.stdout),
+                daemon=True,
+            ),
+            threading.Thread(
+                target=tee_stream,
+                args=(process.stderr, stderr, sys.stderr),
+                daemon=True,
+            ),
+        ]
+        for pump in pumps:
+            pump.start()
         try:
             return process.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
@@ -135,6 +152,19 @@ def run_process(
                 except (OSError, AttributeError):
                     process.kill()
                 return process.wait(timeout=20)
+        finally:
+            for pump in pumps:
+                pump.join(timeout=10)
+
+
+def tee_stream(source: Any, artifact: Any, terminal: Any) -> None:
+    """Persist a native stream while forwarding it unchanged to the Worker."""
+
+    for chunk in iter(source.readline, ""):
+        artifact.write(chunk)
+        artifact.flush()
+        terminal.write(chunk)
+        terminal.flush()
 
 
 def copy_regular_files(source: Path, destination: Path) -> list[str]:
@@ -157,6 +187,54 @@ def find_native_json(directory: Path, marker: str) -> list[Path]:
         [path for path in directory.rglob("*.json") if path.is_file() and marker in path.name],
         key=lambda path: path.stat().st_mtime_ns,
     )
+
+
+def find_benchpress_results(directory: Path) -> list[Path]:
+    """Find both legacy split reports and current Benchpress history reports."""
+
+    legacy = find_native_json(directory, "_metrics_")
+    if legacy:
+        return legacy
+    results: list[Path] = []
+    for path in directory.rglob("*.json"):
+        if not path.is_file():
+            continue
+        try:
+            candidate = load_json(path)
+        except (OSError, ValueError, json.JSONDecodeError):
+            continue
+        metrics = candidate.get("metrics")
+        if (
+            candidate.get("benchmark_name") == JOB_NAME
+            and isinstance(metrics, dict)
+            and isinstance(metrics.get("Combined"), dict)
+        ):
+            results.append(path)
+    return sorted(results, key=lambda path: path.stat().st_mtime_ns)
+
+
+def parse_benchpress_stdout_result(stdout_text: str) -> dict[str, Any] | None:
+    """Recover the current run report when Benchpress only prints it to stdout."""
+
+    marker = "Results Report:"
+    marker_index = stdout_text.rfind(marker)
+    if marker_index < 0:
+        return None
+    payload = stdout_text[marker_index + len(marker) :].lstrip()
+    try:
+        candidate, _end = json.JSONDecoder().raw_decode(payload)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(candidate, dict):
+        return None
+    metrics = candidate.get("metrics")
+    if (
+        candidate.get("benchmark_name") != JOB_NAME
+        or not isinstance(metrics, dict)
+        or not isinstance(metrics.get("Combined"), dict)
+    ):
+        return None
+    return candidate
 
 
 def write_json(path: Path, value: Any) -> None:
@@ -216,6 +294,7 @@ def main() -> int:
         )
         command = [
             str(native_python),
+            "-u",
             str(cli),
             "-u",
             run_id,
@@ -225,6 +304,7 @@ def main() -> int:
             override,
             "-r",
             str(native / "history"),
+            "--verbose",
             "run",
             JOB_NAME,
         ]
@@ -238,29 +318,55 @@ def main() -> int:
         monitor = threading.Thread(target=cpu_monitor, args=(stop, samples), daemon=True)
         monitor.start()
         started = time.monotonic()
-        return_code = run_process(command, dcperf_root, native, env, timeout + 300)
+        # client timeout covers wrk only. Repo-authoritative HHVM compilation,
+        # repeated JIT warmups, the measurement hook, and result collection all
+        # happen outside that window and take about six minutes on a 4-vCPU VM.
+        return_code = run_process(
+            command,
+            dcperf_root,
+            native,
+            env,
+            timeout + NATIVE_SETUP_TIMEOUT_SECONDS,
+        )
         stop.set()
         monitor.join(timeout=2)
         elapsed = time.monotonic() - started
 
-        metric_files = find_native_json(native, "_metrics_")
-        system_files = find_native_json(native, "_system_specs_")
-        if metric_files:
-            shutil.copy2(metric_files[-1], output / "benchpress-result.json")
-        if system_files:
-            shutil.copy2(system_files[-1], output / "native-system-specs.json")
-        profile_data = dcperf_root / "oss-performance" / "perf.data"
-        if profile_data.is_file():
-            shutil.copy2(profile_data, output / "perf.data")
-        profile_log = Path("/tmp/mw-perf-record.log")
-        if profile_log.is_file():
-            shutil.copy2(profile_log, output / "perf-record.log")
         stdout_text = (native / "benchpress.stdout.log").read_text(
             encoding="utf-8", errors="replace"
         )
         stderr_text = (native / "benchpress.stderr.log").read_text(
             encoding="utf-8", errors="replace"
         )
+        metric_files = find_benchpress_results(native)
+        system_files = find_native_json(native, "_system_specs_")
+        result_source: str | None = None
+        if metric_files:
+            shutil.copy2(metric_files[-1], output / "benchpress-result.json")
+            result_source = str(metric_files[-1])
+        else:
+            stdout_result = parse_benchpress_stdout_result(stdout_text)
+            if stdout_result is not None:
+                write_json(output / "benchpress-result.json", stdout_result)
+                result_source = "stdout:Results Report"
+        if system_files:
+            shutil.copy2(system_files[-1], output / "native-system-specs.json")
+        elif result_source is not None:
+            current_result = load_json(output / "benchpress-result.json")
+            write_json(
+                output / "native-system-specs.json",
+                {
+                    "machines": current_result.get("machines", []),
+                    "metadata": current_result.get("metadata", {}),
+                    "source": result_source,
+                },
+            )
+        profile_data = dcperf_root / "oss-performance" / "perf.data"
+        if profile_data.is_file():
+            shutil.copy2(profile_data, output / "perf.data")
+        profile_log = Path("/tmp/mw-perf-record.log")
+        if profile_log.is_file():
+            shutil.copy2(profile_log, output / "perf-record.log")
         (output / "benchmark.log").write_text(
             "=== command ===\n"
             + " ".join(command)
@@ -272,7 +378,7 @@ def main() -> int:
         )
         status = {
             "schemaVersion": "looper.dcperf.native-run/v1",
-            "status": "succeeded" if return_code == 0 and metric_files else "failed",
+            "status": "succeeded" if return_code == 0 and result_source is not None else "failed",
             "exitCode": return_code,
             "elapsedSeconds": round(elapsed, 3),
             "sourceRevision": SOURCE_REVISION,
@@ -287,16 +393,18 @@ def main() -> int:
             "cpuSamples": len(samples),
             "cpuUtilizationP95": percentile(samples, 0.95),
             "nativeMetricFiles": [path.name for path in metric_files],
+            "resultSource": result_source,
             "nativeSystemFiles": [path.name for path in system_files],
             "profileProduced": (output / "perf.data").is_file(),
         }
         write_json(output / "native-run.json", status)
         if status["cpuUtilizationP95"] is None:
             log("CPU monitor unavailable; normalizer will fail the resource gate")
-        if return_code != 0 or not metric_files:
+        if return_code != 0 or result_source is None:
             raise ProducerError(
                 "native Benchpress job failed "
-                f"(exit={return_code}, metricFiles={len(metric_files)})"
+                f"(exit={return_code}, metricFiles={len(metric_files)}, "
+                f"stdoutResult={result_source == 'stdout:Results Report'})"
             )
         native_result = load_json(output / "benchpress-result.json")
         monitor_values: dict[str, Any] = {
@@ -307,7 +415,13 @@ def main() -> int:
         combined = metrics.get("Combined", {}) if isinstance(metrics, dict) else {}
         if isinstance(combined, dict):
             try:
-                monitor_values["timeouts"] = int(combined.get("Nginx 499", 0))
+                nginx_499 = max(0, int(combined.get("Nginx 499", 0)))
+                failed_requests = max(0, int(combined.get("Wrk failed requests", 0)))
+                # Nginx also counts health checks and connection probes that are
+                # outside wrk's measured request population. Only failures that
+                # can belong to wrk may be attributed as measured timeouts.
+                monitor_values["nginx_499_raw"] = nginx_499
+                monitor_values["timeouts"] = min(nginx_499, failed_requests)
             except (TypeError, ValueError):
                 monitor_values["timeouts"] = 0
         native_result["looper_monitor"] = monitor_values

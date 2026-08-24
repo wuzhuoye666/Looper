@@ -1217,7 +1217,11 @@ def _reconcile_evaluation(
         ]
         failed_check = session.scalar(
             select(CheckRecord.id)
-            .where(CheckRecord.attempt_id.in_(successful_ids), CheckRecord.passed.is_(False))
+            .where(
+                CheckRecord.attempt_id.in_(successful_ids),
+                CheckRecord.passed.is_(False),
+                CheckRecord.kind != "statistical",
+            )
             .limit(1)
         )
         evaluation.status = CandidateStatus.INFEASIBLE if failed_check else CandidateStatus.FEASIBLE

@@ -23,8 +23,10 @@ from looper_api.models import (
     BenchmarkRecord,
     BenchmarkRegistrationRecord,
     CandidateRecord,
+    CheckRecord,
     EvaluationRecord,
     ExperimentRecord,
+    ObservationRecord,
     TargetRecord,
 )
 
@@ -76,6 +78,47 @@ def _workload_views(workloads: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return views
 
 
+def _result_sections(manifest: dict[str, Any]) -> list[dict[str, Any]]:
+    """Expose only the bounded, declarative result-navigation contract to clients."""
+
+    spec = manifest.get("spec") or {}
+    extensions = spec.get("x-extensions") or {}
+    presentation = extensions.get("resultPresentation") or {}
+    raw_sections = presentation.get("sections") or []
+    sections: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for raw in raw_sections[:2]:
+        if not isinstance(raw, dict):
+            continue
+        section_id = str(raw.get("id") or "").strip()
+        label = str(raw.get("label") or "").strip()
+        metrics = raw.get("metrics")
+        if (
+            not section_id
+            or section_id in seen
+            or not label
+            or not isinstance(metrics, list)
+        ):
+            continue
+        declared_metrics = [
+            str(metric)
+            for metric in metrics
+            if isinstance(metric, str) and metric in spec.get("metrics", {})
+        ]
+        if not declared_metrics:
+            continue
+        seen.add(section_id)
+        sections.append(
+            {
+                "id": section_id,
+                "label": label[:40],
+                "description": str(raw.get("description") or "")[:300],
+                "metrics": declared_metrics,
+            }
+        )
+    return sections
+
+
 def benchmark_view(
     record: BenchmarkRecord,
     registration: BenchmarkRegistrationRecord | None = None,
@@ -124,6 +167,7 @@ def benchmark_view(
         "manifestDigest": record.manifest_digest,
         "metrics": list(spec["metrics"]),
         "metricDefinitions": _metric_definitions(spec.get("metrics", {})),
+        "resultSections": _result_sections(manifest),
         "workloads": _workload_views(spec.get("workloads", [])),
         "cases": len(spec["workloads"]),
         "updatedAt": _iso(record.installed_at),
@@ -340,6 +384,28 @@ def _best_primary_score(
     return max(scores) if direction == Direction.MAXIMIZE else min(scores)
 
 
+def _observation_metric_view(
+    item: ObservationRecord, declaration: dict[str, Any]
+) -> dict[str, Any] | None:
+    value: float | bool | None = (
+        item.value_boolean if item.value_boolean is not None else item.value_number
+    )
+    if value is None:
+        return None
+    direction = declaration.get("direction")
+    return {
+        "name": item.metric,
+        "value": value,
+        "unit": item.unit,
+        "baseline": None,
+        "direction": "max"
+        if direction == "maximize"
+        else "min"
+        if direction == "minimize"
+        else "none",
+    }
+
+
 def experiment_view(
     session: Session, record: ExperimentRecord, *, detail: bool = False
 ) -> dict[str, Any]:
@@ -445,6 +511,7 @@ def experiment_view(
         )
         if benchmark
         else {},
+        "resultSections": _result_sections(benchmark.manifest_json) if benchmark else [],
         "progress": round(
             100
             * (
@@ -528,6 +595,53 @@ def experiment_view(
             for item in objective_rows
             if item.get("raw") is not None
         ]
+        # Analysis intentionally excludes failed attempts, but the experiment
+        # page must still expose measurements that the Worker successfully
+        # uploaded. Otherwise a later validation failure makes real collection
+        # data appear to have vanished. Prefer the latest attempt's raw
+        # observations for the per-run table and Benchmark-specific sections.
+        if latest:
+            latest_observations = list(
+                session.scalars(
+                    select(ObservationRecord)
+                    .where(ObservationRecord.attempt_id == latest.id)
+                    .order_by(ObservationRecord.created_at)
+                )
+            )
+            latest_by_metric = {item.metric: item for item in latest_observations}
+            metric_specs = (
+                benchmark.manifest_json.get("spec", {}).get("metrics", {})
+                if benchmark
+                else {}
+            )
+            raw_metrics = [
+                view
+                for name, item in latest_by_metric.items()
+                if (
+                    view := _observation_metric_view(item, metric_specs.get(name, {}))
+                )
+                is not None
+            ]
+            if raw_metrics:
+                metrics = raw_metrics
+        failed_check_ids: list[str] = []
+        if latest and AttemptStatus(latest.status) == AttemptStatus.FAILED:
+            failed_check_ids = list(
+                session.scalars(
+                    select(CheckRecord.check_id)
+                    .where(CheckRecord.attempt_id == latest.id, CheckRecord.passed.is_(False))
+                    .order_by(CheckRecord.check_id)
+                )
+            )
+        phase_detail = latest.phase_detail if latest else None
+        if failed_check_ids:
+            phase_detail = f"采集数据已回传；校验未通过：{', '.join(failed_check_ids)}"
+        elif (
+            latest
+            and AttemptStatus(latest.status) == AttemptStatus.FAILED
+            and latest.error_message
+        ):
+            phase_detail = f"采集流程失败：{latest.error_message}"
         duration = None
         if latest and latest.started_at and latest.completed_at:
             duration = (latest.completed_at - latest.started_at).total_seconds()
@@ -542,7 +656,7 @@ def experiment_view(
                 "parameters": candidate.parameters_json if candidate else {},
                 "status": status_map[CandidateStatus(evaluation.status)],
                 "phase": latest.phase if latest else None,
-                "phaseDetail": latest.phase_detail if latest else None,
+                "phaseDetail": phase_detail,
                 "score": objective_rows[0].get("raw") if objective_rows else None,
                 "duration": duration,
                 "createdAt": _iso(evaluation.created_at),

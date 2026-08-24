@@ -455,6 +455,59 @@ def configure_database(dcperf_root: Path) -> None:
     )
 
 
+def configure_mediawiki_measurement_hook(dcperf_root: Path) -> None:
+    """Keep the pinned RecentChanges request valid with the 2014 fixture DB."""
+
+    hook = dcperf_root / "packages/mediawiki/perf-record.sh"
+    if not hook.is_file():
+        fail(f"pinned DCPerf perf-record hook is missing: {hook}")
+    hook.write_text(
+        """#!/bin/bash
+set -e
+
+# The pinned MediaWiki fixture contains recentchanges rows from 2014. Refresh
+# only their timestamps after workload warmup so Special:RecentChanges remains
+# a successful upstream request without changing the URL mix or row count.
+mysql --user=root --password=password mw_bench \\
+  --execute="UPDATE recentchanges SET rc_timestamp = DATE_FORMAT(UTC_TIMESTAMP(), '%Y%m%d%H%i%s');"
+
+sleep 30
+if [ -f "perf.data" ]; then
+  exit 0
+fi
+if [ "${DCPERF_PERF_RECORD}" = "1" ]; then
+  sudo nohup bash -xec "sleep 30; timeout -s INT 5 perf record -a -g;" \\
+    > /tmp/mw-perf-record.log 2>&1 &
+fi
+""",
+        encoding="utf-8",
+    )
+    hook.chmod(0o755)
+
+
+def configure_mediawiki_recentchanges_compatibility(dcperf_root: Path) -> None:
+    """Avoid HHVM repo-authoritative evals while retaining RecentChanges rows."""
+
+    settings = dcperf_root / "oss-performance/targets/mediawiki/LocalSettings.php"
+    if not settings.is_file():
+        fail(f"pinned MediaWiki LocalSettings source is missing: {settings}")
+    marker = "// Looper: use the non-eval RecentChanges renderer under Repo.Authoritative."
+    content = settings.read_text(encoding="utf-8")
+    if marker not in content:
+        settings.write_text(
+            content.rstrip()
+            + "\n\n"
+            + marker
+            + "\n$wgDefaultUserOptions['usenewrc'] = 0;\n",
+            encoding="utf-8",
+        )
+
+
+def configure_mediawiki_runtime(dcperf_root: Path) -> None:
+    configure_mediawiki_measurement_hook(dcperf_root)
+    configure_mediawiki_recentchanges_compatibility(dcperf_root)
+
+
 def shlex_quote(value: str) -> str:
     return "'" + value.replace("'", "'''") + "'"
 
@@ -575,11 +628,13 @@ def main() -> int:
         cache.mkdir(parents=True, exist_ok=True)
         marker = cache / MARKER_NAME
         if prepared_cache_valid(cache):
+            configure_mediawiki_runtime(cache / "runtime/dcperf")
             log("verified managed DCPerf environment is already prepared")
             return 0
         install_system_packages(lock, marker)
         install_hhvm(fetch(asset(lock, "hhvm-3.30"), cache / "assets"))
         dcperf_root = build_dependencies(lock, cache)
+        configure_mediawiki_runtime(dcperf_root)
         run(
             [sys.executable, "-m", "compileall", "-q", str(dcperf_root / "benchpress")], timeout=300
         )

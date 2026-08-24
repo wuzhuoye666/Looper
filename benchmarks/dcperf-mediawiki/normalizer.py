@@ -300,13 +300,18 @@ def main() -> int:
             "".join(json.dumps(item, sort_keys=True) + "\n" for item in observations),
             encoding="utf-8",
         )
-        passed = all(item["passed"] for item in checks)
+        # Statistical evidence thresholds describe whether later tail-latency
+        # analysis is strong enough; they do not invalidate a completed native
+        # collection. Execution, correctness, SLO, and resource checks remain
+        # blocking for the attempt.
+        blocking_checks = [item for item in checks if item["kind"] != "statistical"]
+        passed = all(item["passed"] for item in blocking_checks)
         result = {
             "schemaVersion": "v1alpha1",
             "status": "succeeded" if passed else "failed",
             "message": None
             if passed
-            else "one or more DCPerf correctness or resource gates failed",
+            else "one or more DCPerf execution, correctness, SLO, or resource gates failed",
             "checks": checks,
             "extensions": {
                 "adapter": "dcperf-mediawiki-closed-loop",

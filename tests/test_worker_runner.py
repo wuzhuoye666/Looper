@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import sys
 from pathlib import Path
@@ -63,6 +64,20 @@ class RecordingClient:
         return payload
 
 
+class RecordingLogClient:
+    def __init__(self) -> None:
+        self.logs: list[tuple[str, str]] = []
+
+    def heartbeat(
+        self, _attempt_id: str, _fencing_token: int, **fields: object
+    ) -> dict[str, object]:
+        stream = fields.get("log_stream")
+        text = fields.get("log_text")
+        if isinstance(stream, str) and isinstance(text, str):
+            self.logs.append((stream, text))
+        return {"cancelRequested": False}
+
+
 def test_heartbeat_failure_terminates_benchmark_process(tmp_path: Path) -> None:
     logs = tmp_path / "attempt" / "logs"
     logs.mkdir(parents=True)
@@ -89,6 +104,42 @@ def test_heartbeat_failure_terminates_benchmark_process(tmp_path: Path) -> None:
     assert client.pid is not None
     assert not psutil.pid_exists(client.pid)
     assert not client.process_file.exists()
+
+
+def test_worker_forwards_command_stdout_and_stderr_without_rewriting(tmp_path: Path) -> None:
+    logs = tmp_path / "attempt" / "logs"
+    logs.mkdir(parents=True)
+    client = RecordingLogClient()
+    runner = LocalAttemptRunner(client, tmp_path / "worker")  # type: ignore[arg-type]
+
+    result = runner._run_stage(
+        "attempt-raw",
+        1,
+        "run",
+        {
+            "argv": [
+                sys.executable,
+                "-u",
+                "-c",
+                "import sys; print(' raw stdout  '); print('raw\\tstderr', file=sys.stderr)",
+            ],
+            "timeoutSeconds": 10,
+            "allowedExitCodes": [0],
+        },
+        {"workingDirectory": "."},
+        {"benchmarkRoot": str(tmp_path)},
+        logs,
+        1024 * 1024,
+    )
+
+    assert result.status == "succeeded"
+    assert "".join(text for stream, text in client.logs if stream == "stdout") == (
+        f" raw stdout  {os.linesep}"
+    )
+    assert "".join(text for stream, text in client.logs if stream == "stderr") == (
+        f"raw\tstderr{os.linesep}"
+    )
+    assert any(stream == "command" and sys.executable in text for stream, text in client.logs)
 
 
 def test_configured_producer_and_normalizer_run_without_worker_plugin(tmp_path: Path) -> None:

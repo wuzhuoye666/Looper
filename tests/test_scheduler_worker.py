@@ -4,9 +4,10 @@ from pathlib import Path
 
 import pytest
 from looper_api.config import Settings
-from looper_api.models import AttemptRecord, BenchmarkRecord
+from looper_api.models import AttemptRecord, BenchmarkRecord, CheckRecord, EvaluationRecord
 from looper_api.scheduler import (
     SchedulerError,
+    _reconcile_evaluation,
     create_demo_request,
     create_experiment,
     start_experiment,
@@ -25,8 +26,9 @@ from looper_api.worker_service import (
     register_worker,
     start_attempt,
 )
+from looper_core.canonical import new_id, utc_now
 from looper_core.contracts import BenchmarkInputBinding, MetricObservation
-from looper_core.state import AttemptStatus, ExperimentStatus
+from looper_core.state import AttemptStatus, CandidateStatus, ExperimentStatus
 
 
 def test_demo_start_creates_baseline_and_candidate(db_session: object) -> None:
@@ -37,6 +39,38 @@ def test_demo_start_creates_baseline_and_candidate(db_session: object) -> None:
     attempts = session.query(AttemptRecord).filter_by(experiment_id=experiment.id).all()
     assert experiment.status == ExperimentStatus.QUEUED
     assert len(attempts) == 6
+
+
+def test_statistical_warning_does_not_make_completed_repeats_infeasible(
+    db_session: object,
+) -> None:
+    session = db_session
+    experiment = create_experiment(session, create_demo_request())
+    start_experiment(session, experiment)
+    evaluation = session.query(EvaluationRecord).filter_by(experiment_id=experiment.id).first()
+    assert evaluation is not None
+    attempts = session.query(AttemptRecord).filter_by(evaluation_id=evaluation.id).all()
+    assert len(attempts) == 3
+    for attempt in attempts:
+        attempt.status = AttemptStatus.SUCCEEDED
+        session.add(
+            CheckRecord(
+                id=new_id("check"),
+                attempt_id=attempt.id,
+                check_id="tail-sample-count",
+                passed=False,
+                scope="attempt",
+                kind="statistical",
+                message="tail evidence is below the preferred population",
+                details_json={"observed": 77317, "preferred": 100000},
+                created_at=utc_now(),
+            )
+        )
+    session.flush()
+
+    _reconcile_evaluation(session, experiment, evaluation)
+
+    assert evaluation.status == CandidateStatus.FEASIBLE
 
 
 def test_fencing_token_rejects_stale_worker(db_session: object, tmp_path: Path) -> None:

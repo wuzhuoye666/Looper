@@ -2,7 +2,7 @@ import { ArrowDownToLine, Clipboard, LoaderCircle, Terminal, Wifi, WifiOff } fro
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { API_BASE, resolveApiUrl } from '../lib/api';
 
-type TerminalStream = 'command' | 'stdout' | 'stderr' | 'system';
+type TerminalStream = 'command' | 'stdout' | 'stderr';
 type ConnectionState = 'connecting' | 'live' | 'reconnecting';
 
 interface ExperimentEvent {
@@ -23,20 +23,11 @@ interface TerminalLine {
 }
 
 const eventNames = [
-  'attempt.leased',
-  'attempt.started',
-  'attempt.phase.changed',
   'attempt.log',
-  'artifact.committed',
-  'attempt.succeeded',
-  'attempt.failed',
-  'attempt.timed_out',
-  'attempt.cancelled',
-  'attempt.lost',
 ];
 
 const streamLabels: Record<TerminalStream, string> = {
-  command: '输入', stdout: 'stdout', stderr: 'stderr', system: '系统',
+  command: 'command', stdout: 'stdout', stderr: 'stderr',
 };
 
 const stageLabels: Record<string, string> = {
@@ -94,18 +85,18 @@ export function ExperimentTerminal({ experimentId }: { experimentId: string }) {
 
   const copyOutput = async () => { await navigator.clipboard?.writeText(lines.map(line => line.text).join('')); };
 
-  return <section className="panel experiment-terminal" aria-label="SSH 实时终端">
+  return <section className="panel experiment-terminal" aria-label="远端原始进程输出">
     <div className="experiment-terminal-heading">
-      <div className="panel-heading-copy"><div className="terminal-title"><Terminal size={18} /><div><h2>SSH 实时终端</h2><p>环境搭建、脚本部署与实际测试的输入输出</p></div></div></div>
+      <div className="panel-heading-copy"><div className="terminal-title"><Terminal size={18} /><div><h2>远端原始输出</h2><p>Worker 从目标机命令的 stdout / stderr 原样分块透传，不改写、不摘要</p></div></div></div>
       <div className="terminal-actions">
         <span className={'terminal-connection ' + status.className}>{status.icon}{status.label}</span>
         <button type="button" className={'icon-button' + (autoScroll ? ' active' : '')} title="自动滚动" aria-label="自动滚动" aria-pressed={autoScroll} onClick={() => setAutoScroll(value => !value)}><ArrowDownToLine size={15} /></button>
         <button type="button" className="icon-button" title="复制终端输出" aria-label="复制终端输出" onClick={copyOutput} disabled={!lines.length}><Clipboard size={15} /></button>
       </div>
     </div>
-    <div className="terminal-toolbar"><span>{lines.length ? lines.length + ' 条实时记录' : '等待 Worker 输出…'}</span><code>attempt events · SSE</code></div>
+    <div className="terminal-toolbar"><span>{lines.length ? lines.length + ' 个原始输出块' : '等待远端命令输出…'}</span><code>command · stdout · stderr · SSE</code></div>
     <div className="terminal-viewport" ref={viewportRef} role="log" aria-live="polite">
-      {!lines.length && <div className="terminal-empty"><LoaderCircle size={18} /><span>等待 SSH 会话建立后显示命令和输出</span></div>}
+      {!lines.length && <div className="terminal-empty"><LoaderCircle size={18} /><span>等待 Worker 透传目标机命令和原始输出</span></div>}
       {lines.map(line => <div className={'terminal-line ' + line.stream} key={line.id}>
         <span className="terminal-line-meta"><b>{streamLabels[line.stream]}</b><small>{stageLabels[line.stage] || line.stage}</small></span>
         <pre>{line.text}</pre>
@@ -114,7 +105,7 @@ export function ExperimentTerminal({ experimentId }: { experimentId: string }) {
   </section>;
 }
 
-function eventToLines(event: ExperimentEvent): TerminalLine[] {
+export function eventToLines(event: ExperimentEvent): TerminalLine[] {
   const payload = event.payload || {};
   const timestamp = event.createdAt;
   if (event.type === 'attempt.log') {
@@ -122,24 +113,9 @@ function eventToLines(event: ExperimentEvent): TerminalLine[] {
     if (!isStream(stream) || typeof payload.text !== 'string') return [];
     return [{ id: String(event.sequence) + ':log', stream, stage: String(payload.stage || 'run'), text: payload.text, createdAt: timestamp }];
   }
-  if (event.type === 'attempt.phase.changed') {
-    return [systemLine(event, String(payload.phase || 'phase'), String(payload.detail || payload.phase || '阶段已更新'))];
-  }
-  if (event.type === 'attempt.leased') return [systemLine(event, 'deploying-package', 'Worker 已领取任务，开始下发 Benchmark 脚本包')];
-  if (event.type === 'attempt.started') return [systemLine(event, 'deploying-package', 'Worker 已启动，开始执行远端测试流程')];
-  if (event.type === 'artifact.committed') return [systemLine(event, 'collect', '测试证据已上传到控制面')];
-  if (event.type.startsWith('attempt.')) {
-    const status = event.type.replace('attempt.', '');
-    const labels: Record<string, string> = { succeeded: '测试完成', failed: '测试失败', timed_out: '测试超时', cancelled: '测试已取消', lost: 'Worker 租约丢失' };
-    if (labels[status]) return [systemLine(event, 'collect', labels[status])];
-  }
   return [];
 }
 
-function systemLine(event: ExperimentEvent, stage: string, text: string): TerminalLine {
-  return { id: String(event.sequence) + ':system', stream: 'system', stage, text: '[' + new Date(event.createdAt).toLocaleTimeString() + '] ' + text + '\n', createdAt: event.createdAt };
-}
-
 function isStream(value: unknown): value is TerminalStream {
-  return value === 'command' || value === 'stdout' || value === 'stderr' || value === 'system';
+  return value === 'command' || value === 'stdout' || value === 'stderr';
 }
