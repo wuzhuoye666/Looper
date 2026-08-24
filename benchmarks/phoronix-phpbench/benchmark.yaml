@@ -204,4 +204,5 @@ spec:
     environmentAxes: [machine, day, runtime]
     requiredEvidence: [system-fingerprint, raw-result, profile, log]
   x-extensions:
+    bootstrapCatalog: true
     executionStatus: executable
