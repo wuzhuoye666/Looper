@@ -19,6 +19,7 @@ import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import looper_api.cli as cli_module
 import pytest
 import yaml
 from looper_api.cli import _current_environment_digest, app
@@ -41,6 +42,7 @@ from looper_core.system_opt.phase_gate import (
     SloTarget,
 )
 from looper_core.system_opt.result_vector import PromotionContract
+from looper_core.system_opt.safety import SafetyState
 from looper_core.system_opt.state_evidence import (
     STATE_EVIDENCE_SCHEMA,
     ConfigStateRecord,
@@ -182,6 +184,175 @@ def test_dynamic_run_cli_simulated_end_to_end(tmp_path: Path) -> None:
         (control / "retest-request-verify-window-3-1.json").read_text("utf-8")
     )
     assert verify_request["window_ids"][0] == "verify-window-3-1-run1"
+    evidence_index = control / "dynamic-collection-evidence-index.json"
+    assert evidence_index.is_file()
+
+
+class _RunFailure(RuntimeError):
+    pass
+
+
+class _RestorationFailureBackend:
+    def __init__(self, backend, *, fail_from_snapshot_call: int) -> None:
+        self._backend = backend
+        self._snapshot_calls = 0
+        self._fail_from_snapshot_call = fail_from_snapshot_call
+
+    def __getattr__(self, name):
+        return getattr(self._backend, name)
+
+    def snapshot(self, items, *, fencing_token):
+        self._snapshot_calls += 1
+        if self._snapshot_calls > 1 and self._snapshot_calls >= self._fail_from_snapshot_call:
+            raise OSError("restoration readback unavailable")
+        return self._backend.snapshot(items, fencing_token=fencing_token)
+
+
+class _NonKeptRestoration:
+    def __init__(self, original_execute) -> None:
+        self._original_execute = original_execute
+        self.keep_calls = 0
+
+    def __call__(self, controller, *args, **kwargs):
+        result = self._original_execute(controller, *args, **kwargs)
+        if kwargs.get("keep_authorized"):
+            self.keep_calls += 1
+            if self.keep_calls >= 2:
+                return result.model_copy(
+                    update={
+                        "state": SafetyState.NEEDS_ATTENTION,
+                        "reason": "restoration readback unavailable",
+                    }
+                )
+        return result
+
+
+def _invoke_demo_dynamic_run(tmp_path: Path, session: Path, inputs: dict[str, Path]):
+    return runner.invoke(
+        app,
+        _base_argv(session, inputs, tmp_path)
+        + [
+            "--backend",
+            "simulated",
+            "--initial-state",
+            str(inputs["initial"]),
+        ],
+    )
+
+
+def test_dynamic_run_failure_after_intervention_restores_phase_start_and_releases_lease(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    session = tmp_path / "session"
+    build_dynamic_demo_session(session)
+    inputs = _write_demo_inputs(tmp_path)
+    original = cli_module.run_dynamic_phase
+    order: list[str] = []
+
+    def fail_after_run(**kwargs):
+        original(**kwargs)
+        order.append("run-failed")
+        raise _RunFailure("post-intervention failure")
+
+    original_execute = cli_module.SafetyController.execute
+
+    def record_execute(self, *args, **kwargs):
+        result = original_execute(self, *args, **kwargs)
+        if kwargs.get("keep_authorized"):
+            order.append("restored")
+        return result
+
+    monkeypatch.setattr(cli_module, "run_dynamic_phase", fail_after_run)
+    monkeypatch.setattr(cli_module.SafetyController, "execute", record_execute)
+
+    result = _invoke_demo_dynamic_run(tmp_path, session, inputs)
+
+    assert result.exit_code != 0
+    assert result.exception is not None
+    assert "post-intervention failure" in str(result.exception)
+    assert order[-2:] == ["run-failed", "restored"]
+    restoration = json.loads(
+        (session / "control" / "phase-restoration.json").read_text(encoding="utf-8")
+    )
+    assert restoration["state"] == "kept"
+    assert not list((tmp_path / "leases").glob("*.lease.json"))
+
+
+def test_dynamic_run_restores_before_collection_persistence_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    session = tmp_path / "session"
+    build_dynamic_demo_session(session)
+    inputs = _write_demo_inputs(tmp_path)
+    order: list[str] = []
+    original_execute = cli_module.SafetyController.execute
+
+    def record_execute(self, *args, **kwargs):
+        result = original_execute(self, *args, **kwargs)
+        if kwargs.get("keep_authorized"):
+            order.append("restored")
+        return result
+
+    def fail_persistence(*_args, **_kwargs):
+        order.append("persisted")
+        raise OSError("evidence sink unavailable")
+
+    monkeypatch.setattr(cli_module.SafetyController, "execute", record_execute)
+    monkeypatch.setattr(cli_module, "persist_dynamic_collection_evidence", fail_persistence)
+
+    result = _invoke_demo_dynamic_run(tmp_path, session, inputs)
+
+    assert result.exit_code != 0
+    assert result.exception is not None
+    assert "evidence persistence failed" in str(result.exception)
+    assert order[-2:] == ["restored", "persisted"]
+    restoration = json.loads(
+        (session / "control" / "phase-restoration.json").read_text(encoding="utf-8")
+    )
+    assert restoration["state"] == "kept"
+    assert not list((tmp_path / "leases").glob("*.lease.json"))
+    assert not (tmp_path / "leases" / "demo-dynamic-target.attention.json").exists()
+
+
+def test_dynamic_run_non_kept_restoration_marks_attention_with_original_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    session = tmp_path / "session"
+    build_dynamic_demo_session(session)
+    inputs = _write_demo_inputs(tmp_path)
+    original_run = cli_module.run_dynamic_phase
+    original_execute = cli_module.SafetyController.execute
+
+    def fail_after_run(**kwargs):
+        original_run(**kwargs)
+        raise _RunFailure("original dynamic failure")
+
+    def failing_execute(controller, *args, **kwargs):
+        result = original_execute(controller, *args, **kwargs)
+        if kwargs.get("keep_authorized"):
+            return result.model_copy(
+                update={
+                    "state": SafetyState.NEEDS_ATTENTION,
+                    "reason": "restoration readback unavailable",
+                }
+            )
+        return result
+
+    monkeypatch.setattr(cli_module, "run_dynamic_phase", fail_after_run)
+    monkeypatch.setattr(cli_module.SafetyController, "execute", failing_execute)
+
+    result = _invoke_demo_dynamic_run(tmp_path, session, inputs)
+
+    assert result.exit_code != 0
+    assert result.exception is not None
+    assert "original dynamic failure" in str(result.exception)
+    assert "phase restoration failed" in str(result.exception)
+    attention_paths = list((tmp_path / "leases").glob("*.attention.json"))
+    assert len(attention_paths) == 1
+    attention = json.loads(attention_paths[0].read_text(encoding="utf-8"))
+    assert "original dynamic failure" in attention["reason"]
+    assert "restoration readback unavailable" in attention["reason"]
+    assert not list((tmp_path / "leases").glob("*.lease.json"))
 
 
 # ---------------------------------------------------------------------------

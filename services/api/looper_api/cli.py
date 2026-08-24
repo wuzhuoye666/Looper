@@ -49,6 +49,7 @@ from looper_core.system_opt.dynamic_adapters import (
 from looper_core.system_opt.dynamic_collection import (
     o1_live_source,
     o2_component_probe,
+    persist_dynamic_collection_evidence,
 )
 from looper_core.system_opt.dynamic_loop import run_dynamic_phase
 from looper_core.system_opt.engine import EngineLoopConfig, run_engine_loop
@@ -1220,51 +1221,156 @@ def run_dynamic_phase_session(
             if live_o2 is not None
             else (lambda hypothesis, window: window.digest)
         )
-        run = run_dynamic_phase(
-            contract=contract,
-            gate_contract=gate_contract,
-            promotion_contract=promotion_contract,
-            environment_digest=_current_environment_digest(),
-            max_windows=max_windows,
-            probe_top_k=probe_top_k,
-            load_identity=FileLoadIdentity(layout, business_policy),
-            o0_source=FileO0Source(layout, business_policy),
-            hypothesis_source=FileHypothesisProposals(proposals),
-            clock=lambda: datetime.now(UTC),
-            o1_source=live_o1,
-            component_probe=o2_callback,
-            intervention=intervention,
-            retest=FileRetestSource(planner, layout),
-            verification_window_count=verification_window_count,
-        )
+        restoration_values: dict[str, Any] | None = None
+        run = None
+        run_error: Exception | None = None
+        restoration_error: Exception | None = None
+        restoration_audit_error: Exception | None = None
+        evidence_error: Exception | None = None
+        restoration = None
+        try:
+            restoration_values = {
+                manifest.item(item_id).parameter_id: entry.value
+                for item_id, entry in phase_snapshot.entries.items()
+            }
+            run = run_dynamic_phase(
+                contract=contract,
+                gate_contract=gate_contract,
+                promotion_contract=promotion_contract,
+                environment_digest=_current_environment_digest(),
+                max_windows=max_windows,
+                probe_top_k=probe_top_k,
+                load_identity=FileLoadIdentity(layout, business_policy),
+                o0_source=FileO0Source(layout, business_policy),
+                hypothesis_source=FileHypothesisProposals(proposals),
+                clock=lambda: datetime.now(UTC),
+                o1_source=live_o1,
+                component_probe=o2_callback,
+                intervention=intervention,
+                retest=FileRetestSource(planner, layout),
+                verification_window_count=verification_window_count,
+            )
+        except Exception as error:
+            run_error = error
+        finally:
+            if restoration_values is None:
+                restoration_error = RuntimeError(
+                    "phase restoration values could not be constructed from the complete "
+                    "phase-start snapshot"
+                )
+            else:
+                try:
+                    restoration = controller.execute(
+                        manifest,
+                        restoration_values,
+                        backend,
+                        fencing_token=lease.fencing_token,
+                        keep=True,
+                        keep_authorized=True,
+                    )
+                except Exception as error:
+                    restoration_error = error
+                else:
+                    if restoration.state is not SafetyState.KEPT:
+                        restoration_error = RuntimeError(
+                            f"phase restoration returned {restoration.state.value}: "
+                            f"{restoration.reason}"
+                        )
+                    try:
+                        layout.control.mkdir(parents=True, exist_ok=True)
+                        (layout.control / "phase-restoration.json").write_text(
+                            json.dumps(restoration.model_dump(mode="json"), indent=2),
+                            encoding="utf-8",
+                        )
+                    except Exception as error:
+                        restoration_audit_error = error
 
-        restoration_values = {
-            manifest.item(item_id).parameter_id: entry.value
-            for item_id, entry in phase_snapshot.entries.items()
-        }
-        restoration = controller.execute(
-            manifest,
-            restoration_values,
-            backend,
-            fencing_token=lease.fencing_token,
-            keep=True,
-            keep_authorized=True,
-        )
-        layout.control.mkdir(parents=True, exist_ok=True)
-        (layout.control / "phase-restoration.json").write_text(
-            json.dumps(restoration.model_dump(mode="json"), indent=2),
-            encoding="utf-8",
-        )
-        if restoration.state is not SafetyState.KEPT:
-            guard.mark_needs_attention(
-                target_id,
-                reason="dynamic phase restoration failed",
-                evidence_digest=run.digest,
-                now=datetime.now(UTC),
+            if restoration_error is not None:
+                evidence_digest = run.digest if run is not None else phase_snapshot.digest
+                original = (
+                    f"original dynamic phase error: {type(run_error).__name__}: {run_error}"
+                    if run_error is not None
+                    else "dynamic phase completed without an exception"
+                )
+                audit = (
+                    f"; phase restoration audit error: "
+                    f"{type(restoration_audit_error).__name__}: {restoration_audit_error}"
+                    if restoration_audit_error is not None
+                    else ""
+                )
+                guard.mark_needs_attention(
+                    target_id,
+                    reason=(
+                        f"dynamic phase restoration failed; {original}; "
+                        f"restoration error: {type(restoration_error).__name__}: "
+                        f"{restoration_error}{audit}"
+                    ),
+                    evidence_digest=evidence_digest,
+                    now=datetime.now(UTC),
+                )
+
+            try:
+                persist_dynamic_collection_evidence(
+                    layout.control,
+                    o1_source=live_o1,
+                    o2_probe=live_o2,
+                )
+            except Exception as error:
+                evidence_error = error
+
+        if run_error is not None:
+            detail = f"dynamic phase failed: {type(run_error).__name__}: {run_error}"
+            if restoration_error is not None:
+                detail += (
+                    f"; phase restoration failed: "
+                    f"{type(restoration_error).__name__}: {restoration_error}"
+                )
+            if restoration_audit_error is not None:
+                detail += (
+                    f"; phase restoration audit failed: "
+                    f"{type(restoration_audit_error).__name__}: "
+                    f"{restoration_audit_error}"
+                )
+            if evidence_error is not None:
+                detail += (
+                    f"; evidence persistence failed: "
+                    f"{type(evidence_error).__name__}: {evidence_error}"
+                )
+            raise RuntimeError(detail) from run_error
+        if restoration_error is not None:
+            detail = (
+                f"phase restoration failed: {type(restoration_error).__name__}: "
+                f"{restoration_error}"
             )
-            raise typer.BadParameter(
-                f"phase restoration failed: {restoration.reason}"
+            if restoration_audit_error is not None:
+                detail += (
+                    f"; phase restoration audit failed: "
+                    f"{type(restoration_audit_error).__name__}: "
+                    f"{restoration_audit_error}"
+                )
+            if evidence_error is not None:
+                detail += (
+                    f"; evidence persistence failed: "
+                    f"{type(evidence_error).__name__}: {evidence_error}"
+                )
+            raise typer.BadParameter(detail) from restoration_error
+        if restoration_audit_error is not None:
+            detail = (
+                f"phase restoration audit failed: "
+                f"{type(restoration_audit_error).__name__}: {restoration_audit_error}"
             )
+            if evidence_error is not None:
+                detail += (
+                    f"; evidence persistence failed: "
+                    f"{type(evidence_error).__name__}: {evidence_error}"
+                )
+            raise RuntimeError(detail) from restoration_audit_error
+        if evidence_error is not None:
+            raise RuntimeError(
+                f"dynamic collection evidence persistence failed: "
+                f"{type(evidence_error).__name__}: {evidence_error}"
+            ) from evidence_error
+        assert run is not None
         _write_json(output, run.model_dump(mode="json"))
     finally:
         guard.release(lease)
