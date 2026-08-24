@@ -402,6 +402,9 @@ def _observation_metric_view(
         "name": item.metric,
         "value": value,
         "unit": item.unit,
+        "sampleIndex": item.sample_index,
+        "sampleCount": item.sample_count,
+        "statistic": item.statistic,
         "baseline": None,
         "direction": "max"
         if direction == "maximize"
@@ -633,17 +636,25 @@ def experiment_view(
                     .order_by(ObservationRecord.created_at)
                 )
             )
-            latest_by_metric = {item.metric: item for item in latest_observations}
             metric_specs = (
                 benchmark.manifest_json.get("spec", {}).get("metrics", {})
                 if benchmark
                 else {}
             )
+            latest_by_metric = {item.metric: item for item in latest_observations}
+            display_observations = [
+                item
+                for item in latest_observations
+                if metric_specs.get(item.metric, {}).get("kind") == "sample"
+                or latest_by_metric[item.metric] is item
+            ]
             raw_metrics = [
                 view
-                for name, item in latest_by_metric.items()
+                for item in display_observations
                 if (
-                    view := _observation_metric_view(item, metric_specs.get(name, {}))
+                    view := _observation_metric_view(
+                        item, metric_specs.get(item.metric, {})
+                    )
                 )
                 is not None
             ]

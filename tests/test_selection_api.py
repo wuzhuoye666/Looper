@@ -43,6 +43,24 @@ def test_scenario_catalog_exposes_execution_boundary(db_session: object) -> None
     assert phoronix["selectionReady"] is True
     assert phoronix["singleNodeReady"] is True
     assert phoronix["runnable"] is True
+    assert phoronix["resultSections"] == [
+        {
+            "id": "phpbench-results",
+            "label": "PHPBench 数据",
+            "description": (
+                "展示固定 PTS profile 的综合分数、重复样本、执行参数、"
+                "协议门禁和原始证据状态。"
+            ),
+            "view": "phpbench-results",
+            "metrics": [
+                "phpbench_score",
+                "phpbench_score_sample",
+                "sample_count",
+                "pts_run_ok",
+                "profile_version_match",
+            ],
+        }
+    ]
     benchbase = views["benchbase.smallbank.postgres"]
     assert benchbase["category"] == "scenario"
     assert benchbase["executionStatus"] == "stage0-adapter-only"
@@ -277,6 +295,65 @@ def test_experiment_view_keeps_completed_repeat_metrics_while_later_repeats_are_
         item["name"] == "throughput_mib_s" and item["value"] == 321.5
         for item in evaluation["metrics"]
     )
+
+
+def test_experiment_view_keeps_all_declared_sample_metrics(db_session: object) -> None:
+    session = db_session
+    benchmark = session.scalar(
+        select(BenchmarkRecord).where(
+            BenchmarkRecord.benchmark_id == "looper.phoronix-phpbench"
+        )
+    )
+    assert benchmark is not None
+    request = _normalize_create_request(
+        {
+            "mode": "selection",
+            "name": "PHPBench sample visibility",
+            "benchmarkId": benchmark.benchmark_id,
+            "benchmarkVersion": benchmark.version,
+            "targetIds": ["local"],
+            "config": {"repeats": 3},
+        },
+        session,
+    )
+    experiment = create_experiment(session, request)
+    start_experiment(session, experiment)
+    attempt = session.scalar(
+        select(AttemptRecord)
+        .where(AttemptRecord.experiment_id == experiment.id)
+        .order_by(AttemptRecord.repeat_index)
+    )
+    assert attempt is not None
+    for index, value in enumerate((517432.0, 528171.0, 525322.0)):
+        session.add(
+            ObservationRecord(
+                id=new_id("obs"),
+                attempt_id=attempt.id,
+                metric="phpbench_score_sample",
+                value_number=value,
+                value_boolean=None,
+                unit="Score",
+                phase="measurement",
+                workload="phpbench",
+                sample_index=index,
+                sample_count=3,
+                statistic="sample",
+                timestamp_text=None,
+                attributes_json={},
+                created_at=utc_now(),
+            )
+        )
+    session.flush()
+
+    view = experiment_view(session, experiment, detail=True)
+    samples = [
+        metric
+        for metric in view["evaluations"][0]["metrics"]
+        if metric["name"] == "phpbench_score_sample"
+    ]
+    assert [sample["value"] for sample in samples] == [517432.0, 528171.0, 525322.0]
+    assert [sample["sampleIndex"] for sample in samples] == [0, 1, 2]
+    assert all(sample["sampleCount"] == 3 for sample in samples)
 
 
 def test_stage0_adapter_cannot_be_selected_for_a_new_study(

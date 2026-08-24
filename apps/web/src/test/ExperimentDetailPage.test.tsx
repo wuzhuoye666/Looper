@@ -1,6 +1,6 @@
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
-import { experimentTabs, SysbenchWorkloadSection } from '../pages/ExperimentDetailPage';
+import { experimentTabs, PhpBenchResultSection, SysbenchWorkloadSection } from '../pages/ExperimentDetailPage';
 import type { Experiment } from '../lib/types';
 
 describe('experiment result navigation', () => {
@@ -52,5 +52,34 @@ describe('experiment result navigation', () => {
     expect(screen.getByText('内存吞吐')).toBeInTheDocument();
     expect(screen.getByText('4,467.92 MiB/s')).toBeInTheDocument();
     expect(screen.getByText('已回传指标与原始证据')).toBeInTheDocument();
+  });
+
+  it('renders PHPBench score, samples, parameters, gates, and evidence in its dedicated panel', () => {
+    render(<PhpBenchResultSection
+      section={{ id: 'phpbench-results', label: 'PHPBench 数据', view: 'phpbench-results', metrics: ['phpbench_score', 'phpbench_score_sample'] }}
+      definitions={{ phpbench_score: { unit: 'Score', presentation: { userLabel: 'PHPBench 综合分数' } } }}
+      evaluations={[{
+        id: 'eval-phpbench', candidate: '测试机3', workload: 'phpbench', status: 'completed',
+        parameters: { times_to_run: 3, test_timeout_minutes: 10 },
+        metrics: [
+          { name: 'phpbench_score', value: 523642, unit: 'Score' },
+          { name: 'phpbench_score_sample', value: 517432, unit: 'Score', sampleIndex: 0 },
+          { name: 'phpbench_score_sample', value: 528171, unit: 'Score', sampleIndex: 1 },
+          { name: 'phpbench_score_sample', value: 525322, unit: 'Score', sampleIndex: 2 },
+          { name: 'sample_count', value: 3, unit: 'count' },
+          { name: 'pts_run_ok', value: true, unit: 'flag' },
+          { name: 'profile_version_match', value: true, unit: 'flag' },
+        ],
+        artifacts: [{ name: 'pts-result.json', url: '/result' }, { name: 'run-metadata.json', url: '/metadata' }],
+      }]}
+    />);
+
+    expect(screen.getByRole('heading', { name: 'PHPBench 数据' })).toBeInTheDocument();
+    expect(screen.getByText('523,642 Score')).toBeInTheDocument();
+    expect(screen.getByText('517,432')).toBeInTheDocument();
+    expect(screen.getByText('每轮重复').nextSibling).toHaveTextContent('3 次');
+    expect(screen.getByText('单项超时').nextSibling).toHaveTextContent('10 分钟');
+    expect(screen.getByText('PTS 执行通过')).toBeInTheDocument();
+    expect(screen.getByText('PTS 原始结果已回传')).toBeInTheDocument();
   });
 });

@@ -35,8 +35,8 @@ export interface CapacityStudy {
 }
 
 export interface Artifact { name: string; url: string; type?: string }
-export interface Metric { name: string; value: number; unit?: string; baseline?: number; direction?: 'min' | 'max' }
-export interface Evaluation { id: string; attemptId?: string; candidate: string; workload?: string; status: ExperimentStatus; phase?: string; phaseDetail?: string; score?: number; duration?: number; cost?: number; createdAt?: string; metrics?: Metric[]; artifacts?: Artifact[]; error?: string }
+export interface Metric { name: string; value: number | boolean; unit?: string; baseline?: number; direction?: 'min' | 'max' | 'none'; sampleIndex?: number; sampleCount?: number; statistic?: string }
+export interface Evaluation { id: string; attemptId?: string; resultAttemptId?: string; candidateId?: string; candidate: string; parameters?: Record<string, unknown>; workload?: string; status: ExperimentStatus; phase?: string; phaseDetail?: string; score?: number; duration?: number; cost?: number; createdAt?: string; metrics?: Metric[]; artifacts?: Artifact[]; error?: string; gateResults?: Array<{ id?: string; passed?: boolean; value?: number | boolean }> }
 export interface ScenarioContract {
   id: string; name: string; decision_question: string; user_value: string; workload_class: string;
   topology: 'single-node' | 'client-server' | 'multi-node' | 'closed-loop'; primary_metric: string;

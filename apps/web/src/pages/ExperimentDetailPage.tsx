@@ -194,6 +194,9 @@ function BenchmarkMetricSection({ section, definitions, evaluations }: {
   if (section.view === 'sysbench-workloads') {
     return <SysbenchWorkloadSection section={section} definitions={definitions} evaluations={evaluations} />;
   }
+  if (section.view === 'phpbench-results') {
+    return <PhpBenchResultSection section={section} definitions={definitions} evaluations={evaluations} />;
+  }
   return <section className="panel metric-definitions">
     <div className="panel-heading"><div><h2>{section.label}</h2><p>{section.description || '由 Benchmark manifest 声明的专属结果。'}</p></div></div>
     <div className="metric-definition-grid">{section.metrics.map(name => {
@@ -203,7 +206,7 @@ function BenchmarkMetricSection({ section, definitions, evaluations }: {
       const latest = samples[0];
       return <article key={name}>
         <div className="metric-definition-title"><strong>{presentation?.userLabel || name}</strong><span className="tag">{name}</span></div>
-        <strong className="metric-cell">{latest ? `${formatNumber(latest.value)} ${latest.unit || definition?.unit || ''}`.trim() : '待测试'}</strong>
+        <strong className="metric-cell">{latest ? `${formatMetricValue(latest.value)} ${latest.unit || definition?.unit || ''}`.trim() : '待测试'}</strong>
         <p>{presentation?.userDescription || definition?.description || '暂无指标说明。'}</p>
         <span className="cell-meta">{samples.length ? `${samples.length} 个已采集样本` : '尚未采集该指标'}</span>
       </article>;
@@ -228,7 +231,7 @@ export function SysbenchWorkloadSection({ section, definitions, evaluations }: {
     const metric = evaluation.metrics?.find(item => item.name === name);
     if (!metric) return '—';
     const precision = definitions?.[name]?.presentation?.displayPrecision ?? 2;
-    return `${formatNumber(metric.value, precision)} ${metric.unit || definitions?.[name]?.unit || ''}`.trim();
+    return `${formatMetricValue(metric.value, precision)} ${metric.unit || definitions?.[name]?.unit || ''}`.trim();
   };
   const workloadNames: Record<string, string> = { cpu: 'CPU 素数计算', memory: '内存吞吐', thread: '线程调度', mutex: '互斥锁竞争' };
   return <section className="panel metric-definitions sysbench-results">
@@ -248,6 +251,45 @@ export function SysbenchWorkloadSection({ section, definitions, evaluations }: {
       </article>;
     })}</div> : <EmptyState title="暂无 Sysbench workload 数据" description="完成至少一个 workload 后，这里会显示专属指标。" />}
     <div className="sysbench-result-note"><strong>数据口径</strong><span>每张卡展示该 workload 最新一次带观测值的结果；原始 stdout、raw-result.json 和系统指纹仍在“证据”与“原始终端”中保留。</span></div>
+  </section>;
+}
+
+export function PhpBenchResultSection({ section, definitions, evaluations }: {
+  section: BenchmarkResultSection;
+  definitions?: Record<string, MetricDefinition>;
+  evaluations: Evaluation[];
+}) {
+  const metricValue = (evaluation: Evaluation, name: string) =>
+    evaluation.metrics?.find(item => item.name === name)?.value;
+  const completed = evaluations.filter(item => item.metrics?.some(metric => metric.name === 'phpbench_score'));
+  const shown = completed.length ? completed : evaluations;
+  return <section className="panel metric-definitions phpbench-results">
+    <div className="panel-heading"><div><h2>{section.label}</h2><p>{section.description || '由 Benchmark manifest 声明的专属结果。'}</p></div></div>
+    {shown.length ? <div className="phpbench-result-list">{shown.map(item => {
+      const score = metricValue(item, 'phpbench_score');
+      const samples = (item.metrics || []).filter(metric => metric.name === 'phpbench_score_sample');
+      const sampleCount = metricValue(item, 'sample_count');
+      const ptsOk = metricValue(item, 'pts_run_ok') === true;
+      const profileOk = metricValue(item, 'profile_version_match') === true;
+      const timesToRun = item.parameters?.times_to_run;
+      const timeout = item.parameters?.test_timeout_minutes;
+      const evidenceNames = new Set((item.artifacts || []).map(artifact => artifact.name));
+      return <article className="phpbench-result" key={item.id}>
+        <div className="phpbench-result-heading"><div><span className="cell-meta">{item.candidate}</span><strong>PHPBench 0.8.1</strong></div><StatusBadge status={item.status} /></div>
+        <div className="phpbench-score"><span>{definitions?.phpbench_score?.presentation?.userLabel || 'PHPBench 综合分数'}</span><strong>{typeof score === 'number' ? `${formatNumber(score, 0)} Score` : '待测试'}</strong><small>Higher Is Better</small></div>
+        <div className="phpbench-samples"><strong>重复样本</strong><div>{samples.length ? samples.map((sample, index) => <span key={`${sample.sampleIndex ?? index}-${sample.value}`}><small>第 {typeof sample.sampleIndex === 'number' ? sample.sampleIndex + 1 : index + 1} 次</small><b>{typeof sample.value === 'number' ? formatNumber(sample.value, 0) : '—'}</b></span>) : <span><small>尚未回传</small><b>—</b></span>}</div></div>
+        <dl className="phpbench-parameters">
+          <div><dt>PTS Profile</dt><dd>pts/phpbench-1.1.6</dd></div>
+          <div><dt>有效样本</dt><dd>{typeof sampleCount === 'number' ? sampleCount : samples.length || '—'}</dd></div>
+          <div><dt>每轮重复</dt><dd>{typeof timesToRun === 'number' ? `${timesToRun} 次` : '—'}</dd></div>
+          <div><dt>单项超时</dt><dd>{typeof timeout === 'number' ? `${timeout} 分钟` : '—'}</dd></div>
+          <div><dt>结果单位</dt><dd>Score</dd></div>
+          <div><dt>结果方向</dt><dd>越高越好</dd></div>
+        </dl>
+        <div className="phpbench-gates"><span className={ptsOk ? 'pass' : ''}>{ptsOk ? 'PTS 执行通过' : 'PTS 执行待确认'}</span><span className={profileOk ? 'pass' : ''}>{profileOk ? 'Profile 版本匹配' : 'Profile 版本待确认'}</span><span className={evidenceNames.has('pts-result.json') ? 'pass' : ''}>{evidenceNames.has('pts-result.json') ? 'PTS 原始结果已回传' : 'PTS 原始结果待回传'}</span><span className={evidenceNames.has('run-metadata.json') ? 'pass' : ''}>{evidenceNames.has('run-metadata.json') ? '运行元数据已回传' : '运行元数据待回传'}</span></div>
+      </article>;
+    })}</div> : <EmptyState title="暂无 PHPBench 数据" description="完成至少一轮 PHPBench 后，这里会显示分数、样本、参数和门禁。" />}
+    <div className="sysbench-result-note"><strong>数据口径</strong><span>综合分数与重复样本来自固定的 pts/phpbench-1.1.6；完整 pts-result.json、run-metadata.json、日志和系统指纹继续保留在“证据”与“原始终端”。</span></div>
   </section>;
 }
 
@@ -282,7 +324,7 @@ function Comparisons({ items }: { items: SelectionComparison[] }) {
 
 function Evaluations({ items, retrying, onRetry }: { items: Evaluation[]; retrying: boolean; onRetry: (id: string) => void }) {
   if (!items.length) return <EmptyState title="暂无评估记录" />;
-  return <section className="panel table-panel"><div className="table-wrap"><table><thead><tr><th>候选</th><th>状态 / 阶段</th><th>得分</th><th>耗时</th><th>指标</th><th>操作</th></tr></thead><tbody>{items.map(item => <tr key={item.id}><td>{item.candidate}</td><td><StatusBadge status={item.status} />{item.phaseDetail&&<span className="cell-meta">{item.phaseDetail}</span>}</td><td className="metric-cell">{formatNumber(item.score)}</td><td>{item.duration == null ? '—' : `${formatNumber(item.duration, 1)}s`}</td><td>{item.metrics?.map(metric => `${metric.name}=${formatNumber(metric.value)}`).join(' · ') || '—'}</td><td>{item.attemptId && item.status === 'failed' ? <button className="icon-button" title="重试" aria-label={`重试 ${item.candidate}`} disabled={retrying} onClick={() => onRetry(item.attemptId!)}><RotateCcw size={15} /></button> : '—'}</td></tr>)}</tbody></table></div></section>;
+  return <section className="panel table-panel"><div className="table-wrap"><table><thead><tr><th>候选</th><th>状态 / 阶段</th><th>得分</th><th>耗时</th><th>指标</th><th>操作</th></tr></thead><tbody>{items.map(item => <tr key={item.id}><td>{item.candidate}</td><td><StatusBadge status={item.status} />{item.phaseDetail&&<span className="cell-meta">{item.phaseDetail}</span>}</td><td className="metric-cell">{formatNumber(item.score)}</td><td>{item.duration == null ? '—' : `${formatNumber(item.duration, 1)}s`}</td><td>{item.metrics?.map(metric => `${metric.name}=${formatMetricValue(metric.value)}`).join(' · ') || '—'}</td><td>{item.attemptId && item.status === 'failed' ? <button className="icon-button" title="重试" aria-label={`重试 ${item.candidate}`} disabled={retrying} onClick={() => onRetry(item.attemptId!)}><RotateCcw size={15} /></button> : '—'}</td></tr>)}</tbody></table></div></section>;
 }
 
 function Pareto({ data }: { data: AnalysisData['pareto'] }) {
@@ -318,4 +360,8 @@ function strengthLabel(value?: string) {
     'procurement-candidate': '采购建议候选',
   };
   return value ? labels[value] || value : '待形成';
+}
+
+function formatMetricValue(value: number | boolean, precision?: number) {
+  return typeof value === 'boolean' ? (value ? '是' : '否') : formatNumber(value, precision);
 }

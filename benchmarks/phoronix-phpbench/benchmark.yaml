@@ -157,27 +157,57 @@ spec:
       required: true
       minimumSamples: 1
       description: Aggregate score exported by the pinned PTS PHPBench profile.
+      presentation:
+        userLabel: PHPBench 综合分数
+        userDescription: 固定 PTS PHPBench profile 导出的聚合分数，数值越高表示 PHP 执行性能越好。
+        roles: [primary_outcome]
+        defaultVisibility: summary
+        displayFormat: number
+        displayPrecision: 0
     phpbench_score_sample:
       unit: Score
       direction: maximize
       kind: sample
       minimumSamples: 1
       description: Raw score retained from each PTS repetition.
+      presentation:
+        userLabel: 单次重复分数
+        userDescription: FORCE_TIMES_TO_RUN 控制的每次原始 PHPBench 分数，用于检查波动和聚合结果。
+        roles: [stability]
+        defaultVisibility: detail
+        displayFormat: number
+        displayPrecision: 0
     sample_count:
       unit: count
       direction: none
       kind: aggregate
       minimumSamples: 1
+      presentation:
+        userLabel: 有效样本数
+        roles: [context]
+        defaultVisibility: detail
+        displayFormat: number
+        displayPrecision: 0
     pts_run_ok:
       unit: flag
       direction: maximize
       kind: boolean
       minimumSamples: 1
+      presentation:
+        userLabel: PTS 执行成功
+        roles: [hard_gate]
+        defaultVisibility: detail
+        displayFormat: boolean
     profile_version_match:
       unit: flag
       direction: maximize
       kind: boolean
       minimumSamples: 1
+      presentation:
+        userLabel: Profile 版本匹配
+        roles: [hard_gate]
+        defaultVisibility: detail
+        displayFormat: boolean
   outputs:
     maxBytes: 8388608
     maxMetricLines: 32
@@ -207,3 +237,10 @@ spec:
     bootstrapCatalog: true
     executionStatus: executable
     selectionDefaults: {repeats: 3, timeoutSeconds: 10800, seed: 20260302}
+    resultPresentation:
+      sections:
+        - id: phpbench-results
+          label: PHPBench 数据
+          view: phpbench-results
+          description: 展示固定 PTS profile 的综合分数、重复样本、执行参数、协议门禁和原始证据状态。
+          metrics: [phpbench_score, phpbench_score_sample, sample_count, pts_run_ok, profile_version_match]
