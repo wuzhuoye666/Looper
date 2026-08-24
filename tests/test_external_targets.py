@@ -19,6 +19,7 @@ from looper_api.external_targets import (
 )
 from looper_api.models import Base, TargetRecord
 from looper_api.serialization import target_view
+from looper_core.canonical import canonical_digest
 from pydantic import ValidationError
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
@@ -424,3 +425,63 @@ def test_connect_existing_target_merges_probed_capabilities(external_db_session)
     external_db_session.flush()
     merged = set(refreshed.capabilities_json)
     assert {"custom-role", "linux", "ubuntu-22.04", "systemd", "ssh", "x86_64"} <= merged
+
+
+def test_cloud_target_display_stays_stable_after_ssh_probe(external_db_session) -> None:
+    record = import_external_target(
+        external_db_session,
+        _request(runnable=False),
+    )
+    record.provider = "alibaba"
+    record.status = "inventory-only"
+    record.runnable = False
+    record.inventory_json = {
+        "source": "cloud-order",
+        "endpoint": "10.0.0.9",
+        "framework": "Linux",
+        "image_id": "ubuntu_22_04_x64_20G_alibase.vhd",
+        "order_id": "order-display-stability",
+        "instance_state": "RUNNING",
+    }
+    record.fingerprint_json = {
+        "provider": "alibaba",
+        "instance_type": "ecs.test.large",
+        "cpu": 2,
+        "memory_gib": 1.57,
+        "image_id": "ubuntu_22_04_x64_20G_alibase.vhd",
+        "processor": "Cloud CPU",
+        "logical_cpu_count": 2,
+        "architecture": "x86_64",
+        "system": "Linux",
+        "release": "5.15.0-187-generic",
+    }
+    record.snapshot_digest = canonical_digest(
+        {"fingerprint": record.fingerprint_json, "inventory": record.inventory_json}
+    )
+    external_db_session.flush()
+    before = target_view(record)
+
+    discovered = DiscoveredExternalTarget(
+        hostname="compute-01",
+        operating_system="Ubuntu 22.04.5 LTS",
+        kernel="Linux 5.15.0-187-generic",
+        architecture="x86_64",
+        processor="Intel(R) Xeon(R) Platinum",
+        logical_cpu_count=2,
+        memory_gib=3.57,
+        host_key_sha256="SHA256:" + "D" * 43,
+        host_key_type="ssh-ed25519",
+        capabilities=["linux", "ubuntu-22.04"],
+    )
+    refreshed = connect_existing_target(
+        external_db_session,
+        record,
+        _connection(endpoint="10.0.0.9"),
+        probe=lambda _request: discovered,
+    )
+
+    after = target_view(refreshed)
+    assert after["framework"] == before["framework"]
+    assert after["version"] == before["version"]
+    assert after["hardware"] == before["hardware"]
+    assert "cloud_display" in refreshed.fingerprint_json
