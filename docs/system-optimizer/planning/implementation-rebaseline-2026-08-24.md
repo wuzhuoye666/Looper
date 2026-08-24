@@ -74,7 +74,7 @@
 
 ### 仍未完成（M3 真实边界，保持，不得写成完成）
 
-- O1 evidence → S4 在线优先级推导（当前 v1 假设源仍为声明式提案文件 `FileHypothesisProposals`，待活体 O1 源替换）。
+- O1 evidence → S4 在线优先级推导（O1 活体源已完成；当前 v1 假设源仍为声明式提案文件 `FileHypothesisProposals`，缺少 evidence → S4 vector → ranked proposals 在线生产者）。
 - refuted hypothesis 第二类负缓存（L7 第二条目类型，SO-D019 留 open，schema 未获用户逐字段确认）。
 - M3 汇合集成（M3-INT）与场景 Profile（M3-PROFILE）。
 - O3 时间盒 trace 属 M6+，不是当前缺陷。
