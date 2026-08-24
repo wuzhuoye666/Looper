@@ -1,0 +1,343 @@
+"""dynamic-run CLI end-to-end over a simulated demo session + convergence wiring.
+
+The CLI test exercises the full adapter chain on Windows: session files ->
+FileLoadIdentity/FileO0Source -> declarative hypotheses -> SafetyBacked-
+Intervention (L1 apply-and-keep, business retest judged by S6/S7) ->
+FileRetestSource verification windows -> S9 promotion -> phase restoration
+through the same L1 path. No real system writes happen: the backend is
+SimulatedBackend and the "external load" is the pre-produced session windows.
+
+The two convergence tests pin the stop-class-2 wiring: intervention rounds
+whose business LCB stays at or below the threshold accumulate into
+``consecutive_lcb_threshold_rounds``; a round clearly above it resets it.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+
+import yaml
+from looper_api.cli import _current_environment_digest, app
+from looper_core.system_opt.demo import build_demo_manifest
+from looper_core.system_opt.dynamic_demo import (
+    build_demo_initial_state,
+    build_dynamic_demo_session,
+)
+from looper_core.system_opt.dynamic_loop import run_dynamic_phase
+from looper_core.system_opt.hypothesis import (
+    ComponentHypothesis,
+    InterventionExperiment,
+)
+from looper_core.system_opt.phase_gate import (
+    BoundComparator,
+    ConvergencePolicy,
+    DegradationGate,
+    DynamicPhaseGateContract,
+    PhaseBudget,
+    SloTarget,
+)
+from looper_core.system_opt.result_vector import PromotionContract
+from looper_core.system_opt.state_evidence import (
+    STATE_EVIDENCE_SCHEMA,
+    ConfigStateRecord,
+    ConfigurationStateEvidence,
+    OwnershipDisposition,
+    PersistenceDisposition,
+    StateSource,
+)
+from looper_core.system_opt.workload import WorkloadContract
+from typer.testing import CliRunner
+
+runner = CliRunner()
+
+RATE = "stress-ng.bogo-ops-per-second-usr-sys-time"
+FIXTURE = (
+    Path(__file__).parents[1]
+    / ".artifacts"
+    / "system-opt"
+    / "m2-component-calibration-20260823"
+    / "looper-m2-cpu-calibration-20260823-b"
+    / "cpu-20260823T052438.003303Z-1.yaml"
+)
+ENV = "sha256:" + "b" * 64
+
+
+def _state_evidence(manifest) -> ConfigurationStateEvidence:
+    source = StateSource(
+        kind="user-declaration",
+        locator="demo://dynamic-session",
+        content_sha256=hashlib.sha256(b"demo://dynamic-session").hexdigest(),
+        line=1,
+        raw_value=None,
+    )
+    return ConfigurationStateEvidence(
+        schema_version=STATE_EVIDENCE_SCHEMA,
+        target_id="demo-dynamic-target",
+        manifest_digest=manifest.digest,
+        environment_digest=_current_environment_digest(),
+        collected_at=datetime(2026, 8, 24, tzinfo=UTC),
+        source_scope=["demo://dynamic-session"],
+        assignments=[],
+        records=[
+            ConfigStateRecord(
+                item_id=item.id,
+                parameter_id=item.parameter_id,
+                persistence=PersistenceDisposition.UNKNOWN,
+                persistent_value=None,
+                ownership=OwnershipDisposition.UNOWNED,
+                owner_id=None,
+                pinned=False,
+                sources=[source],
+                reason="simulated demo session: operator verified no external writer",
+            )
+            for item in manifest.items
+        ],
+        counting_basis="one UNOWNED record per demo manifest item",
+    )
+
+
+def _write_demo_inputs(root: Path) -> dict[str, Path]:
+    manifest = build_demo_manifest()
+    manifest_path = root / "manifest.yaml"
+    manifest_path.write_text(
+        yaml.safe_dump(manifest.model_dump(mode="json"), allow_unicode=True),
+        encoding="utf-8",
+    )
+    evidence_path = root / "state-evidence.json"
+    evidence_path.write_text(
+        _state_evidence(manifest).model_dump_json(indent=2), encoding="utf-8"
+    )
+    initial_path = root / "initial-state.json"
+    initial_path.write_text(
+        json.dumps(build_demo_initial_state(), indent=2), encoding="utf-8"
+    )
+    return {"manifest": manifest_path, "evidence": evidence_path, "initial": initial_path}
+
+
+def test_dynamic_run_cli_simulated_end_to_end(tmp_path: Path) -> None:
+    session = tmp_path / "session"
+    build_dynamic_demo_session(session)
+    inputs = _write_demo_inputs(tmp_path)
+    output = tmp_path / "dynamic-run.json"
+
+    result = runner.invoke(
+        app,
+        [
+            "system-opt",
+            "dynamic-run",
+            "--session",
+            str(session),
+            "--manifest",
+            str(inputs["manifest"]),
+            "--state-evidence",
+            str(inputs["evidence"]),
+            "--backend",
+            "simulated",
+            "--initial-state",
+            str(inputs["initial"]),
+            "--target-id",
+            "demo-dynamic-target",
+            "--owner-id",
+            "demo-owner",
+            "--lease-root",
+            str(tmp_path / "leases"),
+            "--lease-ttl-seconds",
+            "7200",
+            "--max-windows",
+            "6",
+            "--probe-top-k",
+            "2",
+            "--verification-windows",
+            "2",
+            "--output",
+            str(output),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+
+    run_payload = json.loads(output.read_text(encoding="utf-8"))
+    actions = [record["action"] for record in run_payload["windows"]]
+    assert actions[0] == "symptom-registered"
+    assert "verified" in actions
+    assert run_payload["stop_gate_decision"]["stop_class"] == "target-met"
+    promotion = run_payload["promotion"]
+    assert promotion is not None
+    assert promotion["promoted"] is True
+    assert promotion["candidate_id"] == "hyp-governor-performance"
+    assert promotion["failed_observations"] == []
+
+    control = session / "control"
+    retest_request = json.loads(
+        (control / "retest-request-hyp-governor-performance.json").read_text("utf-8")
+    )
+    assert retest_request["change"] == {"system.cpu-governor": "performance"}
+    assert len(retest_request["window_ids"]) == 5
+    restoration = json.loads((control / "phase-restoration.json").read_text("utf-8"))
+    assert restoration["state"] == "kept"
+    verify_request = json.loads(
+        (control / "retest-request-verify-window-3-1.json").read_text("utf-8")
+    )
+    assert verify_request["window_ids"][0] == "verify-window-3-1-run1"
+
+
+# ---------------------------------------------------------------------------
+# convergence wiring (stop class 2)
+# ---------------------------------------------------------------------------
+
+
+def _loop_contract(slo_bound: float | None) -> WorkloadContract:
+    payload = dict(
+        workload_id="stress-ng-standin-convergence-test",
+        load_provider="external-test",
+        load_command={
+            "tool": "stress-ng",
+            "argv_digest": "sha256:" + "a" * 64,
+            "declared_duration_seconds": 120,
+            "description": "test-side owned load",
+        },
+        o0_metrics=[
+            {
+                "metric_id": RATE,
+                "unit": "bogo-ops/s",
+                "direction": "maximize",
+                "aggregation": "mean",
+                "source": "stress-ng yaml metrics",
+            },
+            {
+                "metric_id": "stress-ng.bogo-ops",
+                "unit": "ops",
+                "direction": "maximize",
+                "aggregation": "mean",
+                "source": "stress-ng yaml metrics",
+            },
+        ],
+        objective={"primary_metric_id": RATE, "scale": 1.0, "mde": 0.5},
+        slos=(
+            [
+                {
+                    "metric_id": RATE,
+                    "comparator": "at-least",
+                    "bound": slo_bound,
+                    "unit": "bogo-ops/s",
+                }
+            ]
+            if slo_bound is not None
+            else []
+        ),
+        correctness_gates=[
+            {
+                "metric_id": "stress-ng.bogo-ops",
+                "comparator": "at-least",
+                "bound": 1,
+                "unit": "ops",
+            }
+        ],
+        phases=[
+            {
+                "phase_id": "steady",
+                "purpose": "load",
+                "o0_metric_ids": [RATE, "stress-ng.bogo-ops"],
+            }
+        ],
+        limitations="convergence wiring test fixture",
+    )
+    return WorkloadContract(**payload)
+
+
+def _convergence_gate(contract: WorkloadContract) -> DynamicPhaseGateContract:
+    return DynamicPhaseGateContract(
+        workload_contract_digest=contract.digest,
+        slo=SloTarget(
+            metric_id=RATE,
+            comparator=BoundComparator.AT_LEAST,
+            bound=1000.0,
+            hold_windows=2,
+        ),
+        convergence=ConvergencePolicy(rounds=2, lcb_threshold=0.0),
+        budget=PhaseBudget(max_interventions=5, wall_clock_seconds=3600.0, risk_quota=5),
+        degradation=DegradationGate(metric_id="stress-ng.bogo-ops", relative_limit=0.05),
+        reactivation_holdout_windows=2,
+    )
+
+
+def _hypotheses_factory(count: int):
+    def factory(symptom) -> list[ComponentHypothesis]:
+        components = ["cpu", "memory", "network"]
+        return [
+            ComponentHypothesis(
+                hypothesis_id=f"hyp-{components[i]}",
+                symptom_id=symptom.symptom_id,
+                component=components[i],
+                rank=i + 1,
+            )
+            for i in range(count)
+        ]
+
+    return factory
+
+
+def _clock():
+    state = {"now": datetime(2026, 8, 23, 12, 0, tzinfo=UTC)}
+
+    def tick() -> datetime:
+        state["now"] += timedelta(seconds=30)
+        return state["now"]
+
+    return tick
+
+
+def _run_convergence(lcb_values: list[float]) -> object:
+    contract = _loop_contract(slo_bound=1500.0)  # fixture rate 1182.49 violates
+    experiments = {"count": 0}
+
+    def intervention(_hypothesis):
+        index = experiments["count"]
+        experiments["count"] += 1
+        return InterventionExperiment(
+            measurement_batch_digest="sha256:" + str(index + 1).zfill(64),
+            business_metric_id=RATE,
+            accepted=False,
+            business_lcb=lcb_values[index],
+        )
+
+    run = run_dynamic_phase(
+        contract=contract,
+        gate_contract=_convergence_gate(contract),
+        promotion_contract=PromotionContract(
+            min_observations=3, min_distinct_time_blocks=3, min_environments=1
+        ),
+        environment_digest=ENV,
+        max_windows=8,
+        probe_top_k=1,
+        load_identity=lambda _window: contract.load_command,
+        o0_source=lambda _window: FIXTURE.read_text(encoding="utf-8"),
+        # Three competing hypotheses: D2 rule 1 blocks intervening on the last
+        # non-terminal one, so refuting two still leaves the third to keep the
+        # second refutation admissible.
+        hypothesis_source=_hypotheses_factory(3),
+        clock=_clock(),
+        component_probe=lambda hypothesis, window: window.digest,
+        intervention=intervention,
+    )
+    return run, experiments["count"]
+
+
+def test_convergence_counter_stops_after_k_nonimproving_rounds() -> None:
+    run, count = _run_convergence(lcb_values=[0.0, 0.0])
+
+    assert count == 2
+    assert run.stop_gate_decision.stop is True
+    assert run.stop_gate_decision.triggered_field == "convergence.rounds"
+    assert run.stop_gate_decision.stop_class.value == "converged"
+
+
+def test_convergence_counter_resets_on_a_high_lcb_round() -> None:
+    run, count = _run_convergence(lcb_values=[100.0, 100.0])
+
+    assert count == 2
+    # No convergence stop: both rounds had LCB above the threshold; the
+    # window budget ends the phase instead.
+    assert run.stop_gate_decision.triggered_field != "convergence.rounds"

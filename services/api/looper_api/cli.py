@@ -32,6 +32,19 @@ from looper_core.system_opt.domain import (
     DomainEvidence,
     resolve_domain,
 )
+from looper_core.system_opt.dynamic_adapters import (
+    BusinessRetestPlanner,
+    FileHypothesisProposals,
+    FileLoadIdentity,
+    FileO0Source,
+    FileRetestSource,
+    SafetyBackedIntervention,
+    SessionLayout,
+    load_business_policy,
+    load_hypothesis_proposals,
+    load_workload_contract,
+)
+from looper_core.system_opt.dynamic_loop import run_dynamic_phase
 from looper_core.system_opt.engine import EngineLoopConfig, run_engine_loop
 from looper_core.system_opt.executor import ConfigSnapshot
 from looper_core.system_opt.executor.local_linux import LocalLinuxBackend
@@ -56,6 +69,7 @@ from looper_core.system_opt.measurement import (
     MeasurementCommandSpec,
 )
 from looper_core.system_opt.negative_cache import NegativeCache
+from looper_core.system_opt.phase_gate import DynamicPhaseGateContract
 from looper_core.system_opt.policy import (
     OptimizationMode,
     parse_optimization_policy_yaml,
@@ -67,6 +81,7 @@ from looper_core.system_opt.pressure import (
     parse_standard_pressure_protocol_yaml,
     validate_pressure_policy,
 )
+from looper_core.system_opt.result_vector import PromotionContract
 from looper_core.system_opt.safety import SafetyController, SafetyPolicy, SafetyState
 from looper_core.system_opt.scoring import MeasurementBatch
 from looper_core.system_opt.state_evidence import (
@@ -1017,6 +1032,200 @@ def derive_pressure_gate(
                 "metric_id": evidence.metric_id,
                 "acceptance_limit": evidence.acceptance_limit,
                 "calibration_digest": evidence.digest,
+                "output": str(output.resolve()),
+            }
+        )
+    )
+
+
+@system_opt_app.command("dynamic-run")
+def run_dynamic_phase_session(
+    session_dir: Path = typer.Option(..., "--session", exists=True, file_okay=False),
+    manifest_path: Path = typer.Option(..., "--manifest", exists=True, dir_okay=False),
+    state_evidence_path: Path = typer.Option(
+        ..., "--state-evidence", exists=True, dir_okay=False
+    ),
+    backend_kind: str = typer.Option(..., "--backend"),
+    initial_state: Path | None = typer.Option(
+        None, "--initial-state", exists=True, dir_okay=False
+    ),
+    target_id: str = typer.Option(..., "--target-id"),
+    owner_id: str = typer.Option(..., "--owner-id"),
+    lease_root: Path = typer.Option(..., "--lease-root", file_okay=False),
+    lease_ttl_seconds: float = typer.Option(..., "--lease-ttl-seconds", min=1),
+    allow_executable: list[str] | None = typer.Option(None, "--allow-executable"),
+    writable_root: list[Path] = typer.Option([], "--writable-root", file_okay=False),
+    max_windows: int = typer.Option(..., "--max-windows", min=1),
+    probe_top_k: int = typer.Option(..., "--probe-top-k", min=1),
+    verification_window_count: int = typer.Option(..., "--verification-windows", min=0),
+    enable_real: bool = typer.Option(False, "--enable-real"),
+    confirmation: str = typer.Option("", "--confirmation"),
+    output: Path = typer.Option(..., "--output", dir_okay=False),
+) -> None:
+    """Run one dynamic phase over an externally loaded session directory.
+
+    SO-D020: the load is external; this command only reads ``windows/`` and
+    writes ``control/`` inside the session directory. The phase always ends by
+    restoring the phase-start configuration through the L1 safety path, so the
+    machine returns to its starting state regardless of promotion outcome.
+    """
+
+    if backend_kind == "local-linux":
+        _require_linux_confirmation(enable_real, confirmation)
+    elif backend_kind != "simulated":
+        raise typer.BadParameter("backend must be simulated or local-linux")
+    if backend_kind == "simulated" and initial_state is None:
+        raise typer.BadParameter("simulated backend requires --initial-state")
+
+    layout = SessionLayout(session_dir)
+    contract = load_workload_contract(layout)
+    gate_contract = DynamicPhaseGateContract.model_validate_json(
+        layout.gate_contract.read_text(encoding="utf-8")
+    )
+    promotion_contract = PromotionContract.model_validate_json(
+        layout.promotion_contract.read_text(encoding="utf-8")
+    )
+    business_policy = load_business_policy(layout.business_policy)
+    baseline_batch = MeasurementBatch.model_validate_json(
+        layout.baseline_batch.read_text(encoding="utf-8")
+    )
+    proposals = load_hypothesis_proposals(layout.hypothesis_proposals)
+    if lease_ttl_seconds <= gate_contract.budget.wall_clock_seconds:
+        raise typer.BadParameter(
+            "lease TTL must exceed the gate contract wall-clock budget"
+        )
+
+    manifest = parse_config_manifest_yaml(manifest_path.read_text(encoding="utf-8"))
+    if backend_kind == "simulated":
+        payload = _read_json(initial_state)
+        if not isinstance(payload, dict):
+            raise typer.BadParameter("initial state must be a JSON object")
+        backend = SimulatedBackend(payload, target_id=target_id)
+    else:
+        backend = _local_backend(
+            manifest,
+            target_id=target_id,
+            allowed_executables=allow_executable or [],
+            writable_roots=list(writable_root),
+        )
+
+    state_evidence = _load_state_evidence(state_evidence_path)
+    pinned_items, ownership_unknown_items = state_evidence.safety_constraints(
+        manifest,
+        target_id=target_id,
+        actor_id=owner_id,
+        environment_digest=_current_environment_digest(),
+    )
+    safety_policy = SafetyPolicy(
+        allow_keep=True,
+        pinned_items=sorted(pinned_items),
+        ownership_unknown_items=sorted(ownership_unknown_items),
+    )
+    controller = SafetyController(safety_policy)
+
+    guard = FileTargetGuard(lease_root)
+    lease = guard.acquire(
+        target_id,
+        owner_id,
+        ttl_seconds=lease_ttl_seconds,
+        now=datetime.now(UTC),
+        reconciliation=_load_reconciliation(None),
+    )
+    try:
+        changeable_ids: set[str] = set()
+        for proposal in proposals.proposals:
+            for parameter_id in proposal.change:
+                changeable_ids.add(manifest.item_for_parameter(parameter_id).id)
+        phase_items = manifest.ordered_items(changeable_ids)
+        phase_snapshot = backend.snapshot(phase_items, fencing_token=lease.fencing_token)
+        if not phase_snapshot.complete:
+            raise typer.BadParameter(
+                "phase-start snapshot is incomplete; refusing to start a dynamic "
+                "phase whose restoration cannot be guaranteed"
+            )
+
+        planner = BusinessRetestPlanner(
+            contract=contract,
+            policy=business_policy,
+            baseline_batch=baseline_batch,
+            layout=layout,
+        )
+        intervention = SafetyBackedIntervention(
+            controller=controller,
+            manifest=manifest,
+            backend=backend,
+            fencing_token=lease.fencing_token,
+            proposals=proposals.by_id(),
+            planner=planner,
+            layout=layout,
+        )
+        run = run_dynamic_phase(
+            contract=contract,
+            gate_contract=gate_contract,
+            promotion_contract=promotion_contract,
+            environment_digest=_current_environment_digest(),
+            max_windows=max_windows,
+            probe_top_k=probe_top_k,
+            load_identity=FileLoadIdentity(layout, business_policy),
+            o0_source=FileO0Source(layout, business_policy),
+            hypothesis_source=FileHypothesisProposals(proposals),
+            clock=lambda: datetime.now(UTC),
+            component_probe=lambda hypothesis, window: window.digest,
+            intervention=intervention,
+            retest=FileRetestSource(planner, layout),
+            verification_window_count=verification_window_count,
+        )
+
+        restoration_values = {
+            manifest.item(item_id).parameter_id: entry.value
+            for item_id, entry in phase_snapshot.entries.items()
+        }
+        restoration = controller.execute(
+            manifest,
+            restoration_values,
+            backend,
+            fencing_token=lease.fencing_token,
+            keep=True,
+            keep_authorized=True,
+        )
+        layout.control.mkdir(parents=True, exist_ok=True)
+        (layout.control / "phase-restoration.json").write_text(
+            json.dumps(restoration.model_dump(mode="json"), indent=2),
+            encoding="utf-8",
+        )
+        if restoration.state is not SafetyState.KEPT:
+            guard.mark_needs_attention(
+                target_id,
+                reason="dynamic phase restoration failed",
+                evidence_digest=run.digest,
+                now=datetime.now(UTC),
+            )
+            raise typer.BadParameter(
+                f"phase restoration failed: {restoration.reason}"
+            )
+        _write_json(output, run.model_dump(mode="json"))
+    finally:
+        guard.release(lease)
+    console.print_json(
+        json.dumps(
+            {
+                "windows": len(run.windows),
+                "stop": run.stop_gate_decision.stop,
+                "stop_class": (
+                    run.stop_gate_decision.stop_class.value
+                    if run.stop_gate_decision.stop_class
+                    else None
+                ),
+                "stop_reason": run.stop_gate_decision.reason,
+                "promotion": (
+                    {
+                        "candidate_id": run.promotion.candidate_id,
+                        "promoted": run.promotion.promoted,
+                    }
+                    if run.promotion
+                    else None
+                ),
+                "run_digest": run.digest,
                 "output": str(output.resolve()),
             }
         )

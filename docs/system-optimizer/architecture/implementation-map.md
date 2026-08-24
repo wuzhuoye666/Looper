@@ -66,6 +66,7 @@
 | 复验窗口 | `verification.py` | RetestOutcome = 改善 + 原始批次 digest |
 | 重激活 | `reactivation.py` | A+B 案；资格≠自动重启 |
 | **编排器** | `dynamic_loop.py` | run_dynamic_phase：每窗 组装→SLO/症状→账本→干预(注入)→复验→门禁判定→显式停止；负载/施加/测量全注入回调 |
+| **真实接线** | `dynamic_adapters.py` + `dynamic_demo.py` + CLI `system-opt dynamic-run` | 会话文件是引擎↔外部负载唯一界面（只读 windows/ 只写 control/）；干预 = L1 keep 施加 + 业务复测 S6/S7 + 拒绝即恢复；相位收尾无条件恢复到相位起点（晋升≠持久变更）；收敛计数器接真实干预轮 LCB |
 
 ## 五、证据与纪律机制（答辩硬货）
 

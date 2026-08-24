@@ -147,6 +147,7 @@ def run_dynamic_phase(
     promotion: PromotionEvidence | None = None
     symptom_registered = False
     interventions = 0
+    consecutive_lcb_rounds = 0
     elapsed = 0.0
     gate_state = PhaseGateState(
         consecutive_slo_met_windows=0,
@@ -281,6 +282,17 @@ def run_dynamic_phase(
                             ledger.refute(head.hypothesis_id, experiment.measurement_batch_digest)
                             action = WindowAction.INTERVENED
                             note = "business retest rejected the hypothesis; refuted"
+                        # Convergence (stop class 2) counts intervention rounds:
+                        # every experiment that judged through S6 contributes its
+                        # business LCB; verification windows are confirmations of
+                        # an already-accepted hypothesis, not search rounds.
+                        if experiment is not None and experiment.business_lcb is not None:
+                            consecutive_lcb_rounds = (
+                                consecutive_lcb_rounds + 1
+                                if experiment.business_lcb
+                                <= gate_contract.convergence.lcb_threshold
+                                else 0
+                            )
 
         gate_state = gate_state.model_copy(
             update={
@@ -292,6 +304,7 @@ def run_dynamic_phase(
                     else gate_state.consecutive_slo_met_windows
                 ),
                 "interventions": interventions,
+                "consecutive_lcb_threshold_rounds": consecutive_lcb_rounds,
                 "elapsed_seconds": elapsed,
             }
         )

@@ -64,12 +64,16 @@ class InterventionExperiment(StrictModel):
 
     ``accepted`` is the S7 verdict on the **business** metric of the retest
     batch under the same workload identity; component micro-metrics never
-    confirm a hypothesis.
+    confirm a hypothesis. ``business_lcb`` carries the S6 lower confidence
+    bound of that retest so stop class 2 (convergence) can count rounds
+    without re-parsing the batch; ``None`` marks adapters that do not judge
+    through S6 (convergence then simply never fires on their rounds).
     """
 
     measurement_batch_digest: str = Field(pattern=_DIGEST)
     business_metric_id: str = Field(min_length=1, max_length=160)
     accepted: bool
+    business_lcb: float | None = None
 
 
 class ComponentHypothesis(StrictModel):
