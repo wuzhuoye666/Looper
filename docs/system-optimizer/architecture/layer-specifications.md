@@ -46,7 +46,7 @@ packages/core/looper_core/system_opt/
 | 0 | L0–L2 | 现有 | 现有 101 个 system_opt 测试全绿（已满足） |
 | 1 | L4 采集器 | collector.py | ✅ 2026-08-23 修复后通过（42 项 L4 测试；原 13 项仅为基础基线，不代表压/采解耦合同完整） |
 | 2 | L6 回退器 | `rollback/__init__.py` + `rollback/regression.py` + API CLI | ✅ 核心执行与 G5 CLI 生命周期 2026-08-24 通过（四级记录/相位恢复三态；L6c S8 显式阈值→S9 last-good→L1 精确恢复；原子证据图、lease/attention fail-closed） |
-| 3 | L7 负缓存 | negative_cache.py | ✅ 2026-08-23 通过（17 测试：四分量身份敏感/无证据拒收/JSONL 追加/坏行报错） |
+| 3 | L7 负缓存 | negative_cache.py | ✅ 2026-08-24 通过（27 测试：四分量身份敏感/严格证据 digest/JSONL 原子逻辑追加与快照替换/失败保留旧状态/坏行报错） |
 | 4 | L8 引擎 | engine/ | ✅ 2026-08-23 通过（11 测试：打分排序/判断器否定理由完整/调度器缓存跳过与显式耗尽） |
 | 5 | L5 改造 | tuning.py 等 | 组件内终裁降格为上报引擎（单独后续阶段，不在本轮） |
 
@@ -163,15 +163,18 @@ pressure_protocol_digest, formula_versions_digest)` —— 四分量任一不同
 
 1. **每条目必须挂至少一个证据 digest**（optimization-run / measurement-batch
    其一）；无证据条目在校验层直接拒绝，不写入。
-2. **append-only**：存储为 JSONL 追加；加载时逐条校验，坏行报错不跳过。
+2. **append-only**：存储为 JSONL 逻辑追加；每次发布通过同目录临时文件原子替换，
+   旧行字节保持不变且只增加一个新记录；持久化成功后才更新内存索引。
+   加载时逐条校验，坏行报错不跳过。
 3. 缓存的是证据不是结论：verdict 必须是显式枚举
-   （`no-improvement-lcb` / `gate-rejected` / `stability-rejected`），
-   附 metric_id 与记录时间。
+   （`no-improvement-lcb` / `gate-rejected`），附 metric_id 与记录时间；测量稳定性
+   拒绝不是候选无改善结论，不得进入 L7。
 
 ### 5.3 验收门禁
 
 同身份命中、异身份未命中、任一分量变化未命中；无证据条目被拒；
 JSONL 往返追加不变更旧行；digest 稳定。
+原子替换失败时旧磁盘快照与内存索引均不变，临时文件必须清理。
 
 ## 6. L8 引擎规范（engine/）
 

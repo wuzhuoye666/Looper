@@ -21,7 +21,7 @@
 | L4 采集器 | `collector.py` `interference.py` | BuiltinLinuxGuestCollector（**已窗口化** begin_collection/finish/cancel）；verify_collection_artifact_bundle（ZIP 逐文件 sha256，容器字节不作身份）；干扰检查 | /proc /sys 微指标 + 压力工具产物解析；采集开销 A/B 证据（成对裸墙钟，无阈值） |
 | L5 组件优化器 | `component/__init__.py` `component/mapping.py` `component/strategy.py` + `strategies/*.yaml` | ComponentOptimizer（suggest_candidates/candidate_pool/run）；StrategyFormulaMapping（when 条件 bootstrap 置信 + 域校验） | **只建议不终裁**；越域建议拒绝并留痕（formula_rejections） |
 | L6 回退器 | `rollback/__init__.py` `rollback/regression.py` + API CLI | 四级：候选级（每候选测完即回退，真机验证过）/ 相位级 / 退化级（S8 U_regression 显式阈值触发并恢复 S9 last-good）/ 崩溃级 | verify_phase_restoration 三态；L6c 执行桥与 G5 CLI 安全生命周期均已落地，真实目标退化演练仍待执行 |
-| L7 负缓存 | `negative_cache/__init__.py` | NegativeCacheEntry，身份 = 环境×候选参数×协议×公式版本 四 digest | append-only；调度器开轮前查表跳过已证无效；红线：缓存证据不是结论 |
+| L7 负缓存 | `negative_cache/__init__.py` | NegativeCacheEntry，身份 = 环境×候选参数×协议×公式版本 四 digest | 严格 sha256 证据引用；JSONL 逻辑追加/快照同目录原子替换，持久化成功后才更新内存索引；调度器开轮前查表跳过已证无效；红线：缓存证据不是结论 |
 | L8 总引擎 | `engine/{scorer,judge,scheduler,incumbent,loop}.py` + `tuning.py` | run_engine_loop；evaluate_candidate（S0→S2→S7 固定序） | 只做调度/判断/打分三件事；SO-D017 预筛 tracker **按组件隔离**（SO-D018）；GPT 修复后 scheduler 选中候选被 L5 精确定向执行（身份违规即 raise） |
 
 ## 二、公式总线 S0–S10 → 实现位置
