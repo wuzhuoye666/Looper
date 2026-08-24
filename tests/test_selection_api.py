@@ -37,7 +37,10 @@ def test_scenario_catalog_exposes_execution_boundary(db_session: object) -> None
         "benchbase.smallbank.postgres",
         "dcperf.mediawiki.closed-loop",
     }
-    assert "looper.phoronix-phpbench" not in views
+    assert "looper.phoronix-phpbench" in views
+    phoronix = views["looper.phoronix-phpbench"]
+    assert phoronix["selectionReady"] is True
+    assert phoronix["runnable"] is True
     benchbase = views["benchbase.smallbank.postgres"]
     assert benchbase["category"] == "scenario"
     assert benchbase["executionStatus"] == "stage0-adapter-only"
