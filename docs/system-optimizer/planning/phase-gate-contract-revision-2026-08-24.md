@@ -1,9 +1,12 @@
 # phase-gate 合同修订设计 R3（两阶段干预接口 + 异常合同）
 
-> 状态：draft（提案，等主 agent 确认后再编码）。**不写实现**。
-> 关联：`phase_gate.py`、`dynamic_loop.py`、`hypothesis.py`、`dynamic_adapters.py`、
-> `safety.py`、`config_manifest.py`（ConfigItem.risk / RiskLevel）。
-> 日期：2026-08-24（R3 修订，取代 R2）。
+> 状态：D5-I1 实施中——模型与纯函数已落地于 `intervention.py`（
+> `InterventionPlan` / `InterventionOutcome` / `InterventionExecutionReceipt` /
+> `RiskSource` + `resolve_plan_risk` / `evaluate_intervention_gate` /
+> `verify_outcome_binding`）；动态循环接线属 D5-I2。
+> 关联：`phase_gate.py`、`intervention.py`、`dynamic_loop.py`、`hypothesis.py`、
+> `dynamic_adapters.py`、`safety.py`、`config_manifest.py`（ConfigItem.risk / RiskLevel）。
+> 日期：2026-08-24（R3 修订；D5-I1 实现对齐）。
 
 ## 1. 背景问题（主 agent 反馈，均确认）
 
@@ -29,9 +32,12 @@ class InterventionPlan(StrictModel):
     schema_version: Literal[INTERVENTION_PLAN_SCHEMA]
     hypothesis: ComponentHypothesis            # 身份绑定
     change: dict[str, Any]                     # 具体变更（显式，非 head.change）
-    change_count: int                          # = len(change)，single-change 执行前检查用
     risk: RiskLevel                            # 显式必填，无默认
     risk_source: RiskSource                    # 风险来源与一致性证据
+
+    @property
+    def change_count(self) -> int:             # = len(change)，计算属性
+        return len(self.change)                # single-change 执行前检查用
 
     @property
     def digest(self) -> str:                   # canonical digest，非可伪造字段
@@ -39,15 +45,15 @@ class InterventionPlan(StrictModel):
 ```
 
 - **不使用 `plan_digest` 字段**：`digest` 是 `@property` 计算值，攻击者无法自报一个与内容不一致的 plan_digest。
-- `InterventionOutcome.plan_digest` 回绑 `plan.digest`（即 `InterventionPlan.digest` 的返回值），不信任任何自报字段。
+- **不使用 `change_count` 字段**：`change_count` 是 `@property`（精确 `len(self.change)`），调用方无法伪造；`change` 为空在模型校验层拒绝。
+- `InterventionOutcome.plan_digest` 回绑 `plan.digest`（即 `InterventionPlan.digest` 的返回值），不信任任何自报字段；绑定由 `verify_outcome_binding(outcome, plan)` 显式校验，非注释声称。
 - `risk` **必填**（RiskLevel 枚举，无默认）；缺失即模型校验失败，不静默降级为 low。
-- `change_count` 由 `change` 派生（`len(change)`），single-change 在**这个**字段上执行前检查。
 
 ## 4. 风险来源与一致性（不信任 proposal 自报）
 
-1. **manifest 基准**：`ConfigItem.risk`（low/medium/high）；plan 涉及的所有项取**最高者**为 manifest 基准风险。
-2. **任务风险合同**：任务可显式声明 higher/lower，但必须给 `RiskSource` 证据，并与 manifest 基准**校验一致**——声明低于 manifest 最高风险时须给理由并记录；不一致 fail-closed。
-3. **不得仅凭 proposal 自报 `risky=False` 绕过 manifest 风险**。
+1. **manifest 基准（下界）**：`ConfigItem.risk`（low/medium/high）；plan 涉及的所有项取**最高者**为 manifest 基准风险。
+2. **任务风险只能抬高、不能降低**：任务可显式声明 higher，但**不得 lower**；最终风险取二者较高值。声明低于 manifest 最高风险时 fail-closed（无「理由豁免」路径）。
+3. **不得仅凭 proposal 自报 `risky=False` 绕过 manifest 风险**；缺失任务风险、缺失 manifest 绑定、绑定不一致一律 fail-closed。
 
 `RiskSource` 至少含：来源类型（manifest-derived / task-override）+ manifest 项列表 + 各项目 `RiskLevel` + 关联 manifest digest。
 
@@ -66,10 +72,14 @@ class InterventionOutcome(StrictModel):
     evidence_digest: str                        # safety result / measurement batch digest
 ```
 
+- `InterventionOutcome` 内部同样强制进度链：`apply_started => write_attempted`、`rollback_attempted => apply_started`、`rollback_verified => rollback_attempted`（模型校验层，非注释）。
+- 回绑由显式函数 `verify_outcome_binding(outcome, plan)` 校验：`outcome.plan_digest != plan.digest` 即 `InterventionContractError`。
+
 ## 6. execute_intervention 异常合同
 
 - **正常操作性失败**（apply 失败、verify 失败、业务复测拒绝、回退失败等）：在开始执行后**必须返回 `InterventionOutcome`**，不抛异常；`write_attempted`/`apply_started`/`rollback_*` 如实反映进展。
-- **意外异常**（未预期的 bug/崩溃）：必须有**执行 receipt/journal** 记录 `apply_started` 至少落盘（复用 `SafetyController` 已有的 `control/intervention-failure-*.json` 通道，或新增 receipt 模型）；receipt 本身写不进时也要 best-effort 落盘并保留原始异常。
+- **意外异常**（未预期的 bug/崩溃）：必须有**执行 receipt/journal** 记录 `apply_started` 至少落盘。receipt 是**新建独立、版本化的 `InterventionExecutionReceipt`**（`looper.intervention-execution-receipt/v1alpha1`），**不复用** `SafetyController` 当前临时的 `control/intervention-failure-*.json` 通道；其 digest 可重算并绑定 `plan.digest`，状态只能前进不能倒退。receipt 本身写不进时也要 best-effort 落盘并保留原始异常。
+- **D5-I1 边界**：本阶段只落地 `InterventionExecutionReceipt` 的**模型与纯函数**（进度链约束 + `advance` 单调推进），**不接 backend、不伪称崩溃后已持久化**；真正落盘与异常恢复接线属 D5-I2。
 - **dynamic_loop 异常路径**：捕获 `execute_intervention` 的意外异常后，**据 receipt 计 intervention/risk**（`apply_started=True` 即计），随后 fail-closed（停止本相位并记录原始异常 + receipt digest）。不因异常丢失预算计数。
 
 ## 7. 预算计数口径
@@ -79,7 +89,7 @@ class InterventionOutcome(StrictModel):
 | 仅 prepare（proposed） | 否 | 否 |
 | 执行前门禁拒绝（single-change / risk_quota） | 否 | 否 |
 | `apply_started=True`（含 rollback / 无 Experiment / 意外异常） | **是** | 若 plan.risk 非 low 则**是** |
-| 纯 preflight 拒绝（apply 之前） | **待用户确认** | 待用户确认 |
+| 纯 preflight 拒绝（apply 之前） | **否** | **否** |
 
 ## 8. risk_quota 语义（执行前检查）
 
@@ -116,7 +126,7 @@ if plan.risk != low and risky_interventions >= risk_quota:
 | prepare 成功 | 不变 | 不变 |
 | 执行前门禁拒绝 | 不变 | 不变 |
 | apply_started=True（任何终态，含异常） | +1 | plan.risk!=low 时 +1 |
-| preflight 拒绝 | 待确认 | 待确认 |
+| preflight 拒绝 | 不变 | 不变 |
 
 ## 12. 测试矩阵
 
@@ -131,9 +141,9 @@ if plan.risk != low and risky_interventions >= risk_quota:
 | plan_digest 被伪造 | `InterventionOutcome.plan_digest != InterventionPlan.digest` → 校验失败 |
 | 存量 fixture（无新字段） | 行为不变（legacy 兼容） |
 
-## 13. 待用户决定的问题（不在提案里选默认）
+## 13. 已锁定语义（D5-I1 实施）
 
-1. 纯 preflight 拒绝是否计入 intervention/risk 预算？
-2. `risk_quota` 耗尽复用 `BUDGET_EXHAUSTED` 停类还是新开 `RISK_QUOTA` 停类？
-3. 任务风险合同与 manifest 风险冲突时，取更高者还是必须显式 override + 记录？
-4. 意外异常的执行 receipt 是否复用 `control/intervention-failure-*.json`，还是新增独立 receipt schema？
+1. preflight 在 apply 前拒绝：不计 interventions，也不计 risky_interventions。
+2. `risk_quota` 耗尽复用 `GateStopClass.BUDGET_EXHAUSTED`，用 `triggered_field="budget.risk_quota"` 区分，不新增停类。
+3. manifest 风险是下界：任务风险只能提高、不能降低；最终风险取二者较高值。缺失任务风险、缺失 manifest 绑定、绑定不一致全部 fail-closed。
+4. 新建独立、版本化 `InterventionExecutionReceipt`，不复用临时 `intervention-failure` JSON；digest 可重算并绑定 `plan.digest`。
