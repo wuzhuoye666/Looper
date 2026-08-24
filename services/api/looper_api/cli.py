@@ -7,7 +7,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any, Literal
 
 import typer
 from looper_core.action_loop import VerificationPolicy
@@ -105,7 +105,7 @@ from looper_core.system_opt.state_evidence import (
     OwnershipDeclaration,
 )
 from looper_core.system_opt.tuning import SystemOptimizationEngine
-from pydantic import TypeAdapter
+from pydantic import StringConstraints, TypeAdapter, model_validator
 from rich.console import Console
 from sqlalchemy import select
 
@@ -195,18 +195,188 @@ def _ensure_distinct_paths(named_paths: dict[str, Path]) -> dict[str, Path]:
     return normalized
 
 
+REGRESSION_RECOVERY_EVIDENCE_INDEX_SCHEMA = (
+    "looper.regression-recovery-evidence-index/v1alpha1"
+)
+_SHA256_DIGEST = r"^sha256:[0-9a-f]{64}$"
+_Digest = Annotated[str, StringConstraints(pattern=_SHA256_DIGEST)]
+_EvidenceFilename = Annotated[
+    str,
+    StringConstraints(
+        pattern=r"^(request|outcome|rollback)-[0-9a-f]{64}\.json$"
+    ),
+]
+
+
 class RegressionRecoveryEvidenceIndex(StrictModel):
-    schema_version: str = "looper.regression-recovery-evidence-index/v1alpha1"
-    request_digest: str
-    outcome_digest: str
-    rollback_record_digest: str | None = None
-    request_path: str
-    outcome_path: str
-    rollback_record_path: str | None = None
+    """Fixed replay index for one fully published L6c evidence graph."""
+
+    schema_version: Literal[REGRESSION_RECOVERY_EVIDENCE_INDEX_SCHEMA] = (
+        REGRESSION_RECOVERY_EVIDENCE_INDEX_SCHEMA
+    )
+    request_digest: _Digest
+    outcome_digest: _Digest
+    rollback_record_digest: _Digest | None = None
+    request_path: _EvidenceFilename
+    outcome_path: _EvidenceFilename
+    rollback_record_path: _EvidenceFilename | None = None
+
+    @model_validator(mode="after")
+    def validate_content_addressed_paths(self) -> RegressionRecoveryEvidenceIndex:
+        expected_request = f"request-{self.request_digest.removeprefix('sha256:')}.json"
+        expected_outcome = f"outcome-{self.outcome_digest.removeprefix('sha256:')}.json"
+        if self.request_path != expected_request:
+            raise ValueError("request evidence path is not bound to its digest")
+        if self.outcome_path != expected_outcome:
+            raise ValueError("outcome evidence path is not bound to its digest")
+        if (self.rollback_record_digest is None) != (
+            self.rollback_record_path is None
+        ):
+            raise ValueError("rollback digest and path must be present together")
+        if self.rollback_record_digest is not None:
+            expected_rollback = (
+                "rollback-"
+                f"{self.rollback_record_digest.removeprefix('sha256:')}.json"
+            )
+            if self.rollback_record_path != expected_rollback:
+                raise ValueError("rollback evidence path is not bound to its digest")
+        return self
 
     @property
     def digest(self) -> str:
         return canonical_digest(self.model_dump(mode="json"))
+
+
+class RegressionRecoveryEvidenceGraph(StrictModel):
+    """In-memory graph validated completely before any evidence file is created."""
+
+    request: RegressionRecoveryRequest
+    outcome: RegressionRecoveryOutcome
+    index: RegressionRecoveryEvidenceIndex
+
+    @model_validator(mode="after")
+    def validate_associations(self) -> RegressionRecoveryEvidenceGraph:
+        request = self.request
+        outcome = self.outcome
+        rollback = outcome.rollback_record
+        if outcome.request_digest != request.digest:
+            raise ValueError("outcome request digest does not match request")
+        if self.index.request_digest != request.digest:
+            raise ValueError("index request digest does not match request")
+        if self.index.outcome_digest != outcome.digest:
+            raise ValueError("index outcome digest does not match outcome")
+        rollback_digest = rollback.digest if rollback is not None else None
+        if self.index.rollback_record_digest != rollback_digest:
+            raise ValueError("index rollback digest does not match outcome")
+        execution = outcome.execution_evidence
+        if execution is not None and execution.request_digest != request.digest:
+            raise ValueError("execution evidence does not match request")
+        if rollback is not None:
+            if execution is None:
+                raise ValueError("rollback evidence requires execution evidence")
+            checkpoint = request.checkpoint
+            if rollback.target_id != checkpoint.target_id:
+                raise ValueError("rollback target does not match request checkpoint")
+            if rollback.item_ids != sorted(checkpoint.snapshot.entries):
+                raise ValueError("rollback items do not match checkpoint snapshot")
+            if rollback.baseline_snapshot_digest != checkpoint.snapshot.digest:
+                raise ValueError("rollback baseline does not match checkpoint snapshot")
+            if request.digest not in rollback.evidence_digests:
+                raise ValueError("rollback evidence does not reference request")
+            if execution.digest not in rollback.evidence_digests:
+                raise ValueError("rollback evidence does not reference execution")
+            if rollback.checkpoint_digest != checkpoint.digest:
+                raise ValueError("rollback checkpoint does not match request")
+            if rollback.regression_vector_digest != request.current_vector.digest:
+                raise ValueError("rollback vector does not match request")
+            if rollback.regression_threshold != request.regression_threshold:
+                raise ValueError("rollback threshold does not match request")
+            safety_result = execution.safety_result
+            final_snapshot = (
+                safety_result.final_snapshot if safety_result is not None else None
+            )
+            final_snapshot_digest = (
+                final_snapshot.digest if final_snapshot is not None else None
+            )
+            if rollback.final_snapshot_digest != final_snapshot_digest:
+                raise ValueError("rollback final snapshot does not match execution")
+            restoration = execution.restoration
+            if restoration is not None:
+                if restoration.baseline_snapshot_digest != checkpoint.snapshot.digest:
+                    raise ValueError("restoration baseline does not match checkpoint")
+                if restoration.actual_snapshot_digest != final_snapshot_digest:
+                    raise ValueError("restoration snapshot does not match execution")
+        return self
+
+
+def _build_regression_recovery_evidence_graph(
+    request: RegressionRecoveryRequest,
+    outcome: RegressionRecoveryOutcome,
+) -> RegressionRecoveryEvidenceGraph:
+    rollback = outcome.rollback_record
+    rollback_digest = rollback.digest if rollback is not None else None
+    index = RegressionRecoveryEvidenceIndex(
+        request_digest=request.digest,
+        outcome_digest=outcome.digest,
+        rollback_record_digest=rollback_digest,
+        request_path=f"request-{request.digest.removeprefix('sha256:')}.json",
+        outcome_path=f"outcome-{outcome.digest.removeprefix('sha256:')}.json",
+        rollback_record_path=(
+            f"rollback-{rollback_digest.removeprefix('sha256:')}.json"
+            if rollback_digest is not None
+            else None
+        ),
+    )
+    return RegressionRecoveryEvidenceGraph(
+        request=request,
+        outcome=outcome,
+        index=index,
+    )
+
+
+def _persist_regression_recovery_evidence_graph(
+    evidence_dir: Path,
+    graph: RegressionRecoveryEvidenceGraph,
+) -> None:
+    """Publish digest files atomically and the fixed index last.
+
+    A failed publication may retain unindexed forensic files, but it cannot
+    publish a new index that presents a partial graph as complete.
+    """
+
+    index = graph.index
+    _write_json_atomic(evidence_dir / index.request_path, graph.request)
+    _write_json_atomic(evidence_dir / index.outcome_path, graph.outcome)
+    rollback = graph.outcome.rollback_record
+    if rollback is not None:
+        assert index.rollback_record_path is not None
+        _write_json_atomic(evidence_dir / index.rollback_record_path, rollback)
+    _write_json_atomic(
+        evidence_dir / "regression-recovery-evidence-index.json",
+        index,
+    )
+
+
+def _mark_regression_attention(
+    guard: FileTargetGuard,
+    *,
+    target_id: str,
+    reason: str,
+    evidence_digest: str,
+    primary_error: Exception | None = None,
+) -> None:
+    try:
+        guard.mark_needs_attention(
+            target_id,
+            reason=reason,
+            evidence_digest=evidence_digest,
+            now=datetime.now(UTC),
+        )
+    except Exception as attention_error:
+        combined = f"{reason}; attention write failed: {attention_error}"
+        if primary_error is not None:
+            raise RuntimeError(combined) from primary_error
+        raise RuntimeError(combined) from attention_error
 
 
 def _load_state_evidence(path: Path) -> ConfigurationStateEvidence:
@@ -1540,6 +1710,7 @@ def run_regression_recovery(
         reconciliation=None,
     )
     outcome: RegressionRecoveryOutcome | None = None
+    pending_error: BaseException | None = None
     try:
         try:
             outcome = execute_regression_recovery(
@@ -1551,114 +1722,79 @@ def run_regression_recovery(
                 recorded_at=datetime.now(UTC),
             )
         except Exception as error:
-            try:
-                guard.mark_needs_attention(
-                    target_id,
-                    reason=(
-                        f"L6c recovery execution failed for request {request.digest}: "
-                        f"{type(error).__name__}: {error}"
-                    ),
-                    evidence_digest=request.digest,
-                    now=datetime.now(UTC),
-                )
-            except Exception as attention_error:
-                raise RuntimeError(
-                    f"L6c recovery failed: {error}; "
-                    f"attention write failed: {attention_error}"
-                ) from error
-            raise RuntimeError(
+            reason = (
                 f"L6c recovery execution failed for request {request.digest}: "
                 f"{type(error).__name__}: {error}"
-            ) from error
-        rollback = outcome.rollback_record
-        rollback_digest = rollback.digest if rollback else None
-        request_path_name = f"request-{request.digest.removeprefix('sha256:')}.json"
-        outcome_path_name = f"outcome-{outcome.digest.removeprefix('sha256:')}.json"
-        rollback_path_name = (
-            f"rollback-{rollback_digest.removeprefix('sha256:')}.json" if rollback_digest else None
-        )
-        if outcome.request_digest != request.digest:
-            raise RuntimeError("outcome request digest does not match request")
-        index = RegressionRecoveryEvidenceIndex(
-            request_digest=request.digest,
-            outcome_digest=outcome.digest,
-            rollback_record_digest=rollback_digest,
-            request_path=request_path_name,
-            outcome_path=outcome_path_name,
-            rollback_record_path=rollback_path_name,
-        )
-        publish_error: Exception | None = None
-        try:
-            _write_json_atomic(evidence_dir / request_path_name, request)
-            _write_json_atomic(evidence_dir / outcome_path_name, outcome)
-            if rollback is not None:
-                _write_json_atomic(evidence_dir / rollback_path_name, rollback)
-            _write_json_atomic(
-                evidence_dir / "regression-recovery-evidence-index.json", index
             )
+            _mark_regression_attention(
+                guard,
+                target_id=target_id,
+                reason=reason,
+                evidence_digest=request.digest,
+                primary_error=error,
+            )
+            raise RuntimeError(reason) from error
+
+        try:
+            graph = _build_regression_recovery_evidence_graph(request, outcome)
+            _persist_regression_recovery_evidence_graph(evidence_dir, graph)
         except Exception as error:
-            publish_error = error
-        if publish_error is not None:
-            try:
-                guard.mark_needs_attention(
-                    target_id,
-                    reason=(
-                        f"L6c evidence publication failed for request {request.digest}; "
-                        f"recovery={outcome.status.value}: {outcome.reason}; "
-                        f"evidence={type(publish_error).__name__}: {publish_error}"
-                    ),
+            reason = (
+                f"L6c evidence publication failed for request {request.digest}; "
+                f"recovery={outcome.status.value}: {outcome.reason}; "
+                f"evidence={type(error).__name__}: {error}"
+            )
+            if outcome.status is not RegressionRecoveryStatus.NOT_TRIGGERED:
+                _mark_regression_attention(
+                    guard,
+                    target_id=target_id,
+                    reason=reason,
                     evidence_digest=request.digest,
-                    now=datetime.now(UTC),
+                    primary_error=error,
                 )
-            except Exception as attention_error:
-                raise RuntimeError(
-                    f"L6c evidence publication failed: {publish_error}; "
-                    f"recovery={outcome.reason}; "
-                    f"attention write failed: {attention_error}"
-                ) from publish_error
-            raise RuntimeError(
-                f"L6c evidence publication failed for request {request.digest}: "
-                f"{type(publish_error).__name__}: {publish_error}"
-            ) from publish_error
+            raise RuntimeError(reason) from error
+
         try:
             _write_json_atomic(output, outcome)
         except Exception as error:
-            raise RuntimeError(
-                f"L6c output convenience copy failed after evidence publication: {error}"
-            ) from error
+            reason = (
+                "L6c output convenience copy failed after complete evidence "
+                f"publication: {type(error).__name__}: {error}"
+            )
+            if outcome.status is RegressionRecoveryStatus.NEEDS_ATTENTION:
+                _mark_regression_attention(
+                    guard,
+                    target_id=target_id,
+                    reason=f"{outcome.reason}; {reason}",
+                    evidence_digest=outcome.digest,
+                    primary_error=error,
+                )
+            raise RuntimeError(reason) from error
+
         if outcome.status is RegressionRecoveryStatus.NEEDS_ATTENTION:
-            try:
-                guard.mark_needs_attention(
-                    target_id,
-                    reason=(
-                        f"L6c recovery needs attention for request {request.digest}: "
-                        f"{outcome.reason}"
-                    ),
-                    evidence_digest=outcome.digest,
-                    now=datetime.now(UTC),
-                )
-            except Exception as attention_error:
-                raise RuntimeError(
-                    f"L6c recovery needs attention: {outcome.reason}; "
-                    f"attention write failed: {attention_error}"
-                ) from attention_error
+            _mark_regression_attention(
+                guard,
+                target_id=target_id,
+                reason=(
+                    f"L6c recovery needs attention for request {request.digest}: "
+                    f"{outcome.reason}"
+                ),
+                evidence_digest=outcome.digest,
+            )
             raise typer.BadParameter(outcome.reason)
-    except Exception as error:
-        if outcome is not None and outcome.status is RegressionRecoveryStatus.RESTORED:
-            try:
-                guard.mark_needs_attention(
-                    target_id,
-                    reason=f"L6c evidence publication failed for request {request.digest}: {error}",
-                    evidence_digest=outcome.digest,
-                    now=datetime.now(UTC),
-                )
-            except Exception as attention_error:
-                raise RuntimeError(
-                    f"L6c evidence failure: {error}; attention failure: {attention_error}"
-                ) from error
+    except BaseException as error:
+        pending_error = error
         raise
     finally:
-        guard.release(lease)
+        try:
+            guard.release(lease)
+        except Exception as release_error:
+            if pending_error is not None:
+                raise RuntimeError(
+                    f"{type(pending_error).__name__}: {pending_error}; "
+                    f"lease release failed: {release_error}"
+                ) from pending_error
+            raise
     console.print_json(
         json.dumps(
             {
