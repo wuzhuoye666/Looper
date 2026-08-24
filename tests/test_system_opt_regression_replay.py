@@ -9,15 +9,27 @@ verifier's association checks (not just its digest checks) are exercised.
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
 from looper_api.cli import app
-from looper_core.system_opt.rollback.regression import RegressionRecoveryOutcome
+from looper_core.system_opt.rollback import (
+    RestorationStatus,
+    RollbackRecord,
+    RollbackStatus,
+)
+from looper_core.system_opt.rollback.regression import (
+    RegressionExecutionEvidence,
+    RegressionRecoveryOutcome,
+    RegressionRecoveryRequest,
+    RegressionRecoveryStatus,
+)
 from looper_core.system_opt.rollback.regression_evidence import (
     RegressionRecoveryEvidenceVerificationError,
     verify_regression_recovery_evidence,
 )
+from looper_core.system_opt.safety import SafetyState
 from test_system_opt_regression_cli import _argv, _inputs, runner
 
 INDEX_NAME = "regression-recovery-evidence-index.json"
@@ -65,6 +77,45 @@ def _reindex_model(evidence: Path, kind: str, model) -> None:
     payload[digest_field] = new_digest
     payload[path_field] = new_name
     _write_index(evidence, payload)
+
+
+def _replace_rollback(
+    evidence: Path,
+    mutate: Callable[[RollbackRecord], dict[str, object]],
+    *,
+    outcome_updates: dict[str, object] | None = None,
+) -> None:
+    outcome = _load_outcome(evidence)
+    assert outcome.rollback_record is not None
+    forged_rollback = outcome.rollback_record.model_copy(
+        update=mutate(outcome.rollback_record)
+    )
+    forged_outcome = outcome.model_copy(
+        update={"rollback_record": forged_rollback} | (outcome_updates or {})
+    )
+    _reindex_model(evidence, "outcome", forged_outcome)
+    _reindex_model(evidence, "rollback", forged_rollback)
+
+
+def _replace_execution(
+    evidence: Path,
+    forged_execution: RegressionExecutionEvidence,
+) -> None:
+    outcome = _load_outcome(evidence)
+    assert outcome.rollback_record is not None
+    forged_rollback = outcome.rollback_record.model_copy(
+        update={
+            "evidence_digests": [outcome.request_digest, forged_execution.digest]
+        }
+    )
+    forged_outcome = outcome.model_copy(
+        update={
+            "execution_evidence": forged_execution,
+            "rollback_record": forged_rollback,
+        }
+    )
+    _reindex_model(evidence, "outcome", forged_outcome)
+    _reindex_model(evidence, "rollback", forged_rollback)
 
 
 def test_not_triggered_graph_replays_and_is_stable(tmp_path: Path) -> None:
@@ -256,5 +307,207 @@ def test_forged_rollback_threshold_binding_fails_closed(tmp_path: Path) -> None:
     with pytest.raises(
         RegressionRecoveryEvidenceVerificationError,
         match="forged rollback threshold binding",
+    ):
+        verify_regression_recovery_evidence(evidence)
+
+
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (lambda _record: {"target_id": "forged-target"}, "target binding"),
+        (lambda record: {"item_ids": record.item_ids[:1]}, "item binding"),
+        (
+            lambda _record: {
+                "baseline_snapshot_digest": "sha256:" + "1" * 64,
+                "final_snapshot_digest": "sha256:" + "1" * 64,
+            },
+            "baseline snapshot binding",
+        ),
+        (
+            lambda _record: {"checkpoint_digest": "sha256:" + "2" * 64},
+            "checkpoint binding",
+        ),
+        (
+            lambda _record: {"regression_vector_digest": "sha256:" + "3" * 64},
+            "result-vector binding",
+        ),
+        (lambda _record: {"regression_threshold": 0.99}, "threshold binding"),
+        (lambda _record: {"trigger": "forged trigger"}, "trigger binding"),
+        (
+            lambda record: {
+                "evidence_digests": list(reversed(record.evidence_digests))
+            },
+            "request/execution evidence binding",
+        ),
+        (lambda _record: {"note": "forged reason"}, "reason binding"),
+    ],
+)
+def test_each_rollback_association_forgery_fails_closed(
+    tmp_path: Path,
+    mutate: Callable[[RollbackRecord], dict[str, object]],
+    message: str,
+) -> None:
+    evidence, _ = _run(tmp_path)
+    _replace_rollback(evidence, mutate)
+    with pytest.raises(RegressionRecoveryEvidenceVerificationError, match=message):
+        verify_regression_recovery_evidence(evidence)
+
+
+def test_forged_rollback_final_snapshot_binding_fails_closed(tmp_path: Path) -> None:
+    evidence, _ = _run(tmp_path)
+    _replace_rollback(
+        evidence,
+        lambda _record: {
+            "status": RollbackStatus.NEEDS_ATTENTION,
+            "verified": False,
+            "final_snapshot_digest": "sha256:" + "4" * 64,
+        },
+        outcome_updates={"status": RegressionRecoveryStatus.NEEDS_ATTENTION},
+    )
+    with pytest.raises(
+        RegressionRecoveryEvidenceVerificationError,
+        match="final snapshot binding",
+    ):
+        verify_regression_recovery_evidence(evidence)
+
+
+@pytest.mark.parametrize(
+    ("field", "message"),
+    [
+        ("baseline_snapshot_digest", "restoration baseline binding"),
+        ("actual_snapshot_digest", "restoration actual snapshot binding"),
+    ],
+)
+def test_each_restoration_association_forgery_fails_closed(
+    tmp_path: Path,
+    field: str,
+    message: str,
+) -> None:
+    evidence, _ = _run(tmp_path)
+    outcome = _load_outcome(evidence)
+    assert outcome.execution_evidence is not None
+    assert outcome.execution_evidence.restoration is not None
+    forged_restoration = outcome.execution_evidence.restoration.model_copy(
+        update={field: "sha256:" + "5" * 64}
+    )
+    forged_execution = outcome.execution_evidence.model_copy(
+        update={"restoration": forged_restoration}
+    )
+    _replace_execution(evidence, forged_execution)
+    with pytest.raises(RegressionRecoveryEvidenceVerificationError, match=message):
+        verify_regression_recovery_evidence(evidence)
+
+
+@pytest.mark.parametrize("forgery", ["safety-state", "restoration-status", "error"])
+def test_forged_restored_terminal_semantics_fail_closed(
+    tmp_path: Path,
+    forgery: str,
+) -> None:
+    evidence, _ = _run(tmp_path)
+    outcome = _load_outcome(evidence)
+    assert outcome.execution_evidence is not None
+    execution = outcome.execution_evidence
+    if forgery == "safety-state":
+        assert execution.safety_result is not None
+        execution = execution.model_copy(
+            update={
+                "safety_result": execution.safety_result.model_copy(
+                    update={"state": SafetyState.ROLLED_BACK}
+                )
+            }
+        )
+    elif forgery == "restoration-status":
+        assert execution.restoration is not None
+        execution = execution.model_copy(
+            update={
+                "restoration": execution.restoration.model_copy(
+                    update={"status": RestorationStatus.MISMATCH}
+                )
+            }
+        )
+    else:
+        execution = execution.model_copy(
+            update={
+                "execution_error_type": "ForgedError",
+                "execution_error_message": "forged execution error",
+            }
+        )
+    _replace_execution(evidence, execution)
+    with pytest.raises(
+        RegressionRecoveryEvidenceVerificationError,
+        match="terminal-state binding|cannot carry an execution error",
+    ):
+        verify_regression_recovery_evidence(evidence)
+
+
+def test_forged_rollback_verified_flag_fails_closed(tmp_path: Path) -> None:
+    evidence, _ = _run(tmp_path)
+    outcome = _load_outcome(evidence)
+    assert outcome.execution_evidence is not None
+    assert outcome.execution_evidence.safety_result is not None
+    assert outcome.rollback_record is not None
+    forged_execution = outcome.execution_evidence.model_copy(
+        update={
+            "safety_result": outcome.execution_evidence.safety_result.model_copy(
+                update={"state": SafetyState.ROLLED_BACK}
+            )
+        }
+    )
+    forged_rollback = outcome.rollback_record.model_copy(
+        update={
+            "status": RollbackStatus.NEEDS_ATTENTION,
+            "verified": True,
+            "evidence_digests": [outcome.request_digest, forged_execution.digest],
+        }
+    )
+    forged_outcome = outcome.model_copy(
+        update={
+            "status": RegressionRecoveryStatus.NEEDS_ATTENTION,
+            "execution_evidence": forged_execution,
+            "rollback_record": forged_rollback,
+        }
+    )
+    _reindex_model(evidence, "outcome", forged_outcome)
+    _reindex_model(evidence, "rollback", forged_rollback)
+    with pytest.raises(
+        RegressionRecoveryEvidenceVerificationError,
+        match="verification binding",
+    ):
+        verify_regression_recovery_evidence(evidence)
+
+
+def test_malformed_external_trigger_evidence_reference_fails_closed(
+    tmp_path: Path,
+) -> None:
+    evidence, _ = _run(tmp_path)
+    index = _index_payload(evidence)
+    request_path = evidence / index["request_path"]
+    request_payload = json.loads(request_path.read_text(encoding="utf-8"))
+    request_payload["trigger_evidence_digests"] = ["sha256:not-canonical"]
+    forged_request = RegressionRecoveryRequest.model_validate(request_payload)
+    outcome = _load_outcome(evidence)
+    assert outcome.execution_evidence is not None
+    assert outcome.rollback_record is not None
+    forged_execution = outcome.execution_evidence.model_copy(
+        update={"request_digest": forged_request.digest}
+    )
+    forged_rollback = outcome.rollback_record.model_copy(
+        update={
+            "evidence_digests": [forged_request.digest, forged_execution.digest]
+        }
+    )
+    forged_outcome = outcome.model_copy(
+        update={
+            "request_digest": forged_request.digest,
+            "execution_evidence": forged_execution,
+            "rollback_record": forged_rollback,
+        }
+    )
+    _reindex_model(evidence, "request", forged_request)
+    _reindex_model(evidence, "outcome", forged_outcome)
+    _reindex_model(evidence, "rollback", forged_rollback)
+    with pytest.raises(
+        RegressionRecoveryEvidenceVerificationError,
+        match="trigger evidence reference",
     ):
         verify_regression_recovery_evidence(evidence)

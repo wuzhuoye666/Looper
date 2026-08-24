@@ -15,12 +15,13 @@ from pydantic import StringConstraints, model_validator
 
 from looper_core.canonical import canonical_digest
 from looper_core.contracts import StrictModel
-from looper_core.system_opt.rollback import RollbackRecord
+from looper_core.system_opt.rollback import RestorationStatus, RollbackRecord
 from looper_core.system_opt.rollback.regression import (
     RegressionRecoveryOutcome,
     RegressionRecoveryRequest,
     RegressionRecoveryStatus,
 )
+from looper_core.system_opt.safety import SafetyState
 
 REGRESSION_RECOVERY_EVIDENCE_INDEX_SCHEMA = (
     "looper.regression-recovery-evidence-index/v1alpha1"
@@ -97,6 +98,11 @@ class RegressionRecoveryEvidenceGraph(StrictModel):
             raise ValueError("index request digest does not match request")
         if index.outcome_digest != outcome.digest:
             raise ValueError("index outcome digest does not match outcome")
+        if any(
+            re.fullmatch(_DIGEST_PATTERN, digest) is None
+            for digest in request.trigger_evidence_digests
+        ):
+            raise ValueError("forged regression trigger evidence reference")
         execution = outcome.execution_evidence
         rollback = outcome.rollback_record
         if outcome.status is RegressionRecoveryStatus.NOT_TRIGGERED:
@@ -124,9 +130,17 @@ class RegressionRecoveryEvidenceGraph(StrictModel):
             raise ValueError("forged rollback result-vector binding")
         if rollback.regression_threshold != request.regression_threshold:
             raise ValueError("forged rollback threshold binding")
-        expected_refs = {request.digest, execution.digest}
-        if set(rollback.evidence_digests) != expected_refs:
+        expected_trigger = (
+            f"u_regression={request.current_vector.u_regression} fell below explicit "
+            f"threshold {request.regression_threshold}"
+        )
+        if rollback.trigger != expected_trigger:
+            raise ValueError("forged rollback trigger binding")
+        expected_refs = [request.digest, execution.digest]
+        if rollback.evidence_digests != expected_refs:
             raise ValueError("forged rollback request/execution evidence binding")
+        if rollback.note != outcome.reason:
+            raise ValueError("forged rollback reason binding")
         safety = execution.safety_result
         final_snapshot = safety.final_snapshot if safety is not None else None
         final_digest = final_snapshot.digest if final_snapshot is not None else None
@@ -138,6 +152,21 @@ class RegressionRecoveryEvidenceGraph(StrictModel):
                 raise ValueError("forged restoration baseline binding")
             if restoration.actual_snapshot_digest != final_digest:
                 raise ValueError("forged restoration actual snapshot binding")
+        restored = (
+            safety is not None
+            and safety.state is SafetyState.KEPT
+            and restoration is not None
+            and restoration.status is RestorationStatus.RESTORED
+        )
+        if (outcome.status is RegressionRecoveryStatus.RESTORED) != restored:
+            raise ValueError("forged recovery terminal-state binding")
+        if rollback.verified != restored:
+            raise ValueError("forged rollback verification binding")
+        if (
+            outcome.status is RegressionRecoveryStatus.RESTORED
+            and execution.execution_error_type is not None
+        ):
+            raise ValueError("restored recovery cannot carry an execution error")
         return self
 
 
