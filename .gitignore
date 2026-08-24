@@ -6,6 +6,9 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 .pytest-tmp/
+.pytest-temp/
+.pytest-verify-terminal/
+.stg-bt/
 pytest-cache-files-*/
 .pytest_tmp/
 .ruff_cache/
@@ -32,12 +35,17 @@ test-results/
 *.db-shm
 *.db-wal
 
+# Local SSH credentials
+deploy/ssh/*.pem
+deploy/ssh/*.key
+
 # Editors and OS
 .vscode/
 .idea/
 .DS_Store
 Thumbs.db
 debug.log
+/.looper-api.*.log
 
 # Downloaded upstream sources
 third_party/cache/
