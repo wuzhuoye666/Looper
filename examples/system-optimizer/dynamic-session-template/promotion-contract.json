@@ -1,0 +1,5 @@
+{
+  "min_observations": 2,
+  "min_distinct_time_blocks": 2,
+  "min_environments": 1
+}

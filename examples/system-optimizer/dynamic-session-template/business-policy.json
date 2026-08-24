@@ -1,0 +1,14 @@
+{
+  "schema_version": "looper.business-retest-policy/v1alpha1",
+  "business_metric_id": "stress-ng.bogo-ops-per-second-usr-sys-time",
+  "phase_id": "steady",
+  "scale": 1.0,
+  "minimum_effect": 0.01,
+  "minimum_samples": 5,
+  "confidence_level": 0.95,
+  "bootstrap_resamples": 2000,
+  "random_seed": 7,
+  "retest_window_count": 5,
+  "window_wait_timeout_seconds": 300.0,
+  "window_poll_seconds": 1.0
+}

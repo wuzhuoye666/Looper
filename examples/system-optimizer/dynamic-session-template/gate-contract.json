@@ -1,0 +1,21 @@
+{
+  "schema_version": "looper.dynamic-phase-gate/v1alpha1",
+  "workload_contract_digest": "FILL_AFTER_WORKLOAD_CONTRACT_IS_FINALIZED",
+  "slo": null,
+  "convergence": {
+    "rounds": 2,
+    "lcb_threshold": 0.0
+  },
+  "budget": {
+    "max_interventions": 4,
+    "wall_clock_seconds": 14400.0,
+    "risk_quota": 0
+  },
+  "degradation": {
+    "metric_id": "stress-ng.bogo-ops-per-second-usr-sys-time",
+    "relative_limit": 0.05
+  },
+  "identity_drift_action": "stop-phase",
+  "reactivation_holdout_windows": 3,
+  "single_change_per_window": true
+}
