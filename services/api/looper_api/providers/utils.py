@@ -179,13 +179,134 @@ def parse_datetime(value: Any) -> datetime | None:
         return None
 
 
+def instance_type_family_token(item: InstanceTypeInfo) -> str:
+    source = (item.family or item.id).strip()
+    if source.casefold().startswith("ecs."):
+        source = source[4:]
+    return source.split(".", 1)[0]
+
+
+def instance_type_family_kind(item: InstanceTypeInfo) -> str:
+    token = instance_type_family_token(item).casefold()
+    if item.provider.value == "alibaba":
+        for prefix, kind in (
+            (("ebmgn", "vgn", "gn", "ga"), "heterogeneous"),
+            (("hfc",), "compute"),
+            (("s",), "shared"),
+            (("t",), "burstable"),
+            (("e",), "economy"),
+            (("u",), "universal"),
+            (("g",), "general"),
+            (("c",), "compute"),
+            (("r",), "memory"),
+            (("i",), "storage"),
+            (("d",), "big-data"),
+        ):
+            if token.startswith(prefix):
+                return kind
+        return "other"
+
+    if item.provider.value != "tencent":
+        return "other"
+    type_name = str(item.attributes.get("typeName") or "").casefold()
+    upper = token.upper()
+    if upper.startswith(("GN", "GI", "GA", "GT", "PNV", "GPU")) or "gpu" in type_name:
+        return "heterogeneous"
+    if upper.startswith(("IT", "IA")) or any(
+        marker in type_name for marker in ("高io", "高 io", "存储")
+    ):
+        return "storage"
+    if upper.startswith(("MA", "M")) or "内存" in type_name:
+        return "memory"
+    if upper.startswith("D") or "大数据" in type_name:
+        return "big-data"
+    if upper.startswith(("CN", "C")) or "计算" in type_name:
+        return "compute"
+    if "NE" in upper or "网络" in type_name:
+        return "network"
+    if upper.startswith("B") or "批量" in type_name:
+        return "batch"
+    if upper.startswith(("SA", "SR", "S")) or "标准" in type_name:
+        return "standard"
+    return "other"
+
+
+def instance_type_labels(item: InstanceTypeInfo) -> tuple[str, str]:
+    token = instance_type_family_token(item) or item.family or item.id
+    if item.provider.value not in {"alibaba", "tencent"}:
+        return "", ""
+    kind = instance_type_family_kind(item)
+    if item.provider.value == "alibaba":
+        labels = {
+            "shared": ("共享型", "共享标准型"),
+            "burstable": ("突发性能型", "突发性能型"),
+            "economy": ("经济型", "经济型"),
+            "universal": ("通用算力型", "通用算力型"),
+            "general": ("通用型", "通用型"),
+            "compute": (
+                "计算型",
+                "高主频计算型" if token.casefold().startswith("hfc") else "计算型",
+            ),
+            "memory": ("内存型", "内存型"),
+            "storage": ("本地存储型", "本地 SSD 型"),
+            "big-data": ("大数据型", "大数据型"),
+            "heterogeneous": ("GPU/异构型", "GPU/异构计算型"),
+        }
+    else:
+        labels = {
+            "standard": ("标准型", "标准型"),
+            "compute": ("计算型", "计算型"),
+            "memory": ("内存型", "内存型"),
+            "storage": ("存储型", "高 IO/存储型"),
+            "big-data": ("大数据型", "大数据型"),
+            "network": ("网络型", "网络优化型"),
+            "batch": ("批量型", "批量计算型"),
+            "heterogeneous": ("GPU/异构型", "GPU/异构计算型"),
+        }
+    if kind not in labels:
+        return "其他类型", f"规格族 {token}"
+    type_label, family_prefix = labels[kind]
+    type_name = str(item.attributes.get("typeName") or "").strip()
+    if item.provider.value == "tencent" and type_name:
+        family_label = (
+            type_name if token.casefold() in type_name.casefold() else f"{type_name} {token}"
+        )
+    else:
+        family_label = f"{family_prefix} {token}"
+    return type_label, family_label
+
+
+def enrich_instance_type_labels(item: InstanceTypeInfo) -> InstanceTypeInfo:
+    type_label, family_label = instance_type_labels(item)
+    if not type_label or not family_label:
+        return item
+    return item.model_copy(update={"type_label": type_label, "family_label": family_label})
+
+
+def instance_type_search_text(item: InstanceTypeInfo) -> str:
+    type_label, family_label = instance_type_labels(item)
+    return " ".join(
+        value
+        for value in (
+            item.id,
+            item.family or "",
+            item.architecture or "",
+            item.type_label or type_label,
+            item.family_label or family_label,
+            str(item.attributes.get("typeName") or ""),
+        )
+        if value
+    ).casefold()
+
+
 def filter_instance_types(
     items: list[InstanceTypeInfo], filters: CatalogFilters
 ) -> list[InstanceTypeInfo]:
     query = (filters.query or "").casefold()
     result = []
-    for item in items:
-        text = f"{item.id} {item.family or ''} {item.architecture or ''}".casefold()
+    for original in items:
+        item = enrich_instance_type_labels(original)
+        text = instance_type_search_text(item)
         if query and query not in text:
             continue
         if filters.zone and item.zones and filters.zone not in item.zones:

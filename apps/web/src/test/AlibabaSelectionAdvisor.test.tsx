@@ -29,6 +29,8 @@ function advisorResponse(
     zone,
     items: [{
       provider, region, id, family: provider === 'tencent' ? id.split('.')[0] : id.split('.').slice(0, 2).join('.'),
+      typeLabel: provider === 'tencent' ? '内存型' : '本地存储型',
+      familyLabel: provider === 'tencent' ? `内存型 ${id.split('.')[0]}` : `本地 SSD 型 ${id.split('.')[1]}`,
       cpu: 8, memoryGib: 32, gpu: 0, architecture: 'X86', zones: zone ? [zone] : ['ap-test-1'], available: true,
       localStorageCount: 1, localStorageCapacityGib: 1900, localStorageCategory: 'local_ssd_pro',
       attributes: provider === 'tencent' || aggregate ? { zoneCapabilities: [{ zone: provider === 'tencent' ? 'ap-test-1' : 'cn-test-a', available: true, localStorageCategory: 'LOCAL_SSD' }] } : {},
@@ -116,6 +118,7 @@ describe('阿里云 ECS 选型助手', () => {
 
     expect(await screen.findByRole('heading', { name: '剩余 21 个候选' })).toBeInTheDocument();
     expect(screen.getByText('ecs.i9i.xlarge')).toBeInTheDocument();
+    expect(screen.getByText(/本地存储型 · 本地 SSD 型 i9i/)).toBeInTheDocument();
     expect(requests[0]).toMatchObject({
       primaryScenario: 'database', sizingMode: 'exact', exactCpu: 8, exactMemoryGib: 32,
       localStorage: 'required', codeAvailability: 'available', architecture: 'x86', offset: 0, limit: 20,
@@ -125,6 +128,9 @@ describe('阿里云 ECS 选型助手', () => {
     expect(await screen.findByText('ecs.i8i.xlarge')).toBeInTheDocument();
     await waitFor(() => expect(requests[requests.length - 1]).toMatchObject({ query: 'ecs.i8i', offset: 0, limit: 20 }));
     expect(screen.getByRole('heading', { name: '匹配 1 个候选' })).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText('搜索候选机型'), { target: { value: '本地存储型' } });
+    await waitFor(() => expect(requests[requests.length - 1]).toMatchObject({ query: '本地存储型', offset: 0, limit: 20 }));
 
     fireEvent.change(screen.getByLabelText('搜索候选机型'), { target: { value: '' } });
     expect(await screen.findByText('ecs.i9i.xlarge')).toBeInTheDocument();

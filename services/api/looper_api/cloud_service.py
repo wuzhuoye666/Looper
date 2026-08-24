@@ -35,6 +35,7 @@ from looper_api.cloud_contracts import (
     ProviderId,
     ProvisionedInstance,
     SearchResult,
+    SecurityGroupInfo,
     SubnetInfo,
     TargetDestroyPreview,
     TargetDestroyRequest,
@@ -243,8 +244,18 @@ def ensure_managed_security_group(
     registry: CloudProviderRegistry,
     provider_id: ProviderId,
     region: str,
+    *,
+    vpc_id: str | None = None,
 ) -> dict[str, Any]:
-    group = registry.get(provider_id).ensure_managed_security_group(region)
+    token = hashlib.sha256(
+        f"looper-security-group:{provider_id.value}:{region}:{vpc_id or 'regional'}".encode()
+    ).hexdigest()
+    with _network_prep_lock(provider_id, region):
+        group = registry.get(provider_id).ensure_managed_security_group(
+            region,
+            vpc_id=vpc_id,
+            client_token=token,
+        )
     session.execute(
         delete(CloudCatalogCacheRecord).where(
             CloudCatalogCacheRecord.provider == provider_id.value,
@@ -255,7 +266,7 @@ def ensure_managed_security_group(
     return group.model_dump(mode="json", by_alias=True)
 
 
-_FULL_CATALOG_CACHE_VERSION = 4
+_FULL_CATALOG_CACHE_VERSION = 5
 _PAGED_CATALOG_KINDS = {"instance-type", "image"}
 
 
@@ -826,6 +837,49 @@ def resolve_instance_network(
             )
         )
 
+    security_group: SecurityGroupInfo | None = None
+    security_group_action: Literal["reused", "created", "selection-required"] = (
+        "selection-required"
+    )
+    with _network_prep_lock(provider_id, request.region):
+        all_groups = provider.list_security_groups(request.region)
+        compatible_groups = sorted(
+            [
+                item
+                for item in all_groups
+                if provider_id != ProviderId.ALIBABA or item.vpc_id == vpc.id
+            ],
+            key=lambda item: item.id,
+        )
+        if not compatible_groups:
+            security_group = provider.ensure_managed_security_group(
+                request.region,
+                vpc_id=vpc.id,
+                client_token=token_digest,
+            )
+            security_group_action = "created"
+            warnings.append(
+                f"当前网络没有兼容安全组，已自动创建 {security_group.name}"
+            )
+            session.execute(
+                delete(CloudCatalogCacheRecord).where(
+                    CloudCatalogCacheRecord.provider == provider_id.value,
+                    CloudCatalogCacheRecord.resource_type == "security-group",
+                    CloudCatalogCacheRecord.region == request.region,
+                )
+            )
+        else:
+            recommended = [item for item in compatible_groups if item.recommended]
+            defaults = [item for item in compatible_groups if item.is_default]
+            if recommended:
+                security_group = recommended[0]
+            elif defaults:
+                security_group = defaults[0]
+            elif len(compatible_groups) == 1:
+                security_group = compatible_groups[0]
+            if security_group is not None:
+                security_group_action = "reused"
+
     return InstanceNetworkResolution(
         provider=provider_id,
         region=request.region,
@@ -834,9 +888,11 @@ def resolve_instance_network(
         eligibleZones=eligible_zones,
         vpc=vpc,
         subnet=subnet,
+        securityGroup=security_group,
         zoneAutomaticallySelected=not bool(request.zone),
         vpcAction=vpc_action,
         subnetAction=action,
+        securityGroupAction=security_group_action,
         warnings=warnings,
     )
 

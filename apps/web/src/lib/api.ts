@@ -183,8 +183,8 @@ export const api = {
   securityGroups: (provider: CloudProviderId, region: string) =>
     api.catalog<CloudSecurityGroup>(provider, 'security-group', { region }),
   keyPairs: (provider: CloudProviderId, region: string) => api.catalog<CloudKeyPair>(provider, 'key-pair', { region }),
-  ensureManagedSecurityGroup: (provider: CloudProviderId, region: string) =>
-    request<CloudSecurityGroup>(`/cloud/network/${provider}/managed-security-group${query({ region })}`, { method: 'POST' }),
+  ensureManagedSecurityGroup: (provider: CloudProviderId, region: string, vpcId?: string) =>
+    request<CloudSecurityGroup>(`/cloud/network/${provider}/managed-security-group${query({ region, vpc_id: vpcId })}`, { method: 'POST' }),
   resolveInstanceNetwork: (provider: CloudProviderId, payload: InstanceNetworkResolveRequest, key: string) =>
     request<InstanceNetworkResolution>(`/cloud/network/${provider}/resolve-instance-network`, {
       method: 'POST', headers: { 'Idempotency-Key': key }, body: JSON.stringify(payload),

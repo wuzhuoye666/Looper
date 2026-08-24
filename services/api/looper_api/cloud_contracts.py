@@ -87,10 +87,12 @@ class SecurityGroupInfo(ApiModel):
     region: str
     id: str
     name: str
+    vpc_id: str | None = None
     description: str | None = None
     is_default: bool = False
     recommended: bool = False
     tags: dict[str, str] = Field(default_factory=dict)
+    managed: bool = False
 
 
 class KeyPairInfo(ApiModel):
@@ -108,6 +110,8 @@ class InstanceTypeInfo(ApiModel):
     region: str
     id: str
     family: str | None = None
+    type_label: str | None = None
+    family_label: str | None = None
     cpu: int
     memory_gib: float
     gpu: float | None = None
@@ -196,9 +200,11 @@ class InstanceNetworkResolution(ApiModel):
     eligible_zones: list[str]
     vpc: VpcInfo
     subnet: SubnetInfo
+    security_group: SecurityGroupInfo | None = None
     zone_automatically_selected: bool = False
     vpc_action: Literal["reused", "created"]
     subnet_action: Literal["reused", "created"]
+    security_group_action: Literal["reused", "created", "selection-required"]
     warnings: list[str] = Field(default_factory=list)
 
 

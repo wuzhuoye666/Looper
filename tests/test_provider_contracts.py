@@ -5,7 +5,12 @@ from decimal import Decimal
 from types import SimpleNamespace
 
 import pytest
-from looper_api.cloud_contracts import CatalogFilters, CloudPurchaseSpec, VpcInfo
+from looper_api.cloud_contracts import (
+    CatalogFilters,
+    CloudPurchaseSpec,
+    SecurityGroupInfo,
+    VpcInfo,
+)
 from looper_api.providers.alibaba_ecs import AlibabaEcsProvider
 from looper_api.providers.baidu_bcc import BaiduBccProvider
 from looper_api.providers.base import CloudProviderError
@@ -322,10 +327,14 @@ def test_tencent_ensure_security_group_uses_safe_atomic_policy(monkeypatch) -> N
         return SimpleNamespace(
             SecurityGroup=SimpleNamespace(
                 SecurityGroupId="sg-created",
-                SecurityGroupName="looper-private-outbound",
+                SecurityGroupName="looper-ssh-access",
                 SecurityGroupDesc="managed",
                 IsDefault=False,
-                TagSet=[SimpleNamespace(Key="managedBy", Value="looper")],
+                TagSet=[
+                    SimpleNamespace(Key="managedBy", Value="looper"),
+                    SimpleNamespace(Key="purpose", Value="cloud-purchase"),
+                    SimpleNamespace(Key="policyVersion", Value="ssh-v1"),
+                ],
             )
         )
 
@@ -339,10 +348,142 @@ def test_tencent_ensure_security_group_uses_safe_atomic_policy(monkeypatch) -> N
         "CreateSecurityGroupWithPolicies",
     ]
     payload = calls[1][1].to_json_string()
-    assert '"Ingress": []' in payload
+    assert '"Protocol": "TCP"' in payload
+    assert '"Port": "22"' in payload
     assert '"CidrBlock": "0.0.0.0/0"' in payload
     assert '"Action": "ACCEPT"' in payload
     assert '"managedBy"' in payload
+    assert '"purpose"' in payload
+    assert '"policyVersion"' in payload
+
+
+def test_alibaba_ensure_security_group_binds_vpc_and_configures_ssh(monkeypatch) -> None:
+    provider = AlibabaEcsProvider()
+    calls: list[tuple[str, object]] = []
+    created = False
+
+    def call(method: str, _region: str, request: object):
+        nonlocal created
+        calls.append((method, request))
+        if method == "describe_security_groups":
+            groups = []
+            if created:
+                groups = [SimpleNamespace(
+                    security_group_id="sg-created",
+                    security_group_name=getattr(request, "security_group_name", None)
+                    or "looper-ssh-access-test",
+                    vpc_id="vpc-test",
+                    is_default=False,
+                    description="managed",
+                    tags=SimpleNamespace(tag=[
+                        SimpleNamespace(tag_key="managedBy", tag_value="looper"),
+                        SimpleNamespace(tag_key="purpose", tag_value="cloud-purchase"),
+                        SimpleNamespace(tag_key="policyVersion", tag_value="ssh-v1"),
+                    ]),
+                )]
+            return SimpleNamespace(
+                body=SimpleNamespace(
+                    total_count=len(groups),
+                    security_groups=SimpleNamespace(security_group=groups),
+                )
+            )
+        if method == "create_security_group":
+            created = True
+            return SimpleNamespace(body=SimpleNamespace(security_group_id="sg-created"))
+        if method == "describe_security_group_attribute":
+            return SimpleNamespace(
+                body=SimpleNamespace(permissions=SimpleNamespace(permission=[]))
+            )
+        return SimpleNamespace(body=SimpleNamespace(request_id="request-test"))
+
+    monkeypatch.setattr(provider, "_call", call)
+    group = provider.ensure_managed_security_group(
+        "cn-test", vpc_id="vpc-test", client_token="token-test"
+    )
+
+    assert group.id == "sg-created"
+    create_request = next(request for method, request in calls if method == "create_security_group")
+    assert create_request.vpc_id == "vpc-test"
+    assert create_request.client_token == "token-test"
+    ingress = next(request for method, request in calls if method == "authorize_security_group")
+    assert ingress.ip_protocol == "TCP"
+    assert ingress.port_range == "22/22"
+    assert ingress.source_cidr_ip == "0.0.0.0/0"
+    egress = next(
+        request for method, request in calls if method == "authorize_security_group_egress"
+    )
+    assert egress.ip_protocol == "all"
+    assert egress.dest_cidr_ip == "0.0.0.0/0"
+
+
+def test_alibaba_cleanup_deletes_only_unreferenced_managed_security_group(
+    monkeypatch,
+) -> None:
+    provider = AlibabaEcsProvider()
+    group = SecurityGroupInfo(
+        provider="alibaba",
+        region="cn-test",
+        id="sg-managed",
+        name="looper-ssh-access-test",
+        vpcId="vpc-test",
+        tags={
+            "managedBy": "looper",
+            "purpose": "cloud-purchase",
+            "policyVersion": "ssh-v1",
+        },
+        managed=True,
+    )
+    calls: list[str] = []
+    monkeypatch.setattr(provider, "list_security_groups", lambda _region: [group])
+
+    def call(method: str, _region: str, _request: object):
+        calls.append(method)
+        if method == "describe_instances":
+            return SimpleNamespace(body=SimpleNamespace(total_count=0))
+        return SimpleNamespace(body=SimpleNamespace(request_id="request-test"))
+
+    monkeypatch.setattr(provider, "_call", call)
+    result = provider._delete_managed_security_group("cn-test", "sg-managed")
+
+    assert result.released is True
+    assert calls == ["describe_instances", "delete_security_group"]
+
+
+def test_alibaba_cleanup_keeps_referenced_and_user_security_groups(monkeypatch) -> None:
+    provider = AlibabaEcsProvider()
+    managed = SecurityGroupInfo(
+        provider="alibaba",
+        region="cn-test",
+        id="sg-managed",
+        name="looper-ssh-access-test",
+        tags={
+            "managedBy": "looper",
+            "purpose": "cloud-purchase",
+            "policyVersion": "ssh-v1",
+        },
+        managed=True,
+    )
+    user = SecurityGroupInfo(
+        provider="alibaba",
+        region="cn-test",
+        id="sg-user",
+        name="user-security-group",
+    )
+    monkeypatch.setattr(provider, "list_security_groups", lambda _region: [managed, user])
+    calls: list[str] = []
+
+    def call(method: str, _region: str, _request: object):
+        calls.append(method)
+        return SimpleNamespace(body=SimpleNamespace(total_count=1))
+
+    monkeypatch.setattr(provider, "_call", call)
+
+    referenced = provider._delete_managed_security_group("cn-test", "sg-managed")
+    untouched = provider._delete_managed_security_group("cn-test", "sg-user")
+
+    assert referenced.released is False
+    assert untouched.released is False
+    assert calls == ["describe_instances"]
 
 
 def test_tencent_targeted_inventory_sync_only_requests_selected_instances(

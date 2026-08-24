@@ -780,8 +780,15 @@ def cloud_managed_security_group(
     registry: ProviderRegistryDependency,
     _operator: OperatorDependency,
     region: str = Query(min_length=2, max_length=64),
+    vpc_id: str | None = Query(default=None, min_length=1, max_length=120),
 ) -> dict[str, Any]:
-    result = ensure_managed_security_group(session, registry, provider, region)
+    result = ensure_managed_security_group(
+        session,
+        registry,
+        provider,
+        region,
+        vpc_id=vpc_id,
+    )
     session.commit()
     return result
 

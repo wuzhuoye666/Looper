@@ -7,6 +7,11 @@ from typing import Literal
 from pydantic import Field, model_validator
 
 from looper_api.cloud_contracts import ApiModel, InstanceTypeInfo, ProviderId
+from looper_api.providers.utils import (
+    enrich_instance_type_labels,
+    instance_type_family_token,
+    instance_type_search_text,
+)
 
 ScenarioId = Literal[
     "web-api",
@@ -133,10 +138,7 @@ _TENCENT_FAMILY_ORDERS: dict[str, list[set[str]]] = {
 
 
 def _family_token(item: InstanceTypeInfo) -> str:
-    source = (item.family or item.id).casefold()
-    if source.startswith("ecs."):
-        source = source[4:]
-    return source.split(".", 1)[0]
+    return instance_type_family_token(item).casefold()
 
 
 def _alibaba_family_kind(item: InstanceTypeInfo) -> str:
@@ -489,15 +491,12 @@ def advise_instance_types(
     )
     eligible_total = len(ranked)
     query = (request.query or "").casefold()
-    searched = [
-        item
-        for item in ranked
-        if not query or query in f"{item.id} {item.family or ''}".casefold()
-    ]
+    searched = [item for item in ranked if not query or query in instance_type_search_text(item)]
     advised: list[AdvisedInstanceType] = []
     for item in searched[request.offset : request.offset + request.limit]:
         rank = _combined_family_rank(item, request)
         reasons, warnings, tier = _reasons_and_warnings(item, request, rank)
+        item = enrich_instance_type_labels(item)
         advised.append(
             AdvisedInstanceType(
                 **item.model_dump(), matchTier=tier, reasons=reasons, warnings=warnings

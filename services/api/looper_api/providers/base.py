@@ -113,7 +113,14 @@ class CloudProvider(ABC):
     def list_key_pairs(self, region: str) -> list[KeyPairInfo]:
         raise CloudProviderError("key pair catalog is not supported", code="unsupported_catalog")
 
-    def ensure_managed_security_group(self, region: str) -> SecurityGroupInfo:
+    def ensure_managed_security_group(
+        self,
+        region: str,
+        *,
+        vpc_id: str | None = None,
+        client_token: str | None = None,
+    ) -> SecurityGroupInfo:
+        del vpc_id, client_token
         raise CloudProviderError(
             "managed security group creation is not supported", code="unsupported_operation"
         )

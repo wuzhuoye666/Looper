@@ -113,6 +113,7 @@ class AlibabaEcsProvider(CloudProvider):
                 "subnets",
                 "managed-subnet",
                 "security-groups",
+                "managed-security-group",
                 "key-pairs",
                 "hourly-quote",
                 "postpaid-purchase",
@@ -765,12 +766,15 @@ class AlibabaEcsProvider(CloudProvider):
                         region=region,
                         id=str(group_id),
                         name=name,
+                        vpcId=attr(item, "vpc_id"),
                         description=attr(item, "description"),
+                        isDefault=bool(attr(item, "is_default", default=False)),
                         recommended=(
                             tags.get("managedBy", "").casefold() == "looper"
                             or name.casefold().startswith("looper")
                         ),
                         tags=tags,
+                        managed=tags.get("managedBy", "").casefold() == "looper",
                     )
                 )
             total = int(attr(nested(response, ("body",)), "total_count", default=0) or 0)
@@ -778,6 +782,156 @@ class AlibabaEcsProvider(CloudProvider):
                 break
             page_number += 1
         return items
+
+    def ensure_managed_security_group(
+        self,
+        region: str,
+        *,
+        vpc_id: str | None = None,
+        client_token: str | None = None,
+    ) -> SecurityGroupInfo:
+        if not vpc_id:
+            raise CloudProviderError(
+                "Alibaba Cloud managed security groups require a VPC",
+                code="vpc_required",
+            )
+        from alibabacloud_ecs20140526 import models
+
+        token = client_token or canonical_digest(
+            {"provider": self.id.value, "region": region, "vpcId": vpc_id}
+        )
+        name = f"looper-ssh-access-{canonical_digest(vpc_id)[:8]}"
+
+        def matches(group: SecurityGroupInfo) -> bool:
+            return (
+                group.vpc_id == vpc_id
+                and group.name == name
+                and group.tags.get("managedBy", "").casefold() == "looper"
+                and group.tags.get("purpose", "").casefold() == "cloud-purchase"
+                and group.tags.get("policyVersion", "").casefold() == "ssh-v1"
+            )
+
+        existing = sorted(
+            [group for group in self.list_security_groups(region) if matches(group)],
+            key=lambda group: group.id,
+        )
+        if existing:
+            group = existing[0]
+            self._ensure_managed_security_group_rules(region, group.id, token, models)
+            return group
+
+        request = models.CreateSecurityGroupRequest(
+            region_id=region,
+            vpc_id=vpc_id,
+            security_group_name=name,
+            description="Looper managed: SSH ingress and IPv4 egress",
+            security_group_type="normal",
+            client_token=token,
+            tag=[
+                models.CreateSecurityGroupRequestTag(key="managedBy", value="looper"),
+                models.CreateSecurityGroupRequestTag(key="purpose", value="cloud-purchase"),
+                models.CreateSecurityGroupRequestTag(key="policyVersion", value="ssh-v1"),
+            ],
+        )
+        try:
+            response = self._call("create_security_group", region, request)
+            group_id = attr(nested(response, ("body",)), "security_group_id")
+            if not group_id:
+                raise CloudProviderError(
+                    "Alibaba Cloud created a security group without returning its id",
+                    code="ambiguous_response",
+                    ambiguous=True,
+                )
+        except CloudProviderError:
+            recovered = sorted(
+                [group for group in self.list_security_groups(region) if matches(group)],
+                key=lambda group: group.id,
+            )
+            if not recovered:
+                raise
+            group_id = recovered[0].id
+
+        self._ensure_managed_security_group_rules(region, str(group_id), token, models)
+        refreshed = next(
+            (
+                group
+                for group in self.list_security_groups(region)
+                if group.id == str(group_id)
+            ),
+            None,
+        )
+        return refreshed or SecurityGroupInfo(
+            provider=self.id,
+            region=region,
+            id=str(group_id),
+            name=name,
+            vpcId=vpc_id,
+            description="Looper managed: SSH ingress and IPv4 egress",
+            recommended=True,
+            tags={
+                "managedBy": "looper",
+                "purpose": "cloud-purchase",
+                "policyVersion": "ssh-v1",
+            },
+            managed=True,
+        )
+
+    def _ensure_managed_security_group_rules(
+        self, region: str, group_id: str, client_token: str, models: Any
+    ) -> None:
+        def permissions(direction: str) -> list[Any]:
+            request = models.DescribeSecurityGroupAttributeRequest(
+                region_id=region,
+                security_group_id=group_id,
+                direction=direction,
+            )
+            response = self._call("describe_security_group_attribute", region, request)
+            return as_list(
+                nested(response, ("body",), ("permissions",), ("permission",), default=[])
+            )
+
+        ingress_rules = permissions("ingress")
+        has_ingress = any(
+            str(attr(rule, "ip_protocol", default="")).casefold() == "tcp"
+            and str(attr(rule, "port_range", default="")) in {"22", "22/22"}
+            and str(attr(rule, "source_cidr_ip", default="")) == "0.0.0.0/0"
+            and str(attr(rule, "policy", default="accept")).casefold() == "accept"
+            for rule in ingress_rules
+        )
+        if not has_ingress:
+            ingress = models.AuthorizeSecurityGroupRequest(
+                region_id=region,
+                security_group_id=group_id,
+                ip_protocol="TCP",
+                port_range="22/22",
+                source_cidr_ip="0.0.0.0/0",
+                policy="accept",
+                priority="1",
+                description="Looper managed public SSH",
+                client_token=f"{client_token[:56]}-in",
+            )
+            self._call("authorize_security_group", region, ingress)
+
+        egress_rules = permissions("egress")
+        has_egress = any(
+            str(attr(rule, "ip_protocol", default="")).casefold() == "all"
+            and str(attr(rule, "dest_cidr_ip", default="")) == "0.0.0.0/0"
+            and str(attr(rule, "policy", default="accept")).casefold() == "accept"
+            for rule in egress_rules
+        )
+        if not has_egress:
+            egress = models.AuthorizeSecurityGroupEgressRequest(
+                region_id=region,
+                security_group_id=group_id,
+                ip_protocol="all",
+                port_range="-1/-1",
+                dest_cidr_ip="0.0.0.0/0",
+                policy="accept",
+                priority="1",
+                description="Looper managed IPv4 egress",
+                client_token=f"{client_token[:55]}-out",
+            )
+            self._call("authorize_security_group_egress", region, egress)
 
     def list_key_pairs(self, region: str) -> list[KeyPairInfo]:
         from alibabacloud_ecs20140526 import models
@@ -1145,9 +1299,15 @@ class AlibabaEcsProvider(CloudProvider):
         subnet_id: str | None,
         security_group_ids: list[str],
     ) -> list[DestroyedResource]:
-        del vpc_id, security_group_ids
+        del vpc_id
+        released: list[DestroyedResource] = []
+        for security_group_id in security_group_ids:
+            if security_group_id:
+                released.append(
+                    self._delete_managed_security_group(region, str(security_group_id))
+                )
         if not subnet_id:
-            return []
+            return released
         from alibabacloud_vpc20160428 import models
 
         try:
@@ -1166,31 +1326,96 @@ class AlibabaEcsProvider(CloudProvider):
                 if attr(tag, "key", "tag_key")
             }
             if tags.get("managedBy", "").casefold() != "looper":
-                return [
+                released.append(
                     DestroyedResource(
                         kind="subnet",
                         id=subnet_id,
                         released=False,
                         note="非 Looper 纳管 vSwitch，保留不动",
                     )
-                ]
+                )
+                return released
             delete_request = models.DeleteVSwitchRequest(
                 region_id=region,
                 v_switch_id=subnet_id,
             )
             self._vpc_call("delete_vswitch", region, delete_request)
-            return [
+            released.append(
                 DestroyedResource(kind="subnet", id=subnet_id, note="Looper 纳管 vSwitch 已删除")
-            ]
+            )
+            return released
         except CloudProviderError as error:
-            return [
+            released.append(
                 DestroyedResource(
                     kind="subnet",
                     id=subnet_id,
                     released=False,
                     note=f"vSwitch 清理暂缓：{error}",
                 )
-            ]
+            )
+            return released
+
+    def _delete_managed_security_group(
+        self, region: str, security_group_id: str
+    ) -> DestroyedResource:
+        from alibabacloud_ecs20140526 import models
+
+        try:
+            group = next(
+                (
+                    item
+                    for item in self.list_security_groups(region)
+                    if item.id == security_group_id
+                ),
+                None,
+            )
+            if group is None:
+                return DestroyedResource(
+                    kind="security-group", id=security_group_id, note="安全组已不存在"
+                )
+            managed = (
+                not group.is_default
+                and group.tags.get("managedBy", "").casefold() == "looper"
+                and group.tags.get("purpose", "").casefold() == "cloud-purchase"
+                and group.tags.get("policyVersion", "").casefold() == "ssh-v1"
+            )
+            if not managed:
+                return DestroyedResource(
+                    kind="security-group",
+                    id=security_group_id,
+                    released=False,
+                    note="非 Looper 纳管安全组，保留不动",
+                )
+            request = models.DescribeInstancesRequest(
+                region_id=region,
+                security_group_id=security_group_id,
+                page_number=1,
+                page_size=1,
+            )
+            response = self._call("describe_instances", region, request)
+            total = int(attr(nested(response, ("body",)), "total_count", default=0) or 0)
+            if total:
+                return DestroyedResource(
+                    kind="security-group",
+                    id=security_group_id,
+                    released=False,
+                    note=f"安全组仍关联 {total} 台实例，保留不动",
+                )
+            delete_request = models.DeleteSecurityGroupRequest(
+                region_id=region,
+                security_group_id=security_group_id,
+            )
+            self._call("delete_security_group", region, delete_request)
+            return DestroyedResource(
+                kind="security-group", id=security_group_id, note="Looper 纳管安全组已删除"
+            )
+        except CloudProviderError as error:
+            return DestroyedResource(
+                kind="security-group",
+                id=security_group_id,
+                released=False,
+                note=f"安全组清理暂缓：{error}",
+            )
 
     def delete_vpc_if_empty(self, *, region: str, vpc_id: str) -> DestroyedResource:
         from alibabacloud_vpc20160428 import models

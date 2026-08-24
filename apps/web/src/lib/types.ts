@@ -278,11 +278,12 @@ export interface InstanceNetworkResolveRequest {
 export interface InstanceNetworkResolution {
   provider: CloudProviderId; region: string; instanceType: string; zone: string; eligibleZones: string[];
   vpc: CloudVpc; subnet: CloudSubnet; zoneAutomaticallySelected: boolean;
-  vpcAction: 'reused' | 'created'; subnetAction: 'reused' | 'created'; warnings: string[];
+  securityGroup?: CloudSecurityGroup; vpcAction: 'reused' | 'created'; subnetAction: 'reused' | 'created';
+  securityGroupAction: 'reused' | 'created' | 'selection-required'; warnings: string[];
 }
 export interface CloudSecurityGroup {
   provider: CloudProviderId; region: string; id: string; name: string; description?: string;
-  isDefault: boolean; recommended: boolean; tags: Record<string, string>;
+  vpcId?: string; isDefault: boolean; recommended: boolean; tags: Record<string, string>; managed: boolean;
 }
 export interface CloudKeyPair {
   provider: CloudProviderId; region: string; id: string; name: string; description?: string;
@@ -290,6 +291,7 @@ export interface CloudKeyPair {
 }
 export interface CloudInstanceType {
   provider: CloudProviderId; region: string; id: string; family?: string; cpu: number; memoryGib: number;
+  typeLabel?: string; familyLabel?: string;
   gpu?: number; gpuModel?: string; gpuMemoryGib?: number; architecture?: string;
   networkBandwidthRxGbps?: number; networkBandwidthTxGbps?: number; networkPpsRx?: number; networkPpsTx?: number;
   localStorageCount?: number; localStorageCapacityGib?: number; localStorageCategory?: string;

@@ -77,6 +77,8 @@ describe('腾讯云购买网络选择', () => {
           zone: 'ap-test-1',
           id: index === 0 ? 'S9.TEST' : `S9.TEST.${String(index + 1).padStart(2, '0')}`,
           family: 'S9',
+          typeLabel: '标准型',
+          familyLabel: '标准型 S9',
           cpu: 4,
           memoryGib: 8,
           architecture: 'x86',
@@ -132,9 +134,11 @@ describe('腾讯云购买网络选择', () => {
         eligibleZones: ['ap-test-1'],
         vpc: { provider: 'tencent', region: 'ap-test', id: 'vpc-default', name: 'Default-VPC', cidrBlock: '172.16.0.0/16', isDefault: true, tags: {}, managed: false },
         subnet: { provider: 'tencent', region: 'ap-test', zone: 'ap-test-1', vpcId: 'vpc-default', id: 'subnet-default', name: 'Default-Subnet', availableIpCount: 250, isDefault: true },
+        securityGroup: { provider: 'tencent', region: 'ap-test', id: 'sg-looper', name: 'looper-ssh-access', isDefault: false, recommended: true, tags: { managedBy: 'looper', purpose: 'cloud-purchase', policyVersion: 'ssh-v1' }, managed: true },
         zoneAutomaticallySelected: true,
         vpcAction: 'reused',
         subnetAction: 'reused',
+        securityGroupAction: 'created',
         warnings: [],
       });
       if (url.includes('/cloud/selection-advisor/search')) return response({
@@ -169,6 +173,7 @@ describe('腾讯云购买网络选择', () => {
     await screen.findByRole('option', { name: /测试地域/ });
     fireEvent.change(screen.getByLabelText('地域'), { target: { value: 'ap-test' } });
     const firstType = await screen.findByText('S9.TEST');
+    expect(screen.getAllByText('标准型 · 标准型 S9').length).toBeGreaterThan(0);
     const firstRow = firstType.closest('tr');
     expect(firstRow).not.toBeNull();
     fireEvent.click(within(firstRow!).getByRole('button', { name: '选择并继续' }));
@@ -197,6 +202,7 @@ describe('腾讯云购买网络选择', () => {
     expect(screen.getAllByText(/ap-test-1/).length).toBeGreaterThan(0);
     expect(screen.getByText(/已复用 VPC Default-VPC · vpc-default/)).toBeInTheDocument();
     expect(screen.getByText(/已复用子网 Default-Subnet · subnet-default/)).toBeInTheDocument();
+    expect(screen.getByText(/已创建安全组 looper-ssh-access · sg-looper/)).toBeInTheDocument();
     expect(vi.mocked(fetch).mock.calls.some(([request]) => {
       const url = String(request);
       return url.includes('/cloud/catalog/tencent/image') && url.includes('instance_type=S9.TEST');
@@ -225,6 +231,42 @@ describe('腾讯云购买网络选择', () => {
     expect(screen.getByLabelText('VPC ID *')).toBeInTheDocument();
     expect(screen.getByLabelText('子网 / vSwitch ID *')).toBeInTheDocument();
     expect(screen.getByLabelText('安全组 ID *')).toBeInTheDocument();
+  });
+
+  it('只恢复购买配置默认值并保留地域、机型和镜像', async () => {
+    renderMarket();
+    await chooseFirstMachine();
+    await chooseFirstImage();
+    await waitFor(() => expect(screen.getByLabelText('子网 *')).toHaveValue('subnet-default'));
+
+    fireEvent.change(screen.getByLabelText('实例名称 *'), { target: { value: 'custom-instance' } });
+    fireEvent.change(screen.getByLabelText('私有网络 VPC *'), { target: { value: 'vpc-other' } });
+    await waitFor(() => expect(screen.getByLabelText('子网 *')).toHaveValue('subnet-other'));
+
+    fireEvent.click(screen.getByRole('checkbox', { name: /other/ }));
+    fireEvent.click(screen.getByRole('checkbox', { name: /sg-looper/ }));
+    fireEvent.change(screen.getByLabelText('SSH 登录方式 *'), { target: { value: 'private-key' } });
+    fireEvent.change(screen.getByLabelText('系统盘 GB'), { target: { value: '120' } });
+    fireEvent.change(screen.getByLabelText('公网带宽 Mbps'), { target: { value: '12' } });
+    fireEvent.click(screen.getByRole('checkbox', { name: /分配固定带宽公网 IP/ }));
+
+    fireEvent.click(screen.getByRole('button', { name: '恢复默认设置' }));
+
+    expect(screen.getByRole('heading', { name: '购买草稿' })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: '腾讯云 CVM · 机型' })).not.toBeInTheDocument();
+    expect(screen.getAllByText(/ap-test-1/).length).toBeGreaterThan(0);
+    expect(screen.getByLabelText('实例名称 *')).toHaveValue('looper-instance');
+    expect(screen.getByLabelText('私有网络 VPC *')).toHaveValue('vpc-default');
+    await waitFor(() => expect(screen.getByLabelText('子网 *')).toHaveValue('subnet-default'));
+    expect(screen.getByRole('checkbox', { name: /sg-looper/ })).toBeChecked();
+    expect(screen.getByRole('checkbox', { name: /other/ })).not.toBeChecked();
+    expect(screen.getByLabelText('SSH 登录方式 *')).toHaveValue('password');
+    expect(screen.getByLabelText('SSH 默认密码 *')).toHaveValue('StrongPassword1#');
+    expect(screen.getByLabelText('系统盘 GB')).toHaveValue(50);
+    expect(screen.getByRole('checkbox', { name: /分配固定带宽公网 IP/ })).toBeChecked();
+    expect(screen.getByLabelText('公网带宽 Mbps')).toHaveValue(1);
+    expect(screen.getByText('已选机型').parentElement).toHaveTextContent('S9.TEST');
+    expect(screen.getByText('已选镜像').parentElement).toHaveTextContent('TencentOS Server 4 for x86_64');
   });
 
   it('手动目录分页且助手打开后重新从机型步骤开始', async () => {
