@@ -295,7 +295,21 @@ class CloudSshCredentials(ApiModel):
 class OrderPrepareRequest(ApiModel):
     quote_id: str = Field(min_length=8, max_length=100)
     ssh_credentials: CloudSshCredentials | None = None
+    ssh_auth_method: Literal["password", "private-key"] | None = None
+    ssh_password: SecretStr | None = None
     remember_credentials: bool | None = None
+
+    @model_validator(mode="after")
+    def validate_ssh_selection(self) -> OrderPrepareRequest:
+        if self.ssh_credentials is not None and (
+            self.ssh_auth_method is not None or self.ssh_password is not None
+        ):
+            raise ValueError(
+                "ssh_credentials cannot be combined with ssh_auth_method or ssh_password"
+            )
+        if self.ssh_password is not None and self.ssh_auth_method not in {None, "password"}:
+            raise ValueError("ssh_password requires password authentication")
+        return self
 
 
 class OrderConfirmRequest(ApiModel):

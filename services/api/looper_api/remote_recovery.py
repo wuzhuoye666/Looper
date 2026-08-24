@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 
 def remembered_target_ids(settings: Settings) -> list[str]:
-    return EncryptedSshCredentialStore(settings).target_ids()
+    return EncryptedSshCredentialStore(settings).verified_target_ids()
 
 
 def remembered_target_request(

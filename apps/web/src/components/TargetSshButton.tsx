@@ -14,20 +14,12 @@ export function TargetSshButton({
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ['targets'] });
     },
+    onError: () => {
+      if (target.type !== 'external' && onConfigure) onConfigure();
+    },
   });
 
-  if (!target.credentialsRemembered) {
-    if (target.type !== 'external' && onConfigure) {
-      return <button
-        type="button"
-        className="button secondary target-ssh-button"
-        disabled={target.lifecycleStatus !== 'active'}
-        onClick={onConfigure}
-        aria-label={target.name + ' · 配置 SSH 并测试'}
-      >
-        <PlugZap size={14} />配置 SSH 并测试
-      </button>;
-    }
+  if (!target.credentialsRemembered && target.type === 'external') {
     return <span className="ssh-credential-missing" title="先连接一次并保存凭据，后续即可免输入测试">未保存 SSH 凭据</span>;
   }
 
@@ -35,7 +27,9 @@ export function TargetSshButton({
     ? '正在测试并恢复…'
     : test.isSuccess
       ? 'SSH 已连通'
-      : target.runnable
+      : !target.credentialsRemembered
+        ? '配置 SSH 并测试'
+        : target.runnable
         ? '测试 SSH'
         : '测试并恢复';
 

@@ -8,7 +8,7 @@ import json
 import re
 import secrets
 import threading
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -1319,6 +1319,8 @@ def _auto_connect_provisioned_target(
 ) -> None:
     endpoint = instance.public_ip or instance.private_ip
     if not endpoint:
+        if credentials.remember_credentials:
+            EncryptedSshCredentialStore(settings).save_pending(target.id, credentials)
         target.inventory_json = {**target.inventory_json, "autoSsh": {"status": "waiting_endpoint"}}
         return
     request = ConnectExternalTargetRequest(
@@ -1358,6 +1360,9 @@ def _auto_connect_provisioned_target(
             payload={"orderId": order.id, "credentialsRemembered": remembered},
         )
     except Exception as error:
+        if credentials.remember_credentials:
+            with suppress(Exception):
+                EncryptedSshCredentialStore(settings).save_pending(target.id, credentials)
         target.inventory_json = {
             **target.inventory_json,
             "autoSsh": {"status": "failed", "message": str(error)},
@@ -1540,6 +1545,17 @@ def confirm_order(
             code="provider_purchase_not_ready",
         )
     spec = CloudPurchaseSpec.model_validate(order.spec_json)
+    if ssh_credentials is not None:
+        if ssh_credentials.auth_method == "password" and spec.key_pair_id:
+            raise CloudWorkflowError(
+                "password authentication cannot be combined with a cloud key pair",
+                code="invalid_ssh_selection",
+            )
+        if ssh_credentials.auth_method == "private-key" and not spec.key_pair_id:
+            raise CloudWorkflowError(
+                "private-key authentication requires a cloud key pair",
+                code="invalid_ssh_selection",
+            )
     refreshed_quote = provider.quote(spec)
     refreshed_amount = Decimal(str(refreshed_quote.amount))
     confirmed_amount = Decimal(str(order.hourly_amount))
@@ -1610,7 +1626,15 @@ def confirm_order(
     session.refresh(order)
 
     try:
-        result = provider.purchase(spec, client_token=order.client_token)
+        launch_password = (
+            ssh_credentials.password
+            if ssh_credentials is not None and ssh_credentials.auth_method == "password"
+            else None
+        )
+        purchase_options: dict[str, Any] = {"client_token": order.client_token}
+        if launch_password is not None:
+            purchase_options["launch_password"] = launch_password
+        result = provider.purchase(spec, **purchase_options)
     except CloudProviderError as error:
         session.refresh(order)
         order.status = "unknown" if error.ambiguous else "failed"
@@ -1675,26 +1699,32 @@ def confirm_order(
 
 
 def _default_cloud_ssh_credentials(
-    settings: Settings, *, remember_credentials: bool
+    settings: Settings,
+    *,
+    remember_credentials: bool,
+    auth_method: Literal["password", "private-key"] | None = None,
+    password: str | None = None,
 ) -> CloudSshCredentials:
     username = settings.default_ssh_username.strip() or "root"
     port = settings.default_ssh_port
-    if settings.default_ssh_auth_method == "password":
-        password = (
+    selected_method = auth_method or settings.default_ssh_auth_method
+    if selected_method == "password":
+        effective_password = password or (
             settings.default_ssh_password.get_secret_value()
             if settings.default_ssh_password
             else ""
         )
-        if not password:
+        if not effective_password:
             raise CloudWorkflowError(
                 "default SSH password is not configured on the control plane",
                 code="ssh_credentials_not_configured",
             )
+        _validate_cloud_password(effective_password)
         return CloudSshCredentials(
             username=username,
             port=port,
             auth_method="password",
-            password=password,
+            password=effective_password,
             remember_credentials=remember_credentials,
         )
 
@@ -1725,6 +1755,38 @@ def _default_cloud_ssh_credentials(
     )
 
 
+def _validate_cloud_password(password: str) -> None:
+    if not 8 <= len(password) <= 30:
+        raise CloudWorkflowError(
+            "SSH password must contain 8-30 characters",
+            code="invalid_ssh_password",
+        )
+    allowed_special = "()`~!@#$%^&*-+=_|{}[]:;'<>.,?/"
+    invalid_character = any(
+        not character.isascii()
+        or (not character.isalnum() and character not in allowed_special)
+        for character in password
+    )
+    if invalid_character:
+        raise CloudWorkflowError(
+            "SSH password contains characters unsupported by the cloud providers",
+            code="invalid_ssh_password",
+        )
+    categories = sum(
+        (
+            any(character.islower() for character in password),
+            any(character.isupper() for character in password),
+            any(character.isdigit() for character in password),
+            any(not character.isalnum() for character in password),
+        )
+    )
+    if categories < 3 or password.startswith("/"):
+        raise CloudWorkflowError(
+            "SSH password must use at least three character types and cannot start with /",
+            code="invalid_ssh_password",
+        )
+
+
 def purchase_quote(
     session: Session,
     settings: Settings,
@@ -1732,6 +1794,8 @@ def purchase_quote(
     quote_id: str,
     idempotency_key: str,
     ssh_credentials: CloudSshCredentials | None = None,
+    ssh_auth_method: Literal["password", "private-key"] | None = None,
+    ssh_password: str | None = None,
     remember_credentials: bool | None = None,
 ) -> dict[str, Any]:
     """Purchase an exact quote in one user action.
@@ -1745,14 +1809,28 @@ def purchase_quote(
         return prepared
 
     effective_credentials = ssh_credentials
-    if effective_credentials is None and remember_credentials is not None:
+    if effective_credentials is None and (
+        remember_credentials is not None or ssh_auth_method is not None or ssh_password is not None
+    ):
         effective_credentials = _default_cloud_ssh_credentials(
             settings,
-            remember_credentials=remember_credentials,
+            remember_credentials=(
+                settings.remember_ssh_credentials
+                if remember_credentials is None
+                else remember_credentials
+            ),
+            auth_method=ssh_auth_method,
+            password=ssh_password,
         )
     elif effective_credentials is not None and remember_credentials is not None:
         effective_credentials = effective_credentials.model_copy(
             update={"remember_credentials": remember_credentials}
+        )
+    if effective_credentials is None and not prepared["spec"].get("keyPairId"):
+        effective_credentials = _default_cloud_ssh_credentials(
+            settings,
+            remember_credentials=settings.remember_ssh_credentials,
+            auth_method="password",
         )
 
     request = OrderConfirmRequest(

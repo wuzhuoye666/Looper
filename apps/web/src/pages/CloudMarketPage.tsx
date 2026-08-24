@@ -48,6 +48,7 @@ const kindLabels = { 'instance-type': '机型', image: '镜像' } as const;
 type CatalogKind = keyof typeof kindLabels;
 type NetworkMode = 'catalog' | 'manual';
 type MarketStep = 'instance' | 'image' | 'configure';
+type SshAuthMethod = 'password' | 'private-key';
 const CATALOG_PAGE_SIZE = 20;
 const DEFAULT_INSTANCE_NAME = 'looper-instance';
 const DEFAULT_SYSTEM_DISK_GIB = 50;
@@ -68,6 +69,14 @@ function mergeCatalogItem<T extends { id: string }>(
 
 function parseIds(value: string) {
   return [...new Set(value.split(',').map(item => item.trim()).filter(Boolean))].slice(0, 5);
+}
+
+function validCloudPassword(value: string) {
+  const specialCharacters = "()`~!@#$%^&*-+=_|{}[]:;'<>.,?/";
+  const categories = [/[a-z]/.test(value), /[A-Z]/.test(value), /[0-9]/.test(value),
+    [...value].some(character => specialCharacters.includes(character))].filter(Boolean).length;
+  return value.length >= 8 && value.length <= 30 && categories >= 3 && !value.startsWith('/')
+    && [...value].every(character => /[A-Za-z0-9]/.test(character) || specialCharacters.includes(character));
 }
 
 export function CloudMarketPage() {
@@ -101,6 +110,8 @@ export function CloudMarketPage() {
   const [manualSubnetId, setManualSubnetId] = useState('');
   const [manualSecurityGroups, setManualSecurityGroups] = useState('');
   const [manualKeyPairId, setManualKeyPairId] = useState('');
+  const [sshAuthMethod, setSshAuthMethod] = useState<SshAuthMethod>('password');
+  const [sshPassword, setSshPassword] = useState('');
   const [disk, setDisk] = useState(DEFAULT_SYSTEM_DISK_GIB);
   const [publicIp, setPublicIp] = useState(true);
   const [bandwidth, setBandwidth] = useState(0);
@@ -113,6 +124,7 @@ export function CloudMarketPage() {
   const quoteKey = useRef(key());
   const orderKey = useRef(key());
   const networkKey = useRef(key());
+  const sshPasswordInitialized = useRef(false);
   const kind: CatalogKind = step === 'instance' ? 'instance-type' : 'image';
 
   const providerInfo = available.find(item => item.id === provider);
@@ -128,6 +140,14 @@ export function CloudMarketPage() {
     providerInfo.capabilities.includes('security-groups'),
   );
   const networkQueriesEnabled = networkMode === 'catalog' && networkCatalogSupported && operatorAccessReady;
+  const managedSecurityGroupSupported = Boolean(providerInfo?.capabilities.includes('managed-security-group'));
+
+  const sshDefaults = useQuery({
+    queryKey: ['cloud-ssh-defaults'],
+    queryFn: api.cloudSshDefaults,
+    enabled: operatorAccessReady,
+    staleTime: 300_000,
+  });
 
   const regions = useQuery({
     queryKey: ['cloud-regions', provider],
@@ -186,7 +206,7 @@ export function CloudMarketPage() {
   const keyPairs = useQuery({
     queryKey: ['cloud-key-pairs', provider, region],
     queryFn: () => api.keyPairs(provider, region),
-    enabled: networkQueriesEnabled && !!region && !!providerInfo?.capabilities.includes('key-pairs'),
+    enabled: networkQueriesEnabled && sshAuthMethod === 'private-key' && !!region && !!providerInfo?.capabilities.includes('key-pairs'),
     staleTime: 30_000,
   });
   const catalogPages = catalog.data?.pages || [];
@@ -210,7 +230,11 @@ export function CloudMarketPage() {
     },
   });
   const purchaseMutation = useMutation({
-    mutationFn: (request: { quoteId: string; rememberCredentials: boolean }) => api.purchaseQuote(request.quoteId, orderKey.current, { rememberCredentials: request.rememberCredentials }),
+    mutationFn: (request: { quoteId: string; rememberCredentials: boolean }) => api.purchaseQuote(request.quoteId, orderKey.current, {
+      sshAuthMethod,
+      sshPassword: sshAuthMethod === 'password' ? sshPassword : undefined,
+      rememberCredentials: request.rememberCredentials,
+    }),
     onSuccess: order => {
       void queryClient.invalidateQueries({ queryKey: ['targets'] });
       navigate(`/cloud/orders/${order.id}`, { state: order });
@@ -255,10 +279,36 @@ export function CloudMarketPage() {
     onError: error => setSelectionError(error instanceof Error ? error.message : '网络准备失败'),
   });
 
+  const resetTransientErrors = () => {
+    setSelectionError('');
+    managedGroupMutation.reset();
+    networkMutation.reset();
+    quoteMutation.reset();
+    purchaseMutation.reset();
+  };
+
   useEffect(() => {
     const timer = window.setTimeout(() => setCatalogSearch(search.trim()), 300);
     return () => window.clearTimeout(timer);
   }, [search]);
+  useEffect(() => {
+    if (!sshDefaults.data || sshPasswordInitialized.current) return;
+    setSshAuthMethod('password');
+    setSshPassword(sshDefaults.data.password || '');
+    sshPasswordInitialized.current = true;
+  }, [sshDefaults.data]);
+  useEffect(() => {
+    if (step !== 'configure') return;
+    resetTransientErrors();
+    void Promise.all([
+      queryClient.invalidateQueries({ queryKey: ['cloud-vpcs', provider, region] }),
+      queryClient.invalidateQueries({ queryKey: ['cloud-subnets', provider, region] }),
+      queryClient.invalidateQueries({ queryKey: ['cloud-security-groups', provider, region] }),
+      ...(sshAuthMethod === 'private-key'
+        ? [queryClient.invalidateQueries({ queryKey: ['cloud-key-pairs', provider, region] })]
+        : []),
+    ]);
+  }, [step, provider, region, sshAuthMethod]);
   useEffect(() => {
     setAdvisorOpen(false);
     setStep('instance');
@@ -270,6 +320,8 @@ export function CloudMarketPage() {
     setDefaultImageId('');
     setSuppressTypeDefault(false);
     setNetworkMode(provider === 'tencent' || provider === 'alibaba' ? 'catalog' : 'manual');
+    setSshAuthMethod('password');
+    if (sshDefaults.data) setSshPassword(sshDefaults.data.password || '');
     setVpcId('');
     setSubnetId('');
     setSecurityGroupIds([]);
@@ -284,6 +336,7 @@ export function CloudMarketPage() {
     networkKey.current = key();
     setNetworkNotice('');
     setSelectionError('');
+    resetTransientErrors();
   }, [provider, publicIpSupported]);
   useEffect(() => {
     setStep('instance');
@@ -304,6 +357,7 @@ export function CloudMarketPage() {
     networkKey.current = key();
     setNetworkNotice('');
     setSelectionError('');
+    resetTransientErrors();
   }, [region]);
   useEffect(() => {
     const options = regions.data?.items;
@@ -385,7 +439,9 @@ export function CloudMarketPage() {
     : parseIds(manualSecurityGroups);
   const effectiveKeyPairId = networkMode === 'catalog' ? keyPairId : manualKeyPairId.trim();
   const spec = useMemo<CloudPurchaseSpec | null>(() => {
-    if (!selectedType || !selectedImage || !region || !zone || !effectiveVpcId || !effectiveSubnetId || !effectiveSecurityGroups.length || !effectiveKeyPairId) return null;
+    if (!selectedType || !selectedImage || !region || !zone || !effectiveVpcId || !effectiveSubnetId || !effectiveSecurityGroups.length) return null;
+    if (sshAuthMethod === 'private-key' && !effectiveKeyPairId) return null;
+    if (sshAuthMethod === 'password' && !validCloudPassword(sshPassword)) return null;
     return {
       provider,
       region,
@@ -400,7 +456,7 @@ export function CloudMarketPage() {
       vpcId: effectiveVpcId,
       subnetId: effectiveSubnetId,
       securityGroupIds: effectiveSecurityGroups,
-      keyPairId: effectiveKeyPairId || undefined,
+      keyPairId: sshAuthMethod === 'private-key' ? effectiveKeyPairId : undefined,
       systemDiskGib: disk,
       publicIp,
       internetBandwidthMbps: publicIp ? bandwidth : 0,
@@ -417,6 +473,8 @@ export function CloudMarketPage() {
     effectiveSubnetId,
     effectiveSecurityGroups,
     effectiveKeyPairId,
+    sshAuthMethod,
+    sshPassword,
     disk,
     publicIp,
     bandwidth,
@@ -450,12 +508,18 @@ export function CloudMarketPage() {
     setDisk(Math.max(DEFAULT_SYSTEM_DISK_GIB, minimumSystemDiskGib));
     setPublicIp(publicIpSupported);
     setBandwidth(DEFAULT_PUBLIC_BANDWIDTH_MBPS);
+    setSshAuthMethod('password');
+    if (sshDefaults.data) setSshPassword(sshDefaults.data.password || '');
     if (regions.data?.items?.length) setRegion(regions.data.items.find(item => item.available !== false)?.id || regions.data.items[0].id);
     if (zones.data?.items?.length) setZone(zones.data.items.find(item => item.available !== false)?.id || zones.data.items[0].id);
     const type = (items as CloudInstanceType[]).find(item => item.available !== false && item.attributes?.purchaseCompatible !== false);
     if (kind === 'instance-type' && type) { setSelectedType(type); setDefaultTypeId(type.id); }
     const image = (items as CloudImage[]).find(item => item.available !== false);
     if (kind === 'image' && image) { setSelectedImage(image); setDefaultImageId(image.id); }
+  };
+  const goToStep = (next: MarketStep) => {
+    resetTransientErrors();
+    setStep(next);
   };
   const openAdvisor = () => {
     setSelectedType(null);
@@ -475,6 +539,7 @@ export function CloudMarketPage() {
     setAdvisorOpen(false);
   };
   const changeZone = (next: string) => {
+    resetTransientErrors();
     setZone(next);
     setStep('instance');
     setSelectedType(null);
@@ -490,7 +555,7 @@ export function CloudMarketPage() {
   };
   const continueWithInstance = (instance: CloudInstanceType) => {
     if (networkMutation.isPending) return;
-    setSelectionError('');
+    resetTransientErrors();
     setNetworkNotice('');
     networkKey.current = key();
     if (selectionAdvisorSupported) {
@@ -507,6 +572,7 @@ export function CloudMarketPage() {
     setStep('image');
   };
   const continueWithImage = (image: CloudImage) => {
+    resetTransientErrors();
     setSelectedImage(image);
     setSearch('');
     setStep('configure');
@@ -529,9 +595,9 @@ export function CloudMarketPage() {
     {providerInfo && !providerInfo.credentialsConfigured && <div className="notice warning cloud-connection-notice"><AlertTriangle size={18} /><div><strong>{providerInfo.name} 尚未连接</strong><p>SDK 已安装；API 仅从服务端环境变量读取凭证。当前可查看能力和订单策略，实时目录需要配置：{providerInfo.missingEnvironment.join('、')}。</p></div>{selectionAdvisorSupported && <button type="button" className="button secondary" aria-expanded={advisorOpen} aria-controls="cloud-selection-advisor" onClick={advisorOpen ? closeAdvisor : openAdvisor}>{advisorOpen ? <><ChevronLeft size={14} />返回手动选型</> : <><Sparkles size={14} />打开选型助手</>}</button>}</div>}
     {providerInfo?.credentialsConfigured && providerInfo.message && <div className="notice warning"><AlertTriangle size={18} /><div><strong>{providerInfo.name} 购买能力受限</strong><p>{providerInfo.message}</p></div></div>}
     {providerInfo?.credentialsConfigured && <nav className="panel market-steps" aria-label="云服务器选购步骤">
-      <button type="button" className={step === 'instance' ? 'active' : ''} onClick={() => setStep('instance')}><span>1</span><Cpu size={15} />选择机型</button>
-      <button type="button" className={step === 'image' ? 'active' : ''} disabled={!selectedType} onClick={() => selectedType && setStep('image')}><span>2</span><ImageIcon size={15} />选择镜像</button>
-      <button type="button" className={step === 'configure' ? 'active' : ''} disabled={!selectedType || !selectedImage} onClick={() => selectedType && selectedImage && setStep('configure')}><span>3</span><Settings2 size={15} />配置与购买</button>
+      <button type="button" className={step === 'instance' ? 'active' : ''} onClick={() => goToStep('instance')}><span>1</span><Cpu size={15} />选择机型</button>
+      <button type="button" className={step === 'image' ? 'active' : ''} disabled={!selectedType} onClick={() => selectedType && goToStep('image')}><span>2</span><ImageIcon size={15} />选择镜像</button>
+      <button type="button" className={step === 'configure' ? 'active' : ''} disabled={!selectedType || !selectedImage} onClick={() => selectedType && selectedImage && goToStep('configure')}><span>3</span><Settings2 size={15} />配置与购买</button>
     </nav>}
     {providerInfo?.credentialsConfigured && <section className="panel market-toolbar">
       {step === 'instance' ? <>
@@ -540,7 +606,7 @@ export function CloudMarketPage() {
         {!advisorOpen && <><div className="field compact numeric-filter"><label htmlFor="min-cpu">最低 vCPU</label><input id="min-cpu" type="number" min={0} value={minCpu} onChange={event => setMinCpu(Number(event.target.value))} /></div><div className="field compact numeric-filter"><label htmlFor="min-memory">最低内存 GiB</label><input id="min-memory" type="number" min={0} step={0.5} value={minMemory} onChange={event => setMinMemory(Number(event.target.value))} /></div><label className="search-field market-search"><Search size={16} /><span className="sr-only">搜索机型</span><input value={search} onChange={event => setSearch(event.target.value)} placeholder="搜索机型名称或 ID" /></label></>}
         {selectionAdvisorSupported && <button type="button" className="button secondary advisor-toolbar-button" aria-expanded={advisorOpen} aria-controls="cloud-selection-advisor" onClick={advisorOpen ? closeAdvisor : openAdvisor}>{advisorOpen ? <><ChevronLeft size={14} />返回手动选型</> : <><Sparkles size={14} />打开选型助手</>}</button>}
       </> : <>
-        <button type="button" className="button secondary" onClick={() => setStep(step === 'image' ? 'instance' : 'image')}><ChevronLeft size={14} />返回修改{step === 'image' ? '机型' : '镜像'}</button>
+        <button type="button" className="button secondary" onClick={() => goToStep(step === 'image' ? 'instance' : 'image')}><ChevronLeft size={14} />返回修改{step === 'image' ? '机型' : '镜像'}</button>
         <div className="market-step-summary"><strong>{selectedType?.id}</strong><span>{zone || '尚未选择可用区'}{selectedImage ? ` · ${selectedImage.name}` : ''}</span></div>
         {step === 'image' && <label className="search-field market-search"><Search size={16} /><span className="sr-only">搜索兼容镜像</span><input value={search} onChange={event => setSearch(event.target.value)} placeholder="搜索兼容镜像名称或 ID" /></label>}
       </>}
@@ -580,18 +646,20 @@ export function CloudMarketPage() {
                 {!securityGroups.isLoading && !securityGroupItems.length && <div className="network-empty">当前地域没有可用安全组</div>}
               </div>
             </details>
-            {!hasRecommendedGroup && region && operatorAccessReady && <button type="button" className="button secondary compact-button managed-group-button" disabled={managedGroupMutation.isPending} onClick={() => managedGroupMutation.mutate()}><Plus size={14} />{managedGroupMutation.isPending ? '创建中…' : '创建 Looper 安全组'}</button>}
+            {!hasRecommendedGroup && managedSecurityGroupSupported && region && operatorAccessReady && <button type="button" className="button secondary compact-button managed-group-button" disabled={managedGroupMutation.isPending} onClick={() => managedGroupMutation.mutate()}><Plus size={14} />{managedGroupMutation.isPending ? '创建中…' : '创建 Looper 安全组'}</button>}
           </div>
-          <label><span>SSH 密钥 *</span><select id="launch-key-pair" value={keyPairId} disabled={!networkQueriesEnabled || !region || keyPairs.isLoading} onChange={event => setKeyPairId(event.target.value)}><option value="">{keyPairs.isLoading ? '正在读取 SSH 密钥…' : keyPairs.data?.items.length ? '选择 SSH 密钥' : '未找到 SSH 密钥'}</option>{keyPairs.data?.items.map(item => <option key={item.id} value={item.id}>{item.name} · {item.id}</option>)}</select><small>{keyPairs.data?.items.length ? '云厂商公钥资源；平台购买后使用本机统一私钥自动接入。' : '当前地域没有云端密钥，无法创建可由平台接入的机器。请先在云厂商控制台创建密钥后刷新目录。'}</small></label>
+          {sshAuthMethod === 'private-key' && <label><span>SSH 密钥 *</span><select id="launch-key-pair" value={keyPairId} disabled={!networkQueriesEnabled || !region || keyPairs.isLoading} onChange={event => setKeyPairId(event.target.value)}><option value="">{keyPairs.isLoading ? '正在读取 SSH 密钥…' : keyPairs.data?.items.length ? '选择 SSH 密钥' : '未找到 SSH 密钥'}</option>{keyPairs.data?.items.map(item => <option key={item.id} value={item.id}>{item.name} · {item.id}</option>)}</select><small>{keyPairs.data?.items.length ? '云厂商公钥资源；平台购买后使用本机统一私钥自动接入。' : '当前地域没有云端密钥，请先在云厂商控制台创建后刷新。'}</small></label>}
           {catalogError && <div className="network-catalog-error full"><AlertTriangle size={16} /><span>云网络目录读取失败。</span><button type="button" onClick={() => setNetworkMode('manual')}>改用手动 ID</button></div>}
           {managedGroupMutation.isError && <div className="inline-error full">{managedGroupMutation.error instanceof Error ? managedGroupMutation.error.message : '安全组创建失败'}</div>}
         </> : <>
           <label><span>VPC ID *</span><input value={manualVpcId} onChange={event => setManualVpcId(event.target.value)} placeholder="vpc-..." /></label>
           <label><span>子网 / vSwitch ID *</span><input value={manualSubnetId} onChange={event => setManualSubnetId(event.target.value)} placeholder="subnet-..." /></label>
           <label><span>安全组 ID *</span><input value={manualSecurityGroups} onChange={event => setManualSecurityGroups(event.target.value)} placeholder="最多 5 个，用逗号分隔" /></label>
-          <label><span>SSH 密钥 ID *</span><input required value={manualKeyPairId} onChange={event => setManualKeyPairId(event.target.value)} placeholder="云厂商中已存在的密钥 ID" /><small>必须使用已导入云厂商的公钥；平台购买后使用本机统一私钥自动接入。</small></label>
+          {sshAuthMethod === 'private-key' && <label><span>SSH 密钥 ID *</span><input required value={manualKeyPairId} onChange={event => setManualKeyPairId(event.target.value)} placeholder="云厂商中已存在的密钥 ID" /><small>必须使用已导入云厂商的公钥；平台购买后使用本机统一私钥自动接入。</small></label>}
         </>}
 
+        <label><span>SSH 登录方式 *</span><select value={sshAuthMethod} onChange={event => setSshAuthMethod(event.target.value as SshAuthMethod)}><option value="password">SSH 密码</option><option value="private-key">SSH 密钥</option></select></label>
+        {sshAuthMethod === 'password' && <label><span>SSH 默认密码 *</span><input type="password" value={sshPassword} onChange={event => setSshPassword(event.target.value)} autoComplete="new-password" /><small>{validCloudPassword(sshPassword) ? '可直接修改；修改值仅用于本次购买。' : '需要 8–30 位，并包含至少三类大小写字母、数字或特殊字符。'}</small></label>}
         <label className="checkbox-field ssh-save-field full"><input type="checkbox" checked={rememberSshCredentials} onChange={event => setRememberSshCredentials(event.target.checked)} /><span>购买后保存密钥 / 密码</span></label>
         <label><span>系统盘 GB</span><input type="number" min={minimumSystemDiskGib} max={2048} value={disk} onChange={event => setDisk(Math.max(minimumSystemDiskGib, Number(event.target.value)))} /><small>所选镜像至少需要 {minimumSystemDiskGib} GiB</small></label>
         <label className="checkbox-field"><input type="checkbox" checked={publicIp} disabled={!publicIpSupported} onChange={event => setPublicIp(event.target.checked)} /><span>{publicIpSupported ? '分配固定带宽公网 IP' : '公网 IP 需独立定价流程'}</span><small>{publicIp ? '推荐保留，平台购买后才能直接 SSH 接入。' : '关闭后需要确保 Looper 能访问该实例私网地址。'}</small></label>

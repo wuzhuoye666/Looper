@@ -331,6 +331,10 @@ export interface CloudPurchaseSpec {
   securityGroupIds: string[]; keyPairId?: string; systemDiskType?: string; systemDiskGib: number;
   publicIp: boolean; internetBandwidthMbps: number; tags: Record<string, string>;
 }
+export interface CloudSshDefaults {
+  username: string; port: number; authMethod: 'password' | 'private-key'; password: string;
+  passwordConfigured: boolean; privateKeyConfigured: boolean;
+}
 export interface CloudQuote {
   id: string; provider: CloudProviderId; status: string; spec: CloudPurchaseSpec; specDigest: string;
   providerQuoteId?: string; hourlyAmount: string; currency: string; estimated: boolean; quoteDigest: string;

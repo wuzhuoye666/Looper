@@ -10,6 +10,7 @@ import zipfile
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
 from importlib.resources import files
+from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import (
@@ -464,6 +465,32 @@ def cloud_purchase_readiness(
     return purchase_readiness(app_settings, registry)
 
 
+@app.get("/api/v1/cloud/ssh-defaults")
+def cloud_ssh_defaults(
+    app_settings: SettingsDependency,
+    _operator: ConfiguredOperatorDependency,
+) -> JSONResponse:
+    password = (
+        app_settings.default_ssh_password.get_secret_value()
+        if app_settings.default_ssh_password
+        else ""
+    )
+    key_path = Path(app_settings.default_ssh_private_key_path).expanduser()
+    return JSONResponse(
+        {
+            "username": app_settings.default_ssh_username.strip() or "root",
+            "port": app_settings.default_ssh_port,
+            "authMethod": app_settings.default_ssh_auth_method,
+            "password": password,
+            "passwordConfigured": bool(password),
+            "privateKeyConfigured": bool(
+                app_settings.default_ssh_private_key_path and key_path.is_file()
+            ),
+        },
+        headers={"Cache-Control": "no-store, private", "Pragma": "no-cache"},
+    )
+
+
 def operator_session_status(
     credentials: OperatorCredentials,
     app_settings: SettingsDependency,
@@ -825,6 +852,8 @@ def cloud_order_purchase(
         request.quote_id,
         idempotency_key,
         request.ssh_credentials,
+        request.ssh_auth_method,
+        request.ssh_password.get_secret_value() if request.ssh_password else None,
         request.remember_credentials,
     )
 
@@ -1189,7 +1218,32 @@ def test_target_ssh_connection(
     target = session.get(TargetRecord, target_id)
     if target is None:
         raise HTTPException(status_code=404, detail="target not found")
-    request = remembered_target_request(target, app_settings)
+    endpoint = str((target.inventory_json or {}).get("endpoint") or "")
+    if not endpoint:
+        raise ExternalTargetError("cloud target has no reachable endpoint")
+    store = EncryptedSshCredentialStore(app_settings)
+    if target.id in store.verified_target_ids():
+        request = remembered_target_request(target, app_settings)
+    else:
+        try:
+            request = store.load_pending(target.id, endpoint)
+        except RemoteCredentialError:
+            if target.provider == "external":
+                raise
+            credentials = _default_cloud_ssh_credentials(
+                app_settings,
+                remember_credentials=True,
+                auth_method="password",
+            )
+            request = ConnectExternalTargetRequest(
+                endpoint=endpoint,
+                port=credentials.port,
+                username=credentials.username,
+                auth_method="password",
+                password=credentials.password,
+                deploy_worker=True,
+                remember_credentials=True,
+            )
     refreshed = (
         connect_external_target(session, request)
         if target.provider == "external"
@@ -1199,12 +1253,14 @@ def test_target_ssh_connection(
         raise ExternalTargetError("SSH endpoint no longer resolves to the selected target")
     session.commit()
     deployment = deploy_remote_worker(request, refreshed, app_settings)
+    host_key = str(refreshed.fingerprint_json.get("host_key_sha256") or "")
+    remembered = store.save(refreshed.id, request, host_key)
     if target.provider != "external":
         refreshed.status = "available"
         refreshed.runnable = True
         session.commit()
     result = target_view(refreshed)
-    result["credentialsRemembered"] = True
+    result["credentialsRemembered"] = remembered
     result["connectionTest"] = {
         "status": "connected",
         "testedAt": utc_now().isoformat(),

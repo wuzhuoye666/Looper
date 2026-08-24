@@ -6,6 +6,7 @@ from datetime import timedelta
 from typing import Any
 
 from looper_core.canonical import canonical_digest, utc_now
+from pydantic import SecretStr
 
 from looper_api.cloud_contracts import (
     CatalogFilters,
@@ -299,7 +300,18 @@ class BaiduBccProvider(CloudProvider):
             },
         )
 
-    def purchase(self, spec: CloudPurchaseSpec, *, client_token: str) -> ProviderPurchaseResult:
+    def purchase(
+        self,
+        spec: CloudPurchaseSpec,
+        *,
+        client_token: str,
+        launch_password: SecretStr | None = None,
+    ) -> ProviderPurchaseResult:
+        if launch_password is not None:
+            raise CloudProviderError(
+                "password launch is not supported for Baidu BCC",
+                code="unsupported_operation",
+            )
         if spec.public_ip:
             raise CloudProviderError(
                 "Baidu BCC public IP purchase requires a separately priced EIP workflow",

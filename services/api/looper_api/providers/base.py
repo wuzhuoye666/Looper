@@ -3,6 +3,8 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any
 
+from pydantic import SecretStr
+
 from looper_api.cloud_contracts import (
     CatalogFilters,
     CloudPurchaseSpec,
@@ -121,7 +123,13 @@ class CloudProvider(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def purchase(self, spec: CloudPurchaseSpec, *, client_token: str) -> ProviderPurchaseResult:
+    def purchase(
+        self,
+        spec: CloudPurchaseSpec,
+        *,
+        client_token: str,
+        launch_password: SecretStr | None = None,
+    ) -> ProviderPurchaseResult:
         raise NotImplementedError
 
     def destroy(self, *, region: str, instance_ids: list[str]) -> ProviderDestroyResult:

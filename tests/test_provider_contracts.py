@@ -12,6 +12,7 @@ from looper_api.providers.base import CloudProviderError
 from looper_api.providers.tencent_cvm import TencentCvmProvider, sync_cvm_inventory
 from looper_api.providers.utils import ambiguous_create_error
 from looper_api.providers.volcengine_ecs import VolcengineEcsProvider
+from pydantic import SecretStr
 
 
 def purchase_spec(provider: str = "tencent", *, public_ip: bool = True) -> CloudPurchaseSpec:
@@ -84,6 +85,38 @@ def test_tencent_quote_and_run_share_launch_payload(monkeypatch) -> None:
     assert '"PublicIpAssigned": true' in run_map
     assert '"InternetChargeType": "BANDWIDTH_POSTPAID_BY_HOUR"' in run_map
     assert '"TagSpecification"' in run_map
+
+
+def test_tencent_password_launch_is_purchase_only(monkeypatch) -> None:
+    provider = TencentCvmProvider()
+    spec = purchase_spec().model_copy(update={"key_pair_id": None})
+    calls: list[tuple[str, object]] = []
+
+    def call(method: str, _region: str, request: object):
+        calls.append((method, request))
+        if method == "InquiryPriceRunInstances":
+            return SimpleNamespace(
+                RequestId="quote-request",
+                Price=SimpleNamespace(
+                    InstancePrice=SimpleNamespace(UnitPrice=Decimal("0.4")),
+                    BandwidthPrice=SimpleNamespace(UnitPrice=Decimal("0.1")),
+                ),
+            )
+        if method == "DescribeInstances":
+            return SimpleNamespace(InstanceSet=[])
+        return SimpleNamespace(RequestId="run-request", InstanceIdSet=["ins-password"])
+
+    monkeypatch.setattr(provider, "_call", call)
+    provider.quote(spec)
+    provider.purchase(
+        spec,
+        client_token="stable-token",
+        launch_password=SecretStr("StrongPassword1#"),
+    )
+
+    assert "StrongPassword1#" not in calls[0][1].to_json_string()
+    assert '"Password": "StrongPassword1#"' in calls[1][1].to_json_string()
+    assert '"KeyIds"' not in calls[1][1].to_json_string()
 
 
 def test_tencent_network_catalog_maps_defaults_filters_and_recommendations(
@@ -444,6 +477,32 @@ def test_alibaba_quote_and_run_use_postpaid_network_disk_and_token(monkeypatch) 
         ("managedBy", "looper"),
         ("purpose", "contract"),
     ]
+
+
+def test_alibaba_password_launch_excludes_key_pair(monkeypatch) -> None:
+    provider = AlibabaEcsProvider()
+    spec = purchase_spec("alibaba").model_copy(update={"key_pair_id": None})
+    calls: list[tuple[str, object]] = []
+
+    def call(method: str, _region: str, request: object):
+        calls.append((method, request))
+        return SimpleNamespace(
+            body=SimpleNamespace(
+                request_id="run-request",
+                instance_id_sets=SimpleNamespace(instance_id_set=["i-password"]),
+            )
+        )
+
+    monkeypatch.setattr(provider, "_call", call)
+    provider.purchase(
+        spec,
+        client_token="stable-token",
+        launch_password=SecretStr("StrongPassword1#"),
+    )
+
+    run_request = calls[0][1]
+    assert run_request.password == "StrongPassword1#"
+    assert run_request.key_pair_name is None
 
 
 def test_alibaba_blocks_generation_one_instance_before_quote_or_purchase(monkeypatch) -> None:

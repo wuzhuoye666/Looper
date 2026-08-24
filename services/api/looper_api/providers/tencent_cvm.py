@@ -6,6 +6,7 @@ from decimal import Decimal
 from typing import Any
 
 from looper_core.canonical import canonical_digest, canonical_json, utc_now
+from pydantic import SecretStr
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -769,10 +770,23 @@ class TencentCvmProvider(CloudProvider):
             },
         )
 
-    def purchase(self, spec: CloudPurchaseSpec, *, client_token: str) -> ProviderPurchaseResult:
+    def purchase(
+        self,
+        spec: CloudPurchaseSpec,
+        *,
+        client_token: str,
+        launch_password: SecretStr | None = None,
+    ) -> ProviderPurchaseResult:
         from tencentcloud.cvm.v20170312 import models
 
         payload = self._run_payload(spec)
+        if launch_password is not None:
+            if spec.key_pair_id:
+                raise CloudProviderError(
+                    "launch password and key pair cannot be used together",
+                    code="invalid_request",
+                )
+            payload["LoginSettings"] = {"Password": launch_password.get_secret_value()}
         payload.update({"ClientToken": client_token, "InstanceName": spec.instance_name})
         request = models.RunInstancesRequest()
         request.from_json_string(canonical_json(payload))

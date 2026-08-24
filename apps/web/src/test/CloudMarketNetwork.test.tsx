@@ -62,6 +62,7 @@ describe('腾讯云购买网络选择', () => {
         providers: [{ provider: 'tencent', name: '腾讯云 CVM', ready: true, missingEnvironment: [], checks: [] }],
       });
       if (url.endsWith('/operator/session')) return response({ required: true, configured: true, authenticated: true, operatorGateReady: true });
+      if (url.endsWith('/cloud/ssh-defaults')) return response({ username: 'root', port: 22, authMethod: 'password', password: 'StrongPassword1#', passwordConfigured: true, privateKeyConfigured: true });
       if (url.includes('/cloud/catalog/tencent/region')) return response(catalog('region', [
         { provider: 'tencent', id: 'ap-test', name: '测试地域', available: true },
       ]));
@@ -206,6 +207,11 @@ describe('腾讯云购买网络选择', () => {
     await waitFor(() => expect(vpc).toHaveValue('vpc-default'));
     await waitFor(() => expect(screen.getByLabelText('子网 *')).toHaveValue('subnet-default'));
     expect(await screen.findByText('已选择 1 个安全组')).toBeInTheDocument();
+    expect(screen.getByLabelText('SSH 登录方式 *')).toHaveValue('password');
+    expect(screen.getByLabelText('SSH 默认密码 *')).toHaveValue('StrongPassword1#');
+    expect(screen.queryByLabelText('SSH 密钥 *')).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('SSH 登录方式 *'), { target: { value: 'private-key' } });
+    expect(await screen.findByLabelText('SSH 密钥 *')).toHaveValue('skey-one');
     expect(screen.getByText('已选机型').parentElement).toHaveTextContent('S9.TEST');
     expect(screen.getByText('已选镜像').parentElement).toHaveTextContent('TencentOS Server 4 for x86_64');
   });

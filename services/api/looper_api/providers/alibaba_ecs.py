@@ -6,6 +6,7 @@ from datetime import timedelta
 from typing import Any
 
 from looper_core.canonical import canonical_digest, utc_now
+from pydantic import SecretStr
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -934,7 +935,13 @@ class AlibabaEcsProvider(CloudProvider):
             "no usable system disk category", code="system_disk_category_unresolved"
         )
 
-    def purchase(self, spec: CloudPurchaseSpec, *, client_token: str) -> ProviderPurchaseResult:
+    def purchase(
+        self,
+        spec: CloudPurchaseSpec,
+        *,
+        client_token: str,
+        launch_password: SecretStr | None = None,
+    ) -> ProviderPurchaseResult:
         if not _supports_vpc_launch(spec.instance_type):
             raise CloudProviderError(
                 "所选阿里云旧规格不支持 VPC 弹性网卡，请选择较新的 ECS 规格",
@@ -943,6 +950,11 @@ class AlibabaEcsProvider(CloudProvider):
         if not spec.security_group_ids:
             raise CloudProviderError(
                 "at least one security group is required for Alibaba Cloud",
+                code="invalid_request",
+            )
+        if launch_password is not None and spec.key_pair_id:
+            raise CloudProviderError(
+                "launch password and key pair cannot be used together",
                 code="invalid_request",
             )
         from alibabacloud_ecs20140526 import models
@@ -964,6 +976,9 @@ class AlibabaEcsProvider(CloudProvider):
                 amount=spec.count,
                 spot_strategy="NoSpot",
                 key_pair_name=spec.key_pair_id,
+                password=(
+                    launch_password.get_secret_value() if launch_password is not None else None
+                ),
                 client_token=client_token,
                 dry_run=False,
                 system_disk=self._system_disk(models, spec, quote=False, category=category),
