@@ -6,6 +6,7 @@ import pytest
 from looper_api.app import _normalize_create_request, benchmark_target_options
 from looper_api.benchmark_compatibility import (
     BenchmarkTargetCompatibilityError,
+    requirement_summary,
     single_node_contract,
     target_compatibility,
 )
@@ -93,6 +94,35 @@ def test_compatibility_normalizes_aliases_and_accepts_managed_software() -> None
     })
 
     assert target_compatibility(manifest, _target()) == []
+
+
+def test_compatibility_accepts_managed_capabilities_and_verifiable_privileges() -> None:
+    manifest = _manifest(requirements={
+        "osFamilies": ["linux"],
+        "architectures": ["x86_64"],
+        "capabilities": ["managed-tool", "systemd"],
+        "privileges": ["root", "perf", "systemd"],
+    })
+    manifest["spec"]["runtime"]["provisioning"]["provides"].append("perf")
+    target = _target(capabilities=[
+        "python", "local-process", "linux", "x86_64", "root", "systemd",
+    ])
+
+    assert target_compatibility(manifest, target) == []
+    assert "managed-tool" not in requirement_summary(manifest)["capabilities"]
+
+
+def test_compatibility_keeps_unknown_privileges_fail_closed() -> None:
+    constraints = target_compatibility(
+        _manifest(requirements={"privileges": ["kernel-admin"]}),
+        _target(),
+    )
+
+    assert any(
+        item["code"] == "privileges_requirement_unverifiable"
+        and item["required"] == ["kernel-admin"]
+        for item in constraints
+    )
 
 
 @pytest.mark.parametrize(

@@ -214,7 +214,13 @@ def target_compatibility(
         )
 
     actual_capabilities = set(target.capabilities_json or [])
-    required_capabilities = set(requirements.get("capabilities") or [])
+    provided_capabilities = provisioned_capabilities(manifest)
+    # Managed provisioning owns suite software such as ``dcperf-mediawiki``.
+    # Requiring that software to exist before the prepare phase makes the
+    # package impossible to schedule on a clean host.
+    required_capabilities = (
+        set(requirements.get("capabilities") or []) - provided_capabilities
+    )
     required_capabilities.update(deployment_capabilities(manifest))
     missing_capabilities = sorted(required_capabilities - actual_capabilities)
     if missing_capabilities:
@@ -286,7 +292,6 @@ def target_compatibility(
         ("accelerators", "加速器"),
         ("storage", "存储"),
         ("network", "网络"),
-        ("privileges", "权限"),
     ):
         if requirements.get(key):
             constraints.append(
@@ -298,6 +303,30 @@ def target_compatibility(
                     f"当前资源指纹无法可靠验证{label}要求",
                 )
             )
+
+    required_privileges = {
+        _capability_slug(str(item)) for item in requirements.get("privileges") or []
+    }
+    available_privileges = {
+        _capability_slug(str(item))
+        for item in actual_capabilities | provided_capabilities
+    }
+    # A root login and a passwordless sudo-capable login both satisfy a
+    # contract that needs effective root privileges. Other privileges must be
+    # explicitly present on the host or supplied by managed provisioning.
+    if "sudo" in available_privileges:
+        available_privileges.add("root")
+    missing_privileges = sorted(required_privileges - available_privileges)
+    if missing_privileges:
+        constraints.append(
+            _constraint(
+                "privileges_requirement_unverifiable",
+                "requirements.privileges",
+                sorted(required_privileges),
+                sorted(available_privileges),
+                f"当前资源无法验证权限要求：{'、'.join(missing_privileges)}",
+            )
+        )
 
     provided = {_capability_slug(item) for item in provisioned_capabilities(manifest)}
     actual_software = {_capability_slug(item) for item in actual_capabilities}
@@ -331,7 +360,10 @@ def requirement_summary(manifest: dict[str, Any]) -> dict[str, Any]:
     requirements = node_group.get("requirements") or {}
     cpu = requirements.get("cpu") or {}
     memory = requirements.get("memory") or {}
-    capabilities = set(requirements.get("capabilities") or [])
+    capabilities = (
+        set(requirements.get("capabilities") or [])
+        - provisioned_capabilities(manifest)
+    )
     capabilities.update(deployment_capabilities(manifest))
     return {
         "osFamilies": requirements.get("osFamilies") or [],
