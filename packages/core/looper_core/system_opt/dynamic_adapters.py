@@ -37,10 +37,11 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from pydantic import Field, model_validator
+from pydantic import Field, TypeAdapter, model_validator
 
 from looper_core.analysis import aggregate
 from looper_core.contracts import StrictModel
+from looper_core.system_opt.collector import ComponentCollectionPlan
 from looper_core.system_opt.config_manifest import ConfigComponent, ConfigManifest
 from looper_core.system_opt.executor import ExecutorBackend
 from looper_core.system_opt.hypothesis import (
@@ -114,6 +115,10 @@ class SessionLayout:
     @property
     def hypothesis_proposals(self) -> Path:
         return self.root / "hypothesis-proposals.yaml"
+
+    @property
+    def o1_collection_plans(self) -> Path:
+        return self.root / "o1-collection-plans.json"
 
     @property
     def business_policy(self) -> Path:
@@ -260,6 +265,30 @@ def load_hypothesis_proposals(path: Path) -> HypothesisProposalsFile:
 
 def load_business_policy(path: Path) -> BusinessRetestPolicy:
     return BusinessRetestPolicy.model_validate_json(path.read_text(encoding="utf-8"))
+
+
+def load_o1_collection_plans(
+    path: Path, *, environment_digest: str
+) -> list[ComponentCollectionPlan]:
+    """Load live O1/O2 collection plans, bound to the current environment.
+
+    A plan declared on another environment is an identity mismatch, not a
+    portable capability: refuse instead of silently collecting on the wrong
+    machine (S0 discipline applied to the collection side).
+    """
+
+    plans = TypeAdapter(list[ComponentCollectionPlan]).validate_json(
+        path.read_text(encoding="utf-8")
+    )
+    mismatched = sorted(
+        plan.component for plan in plans if plan.environment_digest != environment_digest
+    )
+    if mismatched:
+        raise ValueError(
+            f"collection plans bound to a different environment for components "
+            f"{mismatched}; redeclare plans on this machine"
+        )
+    return plans
 
 
 def load_workload_contract(layout: SessionLayout) -> WorkloadContract:
@@ -579,5 +608,6 @@ __all__ = [
     "build_business_metric_contract",
     "load_business_policy",
     "load_hypothesis_proposals",
+    "load_o1_collection_plans",
     "load_workload_contract",
 ]

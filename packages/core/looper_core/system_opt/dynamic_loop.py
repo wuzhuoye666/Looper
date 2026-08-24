@@ -60,6 +60,7 @@ from looper_core.system_opt.verification import RetestOutcome, verification_obse
 from looper_core.system_opt.workload import (
     BoundComparator,
     LoadCommandIdentity,
+    O0MetricDirection,
     WorkloadContract,
 )
 
@@ -140,6 +141,18 @@ def run_dynamic_phase(
         raise ValueError("max_windows and probe_top_k need >=1; verification windows >=0")
     if gate_contract.workload_contract_digest != contract.digest:
         raise ValueError("gate contract is not bound to this workload contract")
+    degradation_spec = next(
+        (
+            metric
+            for metric in contract.o0_metrics
+            if metric.metric_id == gate_contract.degradation.metric_id
+        ),
+        None,
+    )
+    if degradation_spec is None:
+        raise ValueError(
+            "degradation gate metric is not declared by the workload contract"
+        )
 
     ledger = HypothesisLedger()
     windows: list[DynamicWindowRecord] = []
@@ -148,6 +161,8 @@ def run_dynamic_phase(
     symptom_registered = False
     interventions = 0
     consecutive_lcb_rounds = 0
+    degradation_events = 0
+    pre_intervention_value: float | None = None
     elapsed = 0.0
     gate_state = PhaseGateState(
         consecutive_slo_met_windows=0,
@@ -293,6 +308,61 @@ def run_dynamic_phase(
                                 <= gate_contract.convergence.lcb_threshold
                                 else 0
                             )
+                        # Degradation (stop class 4): this window's O0 was
+                        # produced before the change took effect, so it is the
+                        # pre-intervention reference for every later window.
+                        degradation_observation = next(
+                            (
+                                item
+                                for item in window.o0
+                                if item.metric_id == degradation_spec.metric_id
+                            ),
+                            None,
+                        )
+                        if degradation_observation is not None:
+                            pre_intervention_value = aggregate(
+                                degradation_observation.values,
+                                degradation_spec.aggregation,
+                            )
+
+        # Post-intervention business regression check (stop class 4 input):
+        # relative worsening of the declared metric versus the last
+        # pre-intervention window; the spec's direction defines "worsening".
+        # A zero reference makes the relative measure undefined — any strict
+        # worsening then counts, because it cannot be bounded.
+        degradation_observation = next(
+            (
+                item
+                for item in window.o0
+                if item.metric_id == degradation_spec.metric_id
+            ),
+            None,
+        )
+        if degradation_observation is not None and pre_intervention_value is not None:
+            current_value = aggregate(
+                degradation_observation.values, degradation_spec.aggregation
+            )
+            reference = pre_intervention_value
+            if degradation_spec.direction is O0MetricDirection.MAXIMIZE:
+                worsened = current_value < reference
+                relative = (
+                    (reference - current_value) / abs(reference) if reference != 0 else None
+                )
+            else:
+                worsened = current_value > reference
+                relative = (
+                    (current_value - reference) / abs(reference) if reference != 0 else None
+                )
+            beyond_limit = relative is None or (
+                relative > gate_contract.degradation.relative_limit
+            )
+            if worsened and beyond_limit:
+                degradation_events += 1
+                note = (
+                    f"degradation: {degradation_spec.metric_id} worsened from "
+                    f"{reference:.6f} to {current_value:.6f} "
+                    f"(limit {gate_contract.degradation.relative_limit:.6f})"
+                )
 
         gate_state = gate_state.model_copy(
             update={
@@ -305,6 +375,7 @@ def run_dynamic_phase(
                 ),
                 "interventions": interventions,
                 "consecutive_lcb_threshold_rounds": consecutive_lcb_rounds,
+                "degradation_events": degradation_events,
                 "elapsed_seconds": elapsed,
             }
         )

@@ -15,6 +15,8 @@ session-dir/
   hypothesis-proposals.yaml  # 声明式竞争假设（rank/change 显式）
   business-policy.json       # BusinessRetestPolicy（全部数值任务显式）
   baseline-batch.json        # 冻结业务基线 MeasurementBatch
+  o1-collection-plans.json   # （可选，真机）L4 活体采集计划列表 ComponentCollectionPlan；
+                            #   environment_digest 必须绑定本机——外来环境的计划直接拒绝
   windows/<window_id>/
     identity.json            # LoadCommandIdentity（model_dump_json；含 identity_digest 计算
                             #   所需的 tool/argv_digest/declared_duration_seconds）
@@ -61,4 +63,7 @@ session-dir/
   超时 fail-closed（SessionFileMissing），不会用旧窗口顶替；
 - v1 的 O2 探测证据源是观察窗 digest 占位（CLI component_probe），
   真 O2 组件微指标窗口随 G 泳道窗口化采集适配接入；
-- 假设提案 v1 是声明式文件（rank 显式），从 O1 在线推导 S4 优先级是后续层。
+- 假设提案 v1 是声明式文件（rank 显式），从 O1 在线推导 S4 优先级是后续层；
+- `dynamic-run --o1-plans/--o1-window-seconds`（+ `--o2-source live --o2-window-seconds`）
+  接入 G 泳道的活体源：任一 collector 不可用 → O1 整体关闭、O2 回退 window-digest
+  占位，摘要里如实报告实际运行的模式，不装活体。

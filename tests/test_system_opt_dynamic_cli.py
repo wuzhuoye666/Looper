@@ -19,6 +19,7 @@ import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import pytest
 import yaml
 from looper_api.cli import _current_environment_digest, app
 from looper_core.system_opt.demo import build_demo_manifest
@@ -341,3 +342,233 @@ def test_convergence_counter_resets_on_a_high_lcb_round() -> None:
     # No convergence stop: both rounds had LCB above the threshold; the
     # window budget ends the phase instead.
     assert run.stop_gate_decision.triggered_field != "convergence.rounds"
+
+
+# ---------------------------------------------------------------------------
+# live O1/O2 CLI wiring (fail-closed parameter discipline)
+# ---------------------------------------------------------------------------
+
+
+def _o1_plans_payload(environment_digest: str) -> str:
+    return json.dumps(
+        [
+            {
+                "component": "cpu",
+                "target_id": "demo-dynamic-target",
+                "environment_digest": environment_digest,
+                "workload_phase_id": "demo-steady",
+                "workload_source": "simulated demo external load",
+                "collector_id": "looper.builtin-linux-guest",
+                "requested_metrics": ["cpu.utilization"],
+                "interval_seconds": 1.0,
+                "scope": {},
+            }
+        ]
+    )
+
+
+def _base_argv(session, inputs, tmp_path: Path) -> list[str]:
+    return [
+        "system-opt",
+        "dynamic-run",
+        "--session",
+        str(session),
+        "--manifest",
+        str(inputs["manifest"]),
+        "--state-evidence",
+        str(inputs["evidence"]),
+        "--target-id",
+        "demo-dynamic-target",
+        "--owner-id",
+        "demo-owner",
+        "--lease-root",
+        str(tmp_path / "leases"),
+        "--lease-ttl-seconds",
+        "7200",
+        "--max-windows",
+        "6",
+        "--probe-top-k",
+        "2",
+        "--verification-windows",
+        "2",
+        "--output",
+        str(tmp_path / "out.json"),
+    ]
+
+
+def test_dynamic_run_rejects_live_o1_plans_on_the_simulated_backend(tmp_path: Path) -> None:
+    session = tmp_path / "session"
+    build_dynamic_demo_session(session)
+    inputs = _write_demo_inputs(tmp_path)
+    plans_path = tmp_path / "o1-collection-plans.json"
+    plans_path.write_text(_o1_plans_payload(_current_environment_digest()), "utf-8")
+
+    result = runner.invoke(
+        app,
+        _base_argv(session, inputs, tmp_path)
+        + [
+            "--backend",
+            "simulated",
+            "--initial-state",
+            str(inputs["initial"]),
+            "--o1-plans",
+            str(plans_path),
+            "--o1-window-seconds",
+            "5",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "local-linux" in result.output
+
+
+def test_dynamic_run_rejects_o1_plans_without_window_seconds(tmp_path: Path) -> None:
+    session = tmp_path / "session"
+    build_dynamic_demo_session(session)
+    inputs = _write_demo_inputs(tmp_path)
+    plans_path = tmp_path / "o1-collection-plans.json"
+    plans_path.write_text(_o1_plans_payload(_current_environment_digest()), "utf-8")
+
+    # Simulated backend keeps the parameter check reachable on Windows (the
+    # window-seconds validation fires before the local-linux backend gate).
+    result = runner.invoke(
+        app,
+        _base_argv(session, inputs, tmp_path)
+        + [
+            "--backend",
+            "simulated",
+            "--initial-state",
+            str(inputs["initial"]),
+            "--o1-plans",
+            str(plans_path),
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "--o1-window-seconds" in result.output
+
+
+def test_dynamic_run_rejects_unknown_o2_source(tmp_path: Path) -> None:
+    session = tmp_path / "session"
+    build_dynamic_demo_session(session)
+    inputs = _write_demo_inputs(tmp_path)
+
+    result = runner.invoke(
+        app,
+        _base_argv(session, inputs, tmp_path)
+        + [
+            "--backend",
+            "simulated",
+            "--initial-state",
+            str(inputs["initial"]),
+            "--o2-source",
+            "bogus",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "--o2-source" in result.output
+
+
+def test_o1_collection_plans_refuse_a_foreign_environment(tmp_path: Path) -> None:
+    from looper_core.system_opt.dynamic_adapters import load_o1_collection_plans
+
+    plans_path = tmp_path / "plans.json"
+    plans_path.write_text(_o1_plans_payload("sha256:" + "f" * 64), "utf-8")
+
+    with pytest.raises(ValueError, match="different environment"):
+        load_o1_collection_plans(
+            plans_path, environment_digest=_current_environment_digest()
+        )
+
+
+# ---------------------------------------------------------------------------
+# degradation wiring (stop class 4: post-intervention business regression)
+# ---------------------------------------------------------------------------
+
+
+def _o0_yaml(rate: float) -> str:
+    newline = chr(10)
+    return (
+        "metrics:"
+        + newline
+        + "- stressor: cpu"
+        + newline
+        + f"  bogo-ops: {int(rate * 120)}"
+        + newline
+        + f"  bogo-ops-per-second-usr-sys-time: {rate}"
+        + newline
+    )
+
+
+def _run_degradation(window_rates: dict[str, float]) -> object:
+    contract = _loop_contract(slo_bound=1500.0)  # every window violates -> symptom
+    gate = DynamicPhaseGateContract(
+        workload_contract_digest=contract.digest,
+        slo=SloTarget(
+            metric_id=RATE,
+            comparator=BoundComparator.AT_LEAST,
+            bound=1500.0,
+            hold_windows=2,
+        ),
+        convergence=ConvergencePolicy(rounds=99, lcb_threshold=0.0),
+        budget=PhaseBudget(max_interventions=5, wall_clock_seconds=3600.0, risk_quota=5),
+        degradation=DegradationGate(metric_id=RATE, relative_limit=0.10),
+        reactivation_holdout_windows=2,
+    )
+
+    def intervention(_hypothesis):
+        return InterventionExperiment(
+            measurement_batch_digest="sha256:" + "2" * 64,
+            business_metric_id=RATE,
+            accepted=True,
+            business_lcb=100.0,
+        )
+
+    return run_dynamic_phase(
+        contract=contract,
+        gate_contract=gate,
+        promotion_contract=PromotionContract(
+            min_observations=3, min_distinct_time_blocks=3, min_environments=1
+        ),
+        environment_digest=ENV,
+        max_windows=len(window_rates),
+        probe_top_k=1,
+        load_identity=lambda _window: contract.load_command,
+        o0_source=lambda window_id: _o0_yaml(window_rates[window_id]),
+        hypothesis_source=_hypotheses_factory(2),
+        clock=_clock(),
+        component_probe=lambda hypothesis, window: window.digest,
+        intervention=intervention,
+    )
+
+
+def test_degradation_stops_the_phase_after_a_post_intervention_collapse() -> None:
+    run = _run_degradation(
+        {
+            "window-1": 1182.0,  # symptom
+            "window-2": 1181.0,  # probe
+            "window-3": 1180.0,  # intervention accepted; pre-intervention reference
+            "window-4": 500.0,  # post-intervention collapse (~58% worsening > 10%)
+        }
+    )
+
+    assert run.stop_gate_decision.stop is True
+    assert run.stop_gate_decision.triggered_field == "degradation"
+    assert run.stop_gate_decision.stop_class.value == "safety-triggered"
+    assert run.windows[-1].note is not None
+    assert "degradation" in run.windows[-1].note
+
+
+def test_no_degradation_when_business_improves_after_intervention() -> None:
+    run = _run_degradation(
+        {
+            "window-1": 1182.0,
+            "window-2": 1181.0,
+            "window-3": 1180.0,
+            "window-4": 1300.0,  # improvement, not worsening
+        }
+    )
+
+    assert run.stop_gate_decision.stop is False
+    assert run.stop_gate_decision.triggered_field != "degradation"

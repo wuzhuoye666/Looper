@@ -14,6 +14,7 @@ from looper_core.action_loop import VerificationPolicy
 from looper_core.adapters import load_and_apply_adapter
 from looper_core.canonical import canonical_digest
 from looper_core.manifest import load_and_validate_manifest
+from looper_core.system_opt.collector import BuiltinLinuxGuestCollector
 from looper_core.system_opt.component import ComponentOptimizer
 from looper_core.system_opt.config_manifest import (
     ConfigItem,
@@ -42,7 +43,12 @@ from looper_core.system_opt.dynamic_adapters import (
     SessionLayout,
     load_business_policy,
     load_hypothesis_proposals,
+    load_o1_collection_plans,
     load_workload_contract,
+)
+from looper_core.system_opt.dynamic_collection import (
+    o1_live_source,
+    o2_component_probe,
 )
 from looper_core.system_opt.dynamic_loop import run_dynamic_phase
 from looper_core.system_opt.engine import EngineLoopConfig, run_engine_loop
@@ -1058,6 +1064,18 @@ def run_dynamic_phase_session(
     max_windows: int = typer.Option(..., "--max-windows", min=1),
     probe_top_k: int = typer.Option(..., "--probe-top-k", min=1),
     verification_window_count: int = typer.Option(..., "--verification-windows", min=0),
+    o1_plans_path: Path | None = typer.Option(
+        None, "--o1-plans", exists=True, dir_okay=False
+    ),
+    o1_window_seconds: float | None = typer.Option(
+        None, "--o1-window-seconds", min=0.001
+    ),
+    o2_window_seconds: float | None = typer.Option(
+        None, "--o2-window-seconds", min=0.001
+    ),
+    o2_source: str = typer.Option(
+        "window-digest", "--o2-source", help="probe evidence source: window-digest | live"
+    ),
     enable_real: bool = typer.Option(False, "--enable-real"),
     confirmation: str = typer.Option("", "--confirmation"),
     output: Path = typer.Option(..., "--output", dir_okay=False),
@@ -1094,6 +1112,24 @@ def run_dynamic_phase_session(
         raise typer.BadParameter(
             "lease TTL must exceed the gate contract wall-clock budget"
         )
+    if o2_source not in {"window-digest", "live"}:
+        raise typer.BadParameter("--o2-source must be window-digest or live")
+    o1_plans = None
+    if o1_plans_path is not None:
+        if o1_window_seconds is None:
+            raise typer.BadParameter("--o1-plans requires --o1-window-seconds")
+        if o2_source == "live" and o2_window_seconds is None:
+            raise typer.BadParameter("--o2-source live requires --o2-window-seconds")
+        if backend_kind != "local-linux":
+            raise typer.BadParameter(
+                "live O1/O2 collection requires the local-linux backend"
+            )
+        try:
+            o1_plans = load_o1_collection_plans(
+                o1_plans_path, environment_digest=_current_environment_digest()
+            )
+        except ValueError as error:
+            raise typer.BadParameter(str(error)) from error
 
     manifest = parse_config_manifest_yaml(manifest_path.read_text(encoding="utf-8"))
     if backend_kind == "simulated":
@@ -1159,6 +1195,31 @@ def run_dynamic_phase_session(
             planner=planner,
             layout=layout,
         )
+        live_o1 = None
+        live_o2 = None
+        if o1_plans is not None:
+            collectors = {
+                plan.component: BuiltinLinuxGuestCollector() for plan in o1_plans
+            }
+            live_o1 = o1_live_source(
+                plans=o1_plans,
+                collectors=collectors,
+                window_seconds=o1_window_seconds,
+            )
+            if o2_source == "live":
+                live_o2 = o2_component_probe(
+                    plans=o1_plans,
+                    collectors=collectors,
+                    window_seconds=o2_window_seconds,
+                )
+        # Unavailable live sources degrade explicitly: O1 stays off, O2 falls
+        # back to the window-digest placeholder; the summary reports which
+        # mode actually ran, never silently pretending live collection.
+        o2_callback = (
+            live_o2
+            if live_o2 is not None
+            else (lambda hypothesis, window: window.digest)
+        )
         run = run_dynamic_phase(
             contract=contract,
             gate_contract=gate_contract,
@@ -1170,7 +1231,8 @@ def run_dynamic_phase_session(
             o0_source=FileO0Source(layout, business_policy),
             hypothesis_source=FileHypothesisProposals(proposals),
             clock=lambda: datetime.now(UTC),
-            component_probe=lambda hypothesis, window: window.digest,
+            o1_source=live_o1,
+            component_probe=o2_callback,
             intervention=intervention,
             retest=FileRetestSource(planner, layout),
             verification_window_count=verification_window_count,
@@ -1226,6 +1288,8 @@ def run_dynamic_phase_session(
                     else None
                 ),
                 "run_digest": run.digest,
+                "o1_live_collection": live_o1 is not None,
+                "o2_probe_source": "live" if live_o2 is not None else o2_source,
                 "output": str(output.resolve()),
             }
         )
