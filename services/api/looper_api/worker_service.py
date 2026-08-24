@@ -272,6 +272,11 @@ def _claim_envelope(
             "retryIndex": attempt.retry_index,
             "queueSequence": attempt.queue_sequence,
             "warmupRuns": spec.design.warmup_runs,
+            "executionTargetId": (
+                spec.selection.load_generator_target_id
+                if spec.selection is not None and spec.selection.load_generator_target_id
+                else evaluation.target_id
+            ),
             **(
                 {
                     "scenario": spec.scenario.model_dump(mode="json"),
@@ -349,7 +354,12 @@ def claim_attempt(
         benchmark = get_benchmark(session, spec.benchmark_id, spec.benchmark_version)
         if candidate is None or benchmark is None:
             continue
-        if worker_targets and evaluation.target_id not in worker_targets:
+        execution_target_id = (
+            spec.selection.load_generator_target_id
+            if spec.selection is not None and spec.selection.load_generator_target_id
+            else evaluation.target_id
+        )
+        if worker_targets and execution_target_id not in worker_targets:
             continue
         required = deployment_capabilities(benchmark.manifest_json)
         runtime = benchmark.manifest_json["spec"]["runtime"]

@@ -1,0 +1,5 @@
+.capacity-metric-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:8px;padding:14px 16px 4px}
+.capacity-metric-grid article{display:grid;gap:5px;padding:11px;border:1px solid #e1e6eb;border-radius:6px;background:#fafbfc}
+.capacity-metric-grid article>strong{font-size:11px}
+.capacity-metric-grid article>span{display:flex;justify-content:space-between;gap:10px;font-size:10px}
+.capacity-metric-grid article small{color:#737e89;font:9px Consolas,monospace}

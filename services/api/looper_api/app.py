@@ -71,6 +71,24 @@ from looper_api.benchmark_registration import (
     update_registration,
 )
 from looper_api.benchmark_runs import BenchmarkSmokeRunRequest, create_benchmark_smoke_run
+from looper_api.capacity import (
+    CapacityBuildRepairRequest,
+    CapacityCreateRequest,
+    CapacityDraftUpdate,
+    CapacityError,
+    CapacityStartRequest,
+    cancel_capacity_study,
+    capacity_view,
+    create_capacity_study,
+    list_capacity_studies,
+    preflight_capacity_study,
+    reconcile_capacity_studies,
+    recover_interrupted_capacity_studies,
+    repair_capacity_build_plan,
+    retry_capacity_cleanup,
+    start_capacity_study,
+    update_capacity_study,
+)
 from looper_api.cloud_contracts import (
     CatalogFilters,
     InstanceNetworkResolveRequest,
@@ -129,6 +147,7 @@ from looper_api.models import (
     AttemptRecord,
     BenchmarkRecord,
     BenchmarkRegistrationRecord,
+    CapacityStudyRecord,
     EventRecord,
     ExperimentRecord,
     SourceDiscoveryRecord,
@@ -165,12 +184,15 @@ from looper_api.serialization import (
     experiment_view,
     target_view,
 )
+from looper_api.source_archive_store import SourceArchiveError
 from looper_api.source_discovery import (
     SourceDiscoveryError,
     create_discovery,
     discovery_view,
     list_discoveries,
+    purge_expired_archives,
     recover_interrupted_discoveries,
+    replace_retained_archive,
 )
 from looper_api.variability_service import build_variability_report
 from looper_api.worker_protocol import (
@@ -271,9 +293,11 @@ async def _lease_sweeper() -> None:
             try:
                 expire_stale_leases(session)
                 expire_stale_workers(session, get_settings())
+                purge_expired_archives(session, get_settings())
                 session.commit()
             except Exception:
                 session.rollback()
+        reconcile_capacity_studies(get_settings())
 
 
 async def _remote_worker_recovery() -> None:
@@ -304,6 +328,8 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     with SessionLocal() as session:
         recover_interrupted_orders(session)
         recover_interrupted_discoveries(session)
+        recover_interrupted_capacity_studies(session)
+        purge_expired_archives(session, settings)
         seed_system(session)
         session.commit()
     sweeper = asyncio.create_task(_lease_sweeper())
@@ -363,6 +389,8 @@ async def origin_guard(request: Request, call_next: Any) -> Any:
 @app.exception_handler(SourceDiscoveryError)
 @app.exception_handler(DeepSeekCredentialError)
 @app.exception_handler(RemoteCredentialError)
+@app.exception_handler(SourceArchiveError)
+@app.exception_handler(CapacityError)
 async def domain_error(_request: Request, error: Exception) -> JSONResponse:
     status_code = getattr(error, "status_code", 409)
     code = getattr(error, "code", error.__class__.__name__)
@@ -585,10 +613,15 @@ def delete_deepseek_provider_config(
 @app.get("/api/v1/source-discoveries")
 def source_discovery_history(
     session: SessionDependency,
+    app_settings: SettingsDependency,
     _operator: OperatorDependency,
     limit: int = Query(default=30, ge=1, le=100),
 ) -> dict[str, Any]:
-    items = [discovery_view(record) for record in list_discoveries(session, limit)]
+    purge_expired_archives(session, app_settings)
+    session.commit()
+    items = [
+        discovery_view(record, app_settings) for record in list_discoveries(session, limit)
+    ]
     return {"items": items, "total": len(items)}
 
 
@@ -596,12 +629,15 @@ def source_discovery_history(
 def source_discovery_detail(
     discovery_id: str,
     session: SessionDependency,
+    app_settings: SettingsDependency,
     _operator: OperatorDependency,
 ) -> dict[str, Any]:
     record = session.get(SourceDiscoveryRecord, discovery_id)
     if record is None:
         raise HTTPException(status_code=404, detail="source discovery not found")
-    return discovery_view(record)
+    purge_expired_archives(session, app_settings)
+    session.commit()
+    return discovery_view(record, app_settings)
 
 
 @app.post("/api/v1/source-discoveries", status_code=201)
@@ -628,7 +664,176 @@ async def discover_source_interfaces(
     record = await create_discovery(
         session, archive.filename, payload, effective_deepseek_settings(app_settings)
     )
-    return discovery_view(record)
+    return discovery_view(record, app_settings)
+
+
+@app.put("/api/v1/source-discoveries/{discovery_id}/archive")
+async def replace_source_discovery_archive(
+    discovery_id: str,
+    session: SessionDependency,
+    app_settings: SettingsDependency,
+    _operator: OperatorDependency,
+    archive: UploadFile = File(...),
+) -> dict[str, Any]:
+    record = session.get(SourceDiscoveryRecord, discovery_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="source discovery not found")
+    if record.status != "completed":
+        raise SourceArchiveError("only a completed discovery can retain a source archive")
+    if not archive.filename or not archive.filename.casefold().endswith(".zip"):
+        raise SourceArchiveError("source archive filename must end with .zip")
+    payload = await archive.read(app_settings.source_discovery_max_archive_bytes + 1)
+    replace_retained_archive(session, record, payload, app_settings)
+    session.commit()
+    return discovery_view(record, app_settings)
+
+
+@app.post("/api/v1/source-discoveries/{discovery_id}/capacity-studies", status_code=201)
+async def create_source_capacity_study(
+    discovery_id: str,
+    request: CapacityCreateRequest,
+    session: SessionDependency,
+    app_settings: SettingsDependency,
+    _operator: OperatorDependency,
+) -> dict[str, Any]:
+    discovery = session.get(SourceDiscoveryRecord, discovery_id)
+    if discovery is None:
+        raise HTTPException(status_code=404, detail="source discovery not found")
+    record = await create_capacity_study(
+        session,
+        discovery,
+        effective_deepseek_settings(app_settings),
+        name=request.name,
+    )
+    session.commit()
+    return capacity_view(session, record, app_settings)
+
+
+@app.get("/api/v1/capacity-studies")
+def capacity_study_history(
+    session: SessionDependency,
+    app_settings: SettingsDependency,
+    _operator: OperatorDependency,
+    limit: int = Query(default=100, ge=1, le=500),
+) -> dict[str, Any]:
+    items = [
+        capacity_view(session, item, app_settings)
+        for item in list_capacity_studies(session, limit)
+    ]
+    return {"items": items, "total": len(items)}
+
+
+@app.get("/api/v1/capacity-studies/{study_id}")
+def capacity_study_detail(
+    study_id: str,
+    session: SessionDependency,
+    app_settings: SettingsDependency,
+    _operator: OperatorDependency,
+) -> dict[str, Any]:
+    record = session.get(CapacityStudyRecord, study_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="capacity study not found")
+    return capacity_view(session, record, app_settings)
+
+
+@app.patch("/api/v1/capacity-studies/{study_id}")
+def update_capacity_study_draft(
+    study_id: str,
+    request: CapacityDraftUpdate,
+    session: SessionDependency,
+    app_settings: SettingsDependency,
+    _operator: OperatorDependency,
+) -> dict[str, Any]:
+    record = session.get(CapacityStudyRecord, study_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="capacity study not found")
+    update_capacity_study(record, request)
+    session.commit()
+    return capacity_view(session, record, app_settings)
+
+
+@app.post("/api/v1/capacity-studies/{study_id}/build/repair")
+async def repair_capacity_study_build(
+    study_id: str,
+    request: CapacityBuildRepairRequest,
+    session: SessionDependency,
+    app_settings: SettingsDependency,
+    _operator: OperatorDependency,
+) -> dict[str, Any]:
+    record = session.get(CapacityStudyRecord, study_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="capacity study not found")
+    await repair_capacity_build_plan(
+        session,
+        record,
+        request,
+        effective_deepseek_settings(app_settings),
+    )
+    session.commit()
+    return capacity_view(session, record, app_settings)
+
+
+@app.post("/api/v1/capacity-studies/{study_id}/preflight")
+def run_capacity_study_preflight(
+    study_id: str,
+    session: SessionDependency,
+    app_settings: SettingsDependency,
+    _operator: OperatorDependency,
+) -> dict[str, Any]:
+    record = session.get(CapacityStudyRecord, study_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="capacity study not found")
+    preflight_capacity_study(session, record, app_settings)
+    session.commit()
+    return capacity_view(session, record, app_settings)
+
+
+@app.post("/api/v1/capacity-studies/{study_id}/start")
+def start_capacity_study_run(
+    study_id: str,
+    request: CapacityStartRequest,
+    session: SessionDependency,
+    app_settings: SettingsDependency,
+    _operator: OperatorDependency,
+) -> dict[str, Any]:
+    record = session.get(CapacityStudyRecord, study_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="capacity study not found")
+    purge_expired_archives(session, app_settings)
+    session.commit()
+    start_capacity_study(session, record, request, app_settings)
+    session.commit()
+    return capacity_view(session, record, app_settings)
+
+
+@app.post("/api/v1/capacity-studies/{study_id}/cancel")
+def cancel_capacity_study_run(
+    study_id: str,
+    session: SessionDependency,
+    app_settings: SettingsDependency,
+    _operator: OperatorDependency,
+) -> dict[str, Any]:
+    record = session.get(CapacityStudyRecord, study_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="capacity study not found")
+    cancel_capacity_study(session, record)
+    session.commit()
+    return capacity_view(session, record, app_settings)
+
+
+@app.post("/api/v1/capacity-studies/{study_id}/cleanup-retry")
+def retry_capacity_study_cleanup(
+    study_id: str,
+    session: SessionDependency,
+    app_settings: SettingsDependency,
+    _operator: OperatorDependency,
+) -> dict[str, Any]:
+    record = session.get(CapacityStudyRecord, study_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="capacity study not found")
+    retry_capacity_cleanup(session, record)
+    session.commit()
+    return capacity_view(session, record, app_settings)
 
 
 @app.get("/api/v1/source-discoveries/{discovery_id}/contract")

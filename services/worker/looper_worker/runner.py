@@ -437,6 +437,14 @@ class LocalAttemptRunner:
                 "benchmarkRoot": str(benchmark_root),
                 "cache": str(dependency_cache),
             }
+        if self.secret_root is not None:
+            benchmark_secret_dir = self.secret_root / str(manifest["metadata"]["id"])
+            if benchmark_secret_dir.is_dir() and not benchmark_secret_dir.is_symlink():
+                envelope["paths"]["secrets"] = (
+                    "/run/looper-secrets"
+                    if runtime_type == "container"
+                    else str(benchmark_secret_dir.resolve())
+                )
         envelope_path = input_dir / "run-envelope.json"
         envelope_path.write_text(json.dumps(envelope, indent=2), encoding="utf-8")
         self.client.start(attempt_id, fencing_token, envelope)

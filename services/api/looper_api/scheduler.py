@@ -690,12 +690,23 @@ def _require_start_readiness(
     required_capabilities = deployment_capabilities(benchmark.manifest_json)
     for target_id in spec.target_ids:
         target = session.get(TargetRecord, target_id)
-        if target is None or not target.runnable:
-            raise SchedulerError(f"target {target_id!r} has no runnable worker")
+        if target is None or target.lifecycle_status != "active":
+            raise SchedulerError(f"target {target_id!r} is unavailable")
+    execution_target_ids = spec.target_ids
+    if (
+        spec.mode == ExperimentMode.SELECTION
+        and spec.selection is not None
+        and spec.selection.load_generator_target_id
+    ):
+        execution_target_ids = [spec.selection.load_generator_target_id]
+    for target_id in execution_target_ids:
+        target = session.get(TargetRecord, target_id)
+        if target is None or not target.runnable or target.lifecycle_status != "active":
+            raise SchedulerError(f"execution target {target_id!r} has no runnable worker")
         missing_capabilities = sorted(required_capabilities - set(target.capabilities_json))
         if missing_capabilities:
             raise SchedulerError(
-                f"target {target_id!r} cannot deploy this benchmark; "
+                f"execution target {target_id!r} cannot deploy this benchmark; "
                 f"missing host capabilities: {missing_capabilities}"
             )
 

@@ -4,7 +4,7 @@ import type {
   CloudKeyPair, CloudQuote, CloudReconciliationContext, CloudRegion, CloudSecurityGroup, CloudSubnet, CloudVpc, CloudZone,
   InstanceNetworkResolution, InstanceNetworkResolveRequest,
   DashboardData, Experiment, GlobalSearchResult, ListResponse, PostOptimizationStatus, SelectionAdvisorRequest,
-  SelectionAdvisorResponse, SourceDiscovery, SourceDiscoveryProviderConfig, SourceDiscoveryReadiness,
+  SelectionAdvisorResponse, SourceDiscovery, SourceDiscoveryProviderConfig, SourceDiscoveryReadiness, CapacityDraft, CapacityStudy,
   Target, TargetDestroyPreview, TargetDestroyResult, VariabilityData,
 } from './types';
 
@@ -91,6 +91,27 @@ export const api = {
     const body = new FormData(); body.append('archive', archive);
     return request<SourceDiscovery>('/source-discoveries', { method: 'POST', body });
   },
+  replaceSourceArchive: (id: string, archive: File) => {
+    const body = new FormData(); body.append('archive', archive);
+    return request<SourceDiscovery>(`/source-discoveries/${encodeURIComponent(id)}/archive`, { method: 'PUT', body });
+  },
+  capacityStudies: async () => list(await request<CapacityStudy[] | ListResponse<CapacityStudy>>('/capacity-studies')),
+  capacityStudy: (id: string) => request<CapacityStudy>(`/capacity-studies/${encodeURIComponent(id)}`),
+  createCapacityStudy: (discoveryId: string, name?: string) => request<CapacityStudy>(
+    `/source-discoveries/${encodeURIComponent(discoveryId)}/capacity-studies`, { method: 'POST', body: JSON.stringify({ name: name || undefined }) },
+  ),
+  updateCapacityStudy: (id: string, expectedRevision: number, currentStep: number, draft: CapacityDraft) => request<CapacityStudy>(
+    `/capacity-studies/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ expectedRevision, currentStep, draft }) },
+  ),
+  repairCapacityBuild: (id: string, expectedRevision: number) => request<CapacityStudy>(
+    `/capacity-studies/${encodeURIComponent(id)}/build/repair`, { method: 'POST', body: JSON.stringify({ expectedRevision }) },
+  ),
+  preflightCapacityStudy: (id: string) => request<CapacityStudy>(`/capacity-studies/${encodeURIComponent(id)}/preflight`, { method: 'POST' }),
+  startCapacityStudy: (id: string, expectedRevision: number, excludedTargetIds: string[], acknowledgePartial: boolean) => request<CapacityStudy>(
+    `/capacity-studies/${encodeURIComponent(id)}/start`, { method: 'POST', body: JSON.stringify({ expectedRevision, excludedTargetIds, acknowledgePartial }) },
+  ),
+  cancelCapacityStudy: (id: string) => request<CapacityStudy>(`/capacity-studies/${encodeURIComponent(id)}/cancel`, { method: 'POST' }),
+  retryCapacityCleanup: (id: string) => request<CapacityStudy>(`/capacity-studies/${encodeURIComponent(id)}/cleanup-retry`, { method: 'POST' }),
   dashboard: () => request<DashboardData>('/dashboard'),
   experiments: async (query = '') => list(await request<Experiment[] | ListResponse<Experiment> | { data?: Experiment[] }>(`/experiments${query}`)),
   experiment: (id: string) => request<Experiment>(`/experiments/${encodeURIComponent(id)}`),

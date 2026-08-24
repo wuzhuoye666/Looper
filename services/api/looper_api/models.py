@@ -437,5 +437,35 @@ class SourceDiscoveryRecord(Base):
     trace_json: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=False)
     error_code: Mapped[str | None] = mapped_column(String(80))
     error_message: Mapped[str | None] = mapped_column(Text)
+    archive_retained_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    archive_deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    archive_delete_reason: Mapped[str | None] = mapped_column(String(80))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class CapacityStudyRecord(Base):
+    __tablename__ = "capacity_studies"
+    __table_args__ = (
+        Index("ix_capacity_study_status_updated", "status", "updated_at"),
+        Index("ix_capacity_study_discovery", "discovery_id", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    discovery_id: Mapped[str] = mapped_column(
+        ForeignKey("source_discoveries.id", ondelete="RESTRICT"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(String(160), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    current_step: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    draft_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    preflight_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    execution_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    report_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    error_code: Mapped[str | None] = mapped_column(String(80))
+    error_message: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

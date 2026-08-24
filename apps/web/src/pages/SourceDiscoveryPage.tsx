@@ -1,5 +1,6 @@
-import { AlertTriangle, Braces, CheckCircle2, Download, FileArchive, KeyRound, LoaderCircle, RefreshCw, ShieldCheck, Trash2, Upload } from 'lucide-react';
+import { AlertTriangle, Braces, CheckCircle2, Clock3, Download, FileArchive, Gauge, KeyRound, LoaderCircle, RefreshCw, ShieldCheck, Trash2, Upload } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { PageHeader } from '../components/PageHeader';
 import { OPERATOR_ACCESS_CHANGED_EVENT } from '../components/OperatorAccess';
 import { EmptyState, ErrorState, LoadingState } from '../components/States';
@@ -14,6 +15,7 @@ function downloadContract(item: SourceDiscovery) {
 }
 
 export function SourceDiscoveryPage() {
+  const navigate = useNavigate();
   const [readiness, setReadiness] = useState<SourceDiscoveryReadiness | null>(null);
   const [providerConfig, setProviderConfig] = useState<SourceDiscoveryProviderConfig | null>(null);
   const [items, setItems] = useState<SourceDiscovery[]>([]);
@@ -26,6 +28,7 @@ export function SourceDiscoveryPage() {
   const [keyDraft, setKeyDraft] = useState('');
   const [savingKey, setSavingKey] = useState(false);
   const [keyMessage, setKeyMessage] = useState('');
+  const [reuploadingId, setReuploadingId] = useState('');
   const input = useRef<HTMLInputElement>(null);
 
   async function load() {
@@ -78,6 +81,16 @@ export function SourceDiscoveryPage() {
     finally { setSubmitting(false); }
   }
 
+  async function replaceArchive(item: SourceDiscovery, archive: File | null) {
+    if (!archive) return;
+    setReuploadingId(item.id); setSubmitError('');
+    try {
+      const updated = await api.replaceSourceArchive(item.id, archive);
+      setItems(current => current.map(entry => entry.id === updated.id ? updated : entry));
+    } catch (reason) { setSubmitError(reason instanceof Error ? reason.message : '源码包重新上传失败'); }
+    finally { setReuploadingId(''); }
+  }
+
   return <div className="page source-discovery-page">
     <PageHeader title="动态接口发现" description="DeepSeek Agent 通过只读文件工具理解源码，输出可追溯的统一接口合同；不执行用户代码，也不访问源码中的目标地址。" actions={<button className="button secondary" onClick={() => void load()} disabled={loading}><RefreshCw size={15}/>刷新</button>}/>
     {loading ? <LoadingState label="正在检查 DeepSeek 配置和发现历史"/> : error ? <ErrorState error={error} onRetry={() => void load()}/> : <>
@@ -97,7 +110,7 @@ export function SourceDiscoveryPage() {
         <div className="discovery-upload-body">
           <div className="discovery-flow" aria-label="数据流"><span><FileArchive size={18}/><strong>源码 ZIP</strong><small>安全筛选</small></span><i>→</i><span><ShieldCheck size={18}/><strong>只读 Harness</strong><small>list / search / read</small></span><i>→</i><span><Braces size={18}/><strong>接口合同</strong><small>{'looper.dev/interface-contract/v1'}</small></span></div>
           <label className={`discovery-drop ${!readiness?.configured ? 'disabled' : ''}`} onDragOver={event => event.preventDefault()} onDrop={event => { event.preventDefault(); if (readiness?.configured) choose(event.dataTransfer.files[0] || null); }}>
-            <Upload size={24}/><strong>{file ? file.name : '选择或拖入源码 ZIP'}</strong><small>{file ? bytes(file.size) : '仅 ZIP；源码只用于本次只读分析，不在服务器保存原包'}</small>
+            <Upload size={24}/><strong>{file ? file.name : '选择或拖入源码 ZIP'}</strong><small>{file ? bytes(file.size) : '仅 ZIP；成功后加密保留 24 小时用于容量测试，到期自动删除'}</small>
             <input ref={input} type="file" accept=".zip,application/zip" aria-label="源码 ZIP" disabled={!readiness?.configured} onChange={event => choose(event.target.files?.[0] || null)}/>
           </label>
           <label className={`discovery-consent ${!readiness?.configured ? 'disabled' : ''}`}><input type="checkbox" disabled={!readiness?.configured} checked={consent} onChange={event => setConsent(event.target.checked)}/><span>我确认该源码允许发送到配置的 DeepSeek 端点。Harness 仅会发送为接口判断所需的非敏感源码片段。</span></label>
@@ -106,13 +119,22 @@ export function SourceDiscoveryPage() {
         </div>
       </section>
       <section className="panel discovery-history">
-        <div className="panel-heading"><div><h2>发现记录</h2><p>记录源码摘要、只读工具轨迹、排除文件和逐行证据；不保存上传的源码包。</p></div><span>{items.length} 次</span></div>
+        <div className="panel-heading"><div><h2>发现记录</h2><p>记录源码摘要、只读工具轨迹、逐行证据和加密源码包删除审计。</p></div><span>{items.length} 次</span></div>
         {!items.length ? <EmptyState title="还没有发现记录" description="配置 DeepSeek 后上传一个源码 ZIP。接口必须有真实文件与行号证据才能进入合同。"/> : <div className="discovery-records">{items.map(item => <article key={item.id} className="discovery-record">
           <header><div><strong>{item.archiveName}</strong><small>{item.id} · {new Date(item.createdAt).toLocaleString()}</small></div><span className={`status status-${item.status}`}><span/>{item.status === 'completed' ? '已完成' : item.status === 'failed' ? '失败' : '解析中'}</span></header>
           <div className="discovery-facts"><span><small>可读文件</small><strong>{item.fileManifest.length}</strong></span><span><small>安全排除</small><strong>{item.excludedFiles.length}</strong></span><span><small>工具调用</small><strong>{item.trace.length}</strong></span><span><small>发现接口</small><strong>{item.contract?.spec.interfaces.length ?? '—'}</strong></span></div>
+          <div className={`source-retention ${item.sourceArchive?.status === 'retained' ? 'ready' : 'expired'}`}>
+            <Clock3 size={15}/><span>{item.sourceArchive?.status === 'retained' && item.sourceArchive.expiresAt
+              ? `源码已加密保留至 ${new Date(item.sourceArchive.expiresAt).toLocaleString()}`
+              : '源码包已过期或不可用；创建容量测试前需重新上传同一摘要的 ZIP'}</span>
+            {item.status === 'completed' && item.sourceArchive?.status !== 'retained' && <label className="button secondary compact-button">
+              <Upload size={14}/>{reuploadingId === item.id ? '校验中…' : '重新上传源码'}
+              <input type="file" accept=".zip,application/zip" disabled={Boolean(reuploadingId)} onChange={event => { void replaceArchive(item, event.target.files?.[0] || null); event.target.value = ''; }}/>
+            </label>}
+          </div>
           <details className="discovery-audit"><summary>查看审计详情</summary><dl><div><dt>源码摘要</dt><dd><code>{item.sourceDigest}</code></dd></div><div><dt>模型</dt><dd>{item.model}</dd></div></dl>{item.excludedFiles.length > 0 && <div><strong>安全排除</strong><ul>{item.excludedFiles.map(excluded => <li key={excluded.path}><code>{excluded.path}</code><span>{excluded.reason}</span></li>)}</ul></div>} {item.trace.length > 0 && <div><strong>只读工具轨迹</strong><ol>{item.trace.map((entry, index) => <li key={index}><code>{String(entry.tool || 'unknown')}</code><span>round {String(entry.round || '—')}</span></li>)}</ol></div>}</details>
           {item.error && <div className="inline-alert"><AlertTriangle size={15}/><span><strong>{item.error.code}</strong> · {item.error.message}</span></div>}
-          {item.contract && <><div className="discovery-contract-heading"><strong>{item.contract.apiVersion}</strong><button className="button secondary compact-button" onClick={() => downloadContract(item)}><Download size={14}/>导出 JSON</button></div>
+          {item.contract && <><div className="discovery-contract-heading"><strong>{item.contract.apiVersion}</strong><div className="discovery-contract-actions"><button className="button secondary compact-button" onClick={() => downloadContract(item)}><Download size={14}/>导出 JSON</button><button className="button primary compact-button" disabled={!item.contract.spec.interfaces.length || item.sourceArchive?.status !== 'retained'} onClick={() => navigate(`/capacity/new/${encodeURIComponent(item.id)}`)}><Gauge size={14}/>创建容量测试</button></div></div>
             {item.contract.spec.interfaces.length ? <div className="table-wrap"><table><thead><tr><th>接口</th><th>说明</th><th>请求 / 响应</th><th>认证 / 副作用</th><th>置信度</th><th>源码证据</th></tr></thead><tbody>{item.contract.spec.interfaces.map(found => <tr key={found.id}><td><strong className="method-pill">{found.method}</strong> <code>{found.path}</code></td><td>{found.summary || '—'}</td><td>{found.parameters.length} 参数 · {found.requestBody ? '有请求体' : '无请求体'} · {found.responses.length} 响应</td><td>{found.authentication.join(', ') || '未识别'} · {found.sideEffect}</td><td>{Math.round(found.confidence * 100)}%</td><td>{found.evidence.map(evidence => <code key={`${evidence.file}:${evidence.startLine}`}>{evidence.file}:{evidence.startLine}-{evidence.endLine}</code>)}</td></tr>)}</tbody></table></div> : <EmptyState title="未发现对外 HTTP 接口" description="Agent 已完成源码检查，但没有形成具备逐行证据的接口。"/>}
           </>}
         </article>)}</div>}

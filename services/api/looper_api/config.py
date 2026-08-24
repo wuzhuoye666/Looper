@@ -55,6 +55,7 @@ class Settings(BaseSettings):
     source_discovery_max_files: int = Field(default=10_000, ge=1, le=100_000)
     source_discovery_max_tool_rounds: int = Field(default=32, ge=1, le=128)
     source_discovery_max_output_tokens: int = Field(default=16384, ge=1024, le=32768)
+    source_archive_retention_seconds: int = Field(default=86400, ge=300, le=604800)
     alibaba_default_region: str = "cn-hangzhou"
 
     @field_validator("remote_worker_api_url", mode="before")
@@ -113,10 +114,24 @@ class Settings(BaseSettings):
     def deepseek_credential_store_path(self) -> Path:
         return self.data_dir / "deepseek-credential.enc"
 
+    @property
+    def source_archive_key_path(self) -> Path:
+        return self.data_dir / "source-archives.key"
+
+    @property
+    def source_archive_dir(self) -> Path:
+        return self.data_dir / "source-archives"
+
+    @property
+    def capacity_package_dir(self) -> Path:
+        return self.data_dir / "capacity-packages"
+
     def ensure_directories(self) -> None:
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.artifact_dir.mkdir(parents=True, exist_ok=True)
         self.work_dir.mkdir(parents=True, exist_ok=True)
+        self.source_archive_dir.mkdir(parents=True, exist_ok=True)
+        self.capacity_package_dir.mkdir(parents=True, exist_ok=True)
 
 
 @lru_cache(maxsize=1)

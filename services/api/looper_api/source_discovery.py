@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 
 from looper_api.config import Settings
 from looper_api.models import SourceDiscoveryRecord
+from looper_api.source_archive_store import EncryptedSourceArchiveStore, SourceArchiveError
 
 CONTRACT_VERSION = "looper.dev/interface-contract/v1"
 HARNESS_VERSION = "deepseek-readonly-tools/v1"
@@ -672,7 +673,29 @@ def build_contract(
     }
 
 
-def discovery_view(record: SourceDiscoveryRecord) -> dict[str, Any]:
+def source_archive_digest(archive: bytes) -> str:
+    return canonical_digest({"archiveSha256": hashlib.sha256(archive).hexdigest()})
+
+
+def discovery_view(
+    record: SourceDiscoveryRecord, settings: Settings | None = None
+) -> dict[str, Any]:
+    now = utc_now()
+    retained_until = record.archive_retained_until
+    if record.archive_deleted_at is not None:
+        archive_status = "deleted"
+    elif retained_until is None:
+        archive_status = "unavailable"
+    else:
+        comparable_now = now
+        if retained_until.tzinfo is None and comparable_now.tzinfo is not None:
+            comparable_now = comparable_now.replace(tzinfo=None)
+        if retained_until <= comparable_now:
+            archive_status = "expired"
+        elif settings is not None and not EncryptedSourceArchiveStore(settings).exists(record.id):
+            archive_status = "unavailable"
+        else:
+            archive_status = "retained"
     return {
         "id": record.id,
         "archiveName": record.archive_name,
@@ -689,7 +712,66 @@ def discovery_view(record: SourceDiscoveryRecord) -> dict[str, Any]:
         else None,
         "createdAt": record.created_at.isoformat(),
         "completedAt": record.completed_at.isoformat() if record.completed_at else None,
+        "sourceArchive": {
+            "status": archive_status,
+            "expiresAt": retained_until.isoformat() if retained_until else None,
+            "deletedAt": record.archive_deleted_at.isoformat()
+            if record.archive_deleted_at
+            else None,
+            "deleteReason": record.archive_delete_reason,
+            "encryptedAtRest": archive_status == "retained",
+            "keyProtection": (
+                EncryptedSourceArchiveStore(settings).key_protection()
+                if settings is not None and archive_status == "retained"
+                else None
+            ),
+        },
     }
+
+
+def purge_expired_archives(session: Session, settings: Settings) -> int:
+    now = utc_now()
+    records = list(
+        session.scalars(
+            select(SourceDiscoveryRecord).where(
+                SourceDiscoveryRecord.archive_retained_until.is_not(None),
+                SourceDiscoveryRecord.archive_deleted_at.is_(None),
+            )
+        )
+    )
+    removed = 0
+    store = EncryptedSourceArchiveStore(settings)
+    for record in records:
+        retained_until = record.archive_retained_until
+        if retained_until is None:
+            continue
+        comparable_now = now
+        if retained_until.tzinfo is None and comparable_now.tzinfo is not None:
+            comparable_now = comparable_now.replace(tzinfo=None)
+        if retained_until > comparable_now:
+            continue
+        store.delete(record.id)
+        record.archive_deleted_at = now
+        record.archive_delete_reason = "retention_expired"
+        removed += 1
+    return removed
+
+
+def replace_retained_archive(
+    session: Session,
+    record: SourceDiscoveryRecord,
+    archive: bytes,
+    settings: Settings,
+) -> None:
+    SourceWorkspace.from_zip(archive, settings)
+    if source_archive_digest(archive) != record.source_digest:
+        raise SourceArchiveError(
+            "uploaded ZIP does not match the source digest used for interface discovery"
+        )
+    record.archive_retained_until = EncryptedSourceArchiveStore(settings).save(record.id, archive)
+    record.archive_deleted_at = None
+    record.archive_delete_reason = None
+    session.flush()
 
 
 async def create_discovery(
@@ -703,7 +785,7 @@ async def create_discovery(
     record = SourceDiscoveryRecord(
         id=new_id("discovery"),
         archive_name=archive_name[:255],
-        source_digest=canonical_digest({"archiveSha256": hashlib.sha256(archive).hexdigest()}),
+        source_digest=source_archive_digest(archive),
         status="running",
         provider="deepseek",
         model=settings.deepseek_model,
@@ -713,10 +795,15 @@ async def create_discovery(
         trace_json=[],
         error_code=None,
         error_message=None,
+        archive_retained_until=None,
+        archive_deleted_at=None,
+        archive_delete_reason=None,
         created_at=utc_now(),
         completed_at=None,
     )
     session.add(record)
+    session.flush()
+    record.archive_retained_until = EncryptedSourceArchiveStore(settings).save(record.id, archive)
     session.commit()
     try:
         contract, trace = await run_deepseek_harness(workspace, settings, client)
@@ -731,6 +818,9 @@ async def create_discovery(
         record.error_code = "source_discovery_cancelled"
         record.error_message = "Source discovery was cancelled before completion"
         record.completed_at = utc_now()
+        EncryptedSourceArchiveStore(settings).delete(record.id)
+        record.archive_deleted_at = record.completed_at
+        record.archive_delete_reason = "discovery_cancelled"
         session.commit()
         raise
     except SourceDiscoveryError as error:
@@ -739,6 +829,9 @@ async def create_discovery(
         record.error_code = error.code
         record.error_message = str(error)
         record.completed_at = utc_now()
+        EncryptedSourceArchiveStore(settings).delete(record.id)
+        record.archive_deleted_at = record.completed_at
+        record.archive_delete_reason = "discovery_failed"
         session.commit()
         raise
     record.completed_at = utc_now()

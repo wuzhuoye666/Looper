@@ -5,7 +5,34 @@ export interface SourceDiscoveryProviderConfig { configured: boolean; source: 's
 export interface InterfaceEvidence { file: string; startLine: number; endLine: number; excerptDigest: string }
 export interface DiscoveredInterface { id: string; protocol: string; method: string; path: string; summary: string; handler: { symbol?: string | null }; parameters: Array<{ name: string; in: 'path' | 'query' | 'header' | 'cookie' | 'body' | 'form' | 'unknown'; required: boolean; schema: Record<string, unknown> }>; requestBody?: { required: boolean; contentTypes: string[]; schema: Record<string, unknown> } | null; responses: Array<{ statusCode: string; contentTypes: string[]; schema: Record<string, unknown> }>; authentication: string[]; sideEffect: string; confidence: number; evidence: InterfaceEvidence[]; unresolved: string[] }
 export interface InterfaceContract { apiVersion: 'looper.dev/interface-contract/v1'; kind: 'InterfaceContract'; metadata: { provider: string; model: string; harnessVersion: string; sourceDigest: string }; spec: { interfaces: DiscoveredInterface[]; unresolved: string[] } }
-export interface SourceDiscovery { id: string; archiveName: string; sourceDigest: string; status: 'running' | 'completed' | 'failed'; provider: string; model: string; fileManifest: Array<{ path: string; bytes: number; sha256: string }>; excludedFiles: Array<{ path: string; reason: string }>; contract?: InterfaceContract | null; trace: Array<Record<string, unknown>>; error?: { code: string; message: string } | null; createdAt: string; completedAt?: string | null }
+export interface SourceArchiveState { status: 'retained' | 'expired' | 'deleted' | 'unavailable'; expiresAt?: string | null; deletedAt?: string | null; deleteReason?: string | null; encryptedAtRest?: boolean; keyProtection?: 'windows-dpapi' | 'owner-key-file' | 'unavailable' | 'unknown' | null }
+export interface SourceDiscovery { id: string; archiveName: string; sourceDigest: string; status: 'running' | 'completed' | 'failed'; provider: string; model: string; fileManifest: Array<{ path: string; bytes: number; sha256: string }>; excludedFiles: Array<{ path: string; reason: string }>; contract?: InterfaceContract | null; trace: Array<Record<string, unknown>>; error?: { code: string; message: string } | null; sourceArchive: SourceArchiveState; createdAt: string; completedAt?: string | null }
+
+export interface CapacityBuildPlan { dockerfile: string; compose: string; startCommand: string; healthPath: string; servicePort: number; sourceRoot?: string; dependencies: string[]; unresolved: string[]; advisories?: string[]; checks?: Array<{ id: string; label: string; status: 'pass' | 'fixed' | 'fail'; detail: string }>; orderedMigrations?: string[]; evidence: Array<{ file: string; startLine: number; endLine: number }>; approved: boolean }
+export interface CapacityAssertion { kind: 'status' | 'json-equals' | 'json-exists'; field: string; expected: unknown }
+export interface CapacityScenarioStep { id: string; interfaceId: string; label: string; method: string; path: string; headers: Record<string, string>; body: unknown; extract: Record<string, string>; assertions: CapacityAssertion[]; sideEffect: string }
+export interface CapacityDraft {
+  build: CapacityBuildPlan;
+  scenario: { steps: CapacityScenarioStep[]; resetStrategy: 'none' | 'compose-recreate' | 'custom'; resetCommand: string };
+  slo: { minimumSuccessRate: number; maximumErrorRate: number; maximumTimeoutRate: number; p99Ms: number; p999Ms: number; confidenceLevel: 0.95; minimumSamples: number };
+  targets: { sutIds: string[]; internalLoadGeneratorId: string; externalLoadGeneratorId: string; internalBaseUrls: Record<string, string>; externalBaseUrls: Record<string, string> };
+  budget: { maxSeconds: number; maxAttempts: number; costCap: number; referenceRps: number; measurementSeconds: number };
+}
+export interface CapacityConstraint { code: string; group: string; label: string; status: 'pass' | 'fail'; blocking: boolean; detail: string }
+export interface CapacityPreflightCheck { scope: 'sut' | 'load-generator'; targetId: string; network?: 'internal' | 'external'; passed: boolean; detail: string }
+export interface CapacityPreflight { status?: 'pass' | 'fail'; draftRevision?: number; checkedAt?: string; checks?: CapacityPreflightCheck[]; failedSutIds?: string[]; generatorFailures?: string[] }
+export type CapacityStudyStatus = 'draft' | 'queued' | 'deploying' | 'running' | 'resetting' | 'cleaning' | 'cancelling' | 'completed' | 'failed' | 'cancelled' | 'needs-attention';
+export interface CapacityFrontier { status: string; confirmed_pass?: number | null; confirmed_fail?: number | null; width_ratio?: number | null; termination_reason?: string | null }
+export interface CapacityReportTarget { target_id: string; label: string; status: string; attempt_count: number; valid_block_count: number; invalid_block_count: number; frontiers: Record<string, CapacityFrontier>; metrics: Array<{ metric: string; unit: string; raw?: number | null; status: string }> }
+export interface CapacityReportNetwork { network: 'internal' | 'external'; experimentId: string; status?: string; terminationReason?: string; targets: CapacityReportTarget[]; comparisons: Array<Record<string, unknown>>; trajectory: Array<Record<string, unknown>>; evidence: Record<string, unknown> }
+export interface CapacityStudy {
+  id: string; discoveryId: string; discoveryName?: string; sourceDigest?: string; sourceArchive: SourceArchiveState;
+  name: string; status: CapacityStudyStatus; revision: number; currentStep: number; draft: CapacityDraft;
+  constraints: CapacityConstraint[]; readyToPreflight: boolean; preflight: CapacityPreflight;
+  execution: { phases?: Array<{ id: string; status: string; detail?: string; at: string }>; selectedTargetIds?: string[]; excludedTargetIds?: string[]; activeTargetIds?: string[]; acknowledgedPartial?: boolean; budget?: CapacityDraft['budget']; costControl?: { currency: string; limit: number; scope: string; pricingStatus: string; estimatedIncrementalAmount: number; detail: string }; currentNetwork?: string; runs?: Array<{ network: string; experimentId: string; loadGeneratorTargetId: string; status: string; startedAt: string; completedAt?: string }>; liveMatrix?: Array<{ network: string; targetId: string; experimentId: string; currentLoad?: number | null; pointStatus: string; sloStatus: string; confirmedPass?: number | null; confirmedFail?: number | null }>; deployments?: Array<Record<string, unknown>>; cleanup?: Array<{ targetId: string; status: string; detail?: string; cleanedAt?: string }> };
+  report?: { generatedAt: string; capacityUnit: string; confidenceLevel: number; networks: CapacityReportNetwork[]; decision: string } | null;
+  error?: { code: string; message: string } | null; createdAt: string; updatedAt: string; startedAt?: string; completedAt?: string;
+}
 
 export interface Artifact { name: string; url: string; type?: string }
 export interface Metric { name: string; value: number; unit?: string; baseline?: number; direction?: 'min' | 'max' }
