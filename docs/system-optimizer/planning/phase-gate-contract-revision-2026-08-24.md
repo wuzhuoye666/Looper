@@ -55,7 +55,15 @@ class InterventionPlan(StrictModel):
 2. **任务风险只能抬高、不能降低**：任务可显式声明 higher，但**不得 lower**；最终风险取二者较高值。声明低于 manifest 最高风险时 fail-closed（无「理由豁免」路径）。
 3. **不得仅凭 proposal 自报 `risky=False` 绕过 manifest 风险**；缺失任务风险、缺失 manifest 绑定、绑定不一致一律 fail-closed。
 
-`RiskSource` 至少含：来源类型（manifest-derived / task-override）+ manifest 项列表 + 各项目 `RiskLevel` + 关联 manifest digest。
+`RiskSource` 字段（版本化 `schema_version` 见 §10）：
+
+- `kind`：`manifest-derived` / `task-override`，语义由 `resolve_plan_risk` 强制执行：
+  - `plan.risk == manifest 最高风险` → 只允许 `manifest-derived`；
+  - `plan.risk > manifest 最高风险` → 必须 `task-override` 且 rationale 非空；
+  - `plan.risk < manifest 最高风险` → fail-closed；
+  - kind / risk / rationale 三者不一致一律 `InterventionContractError`。
+- `manifest_digest`：绑定声明来源的 manifest digest。
+- `items`：逐项 `RiskSourceItem{item_id, risk}`，**集合语义**——必须按 `item_id` 严格升序、且不重复；反序/重复直接拒绝（不静默排序），防止调用方靠重排改变 plan digest。
 
 ## 5. InterventionOutcome（提案）
 
@@ -96,11 +104,12 @@ class InterventionOutcome(StrictModel):
 `risk_quota` = 「最多允许**执行**的 risky 干预数」。执行前检查（`execute_intervention` 之前）：
 
 ```text
-if plan.risk != low and risky_interventions >= risk_quota:
+resolved = resolve_plan_risk(plan, manifest)          # 强制：自报 low 不能绕过 high manifest
+if resolved.final_risk != low and risky_interventions >= risk_quota:
     生成停止（不执行本次 plan）
 ```
 
-判定用 `>=`；删除 `evaluate_phase_gate` 现存 `risky_interventions > risk_quota` 停类分支（由执行前检查接管）。
+判定用 `>=`，风险以 `resolved.final_risk`（而非 `plan.risk`）为准；删除 `evaluate_phase_gate` 现存 `risky_interventions > risk_quota` 停类分支（由执行前检查接管，D5-I2 接线后移除）。门禁输入严格校验：`risky_interventions` 非负整数（bool 不算）、`evidence_digest` 严格 sha256。
 
 ## 9. stop decision 的生成（不是抽象 stop()）
 
@@ -115,7 +124,11 @@ if plan.risk != low and risky_interventions >= risk_quota:
 
 ## 10. schema 版本与 legacy 加载策略
 
-- `InterventionPlan` / `InterventionOutcome` / `RiskSource` 为新 schema（`looper.*/v1alpha1`），只增不删。
+- 新 schema 明确版本化，只增不删：
+  - `InterventionPlan` → `looper.intervention-plan/v1alpha1`
+  - `InterventionOutcome` → `looper.intervention-outcome/v1alpha1`
+  - `RiskSource` → `looper.intervention-risk-source/v1alpha1`（`schema_version` 为必填 Literal）
+  - `InterventionExecutionReceipt` → `looper.intervention-execution-receipt/v1alpha1`
 - `InterventionOutcome.experiment` 保留旧 `InterventionExperiment` 子模型，`accepted`/`business_lcb` 语义不变。
 - **新增必填字段不得静默改变历史 digest**：历史产物不加必填字段、不改 digest 口径；新字段全在新 schema。若未来给 `ComponentHypothesis` 加 risk，需评估对 `HypothesisLedger.digest` 的影响（沿用 `test_system_opt_optimization_run_versions.py` 的分派加载策略）。
 

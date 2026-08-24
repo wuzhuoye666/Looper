@@ -10,15 +10,20 @@ R3 把「干预」拆成两个一等记录：
 
 - ``InterventionPlan.digest`` / ``change_count`` 是计算属性，调用方无法伪造；
 - ``resolve_plan_risk`` 以 manifest 为风险下界：任务风险只能抬高、不能降低，
-  缺任务风险、缺 manifest 绑定、绑定不一致一律 fail-closed；
-- ``evaluate_intervention_gate`` 在 execute 之前做纯决策（single_change / risk_quota），
-  不修改 state、不执行写入，被拒时产出既有 ``GateDecision``；
+  缺任务风险、缺 manifest 绑定、绑定不一致、kind/rationale 与是否抬高不一致
+  一律 fail-closed；``RiskSource.items`` 必须按 item_id 严格升序（集合语义，
+  反序即拒，防止重排改变 plan digest）；
+- ``evaluate_intervention_gate`` 在 execute 之前做纯决策：先强制
+  ``resolve_plan_risk(plan, manifest)``（自报 low 无法绕过 high manifest），
+  再按**解析后的 final_risk** 做 single_change / risk_quota 检查；不修改 state、
+  不执行写入，被拒时产出既有 ``GateDecision``；
 - ``InterventionExecutionReceipt`` 是版本化的执行流水账，digest 可重算并绑定
   plan.digest，状态只能前进不能倒退；本阶段不伪称崩溃后已持久化。
 """
 
 from __future__ import annotations
 
+import re
 from enum import StrEnum
 from typing import Any, Literal
 
@@ -41,12 +46,19 @@ from looper_core.system_opt.safety import SafetyState
 INTERVENTION_PLAN_SCHEMA = "looper.intervention-plan/v1alpha1"
 INTERVENTION_OUTCOME_SCHEMA = "looper.intervention-outcome/v1alpha1"
 INTERVENTION_RECEIPT_SCHEMA = "looper.intervention-execution-receipt/v1alpha1"
+INTERVENTION_RISK_SOURCE_SCHEMA = "looper.intervention-risk-source/v1alpha1"
 _DIGEST = r"^sha256:[0-9a-f]{64}$"
 _RISK_RANK = {RiskLevel.LOW: 0, RiskLevel.MEDIUM: 1, RiskLevel.HIGH: 2}
 
 
 def _risk_rank(level: RiskLevel) -> int:
     return _RISK_RANK[level]
+
+
+def _require_digest(value: str, field: str) -> str:
+    if not re.fullmatch(_DIGEST, value):
+        raise InterventionContractError(f"{field} must be a strict sha256 digest")
+    return value
 
 
 class InterventionContractError(ValueError):
@@ -69,20 +81,25 @@ class RiskSource(StrictModel):
     """The planner's auditable claim of where plan risk comes from.
 
     ``manifest_digest`` binds the manifest the claim was derived from; ``items``
-    lists the config items the change touches together with their per-item risk.
-    ``resolve_plan_risk`` re-verifies this claim against the real manifest.
+    lists the config items the change touches together with their per-item risk,
+    in strict ascending ``item_id`` order (callers cannot reorder to change a
+    plan digest). ``resolve_plan_risk`` re-verifies this claim against the real
+    manifest.
     """
 
+    schema_version: Literal[INTERVENTION_RISK_SOURCE_SCHEMA]
     kind: RiskSourceKind
     manifest_digest: str = Field(pattern=_DIGEST)
     items: list[RiskSourceItem] = Field(min_length=1)
     rationale: str | None = Field(default=None, min_length=1, max_length=1000)
 
     @model_validator(mode="after")
-    def unique_items(self) -> RiskSource:
+    def unique_ordered_items(self) -> RiskSource:
         ids = [item.item_id for item in self.items]
         if len(ids) != len(set(ids)):
             raise ValueError("risk source items must be unique")
+        if ids != sorted(ids):
+            raise ValueError("risk source items must be ordered by item_id (ascending)")
         return self
 
 
@@ -244,15 +261,30 @@ class ResolvedRiskItem(StrictModel):
 class ResolvedPlanRisk(StrictModel):
     """The auditable output of ``resolve_plan_risk``.
 
-    ``manifest_risk`` is the highest manifest risk over the change; the task risk
-    is a lower bound, so ``final_risk`` never drops below it.
+    ``plan_digest`` binds the resolved risk back to the plan it was derived
+    from; ``manifest_risk`` is the highest manifest risk over the change and the
+    task risk is a lower bound, so ``final_risk`` never drops below either.
     """
 
+    plan_digest: str = Field(pattern=_DIGEST)
     manifest_digest: str = Field(pattern=_DIGEST)
     items: list[ResolvedRiskItem] = Field(min_length=1)
     manifest_risk: RiskLevel
     task_risk: RiskLevel
     final_risk: RiskLevel
+
+    @model_validator(mode="after")
+    def validate_consistency(self) -> ResolvedPlanRisk:
+        if _risk_rank(self.final_risk) < _risk_rank(self.manifest_risk):
+            raise ValueError("final risk cannot fall below the manifest risk")
+        if _risk_rank(self.final_risk) < _risk_rank(self.task_risk):
+            raise ValueError("final risk cannot fall below the task risk")
+        ids = [item.item_id for item in self.items]
+        if len(ids) != len(set(ids)):
+            raise ValueError("resolved risk items must be unique")
+        if ids != sorted(ids):
+            raise ValueError("resolved risk items must be ordered by item_id")
+        return self
 
     @property
     def digest(self) -> str:
@@ -267,8 +299,9 @@ def resolve_plan_risk(
     Fails closed (raises :class:`InterventionContractError`) on: a manifest digest
     mismatch, a change key not bound in the risk source, a risk-source item that
     does not correspond to the change, a per-item risk that disagrees with the
-    manifest, or a task risk below the manifest's highest risk. Pure: never
-    touches a backend.
+    manifest, a task risk below the manifest's highest risk, or a risk-source
+    kind/rationale inconsistent with whether the task risk was raised. Pure:
+    never touches a backend.
     """
 
     if plan.risk_source.manifest_digest != manifest.digest:
@@ -311,9 +344,26 @@ def resolve_plan_risk(
             f"task risk {plan.risk.value} is below the manifest lower bound "
             f"{manifest_risk.value}"
         )
+    if _risk_rank(plan.risk) == _risk_rank(manifest_risk):
+        if plan.risk_source.kind is not RiskSourceKind.MANIFEST_DERIVED:
+            raise InterventionContractError(
+                "task risk is not raised above the manifest; the risk source "
+                "kind must be 'manifest-derived'"
+            )
+    else:
+        if plan.risk_source.kind is not RiskSourceKind.TASK_OVERRIDE:
+            raise InterventionContractError(
+                "task risk is raised above the manifest; the risk source kind "
+                "must be 'task-override'"
+            )
+        if not plan.risk_source.rationale or not plan.risk_source.rationale.strip():
+            raise InterventionContractError(
+                "a task-override risk requires a non-empty rationale"
+            )
 
     final_risk = max(plan.risk, manifest_risk, key=_risk_rank)
     return ResolvedPlanRisk(
+        plan_digest=plan.digest,
         manifest_digest=manifest.digest,
         items=resolved,
         manifest_risk=manifest_risk,
@@ -325,15 +375,29 @@ def resolve_plan_risk(
 def evaluate_intervention_gate(
     *,
     plan: InterventionPlan,
+    manifest: ConfigManifest,
     contract: DynamicPhaseGateContract,
     risky_interventions: int,
     evidence_digest: str,
 ) -> GateDecision | None:
     """Pure pre-execution gate: decide before execute, mutate nothing, write nothing.
 
-    Returns a stopping :class:`GateDecision` when the plan may not execute, or
-    ``None`` to proceed. Order: single-change first, then the risk quota.
+    Resolves the plan's risk against the manifest (so a self-reported low risk
+    can never bypass a high-risk manifest item), then applies the two pre-flight
+    checks in order: single-change first, then the risk quota on the *resolved*
+    final risk. Returns a stopping :class:`GateDecision` when the plan may not
+    execute, or ``None`` to proceed.
     """
+
+    if isinstance(risky_interventions, bool):
+        raise InterventionContractError("risky_interventions must be an integer, not a bool")
+    if not isinstance(risky_interventions, int):
+        raise InterventionContractError("risky_interventions must be an integer")
+    if risky_interventions < 0:
+        raise InterventionContractError("risky_interventions cannot be negative")
+    _require_digest(evidence_digest, "evidence_digest")
+
+    resolved = resolve_plan_risk(plan, manifest)
 
     if contract.single_change_per_window and plan.change_count > 1:
         return GateDecision(
@@ -347,14 +411,18 @@ def evaluate_intervention_gate(
             contract_digest=contract.digest,
             evidence_digest=evidence_digest,
         )
-    if plan.risk != RiskLevel.LOW and risky_interventions >= contract.budget.risk_quota:
+    if (
+        resolved.final_risk != RiskLevel.LOW
+        and risky_interventions >= contract.budget.risk_quota
+    ):
         return GateDecision(
             stop=True,
             stop_class=GateStopClass.BUDGET_EXHAUSTED,
             triggered_field="budget.risk_quota",
             reason=(
                 f"risky interventions {risky_interventions} reached the task risk "
-                f"quota {contract.budget.risk_quota}"
+                f"quota {contract.budget.risk_quota} (final risk "
+                f"{resolved.final_risk.value})"
             ),
             contract_digest=contract.digest,
             evidence_digest=evidence_digest,
@@ -378,6 +446,7 @@ __all__ = [
     "INTERVENTION_OUTCOME_SCHEMA",
     "INTERVENTION_PLAN_SCHEMA",
     "INTERVENTION_RECEIPT_SCHEMA",
+    "INTERVENTION_RISK_SOURCE_SCHEMA",
     "InterventionContractError",
     "InterventionExecutionReceipt",
     "InterventionOutcome",

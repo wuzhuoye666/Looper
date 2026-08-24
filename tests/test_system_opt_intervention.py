@@ -1,7 +1,8 @@
-"""M3 两阶段干预合同纯单元测试（phase-gate R3 / D5-I1）。
+"""M3 两阶段干预合同纯单元测试（phase-gate R3 / D5-I1 + D5-I1-R1）。
 
 覆盖：风险必填、manifest 下界、change_count 派生、执行前门禁边界、
-receipt 状态约束、outcome 回绑、纯函数不触碰 backend。
+receipt 状态约束、outcome 回绑、纯函数不触碰 backend，以及 D5-I1-R1 的
+manifest 风险绕过关闭 / kind 语义 / schema / 排序 / 输入严格校验。
 """
 
 from __future__ import annotations
@@ -26,11 +27,14 @@ from looper_core.system_opt.config_manifest import (
 )
 from looper_core.system_opt.hypothesis import ComponentHypothesis
 from looper_core.system_opt.intervention import (
+    INTERVENTION_RISK_SOURCE_SCHEMA,
     InterventionContractError,
     InterventionExecutionReceipt,
     InterventionOutcome,
     InterventionPlan,
     ReceiptStage,
+    ResolvedPlanRisk,
+    ResolvedRiskItem,
     RiskSource,
     RiskSourceItem,
     RiskSourceKind,
@@ -107,6 +111,7 @@ def _plan(
     items: list[RiskSourceItem] | None = None,
     kind: RiskSourceKind = RiskSourceKind.MANIFEST_DERIVED,
     manifest_digest: str | None = None,
+    rationale: str | None = None,
 ) -> InterventionPlan:
     if items is None:
         items = [
@@ -116,14 +121,17 @@ def _plan(
             )
             for parameter_id in change
         ]
+        items.sort(key=lambda item: item.item_id)
     return InterventionPlan(
         hypothesis=HYPOTHESIS,
         change=change,
         risk=risk,
         risk_source=RiskSource(
+            schema_version=INTERVENTION_RISK_SOURCE_SCHEMA,
             kind=kind,
             manifest_digest=manifest_digest or manifest.digest,
             items=items,
+            rationale=rationale,
         ),
     )
 
@@ -168,6 +176,7 @@ class TestPlanModel:
 
     def test_empty_change_rejected(self):
         source = RiskSource(
+            schema_version=INTERVENTION_RISK_SOURCE_SCHEMA,
             kind=RiskSourceKind.MANIFEST_DERIVED,
             manifest_digest=MANIFEST.digest,
             items=[RiskSourceItem(item_id="item-0", risk=RiskLevel.LOW)],
@@ -204,6 +213,49 @@ class TestPlanModel:
             )
 
 
+class TestRiskSourceModel:
+    def test_schema_version_is_required(self):
+        with pytest.raises(ValidationError):
+            RiskSource(
+                kind=RiskSourceKind.MANIFEST_DERIVED,
+                manifest_digest=MANIFEST.digest,
+                items=[RiskSourceItem(item_id="item-0", risk=RiskLevel.LOW)],
+            )
+
+    def test_wrong_schema_version_rejected(self):
+        with pytest.raises(ValidationError):
+            RiskSource(
+                schema_version="looper.wrong/v1",
+                kind=RiskSourceKind.MANIFEST_DERIVED,
+                manifest_digest=MANIFEST.digest,
+                items=[RiskSourceItem(item_id="item-0", risk=RiskLevel.LOW)],
+            )
+
+    def test_reversed_item_order_rejected(self):
+        with pytest.raises(ValidationError, match="ordered"):
+            RiskSource(
+                schema_version=INTERVENTION_RISK_SOURCE_SCHEMA,
+                kind=RiskSourceKind.MANIFEST_DERIVED,
+                manifest_digest=MANIFEST.digest,
+                items=[
+                    RiskSourceItem(item_id="item-1", risk=RiskLevel.MEDIUM),
+                    RiskSourceItem(item_id="item-0", risk=RiskLevel.LOW),
+                ],
+            )
+
+    def test_duplicate_items_rejected(self):
+        with pytest.raises(ValidationError, match="unique"):
+            RiskSource(
+                schema_version=INTERVENTION_RISK_SOURCE_SCHEMA,
+                kind=RiskSourceKind.MANIFEST_DERIVED,
+                manifest_digest=MANIFEST.digest,
+                items=[
+                    RiskSourceItem(item_id="item-0", risk=RiskLevel.LOW),
+                    RiskSourceItem(item_id="item-0", risk=RiskLevel.LOW),
+                ],
+            )
+
+
 class TestResolvePlanRisk:
     @pytest.mark.parametrize(
         ("parameter_id", "level"),
@@ -221,8 +273,14 @@ class TestResolvePlanRisk:
         assert resolved.final_risk is level
         assert resolved.manifest_digest == MANIFEST.digest
 
-    def test_task_risk_may_raise_above_manifest(self):
-        plan = _plan(MANIFEST, change={P_MED: 1}, risk=RiskLevel.HIGH)
+    def test_task_override_raises_above_manifest(self):
+        plan = _plan(
+            MANIFEST,
+            change={P_MED: 1},
+            risk=RiskLevel.HIGH,
+            kind=RiskSourceKind.TASK_OVERRIDE,
+            rationale="task contract requires higher risk than the manifest",
+        )
         resolved = resolve_plan_risk(plan, MANIFEST)
         assert resolved.manifest_risk is RiskLevel.MEDIUM
         assert resolved.final_risk is RiskLevel.HIGH
@@ -277,12 +335,66 @@ class TestResolvePlanRisk:
         with pytest.raises(InterventionContractError, match="unknown config item"):
             resolve_plan_risk(plan, MANIFEST)
 
+    def test_raised_risk_manifest_derived_kind_rejected(self):
+        plan = _plan(MANIFEST, change={P_MED: 1}, risk=RiskLevel.HIGH)
+        with pytest.raises(InterventionContractError, match="task-override"):
+            resolve_plan_risk(plan, MANIFEST)
+
+    def test_task_override_requires_rationale(self):
+        plan = _plan(
+            MANIFEST,
+            change={P_MED: 1},
+            risk=RiskLevel.HIGH,
+            kind=RiskSourceKind.TASK_OVERRIDE,
+        )
+        with pytest.raises(InterventionContractError, match="rationale"):
+            resolve_plan_risk(plan, MANIFEST)
+
+    def test_unraised_risk_task_override_kind_rejected(self):
+        plan = _plan(
+            MANIFEST,
+            change={P_MED: 1},
+            risk=RiskLevel.MEDIUM,
+            kind=RiskSourceKind.TASK_OVERRIDE,
+        )
+        with pytest.raises(InterventionContractError, match="manifest-derived"):
+            resolve_plan_risk(plan, MANIFEST)
+
+
+class TestResolvedPlanRiskBinding:
+    def test_binds_plan_digest_and_recomputes(self):
+        plan = _plan(MANIFEST, change={P_MED: 1}, risk=RiskLevel.MEDIUM)
+        resolved = resolve_plan_risk(plan, MANIFEST)
+        assert resolved.plan_digest == plan.digest
+        rebuilt = ResolvedPlanRisk.model_validate(resolved.model_dump(mode="json"))
+        assert resolved.digest == rebuilt.digest
+
+    def test_final_risk_consistency_enforced(self):
+        items = [
+            ResolvedRiskItem(
+                parameter_id=P_MED, item_id="item-1", manifest_risk=RiskLevel.MEDIUM
+            )
+        ]
+        with pytest.raises(ValidationError, match="final risk"):
+            ResolvedPlanRisk(
+                plan_digest="sha256:" + "a" * 64,
+                manifest_digest=MANIFEST.digest,
+                items=items,
+                manifest_risk=RiskLevel.HIGH,
+                task_risk=RiskLevel.HIGH,
+                final_risk=RiskLevel.LOW,
+            )
+
 
 class TestInterventionGate:
     def test_single_change_rejection(self):
         plan = _plan(MANIFEST, change={P_LOW: 1, P_MED: 2}, risk=RiskLevel.MEDIUM)
         decision = evaluate_intervention_gate(
-            plan=plan, contract=_gate(), risky_interventions=0, evidence_digest=EVIDENCE
+            plan=plan,
+            manifest=MANIFEST,
+            contract=_gate(),
+            risky_interventions=0,
+            evidence_digest=EVIDENCE,
         )
         assert decision is not None and decision.stop
         assert decision.stop_class is GateStopClass.BUDGET_EXHAUSTED
@@ -290,11 +402,12 @@ class TestInterventionGate:
         assert decision.contract_digest == _gate().digest
 
     def test_risk_quota_ge_boundary(self):
-        cases = [(0, 0, True), (2, 1, False), (2, 2, True), (3, 2, False)]
+        cases = [(0, 0, True), (2, 1, False), (2, 2, True), (2, 3, True), (3, 2, False)]
         for quota, risky, rejected in cases:
             plan = _plan(MANIFEST, change={P_MED: 1}, risk=RiskLevel.MEDIUM)
             decision = evaluate_intervention_gate(
                 plan=plan,
+                manifest=MANIFEST,
                 contract=_gate(risk_quota=quota),
                 risky_interventions=risky,
                 evidence_digest=EVIDENCE,
@@ -308,7 +421,11 @@ class TestInterventionGate:
     def test_low_risk_never_hits_risk_quota(self):
         plan = _plan(MANIFEST, change={P_LOW: 1}, risk=RiskLevel.LOW)
         decision = evaluate_intervention_gate(
-            plan=plan, contract=_gate(risk_quota=0), risky_interventions=0, evidence_digest=EVIDENCE
+            plan=plan,
+            manifest=MANIFEST,
+            contract=_gate(risk_quota=0),
+            risky_interventions=0,
+            evidence_digest=EVIDENCE,
         )
         assert decision is None
 
@@ -317,12 +434,57 @@ class TestInterventionGate:
         plan = _plan(MANIFEST, change={P_LOW: 1, P_MED: 2}, risk=RiskLevel.MEDIUM)
         decision = evaluate_intervention_gate(
             plan=plan,
+            manifest=MANIFEST,
             contract=_gate(),
             risky_interventions=counter["risky"],
             evidence_digest=EVIDENCE,
         )
         assert decision is not None and decision.stop
         assert counter["risky"] == 0
+
+    def test_high_manifest_plan_low_quota_zero_rejected(self):
+        plan = _plan(MANIFEST, change={P_HIGH: 1}, risk=RiskLevel.LOW)
+        with pytest.raises(InterventionContractError, match="below the manifest lower bound"):
+            evaluate_intervention_gate(
+                plan=plan,
+                manifest=MANIFEST,
+                contract=_gate(risk_quota=0),
+                risky_interventions=0,
+                evidence_digest=EVIDENCE,
+            )
+
+    def test_risky_interventions_negative_rejected(self):
+        plan = _plan(MANIFEST, change={P_MED: 1}, risk=RiskLevel.MEDIUM)
+        with pytest.raises(InterventionContractError, match="negative"):
+            evaluate_intervention_gate(
+                plan=plan,
+                manifest=MANIFEST,
+                contract=_gate(),
+                risky_interventions=-1,
+                evidence_digest=EVIDENCE,
+            )
+
+    def test_risky_interventions_bool_rejected(self):
+        plan = _plan(MANIFEST, change={P_MED: 1}, risk=RiskLevel.MEDIUM)
+        with pytest.raises(InterventionContractError, match="bool"):
+            evaluate_intervention_gate(
+                plan=plan,
+                manifest=MANIFEST,
+                contract=_gate(),
+                risky_interventions=True,
+                evidence_digest=EVIDENCE,
+            )
+
+    def test_malformed_evidence_digest_rejected_on_pass_path(self):
+        plan = _plan(MANIFEST, change={P_LOW: 1}, risk=RiskLevel.LOW)
+        with pytest.raises(InterventionContractError, match="digest"):
+            evaluate_intervention_gate(
+                plan=plan,
+                manifest=MANIFEST,
+                contract=_gate(),
+                risky_interventions=0,
+                evidence_digest="sha256:NOTHEX",
+            )
 
 
 class TestOutcomeBinding:
@@ -406,6 +568,7 @@ class TestPurity:
         assert (
             evaluate_intervention_gate(
                 plan=plan,
+                manifest=MANIFEST,
                 contract=_gate(),
                 risky_interventions=0,
                 evidence_digest=EVIDENCE,
