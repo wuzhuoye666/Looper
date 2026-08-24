@@ -1,35 +1,49 @@
-# Receipt Mutex 崩溃恢复合同（RCP-01）
+# Receipt Mutex 崩溃恢复合同（RCP-01-R2）
 
-> 状态：**R1 待主 agent 复审**（不得视为 frozen；RCP-02 不得在本稿通过前启动）。
-> 基线：`origin/system-optimizer-impl@2e8621c`。
+> 状态：**R2 待主 agent 复审**（不得视为 frozen；RCP-02A 不得在本稿通过前启动）。
+> 基线：`origin/system-optimizer-impl@2e8621c`；本稿修订自 `a2fe0ca`（R1）。
 > 归属：P0 receipt 正确性链第一环，见 `unfinished-task-queue-2026-08-24.md` §3/§4。
-> 本稿只冻结恢复**合同**，不实现代码；不授权作者继续实施 RCP-02。
+> 本稿只冻结恢复**合同**，不实现代码；不授权作者继续实施 RCP-02A/02B。
 
 ---
 
-## 0. 结论摘要（先读）
+## 0. 结论摘要（R2 收敛，先读）
 
 `DurableReceiptStore._mutex` 当前用 `O_CREAT | O_EXCL` 创建空 guard 文件、只在正常
 `finally` 删除，进程崩溃会永久遗留 guard，导致同一 `(plan_digest, execution_id, operation)`
 永久返回 "receipt chain is busy"（`intervention_receipt.py:114-130`）。
 
-推荐**分层方案**，两条腿都**不引入任何隐式 stale timeout / TTL / 自动清理**：
+R2 冻结为**单一实现、无 fallback**：
 
-1. **首选：进程级 advisory lock（OS 内核管理，进程退出自动释放）**。Linux 用
-   `fcntl.flock(fd, LOCK_EX | LOCK_NB)`；Windows 用 `msvcrt.locking` 对锁文件首字节加
-   非阻塞锁。锁文件**常驻不删除**，"busy" 由内核锁状态决定、不是文件存在性决定，因此
-   "崩溃遗留"在正确性上被内核消除，不需要 owner 存活探测、不需要超时。
-2. **fallback + 旧 `.guard` 兼容：带 owner/process/boot/session 身份的 guard + 显式
-   reconciliation**。仅在 OS advisory lock 不可用的文件系统上启用；遗留 guard 一律
-   fail-closed + 显式 reconcile，**绝不静默删除、绝不自动清理**。
-3. **明确排除：guard expiry / lease（TTL）模型**。receipt 是 immutable
-   content-addressed 日志，没有自然"过期"概念；TTL 会误伤一个合法但慢的临界区，且违反
-   "未确认的 stale timeout 不得写默认值"（`unfinished-task-queue-2026-08-24.md` L171、
-   `d5-i2-runtime-wiring-design-2026-08-24.md` §10）。
+- **唯一锁机制 = 进程级 OS advisory lock**：Linux `fcntl.flock(fd, LOCK_EX | LOCK_NB)`；
+  Windows `msvcrt.locking(fd, LK_NBLCK, 1)`。锁文件 `.lock` **常驻不删除**，busy 由内核锁
+  状态决定而非文件存在性决定，进程崩溃后内核自动释放——从根上消除"孤儿 guard 永久 busy"。
+- **不自动退化到 owner guard**：网络文件系统、能力未知、或 advisory lock 不可证明时
+  **直接 fail-closed**，不引入第二套锁协议。
+- **不引入 stale timeout、TTL、PID liveness、自动孤儿判定**。
+- **legacy 空 `.guard` 遗留**由**独立串行包 RCP-02B** 的人工/operator 流程显式恢复，绝不在
+  RCP-02A 锁改造中静默处理，绝不自动清理。
 
 ---
 
-## 1. 当前 mutex 的完整失败链
+## 1. R2 相对 R1 的修订点（逐条）
+
+| # | R1 内容 | R2 修订 |
+|---|---|---|
+| 1 | 方案 A（advisory lock）为首选 + 方案 B（owner guard）为自动 fallback | **删除 owner guard 自动 fallback**，advisory lock 是唯一实现；未知文件系统直接 fail-closed |
+| 2 | advisory lock 合同较简略，未明确 fd 生命周期/fork 语义 | **补全合同**：稳定 `.lock` 锚点、只 open 不 unlink、锁 fd 覆盖完整临界区、release=unlock→close、Linux/Windows 语义引用官方文档或标记平台测试确定 |
+| 3 | 未区分常驻 lock 与孤儿 guard | **明确 `.lock` 是稳定 inode/path 锚点，允许常驻，不是孤儿 guard**；禁止在线单独删除 |
+| 4 | 单一 RCP-02 包 | **拆成串行 RCP-02A（锁改造）→ RCP-02B（legacy guard 恢复）**，不允许同一 Agent 同时实现 |
+| 5 | `ReceiptGuardRecord`（owner guard 模型）+ `ReceiptGuardReconciliation` | **删除 `ReceiptGuardRecord`**（不再有 owner guard）；只保留 `ReceiptGuardReconciliation` 并重新设计为 legacy guard 人工恢复证据 |
+| 6 | legacy reconcile 顺序未冻结 | **冻结 9 步顺序 + 崩溃缝语义** |
+| 7 | 声称"旧 guard 不阻塞无关 scope 正常写入" | **修正**：legacy guard 触发 target-level attention，该 target 所有新写被 `FileTargetGuard` 阻断 |
+| 8 | 方案 B fallback 的"临时文件 os.replace + O_EXCL 改名"原子发布 | **删除**（无跨平台 rename-no-replace 原语） |
+| 9 | 单一测试矩阵 | **拆分 RCP-02A（12 项）与 RCP-02B（9 项）**，分平台测试 |
+| 10 | 核心问题列为"未决" | **收敛**：唯一实现、无 fallback、legacy 独立包、target 全阻断、lock 离线退役清理 |
+
+---
+
+## 2. 当前 mutex 的完整失败链
 
 `intervention_receipt.py:114-130`：
 
@@ -50,312 +64,341 @@ def _mutex(self, plan_digest, execution_id, operation):
             os.unlink(_native_path(path))
 ```
 
-guard 是**空文件**（`os.close` 后未写任何内容），scope = `(plan_digest, execution_id,
-operation)`，identity = `canonical_digest({"execution_id", "plan_digest"})`。调用点只有
-`start`（`intervention_receipt.py:397`）和 `advance`（`:435`），且**只包裹 receipt 链的
-读-改-写临界区**（check head → 校验 → `_publish_receipt`），**不包裹 backend
-apply/rollback/复测**——后者的执行在 `TwoStageSafetyBackedIntervention._run_observed`
-（`dynamic_adapters.py:779-821`）里 `execute_observed` 阶段进行，每次 progress 回调再短促
-`advance`。因此崩溃遗留 guard 的窗口是"临界区内崩溃"，不是"整个干预执行期崩溃"。
-
-逐场景：
+guard 是**空文件**，scope = `(plan_digest, execution_id, operation)`，identity =
+`canonical_digest({"execution_id", "plan_digest"})`。调用点只有 `start`
+（`intervention_receipt.py:397`）和 `advance`（`:435`），且**只包裹 receipt 链的读-改-写
+临界区**，不包裹 backend apply/rollback/复测（后者在
+`TwoStageSafetyBackedIntervention._run_observed` `dynamic_adapters.py:779-821` 的
+`execute_observed` 阶段进行）。
 
 | # | 场景 | 当前行为 | 是否缺陷 |
 |---|---|---|---|
-| 1 | 正常竞争（同 scope 两 writer 同时到达） | 一个 `O_EXCL` 成功，另一个 `FileExistsError → busy` | ✅ 正确（恰好一个 writer） |
-| 2 | writer 在临界区崩溃（`yield` 内进程终止，`finally` 不执行） | guard 永久遗留，同 scope 永久 busy | 🔴 缺陷（本任务目标） |
-| 3 | PID 复用（崩溃进程的 pid 被新进程复用） | 无 owner 信息，无从判断；guard 仍在 | 🔴 缺陷（无法判定 owner 死活） |
-| 4 | guard 文件损坏 / 半写 / 权限异常 | `os.open` 或 `os.unlink` 抛非 `FileExistsError`，未包装为 `ReceiptStoreError`，上下文丢失 | 🟡 需收紧（异常类型） |
-| 5 | guard 内容成功但释放前崩溃（= #2 的同义变体） | 同 #2 | 🔴 缺陷 |
-| 6 | 同 execution 重放 / 恢复（进程重启后重新执行同一 window） | `start` 被 guard 或 "already exists" 挡下，无法区分"崩溃遗留"与"链已存在" | 🔴 需明确恢复路径 |
-| 7 | 不同 execution / 不同 operation 并发 | identity 不同，guard 路径不同，互不影响 | ✅ 正确 |
-
-关键事实：guard **没有 owner 身份、没有 liveness 证据、没有 expiry、没有 reconciliation
-入口**，因此一旦遗留，系统没有任何可证明的依据去安全清理它——这正是必须冻结合同的原因。
+| 1 | 正常竞争（同 scope 两 writer 同时到达） | 一个 `O_EXCL` 成功，另一个 `FileExistsError → busy` | ✅ 正确 |
+| 2 | writer 在临界区崩溃（`yield` 内进程终止） | guard 永久遗留，同 scope 永久 busy | 🔴 缺陷（本任务目标） |
+| 3 | PID 复用 | 无 owner 信息，无从判断 | 🔴 缺陷（无 liveness 证据） |
+| 4 | guard 文件损坏/权限异常 | 非 `FileExistsError` 未包装，上下文丢失 | 🟡 需收紧异常类型 |
+| 5 | guard 内容成功但释放前崩溃（=#2） | 同 #2 | 🔴 缺陷 |
+| 6 | 同 execution 重放/恢复 | `start` 被 guard 或 "already exists" 挡下，无法区分 | 🔴 需明确恢复路径 |
+| 7 | 不同 execution/operation 并发 | identity 不同，互不影响 | ✅ 正确 |
 
 ---
 
-## 2. 三种方案比较
+## 3. 冻结方案：单一 OS advisory lock（无 fallback）
 
-### 方案 A：OS advisory lock（进程级，内核自动释放）
+RCP-02A 的锁实现**只有一条路径**：
 
-- 机制：对锁文件加进程级非阻塞排它锁。Linux `fcntl.flock(fd, LOCK_EX | LOCK_NB)`；
-  Windows `msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)`（锁文件至少 1 字节）。
-- 崩溃语义：进程退出（含 `kill -9`、崩溃）后内核**自动释放**锁；文件仍在但不表示 busy。
-- 优点：**无需 owner 存活探测、无需 TTL、无需 reconciliation 判定孤儿**——内核是正确性
-  的信任根。锁文件常驻不删除，消除"删除 vs 持有"的竞态。
-- 缺点：跨平台语义差异大（§4）；某些文件系统不承诺（NFS 旧版、FAT、某些 SMB）。
-- 是否违反"不设隐式 timeout"：**否**，完全不涉及时间。
+1. **主实现 = OS advisory lock**：
+   - Linux：`fcntl.flock(fd, LOCK_EX | LOCK_NB)`；
+   - Windows：`msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)`。
+2. **只承诺经过验收的本地文件系统**（本机 ext4/xfs/btrfs/NTFS 等）。
+3. **网络文件系统、能力未知、或 advisory lock 不可证明时直接 fail-closed**：在 store 初始化
+   或首次获取锁时显式探测（见 §4.7），探测失败即抛 `ReceiptStoreError`，**不写入、不降级**。
+4. **不自动退化到 owner guard**：不存在第二套锁协议。
+5. **不引入 stale timeout、TTL、PID liveness、自动孤儿判定**。
 
-### 方案 B：带 owner/process/boot/session 身份的 guard + 显式 reconciliation
-
-- 机制：guard 文件写入 owner 身份（pid + boot_id/session_id + 时间戳 + scope digest）。
-  发现遗留 guard 时，读 owner 身份判断其是否存活；已死则走显式 reconcile 后清理。
-- 优点：可审计、可绑定证据、跨文件系统一致。
-- 缺点：需要 boot_id/session 身份 + 存活探测（pid 复用需 boot_id 消除歧义）+ reconcile
-  合同（复杂）；"判定孤儿"本身需要授权与证据，不能自动。
-- 是否违反"不设隐式 timeout"：**否**（存活探测基于进程存在性 + boot 身份，不是时间）。
-
-### 方案 C：guard expiry / lease（TTL）模型
-
-- 机制：guard 带 `expires_at`，过期即可接管（复用 `lease.py:TargetLease` 的 TTL 模式）。
-- 优点：实现简单、复用现有 lease 概念。
-- 缺点：**必须引入 stale timeout/TTL**。receipt 是 immutable 日志，无自然过期语义；一个
-  合法但慢的临界区可能被误判过期，导致两个 writer 同时进入——**直接违反
-  `unfinished-task-queue-2026-08-24.md` L171 与 d5-i2 设计 §10 的硬约束**。
-- 结论：**排除**。
-
-### 比较结论
-
-| 维度 | A（OS advisory lock） | B（owner guard + reconcile） | C（expiry/lease） |
-|---|---|---|---|
-| 崩溃后自动释放 | ✅ 内核保证 | ❌ 需显式 reconcile | ⚠️ 需 TTL（禁止） |
-| 无隐式 timeout | ✅ | ✅ | ❌ 必然要 TTL |
-| 跨平台一致性 | ⚠️ 语义差异大 | ✅ 一致 | ✅ 一致 |
-| 跨文件系统 | ⚠️ 部分不承诺 | ✅ 本机文件系统即可 | ✅ |
-| 可审计/证据绑定 | ⚠️ 锁状态不在文件里 | ✅ 完整证据 | ✅ |
-| 复杂度 | 低 | 高 | 中 |
-
-**推荐 A 为首选、B 为受限 fallback，排除 C。**
+理由：owner guard fallback 引入 boot/session/PID reuse/reconcile 第二套锁协议，且**不能解决
+未知分布式文件系统上的互斥真实性**——一个无法证明 advisory lock 生效的文件系统，同样无法
+证明 O_EXCL/owner guard 生效。因此唯一诚实的语义是"要么本机文件系统的内核锁，要么拒绝"。
 
 ---
 
-## 3. 推荐方案（分层，无隐式超时）
+## 4. Advisory lock 合同（RCP-02A 必须逐条满足）
 
-RCP-02 实现按以下优先级选择，**两条腿都 fail-closed**：
+### 4.1 稳定锁锚点
 
-1. **主路径（Linux / 本机文件系统 / 支持 flock 的 POSIX 文件系统）**：对每个 scope 的
-   **常驻锁文件** `.{identity}.{operation}.lock` 加 `flock(LOCK_EX | LOCK_NB)`。锁文件在
-   store 首次使用时 `mkdir` + 若不存在则以普通 `O_CREAT`（非 EXCL）创建并保留一个字节
-   （Windows `msvcrt.locking` 需要非空）。**锁文件从不删除**。获取失败（`EWOULDBLOCK` /
-   Windows `OSError EACCES/EDEADLK`）→ `ReceiptStoreError("receipt chain is busy")`。
-2. **fallback（不支持 flock 的文件系统被显式检测到）**：退化到方案 B 的 owner guard
-   （§6），绝不静默退化——检测到不支持时要么报错、要么显式走 owner guard 并落盘身份。
-3. **旧 `.guard` 遗留（本次升级前已存在）**：§7 的 fail-closed 迁移路径，**不自动清理**。
+- 每个 `(plan_digest, execution_id, operation)` 使用**稳定** `.{identity}.{operation}.lock`
+  锚点，identity = `canonical_digest({"execution_id", "plan_digest"})` 的 hex。
+- `.lock` 文件在 store 首次使用时以普通 `O_CREAT`（**非 EXCL**）创建，若不存在则写入一个
+  哨兵字节（Windows `msvcrt.locking` 需要文件非空，见 §4.6）。
 
-**为什么锁文件必须常驻、不能被删除**：`flock` 的锁绑定到 inode（open file description），
-一旦有人删除并重建同名文件，后续 `open` 得到新 inode，锁互斥被绕过。因此锁文件是
-**不可变的路径锚点**，只 `open` 不 `unlink`；旧 `O_EXCL` guard 的"删除即释放"语义在方案 A
-中**被废弃**。
+### 4.2 只 open，不 unlink
 
----
+- **lock 文件只 `open`，正常 release 时不 `unlink`**。锁绑定到 inode（open file description，
+  OFD）；一旦删除并重建同名文件，后续 `open` 得到新 inode，锁互斥被绕过。因此 `.lock` 是
+  不可变的路径锚点，`O_EXCL` guard 时代"删除即释放"的语义**被废弃**。
 
-## 4. Windows 与 Linux 语义（必须写进 RCP-02 验收）
+### 4.3 busy 由内核锁状态决定
 
-| 维度 | Linux（`fcntl.flock`） | Windows（`msvcrt.locking`） |
-|---|---|---|
-| 进程退出后锁是否自动释放 | ✅ 内核释放（进程终止即释放） | ✅ 内核释放 |
-| fd 关闭是否释放锁 | ✅ 同一进程任一 fd 关闭即释放该 flock | ⚠️ `msvcrt.locking` 是字节范围锁，`_locking` 需要显式 `LK_UNLCK` 解锁；但进程退出仍自动释放 |
-| 锁文件是否允许删除 | ⚠️ 允许删除但会破坏互斥（inode 失效），RCP-02 禁止删除 | 同左 |
-| 锁文件最小字节 | 可为空（flock 不要求内容） | **必须 ≥1 字节**（RCP-02 写一个哨兵字节） |
-| fork 语义 | flock 与 open file description 绑定，fork 后父子共享同锁（**不产生互斥**） | 不适用 |
-| 同进程内重入（同一线程再次 `_mutex`） | flock 非重入（同 fd 重复 flock 可能死锁/直接失败） | 同左 |
+- busy 判定 = 内核锁获取失败（Linux `EWOULDBLOCK` / Windows `LK_NBLCK` 抛 `OSError`），
+  **不由文件存在性决定**。`.lock` 文件存在但无活跃锁时，后续 `flock` 正常成功。
 
-**明确不承诺 / 需 fail-closed 的文件系统边界**：
+### 4.4 锁后重验 receipt head（防 stale-head）
 
-- NFS：`flock` 在 NFSv3 及更早**不可靠**（历史上映射到 fcntl POSIX lock，语义漂移）；
-  NFSv4 支持但依赖服务器实现。**RCP-02 不得在无法证明语义的文件系统上宣称正确性**；检测到
-  网络文件系统时走方案 B 的 owner guard 或直接拒绝，**不承诺自动正确**。
-- FAT/exFAT、部分 SMB 挂载、内存盘 tmpfs 之外的非 POSIX 文件系统：不承诺。
-- 上述边界必须在 RCP-02 以**显式能力探测 + 文档记录**落盘，不得静默假设本地盘语义。
+- 获取锁后、执行任何链修改前，**必须重新读取并验证该 scope 的 receipt head**（复用现有
+  `head()` / `verify_chain()`），确认当前持有的是最新链头，防止"拿到锁时链已被前一个崩溃
+  前的 writer 推进"导致的 stale-head 写入。这与现有 `advance` 的
+  "cannot advance a stale receipt head"（`intervention_receipt.py:452`）合并为一处强校验。
 
----
+### 4.5 锁 fd 覆盖完整临界区
 
-## 5. 恢复授权（方案 B fallback 与旧 guard 共用）
+- 锁 fd 必须在 `_mutex` 的 `yield` 之前获取、在 `yield` 退出后释放，**覆盖完整临界区**
+  （check head → 校验 → `_publish_receipt`）。
+- 临界区内**不得再次获取同一 scope 的锁**（flock 对同 OFD 重复 flock 会改变锁语义；对独立
+  OFD 会 EWOULDBLOCK 死锁，见 §4.8）。当前 `start`/`advance` 不嵌套调用 `_mutex`，RCP-02A
+  必须保持这一性质并加注释/断言。
 
-> 方案 A 主路径无"孤儿"概念（内核保证），本节的授权只约束**方案 B 的 owner guard** 与
-> **旧 `.guard` 遗留**。
+### 4.6 Windows 哨兵字节
 
-- **谁能判断 guard 已孤儿**：只有显式 reconcile 流程（operator 或主 agent 授权的对账
-  入口），**不是任何写进程的自动逻辑**。写进程遇到遗留 guard 时只有两个动作：
-  `busy`（owner 存活）或 `needs-attention`（无法判定），**不得自行清理**。
-- **owner/process/boot/session 身份**：guard 内容必须携带 `pid`、`boot_id`（Linux
-  `/proc/sys/kernel/random/boot_id` 或等价）、`session_id`（Windows 会话/`os.getppid` 链不
-  足时用进程启动时间 + 随机 nonce）、`hostname`、`created_at`。`pid` 复用用 `boot_id` +
-  `process_start_time` 消除歧义（同一 boot 内 pid 才可能复用；跨 boot 由 boot_id 区分）。
-- **是否必须有 reconciliation evidence**：**是**。判定"owner 已死"必须同时满足
-  (a) owner 进程在相同 boot_id/session 下不存在（存活探测）、(b) 链状态可验证（见下）。
-  任一不满足 → fail-closed + needs-attention。
-- **evidence digest 如何绑定**：reconciliation 记录必须内容寻址，digest 覆盖
-  `plan_digest`、`execution_id`、`operation`、`旧 guard 的身份字段`（pid/boot_id/session_id/
-  created_at）、`guard 文件字节 digest`、`判定时刻`、`reconciler 身份`。旧 guard 文件本身在
-  reconcile 成功前必须被字节级保存（先复制取证，再清理），reconciliation digest 绑定被清理
-  的那份字节。
-- **什么情况只能 fail-closed**：owner 存活探测不确定、boot/session 身份缺失、链状态无法
-  唯一验证、reconciliation 证据缺失/不完整、或任何"删除可信 receipt"的风险 → 一律
-  fail-closed，转既有 `lease.py` 的 needs-attention / `TargetReconciliation` 路径，等待人工。
+- Windows `msvcrt.locking` 是字节范围锁，锁文件**至少 1 字节**。RCP-02A 创建 `.lock` 时写
+  入一个固定哨兵字节；Linux `flock` 不要求内容，但为统一，两平台都写该哨兵字节。
 
----
+### 4.7 文件系统能力探测
 
-## 6. 必须保持的既有 receipt 语义（RCP-02 不得破坏）
+- RCP-02A 在 store 初始化或首次获取锁时做**显式能力探测**：尝试对 `.lock` 加锁/解锁，并在
+  同一进程用**第二个独立 fd** 再尝试加锁，确认会得到 busy（互斥真实生效）。探测失败、或
+  检测到网络/未知文件系统（无法证明 flock 语义）时**直接 fail-closed**，不写入。
+- 能力探测结果不得缓存为"永久可用"；每次 store 实例化重探（低成本）。
 
-以下不变量逐条冻结，RCP-02 的锁改造**只换锁机制、不改链语义**：
+### 4.8 Linux 语义（引用官方文档，不凭印象）
 
-1. **immutable content-addressed nodes**：`<receipt_digest_hex>.json`，digest 可重算
-   （`intervention_receipt.py:111-112`、`_read_receipt:143-152`）。
-2. **candidate / recovery pointer 独立**：`<execution_digest>.<operation>.current.json`
-   （`:105-109`），互不覆盖。
-3. **predecessor 单 successor**：分叉（同 predecessor 两个不同 digest）fail-closed
-   （`:286-299`、`:195-198`）。
-4. **pointer 可落后于唯一内容链头**：内容已发布、pointer 仍指合法祖先 = 可恢复缝，链头
-   优先、下次写重发 pointer（`:322-329`）。
-5. **不自动 replay backend apply/rollback**：durable receipt 是执行到达哪一安全边界的
-   证据，不是 crash 自动回滚日志（`d5-i2-...-design` §4.3、§11.8）。
-6. **post-apply 非终态 → needs-attention**：重启发现 `APPLY_STARTED` 及之后但尚未
-   `OPERATION_TERMINAL` 的 head → 阻止新执行 + attention + 转 lease/state reconcile，不自动
-   恢复（`cli.py:1287-1324`）。
+依据 `flock(2)`（Linux man-pages）：
 
-锁改造不触碰以上任何一条；RCP-02 的竞争正确性必须与这些不变量的既有测试并存全绿。
+- flock 锁与**打开文件描述（OFD）**关联，不是与进程或 fd 关联。
+- `fork()` 后子进程继承父进程的 OFD 与 fd 表副本：**父子共享同一把锁，不互斥**。
+- `dup(2)`/`dup2(2)`/`fcntl(F_DUPFD)` 复制的 fd 引用同一 OFD：**共享锁**。
+- 对同一文件的**两次独立 `open()` 得到两个 OFD，彼此互斥**：因此同一进程对同一文件二次
+  `open` + `flock(LOCK_EX|LOCK_NB)` 会返回 `EWOULDBLOCK`。
+- 锁在**所有引用该 OFD 的 fd 都关闭**时释放（或进程退出时释放）。
+- `flock` 与 `fcntl` 的 POSIX record lock **互不交互**（两套独立锁）。
+- NFS：自 Linux 2.6.12 起 flock 在 NFS 上由 fcntl POSIX lock 模拟（历史语义漂移）；**RCP-02A
+  不承诺 NFS**，见 §4.7。
+
+**标记为必须由平台测试确定**（不凭印象写进验收）：同进程内重复 `open` 互斥的精确行为、fork
+后父子共享锁的跨实现差异、`LOCK_NB` 失败返回 `EWOULDBLOCK` 还是 `EAGAIN` 的移植差异——这些由
+RCP-02A 的真实 Linux 测试钉死，不写为文档断言。
+
+### 4.9 Windows 语义（引用官方文档 + 真实进程测试）
+
+依据 Microsoft `msvcrt.locking` 文档：
+
+- `msvcrt.locking(fd, mode, nbytes)` 对 fd 锁 `nbytes` 字节；`LK_NBLCK` 为**非阻塞**尝试，失败
+  立即抛 `OSError`。
+- 锁是字节范围锁，文件需可写且长度 ≥ `nbytes`。
+- 进程退出后锁由操作系统释放。
+
+**标记为必须由平台测试确定**：`LK_NBLCK` 失败的异常类型/errno、同一进程二次 `open` 互斥
+行为、fork/子进程继承语义、锁文件被删除后的行为——由 RCP-02A 的真实 Windows 测试钉死。
+
+### 4.10 release 顺序
+
+- release 固定为 **unlock → close**（先显式 `LK_UNLCK`/`LOCK_UN` 解锁，再 `close` fd），
+  不依赖"close 即释放"的隐式语义（Windows 尤其需要显式 `LK_UNLCK`）。
 
 ---
 
-## 7. 旧 `.guard` 兼容策略（禁止静默删除）
+## 5. 常驻 `.lock` 文件不是孤儿 guard
 
-现状遗留物是**空 guard 文件**（无 owner、无 schema、无证据），字节上无法判定 owner 死活，
-也无法绑定 reconciliation 证据。策略：
-
-- **不允许静默删除**：任何启动扫描或写进程发现 `.*.guard` 文件时，绝不 `unlink`。
-- **legacy guard 判定 = fail-closed + 人工 reconcile**：因无 owner 身份，无法自动证明其
-  孤儿；唯一安全动作是**转 needs-attention**（绑定该 guard 文件的字节 digest），由
-  operator 显式决定"确认为孤儿后清理"或"该 scope 已死、跳过"。
-- **版本化迁移（不做自动迁移）**：RCP-02 引入的新锁机制使用**新文件名**（方案 A 用
-  `.*.lock`，方案 B 用带 schema 的 `.*.guard.json`），**不复用旧 `.guard` 裸名**，因此旧
-  `.guard` 与新锁机制天然无冲突；旧 `.guard` 只会被识别为 legacy 遗留物进入人工流程。
-- **升级后的启动行为**：启动扫描（`cli.py` 已有的非终态 receipt 扫描）额外检测 `.*.guard`
-  文件；发现即产出一条明确诊断 + needs-attention，**不阻塞无关 scope 的正常写入**（旧
-  guard 只影响它自己那个 scope 的后续 `_mutex`）。
+- **`.lock` 是稳定 inode/path 锚点，允许常驻**；它是锁的载体，不是"持锁标记"，因此不需要
+  "清理"来释放锁。
+- **数量有界**：`.lock` 数量最多与 receipt operation scope 同阶（每
+  plan+execution+operation 一个），不是无限临时文件泄漏。
+- **禁止单独在线删除某个 `.lock`**：在线删除会制造旧 inode/新 inode 双 writer 绕过互斥。
+- **只能在 receipt store 已离线、确认无 writer、准备归档/删除整个 store 时统一清理**。
+- **store retention 属后续显式生命周期输入**，不在 RCP-02 设置默认 TTL/保留期。
+- 测试**不得要求 `.lock` 文件不存在**；只要求"当前可重新获取且无活跃锁"。
 
 ---
 
-## 8. RCP-02 冻结的 API 与写集合
+## 6. 必须保持的既有 receipt 语义（RCP-02A 不得破坏）
 
-### 8.1 预计修改的类 / 函数
-
-- `intervention_receipt.py::DurableReceiptStore._mutex`：换成方案 A 的常驻锁文件
-  `flock`/`msvcrt.locking`（主路径），保留 `ReceiptStoreError("receipt chain is busy")`
-  对外的异常语义不变。
-- 新增 `intervention_receipt.py` 内的锁辅助（可选私有）：`_open_lock_file`（常驻、非 EXCL、
-  Windows 写哨兵字节）、`_acquire_process_lock` / `_release_process_lock`（Linux flock /
-  Windows msvcrt 的薄封装，含 `EWOULDBLOCK/EACCES/EDEADLK` → busy 的映射）。
-- `intervention_receipt.py::DurableReceiptStore.__init__`：不新增公开参数（不注入 TTL）。
-
-### 8.2 是否新增 GuardRecord / Reconciliation 模型
-
-- **是，新增 `ReceiptGuardRecord`**（`looper.receipt-guard-record/v1alpha1`）：仅在**方案 B
-  fallback** 写盘，字段 = `schema_version`、`scope_plan_digest`、`scope_execution_id`、
-  `scope_operation`、`owner_pid`、`owner_boot_id`、`owner_session_id`、`owner_hostname`、
-  `created_at`；`digest` 覆盖上述全部字段。方案 A 主路径**不写**该模型（锁状态在内核，不在
-  文件）。
-- **是，新增 `ReceiptGuardReconciliation`**（`looper.receipt-guard-reconciliation/v1alpha1`）：
-  `schema_version`、`guard_file_digest`（被清理那份 guard 的字节 digest）、`guard_record`
-  （若可解析）、`plan_digest`、`execution_id`、`operation`、`outcome`
-  （`ORPHAN_CONFIRMED` / `NEEDS_ATTENTION`）、`reconciled_at`、`reconciler`；`digest` 覆盖全
-  字段。**不自动产生**，只由显式 reconcile 入口写入。
-- **复用 FileTargetGuard 概念但不复制其隐式行为**：复用"guard + owner + 显式对账"的概念，
-  **不复用** `TargetLease` 的 `expires_at`/`ttl_seconds` 与 `acquire` 的"过期即接管"隐式行为
-  （`lease.py:180-225`）——receipt guard 无 TTL。
-
-### 8.3 哪些字段进 digest
-
-- 锁 scope 身份：`plan_digest`、`execution_id`、`operation`（沿用 `_execution_digest`）。
-- `ReceiptGuardRecord.digest`：owner 身份全字段（pid/boot_id/session_id/hostname/created_at）
-  + scope 全字段。
-- `ReceiptGuardReconciliation.digest`：§5 所述绑定全字段（含旧 guard 文件字节 digest）。
-
-### 8.4 原子发布顺序（方案 B fallback）
-
-1. `mkdir` store root；
-2. 原子写 `ReceiptGuardRecord` 到**临时 guard 内容文件**（tmp + `os.replace`）；
-3. 以 `O_EXCL` 把 guard 内容文件原子改名为正式 guard 路径（发布即持锁，内容先于存在）；
-4. 失败路径按"内容成功但改名失败"处理：fail-closed + 清理自己刚写的临时文件，**不删他人
-   的 guard**；
-5. 释放 = `unlink` 正式 guard 路径（只有 owner 才能，因 O_EXCL 命名空间保证唯一）。
-
-（方案 A 主路径无发布顺序：锁文件常驻，只 open+flock，无内容、无 unlink。）
-
-### 8.5 异常类型与调用方处理
-
-- 对外**保持** `ReceiptStoreError("receipt chain is busy")` 语义（`start`/`advance` 调用方
-  `dynamic_adapters.py:779-821` 已按此 fail-closed 传播为 `DynamicInterventionError`）。
-- 新增诊断异常（内部/可选）：`ReceiptGuardOrphaned`（发现 legacy/orphan guard，需人工）——
-  调用方**不得捕获后继续写**，必须 fail-closed 并转 attention。
-- 崩溃后重试的调用方语义：`start` 遇到"锁已释放但链已存在"仍按现有 "receipt execution
-  already exists" 处理（`intervention_receipt.py:398-399`），与锁恢复无关。
-
-### 8.6 写集合（RCP-02）
-
-- 可修改：`packages/core/looper_core/system_opt/intervention_receipt.py` + 新增
-  `tests/test_system_opt_intervention_receipt_concurrency.py`（或并入既有 receipt 测试）。
-- 不得修改：`intervention.py`、`safety.py`、`dynamic_adapters.py`、`dynamic_loop.py`、
-  `cli.py`、`lease.py`、任何既有测试、`unfinished-task-queue-2026-08-24.md`、
-  `agent-work-ledger-2026-08-24.md`、云端证据与 `.artifacts/`。
+1. immutable content-addressed nodes（`intervention_receipt.py:111-112`、`143-152`）。
+2. candidate/recovery pointer 独立（`:105-109`）。
+3. predecessor 单 successor（`:286-299`、`:195-198`）。
+4. pointer 可落后于唯一内容链头（`:322-329`）。
+5. 不自动 replay backend apply/rollback（`d5-i2-...-design` §4.3、§11.8）。
+6. post-apply 非终态 → needs-attention（`cli.py:1287-1324`）。
 
 ---
 
-## 9. RCP-02 测试矩阵
+## 7. legacy `.guard` 恢复证据（重新设计，RCP-02B）
 
-> 验收门：恰好一个 writer 成功；loser 明确 busy；崩溃后只能按冻结合同恢复；内容/指针链仍
-> 完整；Windows/Linux 语义一致。docs-only 阶段不要求 pytest。
+旧 `.guard` 是**空文件**，字节上不含 plan_digest/execution_id/operation 的明文，但**文件名
+本身编码了 identity 与 operation**：`.{identity_hex}.{operation}.guard`，其中 identity_hex =
+`execution_digest` 的 hex（`canonical_digest({"execution_id", "plan_digest"})`）。
+
+因此恢复证据**只能直接声明并绑定可观察事实**，不能从空文件反推 plan/execution：
+
+`ReceiptGuardReconciliation`（`looper.receipt-guard-reconciliation/v1alpha1`）字段：
+
+1. `guard_filename`：guard 的**规范化纯文件名**（严格 `.`+64hex+`.`+operation+`.guard`）。
+2. `execution_digest`：从 `guard_filename` 解析出的 identity hex，还原为
+   `sha256:<64hex>`。
+3. `operation`：从 `guard_filename` 解析（`candidate` | `recovery`）。
+4. `guard_sha256`：guard 文件**字节级 sha256**（空文件也有确定 digest，用于绑定被清理的那份）。
+5. `receipt_root`：receipt store root 的身份（路径 + 若可得其可观测身份）。
+6. `discovered_at`：发现时间。
+7. `target_id`：关联目标（operator/CLI 提供）。
+8. `operator_id`：operator/reconciler 身份。
+9. `writer_quiescence`：operator 的**显式声明**"旧版本 writer 已全部停止"（布尔 + 声明文本）。
+10. `chain_head_digest`：相关 receipt chain/head digest（若存在；无法建立关联时为 null）。
+11. `outcome`：恢复结果（`ORPHAN_CONFIRMED` | `NEEDS_ATTENTION`）。
+12. `reason`：结果与理由。
+
+**plan_digest + execution_id 关联规则**：
+
+- 若 operator 提供 `plan_digest` + `execution_id`：**必须重算
+  `execution_digest = canonical_digest({"execution_id", "plan_digest"})`，并等于 guard 文件名
+  里的 execution digest**；不匹配 → fail-closed。
+- 若无法建立关联（文件名解析失败、plan/execution 未知、或链缺失）：**不得清理**，标记
+  target needs-attention。
+
+---
+
+## 8. legacy reconcile 顺序（冻结，RCP-02B）
+
+1. CLI 先确认目标处于 needs-attention，或通过 `FileTargetGuard.mark_needs_attention` 建立
+   attention。
+2. operator **显式确认旧版本 writer 已全部停止**（quiescence 声明）。
+3. 在新 advisory lock 下读取 legacy guard（防止与任何仍在写的旧进程竞态）。
+4. 验证 guard 文件名、字节 sha256、相关 receipt 链/head。
+5. **先原子持久化内容寻址 `ReceiptGuardReconciliation` 证据**（tmp + `os.replace`，复用
+   `_atomic_write` 模式）。
+6. **再删除 legacy `.guard`**。
+7. 删除后重验 receipt 链。
+8. 通过既有 `TargetRecoveryEvidence` 清除 attention（复用 `lease.py:253-263` 的
+   `clear_attention` 边界）。
+9. 任一步失败保持或重新进入 needs-attention。
+
+**崩溃缝语义**：
+
+- **evidence 已写、guard 未删**：允许幂等重试（evidence 是内容寻址，重复写同一内容幂等）。
+- **guard 已删、attention 未清**：依据已落盘 evidence 继续恢复（evidence 先于删除是前提）。
+- **不允许先删 guard 后写 evidence**：先写证据是硬序。
+
+**不能直接复用 `reconcile-expired-lease`**（`cli.py:461`）：lease reconciliation 与 receipt
+guard reconciliation 是**不同证据合同**（前者对账配置快照，后者对账空 guard 文件）；只能
+**复用 `FileTargetGuard` 的 attention/recovery 边界**（`mark_needs_attention` /
+`clear_attention`），不复制其 lease TTL/reconciliation 语义。
+
+---
+
+## 9. 作用域与 target attention（修正 R1 矛盾）
+
+- mutex 互斥作用域 = **单 plan+execution+operation**（§4.1）。
+- legacy guard 被发现后，CLI 标记的是 **target-level attention**（
+  `FileTargetGuard.mark_needs_attention`）。
+- **一旦 target attention 建立，该目标所有新写都会被 `FileTargetGuard` 阻断**
+  （`lease.py:164-168` 的 `assert_writable`）。
+- 因此**不能声称"旧 guard 只影响它自己那个 scope、无关 scope 正常写入"**：target attention
+  是全目标阻断。
+- **其它 target、其它 session 不受影响**（attention 按 target_id 隔离，lease 按 target_id 隔离）。
+
+---
+
+## 10. RCP-02A / RCP-02B 写集合（串行）
+
+### RCP-02A：未来崩溃安全锁
+
+- 依赖：本稿（RCP-01-R2）通过。
+- 写集合：
+  - `packages/core/looper_core/system_opt/intervention_receipt.py`
+  - 新增 receipt concurrency 测试（`tests/test_system_opt_intervention_receipt_concurrency.py`
+    或等价）。
+- 内容：advisory lock（§4）、local filesystem 支持边界探测、线程/进程竞争、持锁进程强制
+  退出、不同 scope 并行、stale-head 重验、pointer 完全缺失重建测试。
+- 不可改：`intervention.py`、`safety.py`、`dynamic_adapters.py`、`dynamic_loop.py`、`cli.py`、
+  `lease.py`、任何既有测试、云端证据与 `.artifacts/`。
+
+### RCP-02B：legacy `.guard` 显式恢复
+
+- 依赖：RCP-02A。
+- 写集合：
+  - `packages/core/looper_core/system_opt/intervention_receipt.py`
+  - `services/api/looper_api/cli.py`
+  - receipt/CLI 专属测试
+  - 必要的新恢复证据模型（`ReceiptGuardReconciliation`，§7）
+- 内容：legacy guard 发现、`ReceiptGuardReconciliation` 模型、冻结 9 步 reconcile 顺序
+  （§8）、target attention 边界复用。
+
+**RCP-02A 与 RCP-02B 必须串行，不允许一个 Agent 同时实现**（02A 的锁改造是 02B 恢复流程
+的安全前提，02B 的 CLI 入口依赖 02A 的锁已落地）。
+
+---
+
+## 11. 测试矩阵
+
+### RCP-02A（至少覆盖，分平台）
 
 | # | 用例 | 预期 |
 |---|---|---|
-| 1 | 同 scope 两线程竞争 | 恰好一个 `_mutex` 进入，另一个 `ReceiptStoreError("busy")` |
-| 2 | 同 scope 两独立进程竞争 | 同上（用 `multiprocessing` 或 subprocess，不共享 fd） |
-| 3 | 持锁进程强制退出（`kill`/`terminate`） | 锁自动释放；第二个进程随后可正常进入；**无孤儿 guard** |
-| 4 | 不同 execution 并行 | 互不阻塞（guard/lock 按 identity+operation 隔离） |
-| 5 | candidate 与 recovery 并行（同 execution） | 互不阻塞（operation 不同） |
-| 6 | PID 复用 / 伪造 owner（方案 B） | 依赖 boot_id/session 判定，无法证明 owner 死亡 → fail-closed |
-| 7 | 损坏 / 半写 guard（方案 B） | fail-closed，不清理，转 attention |
-| 8 | legacy 空 `.guard` 遗留 | fail-closed + 人工 reconcile，不静默删除 |
-| 9 | pointer 完全缺失但内容链完整 | 沿前驱链重建唯一 head（现有 `test_content_before_pointer_crash_recovers_unique_head` 覆盖 pointer 指祖先；**新增** pointer 删除后的重建用例） |
-| 10 | pointer 指祖先 | 唯一内容链头优先，下次写重发 pointer |
-| 11 | 内容链分叉 / 断链 | fail-closed（分叉 = 同 predecessor 两个 successor；断链 = 缺 predecessor） |
-| 12 | 恢复失败不得删除可信 receipt | reconcile 失败/不确定时，已存在 receipt 文件一个都不删 |
-| 13 | 测试结束无孤儿 guard | 每个用例 teardown 断言 `.*.guard` / `.*.lock` 无遗留（主路径锁文件常驻属正常，须区分"锁文件"与"遗留 guard"） |
+| 1 | 同 scope 两线程竞争 | 恰好一个进入，另一个 `ReceiptStoreError("busy")` |
+| 2 | 同 scope 两独立进程竞争 | 同上（`multiprocessing`/subprocess，不共享 fd） |
+| 3 | 持锁进程 `terminate` 后可重新获取 | 锁自动释放；无遗留 busy |
+| 4 | 不同 execution 并行 | 互不阻塞（`.lock` 按 identity+operation 隔离） |
+| 5 | candidate 与 recovery 并行（同 execution） | 互不阻塞 |
+| 6 | 锁内 head 重验 | 拿到锁后重读 head，stale-head 写入被拒 |
+| 7 | pointer 完全缺失 | 沿前驱链重建唯一 head |
+| 8 | pointer 指祖先 | 唯一内容链头优先，下次写重发 pointer |
+| 9 | 分叉/断链 | fail-closed |
+| 10 | `.lock` 常驻但无活跃锁 | 测试结束 `.lock` 存在（允许），且可重新获取、无活跃锁 |
+| 11 | Windows 长路径 | `_native_path` 的 `\\?\` 前缀下锁正常 |
+| 12 | Linux 与 Windows 分平台 | **不得在单平台伪报另一平台通过**；两平台各有真实进程测试 |
+
+### RCP-02B（至少覆盖）
+
+| # | 用例 | 预期 |
+|---|---|---|
+| 1 | legacy 空 guard 首次发现 | 标记 target attention，不自动清理 |
+| 2 | target attention 阻断新 lease | 该 target 新写被 `FileTargetGuard` 阻断 |
+| 3 | 未提供 operator quiescence 声明 | 拒绝清理 |
+| 4 | execution digest 重算不一致 | fail-closed，不清理 |
+| 5 | evidence 先落盘 | 删除 guard 前 evidence 已存在 |
+| 6 | evidence 后 guard 删除失败 | 可幂等重试 |
+| 7 | guard 删除后 attention 清理失败 | 依已落盘 evidence 继续 |
+| 8 | 相关 receipt 链损坏 | 不删除 guard，保持 needs-attention |
+| 9 | 完整恢复后 attention 才能清除 | `clear_attention` 只在全部步骤成功后调用 |
 
 ---
 
-## 10. RCP-02 与 RCP-03 边界
+## 12. RCP-02A / RCP-02B / RCP-03 边界
 
-- **RCP-02 只解决并发与崩溃正确性**：锁机制、owner 身份、崩溃判定、显式 reconcile、
-  legacy guard 迁移。**不优化任何扫描复杂度。**
-- **`_all_receipts()` 全局 O(N) 重扫 → O(N²) 累计属于 RCP-03**（
+- **RCP-02A 只解决并发与崩溃正确性**：advisory lock + local filesystem 边界 + 竞争/崩溃
+  测试。不碰 legacy guard、不碰 CLI。
+- **RCP-02B 只解决 legacy `.guard` 显式恢复**：发现、证据、reconcile 顺序、attention 边界。
+- **`_all_receipts()` 全局 O(N) 重扫 → O(N²) 属于 RCP-03**（
   `unfinished-task-queue-2026-08-24.md` L24、§4 RCP-03）。
-- **不得在 RCP-01/RCP-02 中改变"其它 scope 损坏是否全局阻断"的安全语义**：当前"任一
-  scope 损坏即全局 fail-closed"是保守安全语义；局部索引/忽略是 RCP-03 在冻结真实性边界后
-  才可决策的事，RCP-01/RCP-02 一律不碰。
+- **不得在任何一包中改变"其它 scope 损坏是否全局阻断"的安全语义**：当前"任一 scope 损坏即
+  全局 fail-closed"是保守安全语义，局部索引/忽略是 RCP-03 在冻结真实性边界后的事。
 
 ---
 
-## 11. 未决问题（需主 agent / 用户裁决，本稿不擅自定值）
+## 13. 已收敛的决策（不再是未决问题）
 
-1. 方案 A 主路径的**文件系统能力探测**边界：不支持 flock 时是"显式走方案 B"还是"直接拒绝"？
-   本稿倾向"显式走方案 B 并落盘身份"，但**不替主 agent 拍板**。
-2. 方案 B 的 owner 存活探测具体实现（Linux `boot_id` + `/proc/<pid>` vs 便携封装），是否
-   允许引入极小的纯存在性探测（**不含任何时间/超时**）。
-3. `ReceiptGuardRecord` / `ReceiptGuardReconciliation` 的 schema 版本与字段是否需要用户
-   逐字段过目（按公式/字段登记纪律）。
-4. legacy `.guard` 遗留的 operator 清理入口是否复用 `cli.py` 的 reconcile-expired-lease 命令
-   （`cli.py:461`）还是新增独立 `reconcile-orphan-guard` 命令。
+R2 以下核心问题**已冻结，RCP-02A/02B 实现者不得再以"待定"为由自行选择**：
 
-以上问题均**不得**由 RCP-02 实现者以默认值解决；需先在本稿复审时收敛。
+1. **advisory lock 是唯一实现**；未知/网络文件系统直接 fail-closed，不探测降级。
+2. **不做 owner guard fallback**；不引入 boot/session/PID liveness/自动孤儿判定。
+3. **legacy 恢复由独立串行 RCP-02B 的 CLI/operator 流程完成**，不在 RCP-02A 处理。
+4. **target attention 是全目标阻断**；发现 legacy guard 后该 target 所有新写被阻断。
+5. **常驻 `.lock` 只在 store 离线退役时统一清理**；不设默认 TTL/保留期。
 
 ---
 
-## 12. 引用校验记录（本稿重新 grep 核实，非沿用旧行号）
+## 14. 剩余外部问题（可保留，不阻塞 RCP-02A）
+
+1. **store retention 生命周期**：receipt store 何时归档/退役、`_all_receipts` 与 `.lock` 的
+   离线清理时机，属后续显式生命周期输入，不在 RCP-02A/02B 设默认。
+2. **`ReceiptGuardReconciliation` 的 schema 字段定稿**：需主 agent / 用户逐字段过目（按
+   字段登记纪律），但字段语义已由 §7 冻结。
+3. **平台语义的官方依据锚定**：Linux `flock(2)` 与 Windows `msvcrt.locking` 的 fork/重入/
+   异常行为，已在本稿引用官方文档并标记"必须由 RCP-02A 真实进程测试钉死"；不阻塞设计，但
+   是 RCP-02A 验收的硬前置。
+
+---
+
+## 15. 引用校验记录（本稿重新 grep 核实，非沿用旧行号）
 
 - `intervention_receipt.py`：`_mutex` 114-130、`_atomic_write` 132-141、`_read_receipt`
   143-152、`_pointer_path` 105-109、`_content_path` 111-112、`_publish_receipt` 367-387、
-  `start` 389-413（mutex@397、already-exists@398-399）、`advance` 415-454（mutex@435）、
+  `start` 389-413（mutex@397）、`advance` 415-454（mutex@435、stale-head@452）、
   `head` 265-329（content-before-pointer seam@322-329）、`_all_receipts` 163-199。
 - `intervention.py`：`InterventionExecutionReceiptV2` 201-291、`ReceiptStageV2` 178-186、
   `ReceiptOperation` 188-190。
-- `lease.py`：`FileTargetGuard` 117-253、`_mutex` 135-147、`TargetLease` 28-38（expires_at@33）、
-  `acquire` 180-225（TTL/reconciliation）、`TargetReconciliation` 53-87。
-- `dynamic_adapters.py`：`TwoStageSafetyBackedIntervention._run_observed` 779-821
-  （start@788-795、execute_observed@798-806）、`_observer` 764-774。
-- `cli.py`：`DurableReceiptStore` 引用 1287、启动扫描 1289-1324（non-terminal post-apply
-  receipt 阻断）、`attention_sink` 1367、注入 1383-1384、`reconcile-expired-lease` 461。
+- `lease.py`：`FileTargetGuard` 117-253、`_mutex` 135-147、`assert_writable` 164-168、
+  `mark_needs_attention` 238-251、`clear_attention` 253-263、`TargetLease` 28-38。
+- `dynamic_adapters.py`：`TwoStageSafetyBackedIntervention._run_observed` 779-821。
+- `cli.py`：`DurableReceiptStore` 引用 1287、启动扫描 1289-1324、`attention_sink` 1367、
+  注入 1383-1384、`reconcile-expired-lease` 461。
 - 设计来源：`d5-i2-runtime-wiring-design-2026-08-24.md` §4.2/§4.3/§8.3/§10/§11；
   `unfinished-task-queue-2026-08-24.md` §2（L22-24）、§3（RCP 链）、§4（RCP-01/02/03）、
   §6（L171 无默认超时）。
