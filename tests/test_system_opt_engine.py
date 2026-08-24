@@ -148,6 +148,22 @@ class TestScorer:
         with pytest.raises(ValueError, match="at least one"):
             score_components([])
 
+    def test_all_improving_adverse_coordinates_aggregate_to_zero(self):
+        scores = score_components(
+            [
+                DiagnosticPriority(
+                    metric_id="memory.pressure",
+                    component="memory",
+                    pressure=0.2,
+                    adverse_change=-0.4,
+                    persistence=0.0,
+                    confidence=1.0,
+                )
+            ]
+        )
+
+        assert scores[0].max_adverse_change == 0.0
+
 
 class TestScheduler:
     def _entry_for(self, parameters: dict) -> NegativeCacheEntry:

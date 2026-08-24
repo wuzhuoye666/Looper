@@ -52,7 +52,10 @@ def score_components(priorities: Sequence[DiagnosticPriority]) -> list[Component
             ComponentScore(
                 component=component,
                 max_pressure=max(item.pressure for item in items),
-                max_adverse_change=max(item.adverse_change for item in items),
+                # ``adverse_change`` is signed: negative means a favourable
+                # movement.  This aggregate records adverse magnitude, so an
+                # all-improving component is represented by zero.
+                max_adverse_change=max(0.0, max(item.adverse_change for item in items)),
                 best_pareto_rank=min(ranks) if ranks else None,
                 metric_count=len(items),
                 priorities_digest=canonical_digest(
