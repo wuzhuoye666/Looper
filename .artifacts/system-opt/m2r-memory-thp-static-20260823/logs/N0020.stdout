@@ -1,0 +1,11 @@
+{
+  "target_id": "external:8.134.104.213",
+  "actor_id": "init-tuning-session",
+  "authorized_item_ids": [
+    "thp-enabled"
+  ],
+  "source_evidence_digest": "sha256:b2ee080bbc934a700f6d50b3395dbeddd763dda481a2d9cec49e3b241df66475",
+  "declaration_digest": "sha256:1a81ae4b90ef2991af75082dcc8ae287d33a7eefe6f2d5485449bd1cc6eadc1e",
+  "state_evidence_digest": "sha256:66198e679534721e8da65984fa8cce189d079794e849be19b3b4c89d021f6785",
+  "output": "/opt/looper-system-opt-3b01722/.artifacts/system-opt/init-tuning-8134104213/authorized-state-evidence.json"
+}

@@ -1,0 +1,39 @@
+╭───────────────────── Traceback (most recent call last) ──────────────────────╮
+│ /opt/looper-system-opt-3b01722/services/api/looper_api/cli.py:962 in         │
+│ calibrate_linux_pressure                                                     │
+│                                                                              │
+│    959 │   │   │   if decoupled is not None                                  │
+│    960 │   │   │   else PhasedPressureMeasurementAdapter(protocol, runner)   │
+│    961 │   │   )                                                             │
+│ ❱  962 │   │   batch = measure(repeats)                                      │
+│    963 │   │   _write_json(output, batch)                                    │
+│    964 │   finally:                                                          │
+│    965 │   │   guard.release(lease)                                          │
+│                                                                              │
+│ /opt/looper-system-opt-3b01722/packages/core/looper_core/system_opt/pressure │
+│ /__init__.py:817 in __call__                                                 │
+│                                                                              │
+│   814 │   │   │   │   or f"pressure cleanup {cleanup.id}                     │
+│       {cleanup_result.status.value}"                                         │
+│   815 │   │   │   )                                                          │
+│   816 │   │   if error is not None:                                          │
+│ ❱ 817 │   │   │   raise error                                                │
+│   818 │   │   if batch is None:                                              │
+│   819 │   │   │   raise RuntimeError("pressure protocol produced no          │
+│       measurement batch")                                                    │
+│   820 │   │   if (                                                           │
+│                                                                              │
+│ /opt/looper-system-opt-3b01722/packages/core/looper_core/system_opt/pressure │
+│ /__init__.py:786 in __call__                                                 │
+│                                                                              │
+│   783 │   │   │   │   │   )                                                  │
+│   784 │   │   │   │   )                                                      │
+│   785 │   │   │   │   if result.status != OperationStatus.SUCCEEDED:         │
+│ ❱ 786 │   │   │   │   │   raise RuntimeError(                                │
+│   787 │   │   │   │   │   │   result.stderr or f"pressure phase {phase.id}   │
+│       {result.status.value}"                                                 │
+│   788 │   │   │   │   │   )                                                  │
+│   789 │   │   │   │   if phase.kind == PressurePhaseKind.MEASURE:            │
+╰──────────────────────────────────────────────────────────────────────────────╯
+RuntimeError: memory pressure threads exceed the online CPU count
+

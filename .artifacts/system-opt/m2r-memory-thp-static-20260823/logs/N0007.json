@@ -1,0 +1,9 @@
+{
+ "ts": "2026-08-23T14:52:17.165685+00:00",
+ "host": "8.134.104.213",
+ "cmd": "cd /opt/looper-system-opt-3b01722 && PYTHONPATH=packages/core:services/api /opt/looper-venv/bin/python -m looper_api.cli system-opt state-inventory --manifest examples/system-optimizer/aliyun-ecs-memory-thp-manifest.yaml --target-id external:8.134.104.213 --source /usr/lib/tuned/virtual-guest/tuned.conf --source /usr/lib/tuned/throughput-performance/tuned.conf --output .artifacts/system-opt/init-tuning-8134104213/state-evidence.json",
+ "exit_code": 0,
+ "stdout_sha256": "99588d61d86c88f03a9848c30ce35f475fce2eb7f44e3d11dbb835c0f1aede88",
+ "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+ "stdout_bytes": 618
+}

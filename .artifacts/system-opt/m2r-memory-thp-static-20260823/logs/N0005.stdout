@@ -1,0 +1,11 @@
+060b7d8fe0e43d697475687bf0658d5bfd9ab47e08a0874654f2e8277b2d228a  /opt/looper-system-opt-3b01722.tar.gz
+│ derive-pressure-gate     Derive an explicit target-local CV gate from a      │
+│                          frozen calibration batch.                           │
+│ engine-demo              Run the L8 engine loop over a synthetic             │
+│                          multi-component demo.                               │
+│ cache-inspect            Summarize an append-only negative result cache      │
+│                          (L7).                                               │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+/usr/lib/tuned/throughput-performance/tuned.conf
+/usr/lib/tuned/virtual-guest/tuned.conf

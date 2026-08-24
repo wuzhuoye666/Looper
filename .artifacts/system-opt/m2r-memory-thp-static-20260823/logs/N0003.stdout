@@ -1,0 +1,5 @@
+No user sessions are running outdated binaries.
+
+No VM guests are running outdated hypervisor (qemu) binaries on this host.
+Python 3.11.0rc1
+sysbench 1.0.20

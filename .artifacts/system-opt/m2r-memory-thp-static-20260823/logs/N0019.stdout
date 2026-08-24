@@ -1,0 +1,2 @@
+/usr/lib/tuned/throughput-performance/tuned.conf:transparent_hugepages=never
+Current active profile: virtual-guest

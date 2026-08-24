@@ -1,0 +1,6 @@
+{
+  "metric_id": "memory.bandwidth-mib-per-second",
+  "acceptance_limit": 0.046409798043284295,
+  "calibration_digest": "sha256:557bc07f136ab9a91ed763204a4049630b0d1da586fab5e99417d47cf5cd0507",
+  "output": "/opt/looper-system-opt-3b01722/.artifacts/system-opt/init-tuning-8134104213/stability-gate.json"
+}

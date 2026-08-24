@@ -1,0 +1,9 @@
+{
+ "ts": "2026-08-23T15:07:26.494087+00:00",
+ "host": "8.134.104.213",
+ "cmd": "cd /opt/looper-system-opt-3b01722 && PYTHONPATH=packages/core:services/api /opt/looper-venv/bin/python -c \"\nimport json\nfrom looper_core.system_opt.config_manifest import parse_config_manifest_yaml\nfrom looper_core.system_opt.state_evidence import ConfigurationStateEvidence\nfrom looper_core.system_opt.inventory import capture_environment_fingerprint\nfrom looper_core.canonical import canonical_digest\nmanifest = parse_config_manifest_yaml(open('examples/system-optimizer/aliyun-ecs-memory-thp-manifest.yaml').read())\nev = ConfigurationStateEvidence.model_validate(json.load(open('.artifacts/system-opt/init-tuning-8134104213/authorized-state-evidence.json')))\ncur = canonical_digest(capture_environment_fingerprint().model_dump(mode='json'))\nprint('evidence env:', ev.environment_digest[:20])\nprint('current  env:', cur[:20])\nprint('match:', ev.environment_digest == cur)\np, b = ev.safety_constraints(manifest, target_id='external:8.134.104.213', actor_id='init-tuning-session', environment_digest=cur)\nprint('pinned:', p, 'blocked:', b)\n\"",
+ "exit_code": 0,
+ "stdout_sha256": "6d898fd54c3a9d36137f6c806eb43fe6eb2fde65a76485c32f0c104a6e839cdf",
+ "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+ "stdout_bytes": 111
+}

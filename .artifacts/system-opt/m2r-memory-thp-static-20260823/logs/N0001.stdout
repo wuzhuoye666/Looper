@@ -1,0 +1,10 @@
+iZ7xvhz4676o4p0ohgytbuZ
+ 22:49:01 up 17 min,  0 users,  load average: 0.00, 0.02, 0.05
+Python 3.10.12
+2
+               total        used        free      shared  buff/cache   available
+Mem:            1608         359         150           2        1099        1081
+always [madvise] never
+active
+root         990  0.5  1.7 119280 29476 ?        Ssl  22:31   0:06 /usr/local/aegis/aegis_client/aegis_12_93/AliYunDun
+root        2511  0.2 10.1 542100 166828 ?       Ssl  22:36   0:02 /usr/libexec/fwupd/fwupd

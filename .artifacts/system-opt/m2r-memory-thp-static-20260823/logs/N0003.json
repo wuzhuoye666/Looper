@@ -1,0 +1,9 @@
+{
+ "ts": "2026-08-23T14:49:49.143239+00:00",
+ "host": "8.134.104.213",
+ "cmd": "export DEBIAN_FRONTEND=noninteractive; apt-get install -y -q python3.11 python3.11-venv sysbench 2>&1 | tail -3; python3.11 --version; sysbench --version",
+ "exit_code": 0,
+ "stdout_sha256": "33211e07889904bd40d51c1d3d76f6da13500c0fb2959f961956d2e4a10a6efb",
+ "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+ "stdout_bytes": 157
+}

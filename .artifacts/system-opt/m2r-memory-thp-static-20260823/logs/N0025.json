@@ -1,0 +1,9 @@
+{
+ "ts": "2026-08-23T15:03:40.381644+00:00",
+ "host": "8.134.104.213",
+ "cmd": "cd /opt/looper-system-opt-3b01722 && PYTHONPATH=packages/core:services/api /opt/looper-venv/bin/python -m looper_api.cli system-opt calibrate-pressure --pressure-protocol examples/system-optimizer/session-assets/8134-memory-calibration-protocol.yaml --repeats 7 --target-id external:8.134.104.213 --owner-id init-tuning-session --lease-root .artifacts/system-opt/init-tuning-8134104213/leases --lease-ttl-seconds 900 --allow-executable /opt/looper-venv/bin/python --writable-root .artifacts/system-opt/init-tuning-8134104213 --enable-real --confirmation I_UNDERSTAND_LINUX_CONFIG_WRITES --output .artifacts/system-opt/init-tuning-8134104213/calibration-never-batch.json 2>&1 | tail -14 && PYTHONPATH=packages/core:services/api /opt/looper-venv/bin/python -m looper_api.cli system-opt derive-pressure-gate --measurement-batch .artifacts/system-opt/init-tuning-8134104213/calibration-never-batch.json --metric-id memory.bandwidth-mib-per-second --confidence-level 0.95 --bootstrap-resamples 2000 --random-seed 20260823 --target-scope 'Alibaba ECS iZ7xvhz4676o4p0ohgytbuZ (8.134.104.213), Linux guest, fixed memory protocol 2 threads, THP=never baseline state' --portability 'Target-local gate calibrated at the never-baseline configuration; recalibrate after any protocol or environment identity change.' --output .artifacts/system-opt/init-tuning-8134104213/stability-gate-never.json 2>&1 | tail -8",
+ "exit_code": 0,
+ "stdout_sha256": "39a4b0deee40b0a8dd0ceac9f8f883f9a788de0d58ea743882767136da05349e",
+ "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+ "stdout_bytes": 845
+}

@@ -1,0 +1,9 @@
+{
+ "ts": "2026-08-23T14:59:36.031539+00:00",
+ "host": "8.134.104.213",
+ "cmd": "grep -i hugepage /usr/lib/tuned/virtual-guest/tuned.conf /usr/lib/tuned/throughput-performance/tuned.conf; tuned-adm active 2>/dev/null",
+ "exit_code": 0,
+ "stdout_sha256": "2ebcb0d6bde97e22d98660af696671afee99122763fa925ed523d5d269bb2e81",
+ "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+ "stdout_bytes": 115
+}

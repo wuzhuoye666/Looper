@@ -1,0 +1,9 @@
+{
+ "ts": "2026-08-23T14:49:01.079209+00:00",
+ "host": "8.134.104.213",
+ "cmd": "hostname; uptime; python3 --version; nproc; free -m | head -2; cat /sys/kernel/mm/transparent_hugepage/enabled; systemctl is-active tuned 2>/dev/null; which sysbench fio iperf3 stress-ng 2>/dev/null; ps aux --sort=-%cpu | head -4 | tail -2",
+ "exit_code": 0,
+ "stdout_sha256": "62f1564dcacd934b0a3b9bbbada5b51efb433ba98cbcc74ea6b62e900fa89fc0",
+ "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+ "stdout_bytes": 507
+}

@@ -1,0 +1,9 @@
+{
+ "ts": "2026-08-23T14:51:23.021243+00:00",
+ "host": "8.134.104.213",
+ "cmd": "sha256sum /opt/looper-system-opt-3b01722.tar.gz; cd /opt/looper-system-opt-3b01722 && PYTHONPATH=packages/core:services/api /opt/looper-venv/bin/python -m looper_api.cli system-opt --help 2>&1 | tail -8; ls /usr/lib/tuned/virtual-guest/tuned.conf /usr/lib/tuned/throughput-performance/tuned.conf 2>&1",
+ "exit_code": 0,
+ "stdout_sha256": "b12fe9ff267a42870326eef070c99b01f26185b68246ac9bea56075b1b87bf17",
+ "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+ "stdout_bytes": 945
+}

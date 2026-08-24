@@ -1,0 +1,9 @@
+{
+ "ts": "2026-08-23T15:00:00.233428+00:00",
+ "host": "8.134.104.213",
+ "cmd": "cd /opt/looper-system-opt-3b01722 && PYTHONPATH=packages/core:services/api /opt/looper-venv/bin/python -m looper_api.cli system-opt authorize-state --state-evidence .artifacts/system-opt/init-tuning-8134104213/state-evidence.json --actor-id init-tuning-session --declared-by operator-wujiahao-session --item-id thp-enabled --reason 'Operator-authorised static initial tuning session: temporary THP changes on this no-workload target, verify and roll back after every measurement' --output .artifacts/system-opt/init-tuning-8134104213/authorized-state-evidence.json",
+ "exit_code": 0,
+ "stdout_sha256": "7173b93411945731cf07750cb71a7076f780053c064c68b48400cba950b41859",
+ "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+ "stdout_bytes": 557
+}

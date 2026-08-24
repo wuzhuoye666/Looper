@@ -1,0 +1,20 @@
+  "protocol_digest": "sha256:df6e129fd1b79392a5473f87b95e394a76dd131d38d0771ed39abe84866fdda3",
+  "component": "memory",
+  "stability": {
+    "metric_id": "memory.bandwidth-mib-per-second",
+    "statistic": "cv",
+    "formula_id": "F-PROJECT-PRESSURE-CV/v1alpha1",
+    "sample_count": 7,
+    "value": 0.09900282627424176,
+    "enforcement": "report-only",
+    "acceptance_limit": null,
+    "accepted": null
+  },
+  "output": "/opt/looper-system-opt-3b01722/.artifacts/system-opt/init-tuning-8134104213/calibration-never-batch.json"
+}
+{
+  "metric_id": "memory.bandwidth-mib-per-second",
+  "acceptance_limit": 0.12568574746750738,
+  "calibration_digest": "sha256:990c7ce26948dab39a7af5eb2e9cbafd46b4b67ad4924de9bc647154a8408d1d",
+  "output": "/opt/looper-system-opt-3b01722/.artifacts/system-opt/init-tuning-8134104213/stability-gate-never.json"
+}

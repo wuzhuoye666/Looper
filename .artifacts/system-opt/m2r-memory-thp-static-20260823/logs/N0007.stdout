@@ -1,0 +1,10 @@
+{
+  "target_id": "external:8.134.104.213",
+  "manifest_digest": "sha256:66154ca0f7d9e7fe53c4d969c826b745e192d1b1d032f9868db7c928c9ef09a0",
+  "state_evidence_digest": "sha256:b2ee080bbc934a700f6d50b3395dbeddd763dda481a2d9cec49e3b241df66475",
+  "source_count": 2,
+  "assignment_count": 28,
+  "record_count": 1,
+  "counting_basis": "all parseable key=value assignments from every explicitly listed source are retained; exact target or manifest-declared persistent-key matching only; no precedence inference",
+  "output": "/opt/looper-system-opt-3b01722/.artifacts/system-opt/init-tuning-8134104213/state-evidence.json"
+}

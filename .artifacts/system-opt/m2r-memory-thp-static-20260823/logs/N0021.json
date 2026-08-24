@@ -1,0 +1,9 @@
+{
+ "ts": "2026-08-23T15:00:09.274575+00:00",
+ "host": "8.134.104.213",
+ "cmd": "echo madvise > /sys/kernel/mm/transparent_hugepage/enabled && cat /sys/kernel/mm/transparent_hugepage/enabled",
+ "exit_code": 0,
+ "stdout_sha256": "4ca7db7e514787a42c69893c196cd4f7ed14154bda6d690fc2f7771b7ae497d1",
+ "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+ "stdout_bytes": 23
+}
