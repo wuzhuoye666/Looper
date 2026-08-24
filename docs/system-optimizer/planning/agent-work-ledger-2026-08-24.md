@@ -57,6 +57,7 @@ phase-gate audit
 | Z-BASE-01 2026-08-24 实现重新基线 | glm5.3 | `system-optimizer-impl@e704b88` | planning/architecture docs；不碰 agent 代码写集合 | `integrated` 于 `da06607`，push 待本记录提交后一并执行。冻结动态纵向切片、证据/replay、G4、L6c 与 D4/D5/G5 的真实完成边界；docs-only，`git diff --check` 通过，未运行 pytest |
 | Z-CI-01 cloud confirmation 全量 flaky | glm5.3 | `system-optimizer-impl@98f7e23`；主线 `bcc4a6f` | 仅 `tests/test_cloud_workflow.py`；不碰 GPT/DeepSeek 写集合 | `pushed`。测试手工过期数据库字段但未推进时钟，Windows 同 tick 下 renew token 可与 prepare token 相同；测试显式推进 1 秒，不修改生产 token 合同。目标 1、cloud workflow 22、全仓 811 全部通过；Ruff/diff 通过。依赖感知同步规则另见 `a5c549f` |
 | Z-L7-01 candidate negative-cache 持久化硬化 | glm5.3 | `system-optimizer-impl@39af89c`；实现 `06aab11` | 仅 `negative_cache/__init__.py` 与专属 tests；不碰 GPT G6、DeepSeek D5-I2-D 写集合 | `accepted`。证据引用改为严格 lowercase sha256；dump 与逻辑 append 使用同目录原子替换，发布成功后才更新内存索引；失败保留旧磁盘/内存状态并清理临时文件。专属 27、关联 70、System Optimizer 548、全仓 881、Ruff/py_compile/diff 通过；未实现仍待 schema 决策的 SO-D019 假设级第二条目类型 |
+| Z-BACKLOG-01 未完成任务依赖队列 | glm5.3 | `system-optimizer-impl@1854c1b`；实现 `e000533` | docs-only：新增 `unfinished-task-queue-2026-08-24.md` 并加入 README；不改生产代码/测试 | `integrated`，push 待本记录提交后一并执行。按当前代码复核 DeepSeek/审查报告：确认 receipt 孤儿 guard、并发覆盖、全局重扫、pointer 缺失测试及 M3/M4/M5/M6 真实剩余项；拒绝“D5-I2-B 未接线”“L5 尚未降格”两项旧基线误报；以 P0–P3、串行依赖链和四批多 Agent 写集合落档。`git diff --check` 通过，docs-only 未运行 pytest |
 
 ## G5 给 GPT 的正式任务合同
 
