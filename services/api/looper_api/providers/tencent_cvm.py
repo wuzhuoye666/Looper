@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import time
 from datetime import timedelta
 from decimal import Decimal
@@ -54,6 +55,7 @@ class TencentInventoryError(CloudProviderError):
 
 
 _REQUIRED_ENV = ["TENCENTCLOUD_SECRET_ID", "TENCENTCLOUD_SECRET_KEY"]
+_TENCENT_REGION_PATTERN = re.compile(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)+")
 
 
 def _credentials() -> tuple[str, str, str | None]:
@@ -1095,7 +1097,7 @@ def sync_cvm_inventory(
     *,
     credential_store: Any | None = None,
 ) -> list[TargetRecord]:
-    if not region or not region.startswith("ap-"):
+    if not region or _TENCENT_REGION_PATTERN.fullmatch(region) is None:
         raise TencentInventoryError("a valid Tencent Cloud region is required")
     provider = TencentCvmProvider()
     from tencentcloud.cvm.v20170312 import models

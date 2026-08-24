@@ -7,7 +7,6 @@ import {
   ChevronLeft,
   Cloud,
   Cpu,
-  Image as ImageIcon,
   LockKeyhole,
   Network,
   Plus,
@@ -47,15 +46,27 @@ const providerLabels: Record<CloudProviderId, string> = {
   volcengine: '火山引擎 ECS',
   baidu: '百度智能云 BCC',
 };
-const kindLabels = { 'instance-type': '机型', image: '镜像' } as const;
-type CatalogKind = keyof typeof kindLabels;
+type CatalogKind = 'instance-type' | 'image';
 type NetworkMode = 'catalog' | 'manual';
-type MarketStep = 'instance' | 'image' | 'configure';
+type MarketStep = 'instance' | 'configure';
 type SshAuthMethod = 'password' | 'private-key';
 const CATALOG_PAGE_SIZE = 20;
+const IMAGE_CATALOG_LIMIT = 500;
 const DEFAULT_INSTANCE_NAME = 'looper-instance';
 const DEFAULT_SYSTEM_DISK_GIB = 50;
 const DEFAULT_PUBLIC_BANDWIDTH_MBPS = 1;
+const MAX_SYSTEM_DISK_GIB = 2048;
+const MAX_PUBLIC_BANDWIDTH_MBPS = 200;
+const COMMON_IMAGE_FAMILIES = ['Ubuntu', 'Debian', 'CentOS', 'Alibaba Cloud Linux', 'TencentOS', 'Windows'] as const;
+type CommonImageFamily = typeof COMMON_IMAGE_FAMILIES[number];
+const COMMON_IMAGE_VERSION_PREFERENCES: Record<CommonImageFamily, RegExp[]> = {
+  Ubuntu: [/^ubuntu(?:\s+server)?\s+24\.04\b/i, /^ubuntu(?:\s+server)?\s+22\.04\b/i, /^ubuntu(?:\s+server)?\s+20\.04\b/i],
+  Debian: [/^debian\s+12(?:\.|\s|$)/i, /^debian\s+11(?:\.|\s|$)/i, /^debian\s+10(?:\.|\s|$)/i],
+  CentOS: [/^centos(?:\s+stream)?\s+9(?:\.|\s|$)/i, /^centos(?:\s+stream)?\s+8(?:\.|\s|$)/i, /^centos\s+7(?:\.|\s|$)/i],
+  'Alibaba Cloud Linux': [/^(?:alibaba\s+cloud\s+linux|alinux)\s+3(?:\.|\s|$)/i, /^(?:alibaba\s+cloud\s+linux|alinux)\s+2(?:\.|\s|$)/i],
+  TencentOS: [/^tencentos(?:\s+server)?\s+4(?:\.|\s|$)/i, /^tencentos(?:\s+server)?\s+3(?:\.|\s|$)/i],
+  Windows: [/^windows(?:\s+server)?\s+2022\b/i, /^windows(?:\s+server)?\s+2019\b/i, /^windows(?:\s+server)?\s+2016\b/i],
+};
 
 function key() {
   return `looper-${Date.now()}-${window.crypto?.randomUUID?.() || Math.random().toString(36).slice(2)}`;
@@ -101,6 +112,55 @@ function validCloudPassword(value: string) {
     && [...value].every(character => /[A-Za-z0-9]/.test(character) || specialCharacters.includes(character));
 }
 
+function validatedNumber(value: string, minimum: number, maximum: number, fallback: number, integer = false) {
+  const parsed = Number(value.trim());
+  if (!value.trim() || !Number.isFinite(parsed)) return fallback;
+  const normalized = integer ? Math.trunc(parsed) : parsed;
+  return Math.min(maximum, Math.max(minimum, normalized));
+}
+
+function commonImageFamily(image: CloudImage) {
+  const label = image.name;
+  if (/ubuntu/i.test(label)) return 'Ubuntu';
+  if (/debian/i.test(label)) return 'Debian';
+  if (/\bcentos\b/i.test(label)) return 'CentOS';
+  if (/alibaba\s*cloud\s*linux|\balinux\b/i.test(label)) return 'Alibaba Cloud Linux';
+  if (/tencentos/i.test(label)) return 'TencentOS';
+  if (/windows/i.test(label)) return 'Windows';
+  return null;
+}
+
+function commonImageScore(image: CloudImage, family: CommonImageFamily) {
+  const name = image.name.trim();
+  const officialName = /^(ubuntu(?:\s+server)?|debian|centos|alibaba\s+cloud\s+linux|alinux|tencentos|windows(?:\s+server)?)(?:\s|$)/i.test(name);
+  const preferredVersion = COMMON_IMAGE_VERSION_PREFERENCES[family].findIndex(pattern => pattern.test(name));
+  return (officialName ? 1_000 : 0) + (preferredVersion >= 0 ? 100 - preferredVersion : 0) + (image.imageType === 'PUBLIC_IMAGE' ? 1 : 0);
+}
+
+function prioritizedCommonImages(images: CloudImage[]) {
+  return COMMON_IMAGE_FAMILIES.flatMap(family => {
+    const candidates = images
+      .filter(image => commonImageFamily(image) === family && image.available !== false)
+      .sort((left, right) => commonImageScore(right, family) - commonImageScore(left, family));
+    if (family === 'Ubuntu') {
+      const preferred = COMMON_IMAGE_VERSION_PREFERENCES.Ubuntu
+        .slice(0, 2)
+        .map(pattern => candidates.find(image => pattern.test(image.name)))
+        .filter((image): image is CloudImage => Boolean(image));
+      for (const candidate of candidates) {
+        if (preferred.length >= 2) break;
+        if (!preferred.some(image => image.id === candidate.id)) preferred.push(candidate);
+      }
+      return preferred;
+    }
+    return candidates.slice(0, 1);
+  });
+}
+
+function imageLabel(image: CloudImage) {
+  return `${image.name} · ${image.id}${image.sizeGib ? ` · ${image.sizeGib} GiB` : ''}`;
+}
+
 export function CloudMarketPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -115,13 +175,16 @@ export function CloudMarketPage() {
   const [advisorOpen, setAdvisorOpen] = useState(false);
   const [search, setSearch] = useState('');
   const [catalogSearch, setCatalogSearch] = useState('');
-  const [minCpu, setMinCpu] = useState(0);
-  const [minMemory, setMinMemory] = useState(0);
+  const [minCpu, setMinCpu] = useState(1);
+  const [minMemory, setMinMemory] = useState(1);
+  const [minCpuDraft, setMinCpuDraft] = useState('1');
+  const [minMemoryDraft, setMinMemoryDraft] = useState('1');
   const [architectureClass, setArchitectureClass] = useState<InstanceSelectionClass | undefined>();
   const [typeKind, setTypeKind] = useState<string | undefined>();
   const [familyToken, setFamilyToken] = useState<string | undefined>();
   const [selectedType, setSelectedType] = useState<CloudInstanceType | null>(null);
   const [selectedImage, setSelectedImage] = useState<CloudImage | null>(null);
+  const [showAdditionalImages, setShowAdditionalImages] = useState(false);
   const [defaultTypeId, setDefaultTypeId] = useState('');
   const [defaultImageId, setDefaultImageId] = useState('');
   const [suppressTypeDefault, setSuppressTypeDefault] = useState(false);
@@ -138,8 +201,10 @@ export function CloudMarketPage() {
   const [sshAuthMethod, setSshAuthMethod] = useState<SshAuthMethod>('password');
   const [sshPassword, setSshPassword] = useState('');
   const [disk, setDisk] = useState(DEFAULT_SYSTEM_DISK_GIB);
+  const [diskDraft, setDiskDraft] = useState(String(DEFAULT_SYSTEM_DISK_GIB));
   const [publicIp, setPublicIp] = useState(true);
-  const [bandwidth, setBandwidth] = useState(0);
+  const [bandwidth, setBandwidth] = useState(DEFAULT_PUBLIC_BANDWIDTH_MBPS);
+  const [bandwidthDraft, setBandwidthDraft] = useState(String(DEFAULT_PUBLIC_BANDWIDTH_MBPS));
   const [rememberSshCredentials, setRememberSshCredentials] = useState(true);
   const [quote, setQuote] = useState<CloudQuote | null>(null);
   const [quoteSignature, setQuoteSignature] = useState('');
@@ -199,18 +264,12 @@ export function CloudMarketPage() {
       type_kind: kind === 'instance-type' ? typeKind : undefined,
       family_token: kind === 'instance-type' ? familyToken : undefined,
       offset: pageParam,
-      limit: CATALOG_PAGE_SIZE,
+      limit: kind === 'image' ? IMAGE_CATALOG_LIMIT : CATALOG_PAGE_SIZE,
     }),
     initialPageParam: 0,
     getNextPageParam: lastPage => lastPage.nextOffset ?? undefined,
-    enabled: step !== 'configure' && !!region && !!providerInfo?.credentialsConfigured &&
-      (step !== 'image' || !!selectedType) && !(selectionAdvisorSupported && advisorOpen && step === 'instance'),
-    staleTime: 30_000,
-  });
-  const defaultImages = useQuery({
-    queryKey: ['cloud-default-images', provider, region],
-    queryFn: () => api.images(provider, { region, limit: 80 }),
-    enabled: !!region && !!providerInfo?.credentialsConfigured,
+    enabled: !!region && !!providerInfo?.credentialsConfigured &&
+      (step === 'instance' || !!selectedType) && !(selectionAdvisorSupported && advisorOpen && step === 'instance'),
     staleTime: 30_000,
   });
   const vpcs = useQuery({
@@ -315,7 +374,7 @@ export function CloudMarketPage() {
       setSelectionError('');
       setSearch('');
       setCatalogSearch('');
-      setStep('image');
+      setStep('configure');
       void queryClient.invalidateQueries({ queryKey: ['cloud-vpcs', provider, region] });
       void queryClient.invalidateQueries({ queryKey: ['cloud-subnets', provider, region] });
     },
@@ -428,14 +487,17 @@ export function CloudMarketPage() {
   }, [advisorOpen, items, kind, selectedType, suppressTypeDefault]);
 
   useEffect(() => {
-    const imageItems = kind === 'image' ? (items as CloudImage[]) : defaultImages.data?.items || [];
+    const imageItems = kind === 'image' ? (items as CloudImage[]) : [];
     if (selectedImage || !imageItems.length) return;
-    const preferred = imageItems.find(item => item.available !== false);
+    const preferred = prioritizedCommonImages(imageItems)[0] || imageItems.find(item => item.available !== false);
     if (preferred) {
       setSelectedImage(preferred);
       setDefaultImageId(preferred.id);
     }
-  }, [defaultImages.data?.items, items, kind, selectedImage]);
+  }, [items, kind, selectedImage]);
+  useEffect(() => {
+    setShowAdditionalImages(false);
+  }, [provider, region, selectedType?.id]);
 
   useEffect(() => {
     const options = vpcs.data?.items;
@@ -471,6 +533,33 @@ export function CloudMarketPage() {
   useEffect(() => {
     if (disk < minimumSystemDiskGib) setDisk(minimumSystemDiskGib);
   }, [disk, minimumSystemDiskGib]);
+  useEffect(() => {
+    setDiskDraft(String(disk));
+  }, [disk]);
+  useEffect(() => {
+    setBandwidthDraft(String(bandwidth));
+  }, [bandwidth]);
+
+  const commitMinCpu = () => {
+    const next = validatedNumber(minCpuDraft, 0, 4096, minCpu, true);
+    setMinCpu(next);
+    setMinCpuDraft(String(next));
+  };
+  const commitMinMemory = () => {
+    const next = validatedNumber(minMemoryDraft, 0, 65536, minMemory);
+    setMinMemory(next);
+    setMinMemoryDraft(String(next));
+  };
+  const commitDisk = () => {
+    const next = validatedNumber(diskDraft, minimumSystemDiskGib, MAX_SYSTEM_DISK_GIB, minimumSystemDiskGib, true);
+    setDisk(next);
+    setDiskDraft(String(next));
+  };
+  const commitBandwidth = () => {
+    const next = validatedNumber(bandwidthDraft, 0, MAX_PUBLIC_BANDWIDTH_MBPS, bandwidth, true);
+    setBandwidth(next);
+    setBandwidthDraft(String(next));
+  };
 
   const effectiveVpcId = networkMode === 'catalog' ? vpcId : manualVpcId.trim();
   const effectiveSubnetId = networkMode === 'catalog' ? subnetId : manualSubnetId.trim();
@@ -541,6 +630,10 @@ export function CloudMarketPage() {
 
   const catalogError = vpcs.error || subnets.error || securityGroups.error || keyPairs.error;
   const hasRecommendedGroup = securityGroupItems.some(item => item.recommended);
+  const imageItems = kind === 'image' ? (items as CloudImage[]) : [];
+  const commonImages = prioritizedCommonImages(imageItems);
+  const commonImageIds = new Set(commonImages.map(image => image.id));
+  const additionalImages = imageItems.filter(image => !commonImageIds.has(image.id));
   const restoreConfigurationDefaults = () => {
     const nextVpcId = defaultVpcId(vpcs.data?.items);
     setName(DEFAULT_INSTANCE_NAME);
@@ -554,9 +647,12 @@ export function CloudMarketPage() {
       setManualSubnetId('');
       setManualSecurityGroups('');
     }
-    setDisk(Math.max(DEFAULT_SYSTEM_DISK_GIB, minimumSystemDiskGib));
+    const defaultDisk = Math.max(DEFAULT_SYSTEM_DISK_GIB, minimumSystemDiskGib);
+    setDisk(defaultDisk);
+    setDiskDraft(String(defaultDisk));
     setPublicIp(publicIpSupported);
     setBandwidth(DEFAULT_PUBLIC_BANDWIDTH_MBPS);
+    setBandwidthDraft(String(DEFAULT_PUBLIC_BANDWIDTH_MBPS));
     setSshAuthMethod('password');
     setSshPassword(sshDefaults.data?.password || '');
   };
@@ -616,13 +712,6 @@ export function CloudMarketPage() {
     setSelectedImage(null);
     setSearch('');
     setCatalogSearch('');
-    setStep('image');
-  };
-  const continueWithImage = (image: CloudImage) => {
-    resetTransientErrors();
-    setSelectedImage(image);
-    setSearch('');
-    setCatalogSearch('');
     setStep('configure');
   };
   const confirmCatalogSearch = () => setCatalogSearch(search.trim());
@@ -645,19 +734,17 @@ export function CloudMarketPage() {
     {providerInfo?.credentialsConfigured && providerInfo.message && <div className="notice warning"><AlertTriangle size={18} /><div><strong>{providerInfo.name} 购买能力受限</strong><p>{providerInfo.message}</p></div></div>}
     {providerInfo?.credentialsConfigured && <nav className="panel market-steps" aria-label="云服务器选购步骤">
       <button type="button" className={step === 'instance' ? 'active' : ''} onClick={() => goToStep('instance')}><span>1</span><Cpu size={15} />选择机型</button>
-      <button type="button" className={step === 'image' ? 'active' : ''} disabled={!selectedType} onClick={() => selectedType && goToStep('image')}><span>2</span><ImageIcon size={15} />选择镜像</button>
-      <button type="button" className={step === 'configure' ? 'active' : ''} disabled={!selectedType || !selectedImage} onClick={() => selectedType && selectedImage && goToStep('configure')}><span>3</span><Settings2 size={15} />配置与购买</button>
+      <button type="button" className={step === 'configure' ? 'active' : ''} disabled={!selectedType} onClick={() => selectedType && goToStep('configure')}><span>2</span><Settings2 size={15} />配置与购买</button>
     </nav>}
     {providerInfo?.credentialsConfigured && <section className="panel market-toolbar">
       {step === 'instance' ? <>
         <div className="field compact"><label htmlFor="market-region">地域</label><select id="market-region" value={region} onChange={event => setRegion(event.target.value)}><option value="">选择地域</option>{regions.data?.items.map(item => <option key={item.id} value={item.id}>{item.name} · {item.id}</option>)}</select></div>
         <div className="field compact"><label htmlFor="market-zone">可用区（可选）</label><select id="market-zone" value={zone} onChange={event => changeZone(event.target.value)} disabled={!region}><option value="">自动选择可售可用区</option>{zones.data?.items.map(item => <option key={item.id} value={item.id}>{item.name} · {item.id}</option>)}</select></div>
-        {!advisorOpen && <><div className="field compact numeric-filter"><label htmlFor="min-cpu">最低 vCPU</label><input id="min-cpu" type="number" min={0} value={minCpu} onChange={event => setMinCpu(Number(event.target.value))} /></div><div className="field compact numeric-filter"><label htmlFor="min-memory">最低内存 GiB</label><input id="min-memory" type="number" min={0} step={0.5} value={minMemory} onChange={event => setMinMemory(Number(event.target.value))} /></div><form className="search-submit-group market-search-group" onSubmit={event => { event.preventDefault(); confirmCatalogSearch(); }}><label className="search-field market-search"><Search size={16} /><span className="sr-only">搜索机型</span><input aria-label="搜索机型" value={search} onChange={event => setSearch(event.target.value)} placeholder="搜索机型 ID、规格族或中文类型/分组" /></label><button type="submit" className="button primary search-confirm-button" disabled={search.trim() === catalogSearch}>确认</button></form></>}
+        {!advisorOpen && <><div className="field compact numeric-filter"><label htmlFor="min-cpu">最低 vCPU</label><input id="min-cpu" type="number" min={0} step={1} value={minCpuDraft} onChange={event => setMinCpuDraft(event.target.value)} onBlur={commitMinCpu} onKeyDown={event => { if (event.key === 'Enter') event.currentTarget.blur(); }} /></div><div className="field compact numeric-filter"><label htmlFor="min-memory">最低内存 GiB</label><input id="min-memory" type="number" min={0} step={0.5} value={minMemoryDraft} onChange={event => setMinMemoryDraft(event.target.value)} onBlur={commitMinMemory} onKeyDown={event => { if (event.key === 'Enter') event.currentTarget.blur(); }} /></div><form className="search-submit-group market-search-group" onSubmit={event => { event.preventDefault(); confirmCatalogSearch(); }}><label className="search-field market-search"><Search size={16} /><span className="sr-only">搜索机型</span><input aria-label="搜索机型" value={search} onChange={event => setSearch(event.target.value)} placeholder="搜索机型 ID、规格族或中文类型/分组" /></label><button type="submit" className="button primary search-confirm-button" disabled={search.trim() === catalogSearch}>确认</button></form></>}
         {selectionAdvisorSupported && <button type="button" className="button secondary advisor-toolbar-button" aria-expanded={advisorOpen} aria-controls="cloud-selection-advisor" onClick={advisorOpen ? closeAdvisor : openAdvisor}>{advisorOpen ? <><ChevronLeft size={14} />返回手动选型</> : <><Sparkles size={14} />打开选型助手</>}</button>}
       </> : <>
-        <button type="button" className="button secondary" onClick={() => goToStep(step === 'image' ? 'instance' : 'image')}><ChevronLeft size={14} />返回修改{step === 'image' ? '机型' : '镜像'}</button>
+        <button type="button" className="button secondary" onClick={() => goToStep('instance')}><ChevronLeft size={14} />返回修改机型</button>
         <div className="market-step-summary"><strong>{selectedType?.id}</strong><span>{zone || '尚未选择可用区'}{selectedImage ? ` · ${selectedImage.name}` : ''}</span></div>
-        {step === 'image' && <form className="search-submit-group market-search-group" onSubmit={event => { event.preventDefault(); confirmCatalogSearch(); }}><label className="search-field market-search"><Search size={16} /><span className="sr-only">搜索兼容镜像</span><input aria-label="搜索兼容镜像" value={search} onChange={event => setSearch(event.target.value)} placeholder="搜索兼容镜像名称或 ID" /></label><button type="submit" className="button primary search-confirm-button" disabled={search.trim() === catalogSearch}>确认</button></form>}
       </>}
     </section>}
     {providerInfo?.credentialsConfigured && selectionAdvisorSupported && !advisorOpen && step === 'instance' && <InstanceTypeFacetFilter
@@ -675,7 +762,7 @@ export function CloudMarketPage() {
     {networkMutation.isPending && <div className="notice"><RefreshCw className="spin" size={18} /><div><strong>正在准备网络</strong><p>正在核对可售可用区，并复用或创建可购买的子网。</p></div></div>}
     {networkNotice && step !== 'instance' && <div className="notice"><CheckCircle2 size={18} /><div><strong>网络已准备</strong><p>{networkNotice}</p></div></div>}
     {selectionAdvisorSupported && advisorOpen && step === 'instance' && <div id="cloud-selection-advisor"><CloudSelectionAdvisor key={provider} provider={provider} catalogAvailable={Boolean(providerInfo?.credentialsConfigured)} regions={regions.data?.items || []} zones={zones.data?.items || []} region={region} zone={zone} onRegionChange={setRegion} onZoneChange={changeZone} selected={selectedType} onSelect={value => value ? continueWithInstance(value) : setSelectedType(null)} /></div>}
-    {providerInfo?.credentialsConfigured && step !== 'configure' && !(selectionAdvisorSupported && advisorOpen && step === 'instance') && (catalog.isLoading ? <LoadingState /> : catalog.isError ? <ErrorState error={catalog.error} onRetry={() => catalog.refetch()} /> : items.length ? <section className="panel cloud-results"><div className="panel-heading"><div><h2>{providerLabels[provider]} · {kindLabels[kind]}</h2><p>{catalogResult?.source === 'stale-cache' ? `${catalogResult.warning} · 已显示 ${displayedCatalogCount} / ${catalogResult.total}` : `已显示 ${displayedCatalogCount} / ${catalogResult?.total || 0} 个结果`}</p></div><span className="cache-state">{catalogResult?.source === 'live' ? '实时' : '缓存'}</span></div>{step === 'instance' ? <InstanceTypeTable items={items as CloudInstanceType[]} selected={selectedType} busy={networkMutation.isPending} onSelect={continueWithInstance} /> : <ImageTable items={items as CloudImage[]} selected={selectedImage} onSelect={continueWithImage} />}{catalog.hasNextPage && <button type="button" className="button secondary catalog-load-more" disabled={catalog.isFetchingNextPage} onClick={() => catalog.fetchNextPage()}>{catalog.isFetchingNextPage ? '加载中…' : `加载更多（已显示 ${displayedCatalogCount} / ${catalogResult?.total || 0}）`}</button>}</section> : <EmptyState title={step === 'image' ? '没有与所选机型兼容的镜像' : '没有匹配的云资源'} />)}
+    {providerInfo?.credentialsConfigured && step === 'instance' && !advisorOpen && (catalog.isLoading ? <LoadingState /> : catalog.isError ? <ErrorState error={catalog.error} onRetry={() => catalog.refetch()} /> : items.length ? <section className="panel cloud-results"><div className="panel-heading"><div><h2>{providerLabels[provider]} · 机型</h2><p>{catalogResult?.source === 'stale-cache' ? `${catalogResult.warning} · 已显示 ${displayedCatalogCount} / ${catalogResult.total}` : `已显示 ${displayedCatalogCount} / ${catalogResult?.total || 0} 个结果`}</p></div><span className="cache-state">{catalogResult?.source === 'live' ? '实时' : '缓存'}</span></div><InstanceTypeTable items={items as CloudInstanceType[]} selected={selectedType} busy={networkMutation.isPending} onSelect={continueWithInstance} />{catalog.hasNextPage && <button type="button" className="button secondary catalog-load-more" disabled={catalog.isFetchingNextPage} onClick={() => catalog.fetchNextPage()}>{catalog.isFetchingNextPage ? '加载中…' : `加载更多（已显示 ${displayedCatalogCount} / ${catalogResult?.total || 0}）`}</button>}</section> : <EmptyState title="没有匹配的云资源" />)}
 
     {step === 'configure' && <section className="panel launch-panel">
       <div className="panel-heading"><div><h2>购买草稿</h2><p>仅按量付费；点击购买后，服务端会自动重验价格、库存和金额上限。</p></div><ShieldCheck size={20} /></div>
@@ -686,6 +773,7 @@ export function CloudMarketPage() {
       </div>
       <div className="form-grid cloud-form">
         <label><span>实例名称 *</span><input value={name} onChange={event => setName(event.target.value)} /></label>
+        <label><span>操作系统镜像 *</span><select aria-label="操作系统镜像" value={selectedImage?.id || ''} disabled={catalog.isLoading || !imageItems.length} onChange={event => { if (event.target.value === '__more_images__') { setShowAdditionalImages(true); return; } const image = imageItems.find(item => item.id === event.target.value); if (image) { setSelectedImage(image); setDefaultImageId(''); } }}><option value="">{catalog.isLoading ? '正在读取兼容镜像…' : imageItems.length ? '选择操作系统镜像' : '暂无兼容镜像'}</option>{commonImages.map(image => <option key={image.id} value={image.id}>{imageLabel(image)}</option>)}{!showAdditionalImages && additionalImages.length > 0 && <option value="__more_images__">更多镜像…</option>}{showAdditionalImages && additionalImages.length > 0 && <optgroup label="更多镜像">{additionalImages.map(image => <option key={image.id} value={image.id}>{imageLabel(image)}</option>)}</optgroup>}</select><small>默认显示常用系统；选择“更多镜像”后展开其余版本。</small></label>
         <div className="network-mode-row full">
           <span><Network size={16} /><strong>网络与访问</strong></span>
           <div className="segmented network-mode" role="group" aria-label="网络配置方式">
@@ -719,11 +807,11 @@ export function CloudMarketPage() {
         </>}
 
         <label><span>SSH 登录方式 *</span><select value={sshAuthMethod} onChange={event => setSshAuthMethod(event.target.value as SshAuthMethod)}><option value="password">SSH 密码</option><option value="private-key">SSH 密钥</option></select></label>
-        {sshAuthMethod === 'password' && <label><span>SSH 默认密码 *</span><input type="password" value={sshPassword} onChange={event => setSshPassword(event.target.value)} autoComplete="new-password" /><small>{validCloudPassword(sshPassword) ? '可直接修改；修改值仅用于本次购买。' : '需要 8–30 位，并包含至少三类大小写字母、数字或特殊字符。'}</small></label>}
+        {sshAuthMethod === 'password' && <label><span>SSH 默认密码 *</span><input aria-label="SSH 默认密码 *" type="password" value={sshPassword} onChange={event => setSshPassword(event.target.value)} autoComplete="new-password" /><small>{validCloudPassword(sshPassword) ? '可直接修改；修改值仅用于本次购买。' : '需要 8–30 位，并包含至少三类大小写字母、数字或特殊字符。'}</small></label>}
         <label className="checkbox-field ssh-save-field full"><input type="checkbox" checked={rememberSshCredentials} onChange={event => setRememberSshCredentials(event.target.checked)} /><span>购买后保存密钥 / 密码</span></label>
-        <label><span>系统盘 GB</span><input type="number" min={minimumSystemDiskGib} max={2048} value={disk} onChange={event => setDisk(Math.max(minimumSystemDiskGib, Number(event.target.value)))} /><small>所选镜像至少需要 {minimumSystemDiskGib} GiB</small></label>
+        <label><span>系统盘 GB</span><input aria-label="系统盘 GB" type="number" min={minimumSystemDiskGib} max={MAX_SYSTEM_DISK_GIB} value={diskDraft} onChange={event => setDiskDraft(event.target.value)} onBlur={commitDisk} onKeyDown={event => { if (event.key === 'Enter') event.currentTarget.blur(); }} /><small>所选镜像至少需要 {minimumSystemDiskGib} GiB</small></label>
         <label className="checkbox-field"><input type="checkbox" checked={publicIp} disabled={!publicIpSupported} onChange={event => setPublicIp(event.target.checked)} /><span>{publicIpSupported ? '分配固定带宽公网 IP' : '公网 IP 需独立定价流程'}</span><small>{publicIp ? '推荐保留，平台购买后才能直接 SSH 接入。' : '关闭后需要确保 Looper 能访问该实例私网地址。'}</small></label>
-        <label><span>公网带宽 Mbps</span><input type="number" min={0} max={1000} disabled={!publicIp} value={bandwidth} onChange={event => setBandwidth(Number(event.target.value))} /></label>
+        <label><span>公网带宽 Mbps</span><input aria-label="公网带宽 Mbps" type="number" min={0} max={MAX_PUBLIC_BANDWIDTH_MBPS} disabled={!publicIp} value={bandwidthDraft} onChange={event => setBandwidthDraft(event.target.value)} onBlur={commitBandwidth} onKeyDown={event => { if (event.key === 'Enter') event.currentTarget.blur(); }} /><small>最大支持 {MAX_PUBLIC_BANDWIDTH_MBPS} Mbps</small></label>
       </div>
       <div className="launch-summary"><div><span>已选机型</span><strong>{selectedType ? `${selectedType.id} · ${selectedType.cpu} vCPU / ${selectedType.memoryGib} GiB${defaultTypeId === selectedType.id ? ' · 推荐' : ''}` : '未选择'}</strong></div><div><span>已选镜像</span><strong>{selectedImage ? `${selectedImage.name}${defaultImageId === selectedImage.id ? ' · 推荐' : ''}` : '未选择'}</strong></div><button className="button primary" disabled={!spec || !quoteSupported || quoteMutation.isPending || !operatorAccessReady} onClick={() => spec && quoteMutation.mutate({ spec, key: quoteKey.current, signature: specSignature })}><Calculator size={16} />{!operatorAccessReady ? '需要操作员认证' : !quoteSupported ? '报价配置未完成' : quoteMutation.isPending ? '询价中...' : '获取小时报价'}</button></div>
       {quoteMutation.isError && <div className="inline-error">{quoteMutation.error instanceof Error ? quoteMutation.error.message : '询价失败'}</div>}

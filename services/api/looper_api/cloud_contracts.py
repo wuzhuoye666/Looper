@@ -263,7 +263,7 @@ class CloudPurchaseSpec(ApiModel):
     system_disk_type: str | None = Field(default=None, max_length=80)
     system_disk_gib: int = Field(default=50, ge=20, le=2048)
     public_ip: bool = False
-    internet_bandwidth_mbps: int = Field(default=0, ge=0, le=1000)
+    internet_bandwidth_mbps: int = Field(default=0, ge=0, le=200)
     tags: dict[str, str] = Field(default_factory=dict)
 
     @field_validator("security_group_ids")

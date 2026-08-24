@@ -42,6 +42,13 @@ def purchase_spec(provider: str = "tencent", *, public_ip: bool = True) -> Cloud
     )
 
 
+def test_purchase_spec_rejects_bandwidth_above_product_limit() -> None:
+    with pytest.raises(ValueError):
+        CloudPurchaseSpec.model_validate(
+            purchase_spec().model_dump() | {"internet_bandwidth_mbps": 201}
+        )
+
+
 def test_tencent_quote_and_run_share_launch_payload(monkeypatch) -> None:
     provider = TencentCvmProvider()
     spec = purchase_spec()

@@ -118,6 +118,9 @@ def test_manifest_validates_against_schema() -> None:
     assert provisioning["hostCapabilities"] == ["python", "local-process", "linux"]
     assert provisioning["provides"] == ["sysbench"]
     assert "prepare" in document["spec"]["runtime"]["commands"]
+    result_sections = document["spec"]["x-extensions"]["resultPresentation"]["sections"]
+    assert result_sections[0]["view"] == "sysbench-workloads"
+    assert "throughput_mib_s" in result_sections[0]["metrics"]
     assert digest.startswith("sha256:")
 
 

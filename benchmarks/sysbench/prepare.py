@@ -8,11 +8,19 @@ import os
 import platform
 import shutil
 import subprocess
+import time
 from pathlib import Path
 
 
 class PrepareError(RuntimeError):
     pass
+
+
+APT_LOCK_MARKERS = (
+    "Could not get lock /var/lib/dpkg/lock-frontend",
+    "Could not get lock /var/lib/dpkg/lock",
+    "Unable to acquire the dpkg frontend lock",
+)
 
 
 def _run(argv: list[str], *, timeout: int) -> subprocess.CompletedProcess[str]:
@@ -31,6 +39,21 @@ def _privileged(argv: list[str]) -> list[str]:
     raise PrepareError("installing sysbench requires root or passwordless sudo")
 
 
+def _run_package_manager(argv: list[str], *, timeout: int) -> subprocess.CompletedProcess[str]:
+    """Wait through a transient unattended-upgrades dpkg lock."""
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            return _run(argv, timeout=min(60, max(1, int(deadline - time.monotonic()))))
+        except PrepareError as error:
+            if not any(marker in str(error) for marker in APT_LOCK_MARKERS):
+                raise
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise
+            time.sleep(min(5, remaining))
+
+
 def _sysbench_version(binary: str) -> str:
     output = _run([binary, "--version"], timeout=30).stdout.strip()
     if "1.0" not in output:
@@ -46,8 +69,8 @@ def prepare(cache: Path) -> dict[str, str]:
     if binary is None:
         if not shutil.which("apt-get"):
             raise PrepareError("sysbench is missing and no supported package manager was found")
-        _run(_privileged(["apt-get", "update", "-qq"]), timeout=300)
-        _run(
+        _run_package_manager(_privileged(["apt-get", "update", "-qq"]), timeout=300)
+        _run_package_manager(
             _privileged([
                 "env",
                 "DEBIAN_FRONTEND=noninteractive",

@@ -191,6 +191,9 @@ function BenchmarkMetricSection({ section, definitions, evaluations }: {
   evaluations: Evaluation[];
 }) {
   if (!section) return <EmptyState title="该 Benchmark 未声明此结果栏目" />;
+  if (section.view === 'sysbench-workloads') {
+    return <SysbenchWorkloadSection section={section} definitions={definitions} evaluations={evaluations} />;
+  }
   return <section className="panel metric-definitions">
     <div className="panel-heading"><div><h2>{section.label}</h2><p>{section.description || '由 Benchmark manifest 声明的专属结果。'}</p></div></div>
     <div className="metric-definition-grid">{section.metrics.map(name => {
@@ -205,6 +208,46 @@ function BenchmarkMetricSection({ section, definitions, evaluations }: {
         <span className="cell-meta">{samples.length ? `${samples.length} 个已采集样本` : '尚未采集该指标'}</span>
       </article>;
     })}</div>
+  </section>;
+}
+
+const sysbenchMetricColumns = [
+  ['events_per_sec', '每秒事件数'],
+  ['throughput_mib_s', '内存吞吐量'],
+  ['latency_avg_ms', '平均延迟'],
+  ['latency_p95_ms', 'P95 延迟'],
+  ['latency_max_ms', '最大延迟'],
+] as const;
+
+export function SysbenchWorkloadSection({ section, definitions, evaluations }: {
+  section: BenchmarkResultSection;
+  definitions?: Record<string, MetricDefinition>;
+  evaluations: Evaluation[];
+}) {
+  const value = (evaluation: Evaluation, name: string) => {
+    const metric = evaluation.metrics?.find(item => item.name === name);
+    if (!metric) return '—';
+    const precision = definitions?.[name]?.presentation?.displayPrecision ?? 2;
+    return `${formatNumber(metric.value, precision)} ${metric.unit || definitions?.[name]?.unit || ''}`.trim();
+  };
+  const workloadNames: Record<string, string> = { cpu: 'CPU 素数计算', memory: '内存吞吐', thread: '线程调度', mutex: '互斥锁竞争' };
+  return <section className="panel metric-definitions sysbench-results">
+    <div className="panel-heading"><div><h2>{section.label}</h2><p>{section.description || '由 Benchmark manifest 声明的专属结果。'}</p></div></div>
+    {evaluations.length ? <div className="metric-definition-grid sysbench-workload-grid">{evaluations.map(item => {
+      const primaryMetric = item.workload === 'memory' ? 'throughput_mib_s' : 'events_per_sec';
+      const primaryDefinition = definitions?.[primaryMetric];
+      const secondaryMetrics = sysbenchMetricColumns.filter(([name]) => name !== primaryMetric && item.metrics?.some(metric => metric.name === name));
+      const measured = item.metrics?.some(metric => metric.name !== 'sysbench_run_ok');
+      return <article key={item.id}>
+        <div className="metric-definition-title"><strong>{workloadNames[item.workload || ''] || item.workload || '未命名 workload'}</strong><StatusBadge status={item.status} /></div>
+        <span className="cell-meta">{item.candidate}</span>
+        <div className="sysbench-primary-metric"><span>{primaryDefinition?.presentation?.userLabel || (primaryMetric === 'throughput_mib_s' ? '内存吞吐量' : '每秒事件数')}</span><strong className="metric-cell">{value(item, primaryMetric)}</strong></div>
+        {secondaryMetrics.length > 0 && <dl className="sysbench-secondary-metrics">{secondaryMetrics.map(([name, fallback]) => <div key={name}><dt>{definitions?.[name]?.presentation?.userLabel || fallback}</dt><dd>{value(item, name)}</dd></div>)}</dl>}
+        <p>{item.phaseDetail || (measured ? '已完成指标回传。' : '本次运行未形成有效指标。')}</p>
+        <span className={measured ? 'cell-meta' : 'cell-error'}>{measured ? '已回传指标与原始证据' : '未形成有效指标'}</span>
+      </article>;
+    })}</div> : <EmptyState title="暂无 Sysbench workload 数据" description="完成至少一个 workload 后，这里会显示专属指标。" />}
+    <div className="sysbench-result-note"><strong>数据口径</strong><span>每张卡展示该 workload 最新一次带观测值的结果；原始 stdout、raw-result.json 和系统指纹仍在“证据”与“原始终端”中保留。</span></div>
   </section>;
 }
 

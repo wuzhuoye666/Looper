@@ -1498,6 +1498,51 @@ def sync_tencent_targets(
     return {"items": [target_view(item) for item in records], "total": len(records)}
 
 
+def _sync_all_cloud_inventory(
+    session: Session,
+    registry: CloudProviderRegistry,
+    credential_store: EncryptedSshCredentialStore,
+) -> dict[str, Any]:
+    records_by_id: dict[str, TargetRecord] = {}
+    synced_regions: dict[str, list[str]] = {}
+    syncers = {
+        ProviderId.TENCENT: sync_cvm_inventory,
+        ProviderId.ALIBABA: sync_ecs_inventory,
+    }
+    for provider_id, sync_inventory in syncers.items():
+        regions = sorted({item.id for item in registry.get(provider_id).list_regions()})
+        synced_regions[provider_id.value] = regions
+        for region in regions:
+            records = sync_inventory(
+                session,
+                region,
+                credential_store=credential_store,
+            )
+            records_by_id.update({record.id: record for record in records})
+    records = list(records_by_id.values())
+    return {
+        "items": [target_view(item) for item in records],
+        "total": len(records),
+        "regions": synced_regions,
+    }
+
+
+@app.post("/api/v1/targets/cloud/sync")
+def sync_cloud_targets(
+    session: SessionDependency,
+    app_settings: SettingsDependency,
+    registry: ProviderRegistryDependency,
+    _operator: OperatorDependency,
+) -> dict[str, Any]:
+    result = _sync_all_cloud_inventory(
+        session,
+        registry,
+        EncryptedSshCredentialStore(app_settings),
+    )
+    session.commit()
+    return result
+
+
 @app.post("/api/v1/targets/alibaba-ecs/sync")
 def sync_alibaba_targets(
     session: SessionDependency,

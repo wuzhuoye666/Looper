@@ -36,7 +36,7 @@ export interface CapacityStudy {
 
 export interface Artifact { name: string; url: string; type?: string }
 export interface Metric { name: string; value: number; unit?: string; baseline?: number; direction?: 'min' | 'max' }
-export interface Evaluation { id: string; attemptId?: string; candidate: string; status: ExperimentStatus; phase?: string; phaseDetail?: string; score?: number; duration?: number; cost?: number; createdAt?: string; metrics?: Metric[]; artifacts?: Artifact[]; error?: string }
+export interface Evaluation { id: string; attemptId?: string; candidate: string; workload?: string; status: ExperimentStatus; phase?: string; phaseDetail?: string; score?: number; duration?: number; cost?: number; createdAt?: string; metrics?: Metric[]; artifacts?: Artifact[]; error?: string }
 export interface ScenarioContract {
   id: string; name: string; decision_question: string; user_value: string; workload_class: string;
   topology: 'single-node' | 'client-server' | 'multi-node' | 'closed-loop'; primary_metric: string;
@@ -104,6 +104,8 @@ export interface BenchmarkResultSection {
   id: string;
   label: string;
   description?: string;
+  /** Declarative renderer selected by the Benchmark package, if provided. */
+  view?: string;
   metrics: string[];
 }
 export interface BenchmarkWorkload {

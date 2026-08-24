@@ -262,3 +262,10 @@ spec:
     bootstrapCatalog: true
     executionStatus: executable
     selectionDefaults: {repeats: 5, timeoutSeconds: 3600, seed: 20260301}
+    resultPresentation:
+      sections:
+        - id: sysbench-workloads
+          label: Sysbench workload 数据
+          view: sysbench-workloads
+          description: 按 CPU、内存、线程和互斥锁 workload 展示原始采集指标与执行状态。
+          metrics: [events_per_sec, throughput_mib_s, latency_avg_ms, latency_p95_ms, latency_max_ms, sysbench_run_ok]

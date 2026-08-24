@@ -11,14 +11,14 @@ function response(data: unknown) {
   });
 }
 
-function catalog(resourceType: string, items: unknown[], total = items.length, offset = 0, nextOffset?: number) {
+function catalog(resourceType: string, items: unknown[], total = items.length, offset = 0, nextOffset?: number, limit = 20) {
   return {
     provider: 'tencent',
     resourceType,
     items,
     total,
     offset,
-    limit: 20,
+    limit,
     nextOffset,
     source: 'live',
     fetchedAt: '2026-08-21T00:00:00Z',
@@ -87,19 +87,28 @@ describe('腾讯云购买网络选择', () => {
         return response(catalog('instance-type', all.slice(offset, offset + 20), all.length, offset, offset + 20 < all.length ? offset + 20 : undefined));
       }
       if (url.includes('/cloud/catalog/tencent/image')) {
-        const offset = Number(new URL(url).searchParams.get('offset') || 0);
+        const params = new URL(url).searchParams;
+        const offset = Number(params.get('offset') || 0);
+        const limit = Number(params.get('limit') || 20);
         const all = Array.from({ length: 25 }, (_, index) => ({
           provider: 'tencent',
           region: 'ap-test',
           id: index === 0 ? 'img-tencentos-test' : `img-tencentos-test-${index + 1}`,
-          name: index === 0 ? 'TencentOS Server 4 for x86_64' : `TencentOS Server 4 test image ${index + 1}`,
+          name: index === 0 ? 'TencentOS Server 4 for x86_64'
+            : index === 1 ? 'Custom Linux test image'
+              : index === 2 ? 'Ubuntu Server 24.04 LTS 64位'
+                : index === 3 ? 'Ubuntu Server 22.04 LTS 64位'
+                  : index === 4 ? 'Debian 12.0 64位'
+                    : index === 5 ? 'CentOS Stream 9 64位'
+                      : index === 6 ? 'Windows Server 2022 数据中心版 64位 中文版'
+                        : `TencentOS Server 4 test image ${index + 1}`,
           platform: 'TencentOS',
           architecture: 'x86_64',
           imageType: 'PUBLIC_IMAGE',
           sizeGib: 20,
           available: true,
         }));
-        return response(catalog('image', all.slice(offset, offset + 20), all.length, offset, offset + 20 < all.length ? offset + 20 : undefined));
+        return response(catalog('image', all.slice(offset, offset + limit), all.length, offset, offset + limit < all.length ? offset + limit : undefined, limit));
       }
       if (url.includes('/cloud/catalog/tencent/vpc')) return response(catalog('vpc', [
         { provider: 'tencent', region: 'ap-test', id: 'vpc-default', name: 'Default-VPC', cidrBlock: '172.16.0.0/16', isDefault: true },
@@ -182,19 +191,19 @@ describe('腾讯云购买网络选择', () => {
         String(request).includes('/cloud/network/tencent/resolve-instance-network'))).toBe(true),
       { timeout: 5000 },
     );
-    await screen.findByRole('heading', { name: '腾讯云 CVM · 镜像' }, { timeout: 5000 });
+    await screen.findByRole('heading', { name: '购买草稿' }, { timeout: 5000 });
   }
 
   async function chooseFirstImage() {
-    const imageName = await screen.findByText('TencentOS Server 4 for x86_64');
-    fireEvent.click(within(imageName.closest('tr')!).getByRole('button', { name: '选择并继续' }));
-    await screen.findByRole('heading', { name: '购买草稿' });
+    const image = await screen.findByLabelText('操作系统镜像');
+    await waitFor(() => expect(image).not.toBeDisabled());
+    fireEvent.change(image, { target: { value: 'img-tencentos-test' } });
   }
 
   it('按机型、兼容镜像、配置购买的顺序准备网络', async () => {
     renderMarket();
     await screen.findByRole('heading', { name: '云资源市场' });
-    expect(await screen.findByRole('button', { name: /2.*选择镜像/ })).toBeDisabled();
+    expect(await screen.findByRole('button', { name: /2.*配置与购买/ })).toBeDisabled();
     expect(screen.queryByRole('heading', { name: '购买草稿' })).not.toBeInTheDocument();
 
     await chooseFirstMachine();
@@ -203,10 +212,11 @@ describe('腾讯云购买网络选择', () => {
     expect(screen.getByText(/已复用 VPC Default-VPC · vpc-default/)).toBeInTheDocument();
     expect(screen.getByText(/已复用子网 Default-Subnet · subnet-default/)).toBeInTheDocument();
     expect(screen.getByText(/已创建安全组 looper-ssh-access · sg-looper/)).toBeInTheDocument();
-    expect(vi.mocked(fetch).mock.calls.some(([request]) => {
+    await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([request]) => {
       const url = String(request);
-      return url.includes('/cloud/catalog/tencent/image') && url.includes('instance_type=S9.TEST');
-    })).toBe(true);
+      return url.includes('/cloud/catalog/tencent/image') && url.includes('instance_type=S9.TEST') && url.includes('limit=500');
+    })).toBe(true));
+    expect(screen.getByLabelText('操作系统镜像')).toBeInTheDocument();
 
     await chooseFirstImage();
     const vpc = await screen.findByLabelText('私有网络 VPC *');
@@ -272,6 +282,8 @@ describe('腾讯云购买网络选择', () => {
   it('手动目录分页且助手打开后重新从机型步骤开始', async () => {
     const view = renderMarket();
     await screen.findByRole('option', { name: /测试地域/ });
+    expect(screen.getByLabelText('最低 vCPU')).toHaveValue(1);
+    expect(screen.getByLabelText('最低内存 GiB')).toHaveValue(1);
     fireEvent.change(screen.getByLabelText('地域'), { target: { value: 'ap-test' } });
     await waitFor(() =>
       expect(view.container.querySelectorAll('.cloud-results tbody tr')).toHaveLength(20),
@@ -291,6 +303,14 @@ describe('腾讯云购买网络选择', () => {
       const requests = instanceRequests();
       return requests[requests.length - 1];
     };
+    const requestCountBeforeNumericTyping = instanceRequests().length;
+    fireEvent.change(screen.getByLabelText('最低 vCPU'), { target: { value: '8' } });
+    fireEvent.change(screen.getByLabelText('最低内存 GiB'), { target: { value: '16' } });
+    expect(instanceRequests()).toHaveLength(requestCountBeforeNumericTyping);
+    fireEvent.blur(screen.getByLabelText('最低 vCPU'));
+    fireEvent.blur(screen.getByLabelText('最低内存 GiB'));
+    await waitFor(() => expect(new URL(latestInstanceRequest()).searchParams.get('min_cpu')).toBe('8'));
+    expect(new URL(latestInstanceRequest()).searchParams.get('min_memory_gib')).toBe('16');
     const requestCountBeforeTyping = instanceRequests().length;
     for (const value of ['S9.TEST.02', 'S9.TEST.0', 'S9.TEST.', 'S9.TEST', 'S9.TES']) {
       fireEvent.change(search, { target: { value } });
@@ -306,7 +326,7 @@ describe('腾讯云购买网络选择', () => {
     expect(search).toHaveValue('');
     expect(instanceRequests()).toHaveLength(requestCountAfterConfirm);
     fireEvent.click(screen.getByRole('button', { name: '确认' }));
-    await waitFor(() => expect(new URL(latestInstanceRequest()).searchParams.get('query')).toBeNull());
+    await waitFor(() => expect(view.container.querySelectorAll('.cloud-results tbody tr')).toHaveLength(20));
     fireEvent.click(screen.getByRole('button', { name: '加载更多（已显示 20 / 25）' }));
     await waitFor(() => expect(view.container.querySelectorAll('.cloud-results tbody tr')).toHaveLength(25));
 
@@ -321,19 +341,26 @@ describe('腾讯云购买网络选择', () => {
     expect(screen.getByRole('heading', { name: '主要使用场景是什么？' })).toBeInTheDocument();
   });
 
-  it('兼容镜像列表保留窄屏卡片标记和分批展示', async () => {
-    const view = renderMarket();
+  it('配置页内联镜像选择器将常用系统置顶，其余收进更多镜像', async () => {
+    renderMarket();
     await chooseFirstMachine();
-    const imageName = await screen.findByText('TencentOS Server 4 for x86_64');
-    const row = imageName.closest('tr');
-    expect(row).not.toBeNull();
-    expect(view.container.querySelector('.cloud-image-table')).toBeInTheDocument();
-    expect(view.container.querySelectorAll('.cloud-image-table tbody tr')).toHaveLength(20);
-    expect(within(row!).getAllByRole('button')).toHaveLength(1);
-    expect(within(row!).getByText('平台')).toHaveClass('image-mobile-label');
-    expect(within(row!).getByText('架构')).toHaveClass('image-mobile-label');
-    expect(within(row!).getByText('大小')).toHaveClass('image-mobile-label');
-    fireEvent.click(screen.getByRole('button', { name: '加载更多（已显示 20 / 25）' }));
-    await waitFor(() => expect(view.container.querySelectorAll('.cloud-image-table tbody tr')).toHaveLength(25));
+    const image = screen.getByLabelText('操作系统镜像');
+    expect(image).toBeInTheDocument();
+    await waitFor(() => expect(image).not.toBeDisabled());
+    const options = within(image).getAllByRole('option');
+    expect(options).toHaveLength(8);
+    expect(options[1]).toHaveTextContent('Ubuntu Server 24.04 LTS 64位');
+    expect(options[2]).toHaveTextContent('Ubuntu Server 22.04 LTS 64位');
+    expect(options[3]).toHaveTextContent('Debian 12.0 64位');
+    expect(options[4]).toHaveTextContent('CentOS Stream 9 64位');
+    expect(options[5]).toHaveTextContent('TencentOS Server 4 for x86_64');
+    expect(options[6]).toHaveTextContent('Windows Server 2022');
+    expect(options[7]).toHaveTextContent('更多镜像');
+    expect(within(image).queryByRole('group', { name: '更多镜像' })).not.toBeInTheDocument();
+    fireEvent.change(image, { target: { value: '__more_images__' } });
+    expect(within(image).getByRole('group', { name: '更多镜像' })).toBeInTheDocument();
+    expect(within(image).getByRole('option', { name: /Custom Linux test image/ })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: '腾讯云 CVM · 镜像' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '选择并继续' })).not.toBeInTheDocument();
   });
 });

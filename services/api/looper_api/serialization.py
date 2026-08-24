@@ -114,6 +114,7 @@ def _result_sections(manifest: dict[str, Any]) -> list[dict[str, Any]]:
                 "id": section_id,
                 "label": label[:40],
                 "description": str(raw.get("description") or "")[:300],
+                "view": str(raw.get("view") or "")[:80] or None,
                 "metrics": declared_metrics,
             }
         )

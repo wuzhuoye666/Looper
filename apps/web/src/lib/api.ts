@@ -160,6 +160,7 @@ export const api = {
   syncAlibabaTargets: (region = 'cn-hangzhou') => request<ListResponse<Target>>(
     `/targets/alibaba-ecs/sync?region=${encodeURIComponent(region)}`, { method: 'POST' },
   ),
+  syncCloudTargets: () => request<ListResponse<Target>>('/targets/cloud/sync', { method: 'POST' }),
   importExternalTarget: (payload: Record<string, unknown>) => request<Target>(
     '/targets/import', { method: 'POST', body: JSON.stringify(payload) },
   ),

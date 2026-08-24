@@ -31,21 +31,9 @@ export function TargetsPage() {
   const [destroyTarget, setDestroyTarget] = useState<Target | null>(null);
   const [sshTarget, setSshTarget] = useState<Target | null>(null);
   const query = useQuery({ queryKey: ['targets', 'all'], queryFn: () => api.targets(true), refetchInterval: 30_000 });
-  const sync = useMutation({ mutationFn: () => api.syncTencentTargets(), onSuccess: () => query.refetch() });
-  const syncAlibaba = useMutation({
-    mutationFn: async () => {
-      const regions = new Set(
-        (query.data?.items || [])
-          .filter(item => item.provider === "alibaba" && item.lifecycleStatus === "active")
-          .map(item => item.fingerprint?.region)
-          .filter((region): region is string => Boolean(region)),
-      );
-      if (!regions.size) regions.add("cn-hangzhou");
-      let result;
-      for (const region of regions) result = await api.syncAlibabaTargets(region);
-      return result;
-    },
-    onSuccess: () => query.refetch(),
+  const syncCloud = useMutation({
+    mutationFn: api.syncCloudTargets,
+    onSettled: () => query.refetch(),
   });
   const items = useMemo(() => query.data?.items.filter(x => {
     if (x.type === 'local' || x.id === 'local') return false;
@@ -60,12 +48,10 @@ export function TargetsPage() {
   return (
     <div className="page">
       <PageHeader title="候选资源" description="查看服务器规格、环境指纹和执行就绪状态。" actions={<>
-        <button className="button secondary" disabled={sync.isPending} onClick={() => sync.mutate()}><RefreshCw size={15} />{sync.isPending ? '同步中…' : '同步腾讯云库存'}</button>
-        <button className="button secondary" disabled={syncAlibaba.isPending} onClick={() => syncAlibaba.mutate()}><RefreshCw size={15} />{syncAlibaba.isPending ? '同步中…' : '同步阿里云库存'}</button>
+        <button className="button secondary" disabled={syncCloud.isPending} onClick={() => syncCloud.mutate()}><RefreshCw size={15} />{syncCloud.isPending ? '同步中…' : '同步云库存'}</button>
         <button className="button primary" onClick={() => setImportOpen(true)}><Download size={15} />连接外部机器</button>
       </>} />
-      {sync.isError && <div className="inline-alert"><AlertTriangle size={16} />{sync.error.message}</div>}
-      {syncAlibaba.isError && <div className="inline-alert"><AlertTriangle size={16} />{syncAlibaba.error.message}</div>}
+      {syncCloud.isError && <div className="inline-alert"><AlertTriangle size={16} />{syncCloud.error.message}</div>}
       <div className="toolbar">
         <label className="search-field"><Search size={16} /><span className="sr-only">搜索目标</span><input value={search} onChange={e => setSearch(e.target.value)} placeholder="搜索名称、框架或硬件" /></label>
         <label className="select-field"><Filter size={15} /><select aria-label="资源状态" value={status} onChange={e => setStatus(e.target.value)}>
