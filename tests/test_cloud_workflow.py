@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from decimal import Decimal
 
+import looper_api.cloud_service as cloud_service
 import pytest
 from looper_api.cloud_contracts import (
     CatalogFilters,
@@ -732,13 +733,14 @@ def test_quote_binds_one_order_and_expired_snapshot_is_revalidated_at_confirmati
 
 
 def test_expired_order_can_renew_exact_confirmation_and_then_submit(
-    db_session, tmp_path
+    db_session, tmp_path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake = FakeProvider()
     reg = registry(fake)
     app_settings = settings(tmp_path, live=True)
     quote = create_quote(db_session, app_settings, reg, spec(), "quote-key-renew")
     prepared = prepare_order(db_session, app_settings, quote["id"], "order-key-renew")
+    prepared_expiry = datetime.fromisoformat(str(prepared["confirmationExpiresAt"]))
     order = db_session.get(CloudOrderRecord, prepared["id"])
     quote_record = db_session.get(CloudQuoteRecord, quote["id"])
     assert order is not None and quote_record is not None
@@ -746,6 +748,16 @@ def test_expired_order_can_renew_exact_confirmation_and_then_submit(
     quote_record.expires_at = utc_now() - timedelta(seconds=1)
     quote_record.status = "expired"
     db_session.commit()
+
+    # The fixture manually expires persisted state, so it must also advance the
+    # service clock.  Otherwise prepare and renew can share one Windows clock
+    # tick and deterministically sign the same expiry payload.
+    renewal_now = (
+        prepared_expiry
+        - timedelta(seconds=app_settings.purchase_confirmation_seconds)
+        + timedelta(seconds=1)
+    )
+    monkeypatch.setattr(cloud_service, "utc_now", lambda: renewal_now)
 
     renewed = renew_order_confirmation(
         db_session, app_settings, reg, prepared["id"]
