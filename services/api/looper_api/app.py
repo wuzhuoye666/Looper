@@ -28,7 +28,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from looper_core.canonical import utc_now
+from looper_core.canonical import canonical_digest, utc_now
 from looper_core.cas import FileSystemCAS
 from looper_core.contracts import (
     Aggregation,
@@ -88,6 +88,7 @@ from looper_api.cloud_service import (
     catalog_inventory,
     catalog_search,
     create_quote,
+    delete_order,
     destroy_target,
     destroy_target_preview,
     ensure_managed_security_group,
@@ -106,7 +107,7 @@ from looper_api.cloud_service import (
     recover_interrupted_orders,
     resolve_instance_network,
     resolve_unknown_order,
-    delete_order,
+    retry_pending_cloud_ssh,
 )
 from looper_api.config import Settings, get_settings
 from looper_api.database import SessionLocal, get_session, init_database
@@ -298,6 +299,23 @@ async def _remote_worker_recovery() -> None:
             await asyncio.sleep(30)
 
 
+def _retry_pending_cloud_ssh_sync(settings: Settings) -> int:
+    with SessionLocal() as session:
+        connected = retry_pending_cloud_ssh(session, settings)
+        session.commit()
+        return connected
+
+
+async def _cloud_ssh_recovery() -> None:
+    settings = get_settings()
+    while True:
+        try:
+            await asyncio.to_thread(_retry_pending_cloud_ssh_sync, settings)
+        except Exception:
+            logger.exception("Pending cloud SSH recovery failed")
+        await asyncio.sleep(30)
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
@@ -310,15 +328,19 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         session.commit()
     sweeper = asyncio.create_task(_lease_sweeper())
     remote_recovery = asyncio.create_task(_remote_worker_recovery())
+    cloud_ssh_recovery = asyncio.create_task(_cloud_ssh_recovery())
     try:
         yield
     finally:
         sweeper.cancel()
         remote_recovery.cancel()
+        cloud_ssh_recovery.cancel()
         with suppress(asyncio.CancelledError):
             await sweeper
         with suppress(asyncio.CancelledError):
             await remote_recovery
+        with suppress(asyncio.CancelledError):
+            await cloud_ssh_recovery
 
 
 app = FastAPI(
@@ -1268,6 +1290,16 @@ def test_target_ssh_connection(
     if target.provider != "external":
         refreshed.status = "available"
         refreshed.runnable = True
+        refreshed.inventory_json = {
+            **(refreshed.inventory_json or {}),
+            "autoSsh": {
+                "status": "connected",
+                "deployment": deployment.get("status", "deployed"),
+            },
+        }
+        refreshed.snapshot_digest = canonical_digest(
+            {"fingerprint": refreshed.fingerprint_json, "inventory": refreshed.inventory_json}
+        )
         session.commit()
     result = target_view(refreshed)
     result["credentialsRemembered"] = remembered

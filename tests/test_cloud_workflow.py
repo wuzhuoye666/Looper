@@ -3,9 +3,8 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from decimal import Decimal
 
-import pytest
-from pydantic import SecretStr
 import looper_api.cloud_service as cloud_service_module
+import pytest
 from looper_api.cloud_contracts import (
     CatalogFilters,
     CloudPurchaseSpec,
@@ -54,6 +53,7 @@ from looper_api.providers.registry import CloudProviderRegistry
 from looper_api.remote_credentials import EncryptedSshCredentialStore
 from looper_api.serialization import target_view
 from looper_core.canonical import canonical_digest, utc_now
+from pydantic import SecretStr
 from sqlalchemy import select, text, update
 from sqlalchemy.orm import Session
 
@@ -781,9 +781,62 @@ def test_default_password_purchase_remembers_credentials_and_auto_connects(
     assert saved.password.get_secret_value() == "StrongPassword1#"
 
 
+def test_pending_password_credentials_retry_after_endpoint_appears(
+    db_session, tmp_path, monkeypatch
+) -> None:
+    fake = FakeProvider()
+    reg = registry(fake)
+    app_settings = settings(tmp_path, live=True)
+    quote = create_quote(db_session, app_settings, reg, spec(), "quote-key-pending-retry")
+    result = purchase_quote(
+        db_session,
+        app_settings,
+        reg,
+        quote["id"],
+        "order-key-pending-retry",
+        remember_credentials=True,
+    )
+
+    assert result["status"] == "submitted"
+    target = db_session.scalar(select(TargetRecord).where(TargetRecord.provider == "tencent"))
+    assert target is not None
+    assert target.inventory_json["autoSsh"]["status"] == "waiting_endpoint"
+    target.inventory_json = {
+        **target.inventory_json,
+        "endpoint": "203.0.113.11",
+        "public_ip": "203.0.113.11",
+        "public_ip_present": True,
+    }
+    db_session.flush()
+    assert target.id in EncryptedSshCredentialStore(app_settings).pending_target_ids()
+
+    def connect(_session, target, _request):
+        target.fingerprint_json = {
+            **target.fingerprint_json,
+            "host_key_sha256": "SHA256:" + "C" * 43,
+        }
+        return target
+
+    monkeypatch.setattr(cloud_service_module, "connect_existing_target", connect)
+    monkeypatch.setattr(
+        cloud_service_module,
+        "deploy_remote_worker",
+        lambda _request, _target, _settings: {"status": "deployed"},
+    )
+
+    assert cloud_service_module.retry_pending_cloud_ssh(db_session, app_settings) == 1
+    db_session.commit()
+    db_session.refresh(target)
+    assert target.runnable is True
+    assert target.inventory_json["autoSsh"]["status"] == "connected"
+    assert target.id in EncryptedSshCredentialStore(app_settings).verified_target_ids()
+
+
 def test_private_key_auth_remains_available_when_selected(tmp_path) -> None:
     key_path = tmp_path / "cloud-key.pem"
-    key_path.write_text("-----BEGIN OPENSSH PRIVATE KEY-----\nkey\n-----END OPENSSH PRIVATE KEY-----\n")
+    key_path.write_text(
+        "-----BEGIN OPENSSH PRIVATE KEY-----\nkey\n-----END OPENSSH PRIVATE KEY-----\n"
+    )
     app_settings = Settings(
         _env_file=None,
         data_dir=tmp_path,
@@ -798,7 +851,9 @@ def test_private_key_auth_remains_available_when_selected(tmp_path) -> None:
 
     assert credentials.auth_method == "private-key"
     assert credentials.private_key is not None
-    assert credentials.private_key.get_secret_value().startswith("-----BEGIN OPENSSH PRIVATE KEY-----")
+    assert credentials.private_key.get_secret_value().startswith(
+        "-----BEGIN OPENSSH PRIVATE KEY-----"
+    )
 
 
 def test_ambiguous_provider_result_is_not_automatically_retried(db_session, tmp_path) -> None:

@@ -1382,6 +1382,73 @@ def _auto_connect_provisioned_target(
         )
 
 
+def retry_pending_cloud_ssh(session: Session, settings: Settings) -> int:
+    """Retry saved cloud SSH credentials after inventory discovers an endpoint."""
+
+    store = EncryptedSshCredentialStore(settings)
+    pending_ids = store.pending_target_ids()
+    connected = 0
+    for target_id in sorted(pending_ids):
+        target = session.get(TargetRecord, target_id)
+        if target is None:
+            continue
+        inventory = target.inventory_json or {}
+        endpoint = str(inventory.get("endpoint") or "").strip()
+        order_id = str(inventory.get("order_id") or "").strip()
+        instance_id = str(
+            inventory.get("instance_id") or inventory.get("provider_instance_id") or ""
+        ).strip()
+        region = str(inventory.get("region") or "").strip()
+        if not endpoint or not order_id or not instance_id or not region:
+            continue
+        order = session.get(CloudOrderRecord, order_id)
+        if order is None:
+            continue
+        try:
+            request = store.load_pending(target.id, endpoint)
+            if request.auth_method not in {"password", "private-key"}:
+                continue
+            credentials = CloudSshCredentials(
+                username=request.username,
+                port=request.port,
+                auth_method=request.auth_method,
+                password=request.password,
+                private_key=request.private_key,
+                passphrase=request.passphrase,
+                remember_credentials=True,
+            )
+            instance = ProvisionedInstance(
+                id=instance_id,
+                name=str(inventory.get("instance_name") or target.name or instance_id),
+                region=region,
+                zone=str(inventory.get("zone") or "") or None,
+                status=str(inventory.get("instance_state") or target.status),
+                private_ip=str(inventory.get("private_ip") or "") or None,
+                public_ip=str(inventory.get("public_ip") or endpoint) or None,
+                public_ip_present=bool(
+                    inventory.get("public_ip_present") or inventory.get("public_ip")
+                ),
+            )
+            _auto_connect_provisioned_target(
+                session,
+                settings,
+                order,
+                instance,
+                target,
+                credentials,
+            )
+            if (target.inventory_json or {}).get("autoSsh", {}).get("status") == "connected":
+                connected += 1
+        except Exception as error:
+            # Keep the encrypted pending credentials for the next inventory retry.
+            target.inventory_json = {
+                **(target.inventory_json or {}),
+                "autoSsh": {"status": "failed", "message": str(error)},
+            }
+            continue
+    return connected
+
+
 def _upsert_provisioned_target(
     session: Session,
     order: CloudOrderRecord,
