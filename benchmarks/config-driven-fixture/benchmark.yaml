@@ -127,5 +127,6 @@ spec:
   x-extensions:
     bootstrapCatalog: true
     executionStatus: executable
+    selectionDefaults: {repeats: 3, timeoutSeconds: 900, seed: 20260304}
     fixtureOnly: true
     sourceLock: source-lock.json

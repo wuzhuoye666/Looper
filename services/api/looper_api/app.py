@@ -52,6 +52,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from looper_api.analysis_service import build_analysis_snapshot
+from looper_api.benchmark_defaults import benchmark_selection_defaults
 from looper_api.benchmark_packages import (
     MAX_PACKAGE_BYTES,
     BenchmarkPackageError,
@@ -1626,9 +1627,12 @@ def _selection_create_request(payload: dict[str, Any], session: Session) -> Expe
     if metric_declaration is None:
         raise SchedulerError("scenario primary metric is not declared")
     config = payload.get("config") if isinstance(payload.get("config"), dict) else {}
-    repeats = int(config.get("repeats", payload.get("repeats", 5)))
-    seed = int(config.get("seed", payload.get("seed", 20260301)))
-    wall_time_seconds = int(config.get("timeout", payload.get("timeout", 86400)))
+    defaults = benchmark_selection_defaults(benchmark.manifest_json)
+    repeats = int(config.get("repeats", payload.get("repeats", defaults["repeats"])))
+    seed = int(config.get("seed", payload.get("seed", defaults["seed"])))
+    wall_time_seconds = int(
+        config.get("timeout", payload.get("timeout", defaults["timeout"]))
+    )
     raw_input_bindings = payload.get("inputBindings")
     input_bindings = (
         {

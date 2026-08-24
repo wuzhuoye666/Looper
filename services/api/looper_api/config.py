@@ -34,7 +34,15 @@ class Settings(BaseSettings):
     max_artifact_bytes: int = Field(default=256 * 1024 * 1024, ge=1024)
     max_output_bytes: int = Field(default=16 * 1024 * 1024, ge=1024)
     # Managed benchmark preparation may download and compile multi-gigabyte dependencies.
-    lease_seconds: int = Field(default=600, ge=5, le=3600)
+    lease_seconds: int = Field(
+        default=3600,
+        ge=5,
+        le=3600,
+        description=(
+            "Attempt lease in seconds; first-time provisioning may unpack "
+            "multi-gigabyte assets."
+        ),
+    )
     worker_stale_seconds: int = Field(default=90, ge=10, le=86400)
     max_local_workers: int = Field(default=4, ge=1, le=64)
     cloud_catalog_ttl_seconds: int = Field(default=300, ge=30, le=86400)

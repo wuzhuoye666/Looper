@@ -10,6 +10,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from looper_api.analysis_service import build_analysis_snapshot
+from looper_api.benchmark_defaults import benchmark_selection_defaults
 from looper_api.benchmark_registration import selection_scenario_document
 from looper_api.benchmark_runtime import (
     deployment_capabilities,
@@ -116,6 +117,7 @@ def benchmark_view(
         "inputs": adapter.get("inputs", []),
         "infrastructure": spec.get("infrastructure"),
         "auditPolicy": spec.get("audit"),
+        "selectionDefaults": benchmark_selection_defaults(manifest),
         "executionPolicy": spec.get("runtime", {}).get("executionPolicy"),
         "version": record.version,
         "license": record.license,

@@ -48,6 +48,35 @@ def test_scenario_catalog_exposes_execution_boundary(db_session: object) -> None
     assert benchbase["primaryMetric"] == "committed_tps"
 
 
+def test_selection_defaults_are_benchmark_specific_and_used_by_create_request(
+    db_session: object,
+) -> None:
+    session = db_session
+    records = {record.benchmark_id: record for record in session.scalars(select(BenchmarkRecord))}
+    views = {benchmark_id: benchmark_view(record) for benchmark_id, record in records.items()}
+
+    sysbench_defaults = views["looper.sysbench"]["selectionDefaults"]
+    dcperf_defaults = views["dcperf.mediawiki.closed-loop"]["selectionDefaults"]
+    assert sysbench_defaults == {"repeats": 5, "timeout": 3600, "seed": 20260301}
+    assert dcperf_defaults == {"repeats": 5, "timeout": 86400, "seed": 20260306}
+    assert sysbench_defaults != dcperf_defaults
+
+    dcperf = records["dcperf.mediawiki.closed-loop"]
+    request = _normalize_create_request(
+        {
+            "mode": "selection",
+            "name": "DCPerf defaults",
+            "benchmarkId": dcperf.benchmark_id,
+            "benchmarkVersion": dcperf.version,
+            "targetIds": ["local"],
+        },
+        session,
+    )
+    assert request.spec.design.min_repeats == 5
+    assert request.spec.budget.wall_time_seconds == 86400
+    assert request.spec.design.random_seed == 20260306
+
+
 def test_benchmark_view_exposes_metric_presentation_without_dropping_metrics(
     db_session: object,
 ) -> None:

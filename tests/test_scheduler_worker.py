@@ -75,6 +75,80 @@ def test_fencing_token_rejects_stale_worker(db_session: object, tmp_path: Path) 
         )
 
 
+def test_worker_does_not_claim_above_its_concurrency(
+    db_session: object, tmp_path: Path
+) -> None:
+    session = db_session
+    settings = Settings(
+        data_dir=tmp_path,
+        database_url="sqlite://",
+        local_worker_token="secret",
+        lease_seconds=30,
+    )
+    experiment = create_experiment(session, create_demo_request())
+    start_experiment(session, experiment)
+    worker = register_worker(
+        session,
+        settings,
+        WorkerRegister(
+            workerId="worker-single-slot",
+            name="single slot worker",
+            token="secret",
+            capabilities=["python", "local-process"],
+            fingerprint={},
+            maxConcurrency=1,
+        ),
+    )
+
+    first_claim = claim_attempt(session, settings, worker)
+
+    assert first_claim is not None
+    assert claim_attempt(session, settings, worker) is None
+
+
+def test_worker_reregistration_requeues_its_interrupted_attempt(
+    db_session: object, tmp_path: Path
+) -> None:
+    session = db_session
+    settings = Settings(
+        data_dir=tmp_path,
+        database_url="sqlite://",
+        local_worker_token="secret",
+        lease_seconds=30,
+    )
+    experiment = create_experiment(session, create_demo_request())
+    start_experiment(session, experiment)
+    registration = WorkerRegister(
+        workerId="worker-restarted",
+        name="restarted worker",
+        token="secret",
+        capabilities=["python", "local-process"],
+        fingerprint={},
+        maxConcurrency=1,
+    )
+    worker = register_worker(session, settings, registration)
+    first_claim = claim_attempt(session, settings, worker)
+    assert first_claim is not None
+    start_attempt(
+        session,
+        first_claim["attemptId"],
+        AttemptStart(
+            workerId=worker.id,
+            fencingToken=first_claim["fencingToken"],
+            envelope=first_claim["envelope"],
+        ),
+    )
+
+    worker = register_worker(session, settings, registration)
+    recovered = session.get(AttemptRecord, first_claim["attemptId"])
+    second_claim = claim_attempt(session, settings, worker)
+
+    assert recovered is not None
+    assert second_claim is not None
+    assert second_claim["attemptId"] == first_claim["attemptId"]
+    assert second_claim["fencingToken"] == first_claim["fencingToken"] + 1
+
+
 def test_completion_rejects_required_metrics_without_enough_samples(
     db_session: object, tmp_path: Path
 ) -> None:

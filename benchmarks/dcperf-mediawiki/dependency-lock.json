@@ -35,6 +35,8 @@
       "php-xml",
       "python3",
       "python3-click",
+      "python3-numpy",
+      "python3-pandas",
       "python3-psutil",
       "python3-tabulate",
       "python3-yaml",

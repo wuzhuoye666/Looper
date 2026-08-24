@@ -13,7 +13,7 @@ from looper_core.cas import FileSystemCAS, StoredArtifact
 from looper_core.contracts import ExperimentSpec
 from looper_core.manifest import validate_document
 from looper_core.state import AttemptStatus, CandidateStatus, ExperimentStatus
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from looper_api.benchmark_packages import BenchmarkPackageError, build_directory_package
@@ -86,6 +86,37 @@ def register_worker(session: Session, settings: Settings, request: WorkerRegiste
         )
         session.add(worker)
     else:
+        interrupted = list(
+            session.scalars(
+                select(AttemptRecord).where(
+                    AttemptRecord.worker_id == worker.id,
+                    AttemptRecord.status.in_(
+                        [AttemptStatus.LEASED, AttemptStatus.RUNNING, AttemptStatus.UPLOADING]
+                    ),
+                )
+            )
+        )
+        for attempt in interrupted:
+            attempt.status = AttemptStatus.QUEUED
+            attempt.worker_id = None
+            attempt.lease_expires_at = None
+            attempt.leased_at = None
+            attempt.started_at = None
+            attempt.envelope_json = {}
+            attempt.envelope_digest = None
+            attempt.phase = None
+            attempt.phase_detail = None
+            append_event(
+                session,
+                experiment_id=attempt.experiment_id,
+                event_type="attempt.requeued",
+                entity_type="attempt",
+                entity_id=attempt.id,
+                idempotency_key=(
+                    f"attempt.requeued:{attempt.id}:{attempt.fencing_token}:worker-reregistered"
+                ),
+                payload={"reason": "worker re-registered"},
+            )
         for field, value in values.items():
             setattr(worker, field, value)
     session.flush()
@@ -312,6 +343,19 @@ def claim_attempt(
     session: Session, settings: Settings, worker: WorkerRecord
 ) -> dict[str, Any] | None:
     expire_stale_leases(session)
+    active_attempts = int(
+        session.scalar(
+            select(func.count(AttemptRecord.id)).where(
+                AttemptRecord.worker_id == worker.id,
+                AttemptRecord.status.in_(
+                    [AttemptStatus.LEASED, AttemptStatus.RUNNING, AttemptStatus.UPLOADING]
+                ),
+            )
+        )
+        or 0
+    )
+    if active_attempts >= worker.max_concurrency:
+        return None
     queued = list(
         session.scalars(
             select(AttemptRecord)

@@ -77,6 +77,12 @@ export interface BenchmarkWorkload {
   name: string;
   metrics?: Record<string, MetricDefinition>;
 }
+export interface BenchmarkSelectionDefaults {
+  repeats: number;
+  timeout: number;
+  seed: number;
+}
+
 export interface Benchmark {
   id: string; key?: string; name: string; description?: string; category?: string; version?: string; metrics?: string[];
   metricDefinitions?: Record<string, MetricDefinition>;
@@ -85,6 +91,7 @@ export interface Benchmark {
   inputs?: BenchmarkInputDeclaration[];
   infrastructure?: Record<string, unknown>;
   auditPolicy?: Record<string, unknown>;
+  selectionDefaults?: BenchmarkSelectionDefaults;
   executionPolicy?: Record<string, unknown>;
   cases?: number; updatedAt?: string; tags?: string[]; license?: string; runnable?: boolean; selectable?: boolean; executionStatus?: string;
   executionBlocker?: string; executionBlockerReason?: string;

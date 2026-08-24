@@ -200,6 +200,120 @@ def _remote_login_identity(client: Any) -> tuple[bool, str, str]:
     return answer == "1", uid, gid
 
 
+def _python_requirement_check() -> str:
+    """Python -c expression accepting only interpreters at the platform floor."""
+
+    return "import sys; sys.exit(0 if (3, 12) <= sys.version_info[:2] < (3, 15) else 1)"
+
+
+def _select_remote_python(client: Any, *, timeout: int = 60) -> str:
+    """Return the first interpreter on PATH that satisfies the platform floor."""
+
+    probe = (
+        "for p in python3.13 python3.12 python3.11 python3; do "
+        "if command -v \"$p\" >/dev/null 2>&1 && \"$p\" -c "
+        f"'{_python_requirement_check()}' 2>/dev/null; then "
+        "printf '%s' \"$p\"; exit 0; fi; done; exit 1"
+    )
+    return _run(client, probe, timeout=timeout).strip()
+
+
+def _install_remote_python(client: Any, privilege_prefix: str) -> str:
+    """Install a distro Python >= 3.12 and return its interpreter name.
+
+    Debian/Ubuntu ship 3.12 natively (24.04) or through the deadsnakes PPA
+    (22.04). Distros without apt are rejected with a manual-install hint.
+    """
+
+    prefix = privilege_prefix or ""
+    apt = f"{prefix}env DEBIAN_FRONTEND=noninteractive "
+    script = (
+        "set -e; "
+        "command -v apt-get >/dev/null 2>&1 || { "
+        "printf '%s' 'no apt-get; install Python 3.12+ manually and retry' >&2; exit 1; }; "
+        f"{prefix}apt-get update -qq >/dev/null; "
+        f"{apt}apt-get install -y -qq python3.12 python3.12-venv >/dev/null || {{ "
+        f"{apt}apt-get install -y -qq software-properties-common >/dev/null; "
+        f"{prefix}add-apt-repository -y ppa:deadsnakes/ppa >/dev/null; "
+        f"{prefix}apt-get update -qq >/dev/null; "
+        f"{apt}apt-get install -y -qq python3.12 python3.12-venv >/dev/null; }}; "
+        "printf 'python3.12'"
+    )
+    output = _run(client, script, timeout=900).strip()
+    if output:
+        return output
+    selected = _select_remote_python(client, timeout=60)
+    if selected:
+        return selected
+    raise ExternalTargetError(
+        "unable to obtain a Python >= 3.12 runtime; install Python 3.12+ on the "
+        "remote host and retry the deployment"
+    )
+
+
+def _ensure_remote_python(client: Any, privilege_prefix: str) -> str:
+    """Return a floor-compliant remote interpreter, installing one if needed."""
+
+    try:
+        selected = _select_remote_python(client)
+    except ExternalTargetError:
+        selected = ""
+    return selected or _install_remote_python(client, privilege_prefix)
+
+
+def _venv_satisfies_floor(client: Any, venv_python: str) -> bool:
+    """Return True when the venv interpreter meets the platform requirement."""
+
+    try:
+        _run(client, f"{venv_python} -c '{_python_requirement_check()}'", timeout=60)
+        return True
+    except ExternalTargetError:
+        return False
+
+
+def _ensure_remote_venv(
+    client: Any,
+    remote_root: PurePosixPath,
+    remote_python: str,
+    privilege_prefix: str,
+) -> None:
+    """Recreate the Worker venv when its interpreter is below the floor."""
+
+    venv_python = f"{remote_root}/venv/bin/python"
+    if _venv_satisfies_floor(client, venv_python):
+        return
+    _run(client, f"{privilege_prefix}rm -rf {remote_root}/venv", timeout=60)
+    try:
+        _run(
+            client,
+            f"{privilege_prefix}{shlex.quote(remote_python)} -m venv {remote_root}/venv",
+            timeout=300,
+        )
+    except ExternalTargetError:
+        # Typical cause: the interpreter exists but its -venv package is missing.
+        try:
+            _run(
+                client,
+                f"{privilege_prefix}apt-get update -qq && "
+                f"{privilege_prefix}env DEBIAN_FRONTEND=noninteractive "
+                f"apt-get install -y -qq {shlex.quote(remote_python)}-venv",
+                timeout=900,
+            )
+        except ExternalTargetError as package_error:
+            raise ExternalTargetError(
+                f"remote Python venv support is unavailable: {package_error}"
+            ) from package_error
+        _run(
+            client,
+            f"{privilege_prefix}{shlex.quote(remote_python)} -m venv {remote_root}/venv",
+            timeout=300,
+        )
+    if not _venv_satisfies_floor(client, venv_python):
+        raise ExternalTargetError(
+            f"Worker venv at {venv_python} is not Python >= 3.12 after recreation"
+        )
+
+
 def _deploy_remote_worker_impl(
     request: ConnectExternalTargetRequest,
     target: TargetRecord,
@@ -258,18 +372,16 @@ def _deploy_remote_worker_impl(
         finally:
             sftp.close()
 
+        # The Worker needs a Python >= 3.12 interpreter (platform floor). Old
+        # distros (e.g. Ubuntu 22.04 with Python 3.10) would otherwise build a
+        # venv whose worker dies on import (datetime.UTC is 3.11+), leaving the
+        # target "deployed" but never registered and reclassified as
+        # inventory-only by the next inventory sync.
+        remote_python = _ensure_remote_python(client, privilege_prefix)
+        _ensure_remote_venv(client, remote_root, remote_python, privilege_prefix)
+
         bootstrap = " && ".join(
             (
-                (
-                    f"{privilege_prefix}python3 -m venv {remote_root}/venv || "
-                    "(command -v apt-get >/dev/null && "
-                    "if test \"$(id -u)\" = 0; then "
-                    "apt-get update -qq && env DEBIAN_FRONTEND=noninteractive "
-                    "apt-get install -y -qq python3-venv; else "
-                    "sudo -n apt-get update -qq && sudo -n env "
-                    "DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3-venv; fi && "
-                    f"{privilege_prefix}python3 -m venv {remote_root}/venv)"
-                ),
                 (
                     f"{privilege_prefix}{remote_root}/venv/bin/python -m pip install "
                     "--disable-pip-version-check -q 'httpx>=0.28,<1' 'psutil>=7,<8' "

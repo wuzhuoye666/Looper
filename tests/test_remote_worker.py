@@ -148,3 +148,107 @@ def test_remote_login_identity_without_sudo_stays_unprivileged(monkeypatch) -> N
     elevate, uid, gid = remote_worker._remote_login_identity(Mock())
     assert elevate is False
     assert uid == "1000"
+
+
+def test_ensure_remote_python_installs_when_no_candidate(monkeypatch) -> None:
+    from looper_api import remote_worker
+
+    def fake_run(client, command, *, timeout=300):
+        if command.startswith("for p in python3.13"):
+            raise remote_worker.ExternalTargetError("no candidate on PATH")
+        return "python3.12" + chr(10)
+
+    monkeypatch.setattr(remote_worker, "_run", fake_run)
+    assert remote_worker._ensure_remote_python(Mock(), "") == "python3.12"
+
+
+def test_install_remote_python_uses_deadsnakes_fallback(monkeypatch) -> None:
+    from looper_api import remote_worker
+
+    commands: list[str] = []
+
+    def fake_run(client, command, *, timeout=300):
+        commands.append(command)
+        return "python3.12" + chr(10)
+
+    monkeypatch.setattr(remote_worker, "_run", fake_run)
+    assert remote_worker._install_remote_python(Mock(), "sudo -n ") == "python3.12"
+    install = next(
+        command for command in commands if "apt-get install -y -qq python3.12" in command
+    )
+    assert "add-apt-repository -y ppa:deadsnakes/ppa >/dev/null" in install
+    assert "software-properties-common >/dev/null" in install
+    assert "python3.12 python3.12-venv >/dev/null" in install
+
+
+def test_ensure_remote_venv_recreates_below_floor_venv(monkeypatch) -> None:
+    from pathlib import PurePosixPath
+
+    from looper_api import remote_worker
+
+    calls: list[str] = []
+    state = {"checks": 0}
+
+    def fake_run(client, command, *, timeout=300):
+        calls.append(command)
+        if command.startswith("/root/.looper-worker/venv/bin/python -c"):
+            state["checks"] += 1
+            if state["checks"] == 1:
+                raise remote_worker.ExternalTargetError("bad interpreter")
+        return ""
+
+    monkeypatch.setattr(remote_worker, "_run", fake_run)
+    remote_worker._ensure_remote_venv(
+        Mock(), PurePosixPath("/root/.looper-worker"), "python3.12", ""
+    )
+    assert any("rm -rf /root/.looper-worker/venv" in call for call in calls)
+    assert any("python3.12 -m venv /root/.looper-worker/venv" in call for call in calls)
+    assert state["checks"] == 2
+
+
+def test_ensure_remote_venv_keeps_compliant_venv(monkeypatch) -> None:
+    from pathlib import PurePosixPath
+
+    from looper_api import remote_worker
+
+    calls: list[str] = []
+
+    def fake_run(client, command, *, timeout=300):
+        calls.append(command)
+        return ""
+
+    monkeypatch.setattr(remote_worker, "_run", fake_run)
+    remote_worker._ensure_remote_venv(
+        Mock(), PurePosixPath("/root/.looper-worker"), "python3.12", ""
+    )
+    assert len(calls) == 1
+    assert not any("rm -rf" in call for call in calls)
+
+
+def test_ensure_remote_venv_installs_venv_package_when_missing(monkeypatch) -> None:
+    from pathlib import PurePosixPath
+
+    from looper_api import remote_worker
+
+    calls: list[str] = []
+    state = {"creates": 0, "ready": False}
+
+    def fake_run(client, command, *, timeout=300):
+        calls.append(command)
+        if command.startswith("/root/.looper-worker/venv/bin/python -c"):
+            if not state["ready"]:
+                raise remote_worker.ExternalTargetError("venv not ready")
+            return ""
+        if command.endswith("python3.12 -m venv /root/.looper-worker/venv"):
+            state["creates"] += 1
+            if state["creates"] == 1:
+                raise remote_worker.ExternalTargetError("venv package missing")
+            state["ready"] = True
+        return ""
+
+    monkeypatch.setattr(remote_worker, "_run", fake_run)
+    remote_worker._ensure_remote_venv(
+        Mock(), PurePosixPath("/root/.looper-worker"), "python3.12", ""
+    )
+    assert any("apt-get install -y -qq python3.12-venv" in call for call in calls)
+    assert state["creates"] == 2

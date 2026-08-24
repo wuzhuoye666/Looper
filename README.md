@@ -2,7 +2,7 @@
 
 Looper 是面向服务器采购与选型的场景化 Benchmark 套件。用户先提出采购问题，选择真实 workload、候选服务器和证据协议；Looper 再以相同 workload、成对时间块和独立 placement 组织运行，输出 SLO 内容量、尾延迟、错误/中止、价格归一化结果和结论强度。原始观测、环境指纹、价格快照、统计策略和分析代码版本保存在同一条可复算证据链中。
 
-当前 Stage 0 已安装两个选型场景契约：BenchBase SmallBank + PostgreSQL 16，以及 DCPerf MediaWiki 单 VM 闭环容量。两者具备固定上游 commit、manifest、结果 adapter、normalization-only 命令和合成 fixture，但执行状态仍是 `stage0-adapter-only`；这些命令验证 upstream output 到标准 worker evidence 的边界，不启动 workload。Web/API 可以保存选型研究草稿，启动会在容器镜像 digest 和匹配 runner 就绪前 fail closed。内置压缩优化器仍作为本地兼容 demo，不代表产品主流程。
+Looper 已安装 BenchBase SmallBank + PostgreSQL 16 和 DCPerf MediaWiki 单 VM 闭环容量两个选型场景契约。BenchBase 仍是 `stage0-adapter-only`，只验证 normalization 和 evidence 边界；DCPerf 已提供受信任的 managed provisioning：用户选择兼容的 Ubuntu SSH 目标后，控制面自动部署 Worker，目标机自动安装锁定依赖、下载并校验上游资产、构建服务栈并启动原生 Benchpress。Ubuntu 22.04 是正式目标，Ubuntu 24.04 仍是必须通过 native smoke 才能正式声明兼容的候选版本。内置压缩优化器仍作为本地兼容 demo，不代表产品主流程。
 
 P0 评价框架、23 项候选审计、Top 10 landscape、TencentBench 未决项和 CPU 试点协议分别见 `docs/p0-benchmark-evaluation.md`、`docs/p0-candidate-audit.md`、`docs/p0-benchmark-landscape.md`、`docs/p0-tencentbench-gap.md` 和 `docs/cpu-pilot-design.md`。Stage 0 验收边界见 `docs/stage0-acceptance.md`。
 
@@ -60,6 +60,8 @@ Web 的“新建选型研究”按以下对象建立不可变 spec：
 完成一个 `optimization` 实验后，实验详情页会读取 Benchmark manifest 中的 `postBenchmarkActions` 低风险白名单并显示“优化并重新测试”。点击后，Looper 以原实验最佳可行配置为基线，只修改一个声明参数，创建关联的复测实验；复测完成后显示建议保留、保留原配置或证据不足。原实验和原始证据不会被覆盖。当前 Web 流程只支持 `benchmark-parameter` 动作并输出配置决策，不会把配置自动部署到生产目标。
 
 候选资源页的“连接外部机器”支持通过 SSH 密码、私钥或 API 进程 SSH Agent 连接 Linux 主机，自动读取主机名、系统、内核、架构、CPU 与内存，并部署绑定到该目标的 Looper Worker。连接成功后，SSH 凭据会保存在数据库之外的本机加密仓库；后端重启会校验已固定的主机指纹并自动重建反向隧道。Windows 上的加密密钥还会通过 DPAPI 绑定当前服务账户。也可以配置 `LOOPER_REMOTE_WORKER_API_URL`，让 Worker 通过稳定地址直接重连。完整安全边界和停用开关见 `docs/operations.md`。
+
+Worker 需要 Python >= 3.12（平台运行时下限）。部署脚本会先探测远端解释器（python3.13 / python3.12 / python3.11 / python3），只接受满足下限的版本；一个都找不到时会在 Debian/Ubuntu 上用 python3.12 包安装，必要时回退到 deadsnakes PPA（如 Ubuntu 22.04，默认仅有 Python 3.10）。已有 venv 若由旧解释器创建会被自动重建，否则按平台要求运行，避免出现“SSH 连通但 Worker 启动即崩溃、目标被下一次库存同步打回‘仅库存’”的情况。
 
 ## 多云目录与受保护购买
 

@@ -29,6 +29,9 @@ SUPPORTED_UBUNTU_RELEASES = {"22.04", "24.04"}
 HHVM_BIN = Path("/usr/local/hphpi/legacy/bin/hhvm")
 HHVM_LIB = Path("/opt/local/hhvm-3.30/lib")
 MARKER_NAME = "dcperf-mediawiki-ready.json"
+DOWNLOAD_BLOCK_BYTES = 1024 * 1024
+DOWNLOAD_ROUTE_PROBE_SECONDS = 15.0
+DOWNLOAD_ROUTE_MIN_MIB_PER_SECOND = 0.25
 
 
 class PrepareError(RuntimeError):
@@ -140,7 +143,7 @@ def asset(lock: dict[str, Any], asset_id: str) -> dict[str, Any]:
 def sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(1024 * 1024), b""):
+        for block in iter(lambda: stream.read(DOWNLOAD_BLOCK_BYTES), b""):
             digest.update(block)
     return digest.hexdigest()
 
@@ -160,9 +163,7 @@ def fetch(asset_spec: dict[str, Any], directory: Path) -> Path:
         destination.unlink()
 
     offset = temporary.stat().st_size if temporary.is_file() else 0
-    headers = {"User-Agent": "Looper-DCPerf-provisioner/2"}
     if offset:
-        headers["Range"] = f"bytes={offset}-"
         log(f"resuming {asset_spec['id']} from {offset / (1024 * 1024):.1f} MiB")
     else:
         log(f"downloading {asset_spec['id']}")
@@ -170,58 +171,87 @@ def fetch(asset_spec: dict[str, Any], directory: Path) -> Path:
         *(str(item) for item in asset_spec.get("mirrors", [])),
         str(asset_spec["url"]),
     ]
-    response = None
     route_errors: list[str] = []
+    completed = False
+    total = offset
     for route_number, source_url in enumerate(source_urls, start=1):
+        headers = {"User-Agent": "Looper-DCPerf-provisioner/2"}
+        if offset:
+            headers["Range"] = f"bytes={offset}-"
         request = urllib.request.Request(source_url, headers=headers)
         try:
             response = urllib.request.urlopen(request, timeout=180)
             log(f"using download route {route_number}/{len(source_urls)}")
-            break
         except Exception as error:
             route_errors.append(str(error))
             log(f"download route {route_number}/{len(source_urls)} unavailable: {error}")
-    if response is None:
-        fail(f"all download routes failed for {asset_spec['id']}: {'; '.join(route_errors)}")
-    try:
-        with response:
-            resumed = offset > 0 and getattr(response, "status", 200) == 206
-            if offset and not resumed:
-                log("upstream does not support range requests; restarting this asset")
-                offset = 0
-            total = offset
-            started = time.monotonic()
-            last_report = started
-            mode = "ab" if resumed else "wb"
-            with temporary.open(mode) as stream:
-                while True:
-                    block = response.read(1024 * 1024)
-                    if not block:
-                        break
-                    stream.write(block)
-                    total += len(block)
-                    now = time.monotonic()
-                    if now - last_report >= 5:
-                        downloaded = total / (1024 * 1024)
-                        speed = (total - offset) / max(now - started, 0.001) / (1024 * 1024)
-                        if expected_bytes:
-                            percent = min(100.0, total * 100 / expected_bytes)
+            continue
+        try:
+            with response:
+                resumed = offset > 0 and getattr(response, "status", 200) == 206
+                if offset and not resumed:
+                    log("upstream does not support range requests; restarting this asset")
+                    offset = 0
+                total = offset
+                started = time.monotonic()
+                last_report = started
+                mode = "ab" if resumed else "wb"
+                with temporary.open(mode) as stream:
+                    while True:
+                        block = response.read(DOWNLOAD_BLOCK_BYTES)
+                        if not block:
+                            completed = True
+                            break
+                        stream.write(block)
+                        stream.flush()
+                        total += len(block)
+                        now = time.monotonic()
+                        elapsed = max(now - started, 0.001)
+                        speed = (total - offset) / elapsed / (1024 * 1024)
+                        if now - last_report >= 5:
+                            downloaded = total / (1024 * 1024)
+                            if expected_bytes:
+                                percent = min(100.0, total * 100 / expected_bytes)
+                                log(
+                                    f"downloading {asset_spec['id']}: {downloaded:.1f} MiB / "
+                                    f"{expected_bytes / (1024 * 1024):.1f} MiB "
+                                    f"({percent:.1f}%) at {speed:.2f} MiB/s"
+                                )
+                            else:
+                                log(
+                                    f"downloading {asset_spec['id']}: {downloaded:.1f} MiB "
+                                    f"at {speed:.2f} MiB/s"
+                                )
+                            last_report = now
+                        if (
+                            route_number < len(source_urls)
+                            and elapsed >= DOWNLOAD_ROUTE_PROBE_SECONDS
+                            and speed < DOWNLOAD_ROUTE_MIN_MIB_PER_SECOND
+                        ):
                             log(
-                                f"downloading {asset_spec['id']}: {downloaded:.1f} MiB / "
-                                f"{expected_bytes / (1024 * 1024):.1f} MiB "
-                                f"({percent:.1f}%) at {speed:.2f} MiB/s"
+                                f"download route {route_number}/{len(source_urls)} is slow "
+                                f"({speed:.2f} MiB/s); trying the next route"
                             )
-                        else:
-                            log(
-                                f"downloading {asset_spec['id']}: {downloaded:.1f} MiB "
-                                f"at {speed:.2f} MiB/s"
-                            )
-                        last_report = now
-    except Exception as error:
+                            completed = False
+                            break
+        except Exception as error:
+            route_errors.append(str(error))
+            log(
+                f"download route {route_number}/{len(source_urls)} interrupted: {error}; "
+                "trying the next route"
+            )
+        offset = temporary.stat().st_size if temporary.exists() else 0
+        if completed and (expected_bytes is None or total == expected_bytes):
+            break
+        if completed and expected_bytes is not None and total != expected_bytes:
+            route_errors.append(f"route ended after {total} of {expected_bytes} bytes")
+            completed = False
+    if not completed:
         saved = temporary.stat().st_size if temporary.exists() else 0
         fail(
-            f"download interrupted for {asset_spec['id']} after "
-            f"{saved / (1024 * 1024):.1f} MiB; next run will resume: {error}"
+            f"all download routes failed for {asset_spec['id']} after "
+            f"{saved / (1024 * 1024):.1f} MiB; next run will resume: "
+            f"{'; '.join(route_errors) or 'no route completed the asset'}"
         )
     if expected_bytes is not None and total != expected_bytes:
         if total > expected_bytes:
@@ -268,9 +298,22 @@ def extract_archive(archive: Path, destination: Path) -> None:
                     name = name[len(root_prefix) + 1 :]
                 if not name:
                     continue
-                if member.issym() or member.islnk():
-                    fail(f"symbolic links are not accepted in dependency archive: {member.name}")
                 target = safe_member_path(destination, name)
+                if member.issym():
+                    link_name = str(member.linkname)
+                    link_target = (target.parent / link_name).resolve()
+                    base = destination.resolve()
+                    if (
+                        not link_name
+                        or Path(link_name).is_absolute()
+                        or link_target != base and base not in link_target.parents
+                    ):
+                        fail(f"unsafe symbolic link in dependency archive: {member.name}")
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.symlink_to(link_name)
+                    continue
+                if member.islnk():
+                    fail(f"hard links are not accepted in dependency archive: {member.name}")
                 if member.isdir():
                     target.mkdir(parents=True, exist_ok=True)
                     continue
@@ -330,12 +373,18 @@ def hhvm_version() -> str:
     if not HHVM_BIN.is_file() or not os.access(HHVM_BIN, os.X_OK):
         return ""
     try:
+        environment = os.environ.copy()
+        environment["LD_LIBRARY_PATH"] = (
+            str(HHVM_LIB)
+            + (":" + environment["LD_LIBRARY_PATH"] if environment.get("LD_LIBRARY_PATH") else "")
+        )
         completed = subprocess.run(
             [str(HHVM_BIN), "--version"],
             text=True,
             capture_output=True,
             timeout=30,
             check=False,
+            env=environment,
         )
     except (OSError, subprocess.TimeoutExpired):
         return ""
@@ -351,13 +400,17 @@ def install_hhvm(archive: Path) -> None:
         log("existing HHVM executable is not the pinned 3.30 build; reinstalling")
     stage = Path(tempfile.mkdtemp(prefix="looper-hhvm-"))
     try:
+        log("extracting hhvm-3.30 archive")
         extract_archive(archive, stage)
+        log("HHVM archive extracted; locating installer")
         installer = find_one(stage, "pour-hhvm.sh")
         if installer is not None:
+            log("installing HHVM with pour-hhvm.sh")
             run(["bash", str(installer)], cwd=installer.parent, timeout=3600)
         else:
             installer = find_one(stage, "install.sh")
             if installer is not None:
+                log("installing HHVM with install.sh")
                 run(["bash", str(installer)], cwd=installer.parent, timeout=3600)
         if not HHVM_BIN.is_file():
             candidate = find_one(stage, "hhvm")
@@ -454,6 +507,10 @@ def build_dependencies(lock: dict[str, Any], cache: Path) -> Path:
     shutil.copy2(composer_archive, oss_root / "composer.phar")
     env = os.environ.copy()
     env["LD_LIBRARY_PATH"] = str(HHVM_LIB) + ":" + env.get("LD_LIBRARY_PATH", "")
+    composer_home = oss_root / ".composer-home"
+    composer_home.mkdir(parents=True, exist_ok=True)
+    env["HOME"] = str(composer_home)
+    env["COMPOSER_HOME"] = str(composer_home)
     run(
         [str(HHVM_BIN), "composer.phar", "install", "--no-interaction", "--prefer-dist"],
         cwd=oss_root,

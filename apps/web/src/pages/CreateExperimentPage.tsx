@@ -6,7 +6,7 @@ import { BackLink } from '../components/Layout';
 import { ErrorState } from '../components/States';
 import { TargetSshButton } from '../components/TargetSshButton';
 import { api } from '../lib/api';
-import type { Target } from '../lib/types';
+import type { Benchmark, Target } from '../lib/types';
 
 const steps = [
   { label: '采购问题', icon: ClipboardCheck },
@@ -22,6 +22,12 @@ function targetEnvironment(target: Pick<Target, 'type' | 'provider' | 'id'>): st
   return target.provider || target.type || '其他';
 }
 
+const FALLBACK_SELECTION_DEFAULTS = { repeats: 5, timeout: 86400, seed: 20260301 };
+
+function selectionDefaults(benchmark?: Pick<Benchmark, 'selectionDefaults'>) {
+  return benchmark?.selectionDefaults || FALLBACK_SELECTION_DEFAULTS;
+}
+
 export function CreateExperimentPage() {
   const navigate = useNavigate();
   const [step, setStep] = useState(0);
@@ -33,9 +39,7 @@ export function CreateExperimentPage() {
     targetIds: [] as string[],
     targetBindings: {} as Record<string, { variantId: string; label: string; placementPairId: string }>,
     inputBindings: {} as Record<string, { reference: string; digest: string }>,
-    repeats: 5,
-    timeout: 86400,
-    seed: 20260821,
+    ...FALLBACK_SELECTION_DEFAULTS,
   });
   const benchmarks = useQuery({ queryKey: ['benchmarks'], queryFn: api.benchmarks });
   const targets = useQuery({ queryKey: ['targets', 'active'], queryFn: () => api.targets(false), refetchInterval: 10_000 });
@@ -49,15 +53,18 @@ export function CreateExperimentPage() {
   );
   useEffect(() => {
     if (!selectableBenchmarks.length) return;
-    setForm(current => selectableBenchmarks.some(item => (item.key || item.id) === current.benchmarkKey)
-      ? current
-      : {
-          ...current,
-          benchmarkKey: selectableBenchmarks[0].key || selectableBenchmarks[0].id,
-          targetIds: [],
-          targetBindings: {},
-          inputBindings: {},
-        });
+    setForm(current => {
+      if (selectableBenchmarks.some(item => (item.key || item.id) === current.benchmarkKey)) return current;
+      const benchmark = selectableBenchmarks[0];
+      return {
+        ...current,
+        ...selectionDefaults(benchmark),
+        benchmarkKey: benchmark.key || benchmark.id,
+        targetIds: [],
+        targetBindings: {},
+        inputBindings: {},
+      };
+    });
   }, [selectableBenchmarks]);
   const selectedBenchmark = selectableBenchmarks.find(item => (item.key || item.id) === form.benchmarkKey);
   const targetItems = targets.data?.items || [];
@@ -178,7 +185,18 @@ export function CreateExperimentPage() {
         <legend>场景与候选资源</legend>
         <div className="form-grid form-section-gap">
           <label className="full"><span>Benchmark 场景 *</span>
-            <select required value={form.benchmarkKey} onChange={event => setForm(current => ({ ...current, benchmarkKey: event.target.value, targetIds: [], targetBindings: {}, inputBindings: {} }))}>
+            <select required value={form.benchmarkKey} onChange={event => {
+              const benchmarkKey = event.currentTarget.value;
+              const benchmark = selectableBenchmarks.find(item => (item.key || item.id) === benchmarkKey);
+              setForm(current => ({
+                ...current,
+                ...selectionDefaults(benchmark),
+                benchmarkKey,
+                targetIds: [],
+                targetBindings: {},
+                inputBindings: {},
+              }));
+            }}>
               {!selectableBenchmarks.length && <option value="">暂无可直接测试的 Benchmark</option>}
               {selectableBenchmarks.map(item => <option key={item.key || `${item.id}-${item.version}`} value={item.key || item.id}>{item.name}{item.version ? ` · ${item.version}` : ''}</option>)}
             </select>
