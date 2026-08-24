@@ -27,6 +27,10 @@ from looper_core.system_opt.rollback.regression import (
     RegressionRecoveryRequest,
     RegressionRecoveryStatus,
 )
+from looper_core.system_opt.rollback.regression_evidence import (
+    RegressionRecoveryEvidenceGraph,
+    RegressionRecoveryEvidenceIndex,
+)
 from looper_core.system_opt.state_evidence import (
     STATE_EVIDENCE_SCHEMA,
     ConfigStateRecord,
@@ -191,11 +195,11 @@ def _read_attention(root: Path) -> TargetAttention | None:
 def _read_graph(
     evidence: Path,
 ) -> tuple[
-    cli_module.RegressionRecoveryEvidenceGraph,
+    RegressionRecoveryEvidenceGraph,
     RegressionRecoveryRequest,
     RegressionRecoveryOutcome,
 ]:
-    index = cli_module.RegressionRecoveryEvidenceIndex.model_validate_json(
+    index = RegressionRecoveryEvidenceIndex.model_validate_json(
         (evidence / INDEX_NAME).read_text(encoding="utf-8")
     )
     request = RegressionRecoveryRequest.model_validate_json(
@@ -209,7 +213,7 @@ def _read_graph(
             (evidence / index.rollback_record_path).read_text(encoding="utf-8")
         )
         assert outcome.rollback_record == rollback
-    graph = cli_module.RegressionRecoveryEvidenceGraph(
+    graph = RegressionRecoveryEvidenceGraph(
         request=request,
         outcome=outcome,
         index=index,
@@ -680,7 +684,7 @@ def test_forged_outcome_association_is_rejected_before_publication(
     )
 
     assert result.exit_code != 0
-    assert "outcome request digest does not match request" in str(result.exception)
+    assert "forged outcome request binding" in str(result.exception)
     attention = _read_attention(tmp_path)
     assert attention is not None
     assert attention.evidence_digest == request.digest
@@ -709,7 +713,7 @@ def test_forged_rollback_target_is_rejected_before_publication(
     )
 
     assert result.exit_code != 0
-    assert "rollback target does not match request checkpoint" in str(result.exception)
+    assert "forged rollback target binding" in str(result.exception)
     assert not list(evidence.glob("*.json"))
     _assert_lease_released(tmp_path)
 
@@ -753,7 +757,7 @@ def test_lease_release_failure_preserves_primary_error_context(
 
 def test_evidence_index_rejects_digest_path_mismatch() -> None:
     with pytest.raises(ValidationError, match="request evidence path"):
-        cli_module.RegressionRecoveryEvidenceIndex(
+        RegressionRecoveryEvidenceIndex(
             request_digest="sha256:" + "a" * 64,
             outcome_digest="sha256:" + "b" * 64,
             request_path="request-" + "c" * 64 + ".json",

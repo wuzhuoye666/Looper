@@ -7,13 +7,12 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
-from typing import Annotated, Any, Literal
+from typing import Any
 
 import typer
 from looper_core.action_loop import VerificationPolicy
 from looper_core.adapters import load_and_apply_adapter
 from looper_core.canonical import canonical_digest
-from looper_core.contracts import StrictModel
 from looper_core.manifest import load_and_validate_manifest
 from looper_core.system_opt.collector import BuiltinLinuxGuestCollector
 from looper_core.system_opt.component import ComponentOptimizer
@@ -96,6 +95,10 @@ from looper_core.system_opt.rollback.regression import (
     RegressionRecoveryStatus,
     execute_regression_recovery,
 )
+from looper_core.system_opt.rollback.regression_evidence import (
+    RegressionRecoveryEvidenceGraph,
+    build_regression_recovery_evidence_graph,
+)
 from looper_core.system_opt.safety import SafetyController, SafetyPolicy, SafetyState
 from looper_core.system_opt.scoring import MeasurementBatch
 from looper_core.system_opt.state_evidence import (
@@ -105,7 +108,7 @@ from looper_core.system_opt.state_evidence import (
     OwnershipDeclaration,
 )
 from looper_core.system_opt.tuning import SystemOptimizationEngine
-from pydantic import StringConstraints, TypeAdapter, model_validator
+from pydantic import TypeAdapter
 from rich.console import Console
 from sqlalchemy import select
 
@@ -193,145 +196,6 @@ def _ensure_distinct_paths(named_paths: dict[str, Path]) -> dict[str, Path]:
             if path is not None and evidence_root in path.parents:
                 raise typer.BadParameter(f"input path {name} is inside evidence root: {path}")
     return normalized
-
-
-REGRESSION_RECOVERY_EVIDENCE_INDEX_SCHEMA = (
-    "looper.regression-recovery-evidence-index/v1alpha1"
-)
-_SHA256_DIGEST = r"^sha256:[0-9a-f]{64}$"
-_Digest = Annotated[str, StringConstraints(pattern=_SHA256_DIGEST)]
-_EvidenceFilename = Annotated[
-    str,
-    StringConstraints(
-        pattern=r"^(request|outcome|rollback)-[0-9a-f]{64}\.json$"
-    ),
-]
-
-
-class RegressionRecoveryEvidenceIndex(StrictModel):
-    """Fixed replay index for one fully published L6c evidence graph."""
-
-    schema_version: Literal[REGRESSION_RECOVERY_EVIDENCE_INDEX_SCHEMA] = (
-        REGRESSION_RECOVERY_EVIDENCE_INDEX_SCHEMA
-    )
-    request_digest: _Digest
-    outcome_digest: _Digest
-    rollback_record_digest: _Digest | None = None
-    request_path: _EvidenceFilename
-    outcome_path: _EvidenceFilename
-    rollback_record_path: _EvidenceFilename | None = None
-
-    @model_validator(mode="after")
-    def validate_content_addressed_paths(self) -> RegressionRecoveryEvidenceIndex:
-        expected_request = f"request-{self.request_digest.removeprefix('sha256:')}.json"
-        expected_outcome = f"outcome-{self.outcome_digest.removeprefix('sha256:')}.json"
-        if self.request_path != expected_request:
-            raise ValueError("request evidence path is not bound to its digest")
-        if self.outcome_path != expected_outcome:
-            raise ValueError("outcome evidence path is not bound to its digest")
-        if (self.rollback_record_digest is None) != (
-            self.rollback_record_path is None
-        ):
-            raise ValueError("rollback digest and path must be present together")
-        if self.rollback_record_digest is not None:
-            expected_rollback = (
-                "rollback-"
-                f"{self.rollback_record_digest.removeprefix('sha256:')}.json"
-            )
-            if self.rollback_record_path != expected_rollback:
-                raise ValueError("rollback evidence path is not bound to its digest")
-        return self
-
-    @property
-    def digest(self) -> str:
-        return canonical_digest(self.model_dump(mode="json"))
-
-
-class RegressionRecoveryEvidenceGraph(StrictModel):
-    """In-memory graph validated completely before any evidence file is created."""
-
-    request: RegressionRecoveryRequest
-    outcome: RegressionRecoveryOutcome
-    index: RegressionRecoveryEvidenceIndex
-
-    @model_validator(mode="after")
-    def validate_associations(self) -> RegressionRecoveryEvidenceGraph:
-        request = self.request
-        outcome = self.outcome
-        rollback = outcome.rollback_record
-        if outcome.request_digest != request.digest:
-            raise ValueError("outcome request digest does not match request")
-        if self.index.request_digest != request.digest:
-            raise ValueError("index request digest does not match request")
-        if self.index.outcome_digest != outcome.digest:
-            raise ValueError("index outcome digest does not match outcome")
-        rollback_digest = rollback.digest if rollback is not None else None
-        if self.index.rollback_record_digest != rollback_digest:
-            raise ValueError("index rollback digest does not match outcome")
-        execution = outcome.execution_evidence
-        if execution is not None and execution.request_digest != request.digest:
-            raise ValueError("execution evidence does not match request")
-        if rollback is not None:
-            if execution is None:
-                raise ValueError("rollback evidence requires execution evidence")
-            checkpoint = request.checkpoint
-            if rollback.target_id != checkpoint.target_id:
-                raise ValueError("rollback target does not match request checkpoint")
-            if rollback.item_ids != sorted(checkpoint.snapshot.entries):
-                raise ValueError("rollback items do not match checkpoint snapshot")
-            if rollback.baseline_snapshot_digest != checkpoint.snapshot.digest:
-                raise ValueError("rollback baseline does not match checkpoint snapshot")
-            if request.digest not in rollback.evidence_digests:
-                raise ValueError("rollback evidence does not reference request")
-            if execution.digest not in rollback.evidence_digests:
-                raise ValueError("rollback evidence does not reference execution")
-            if rollback.checkpoint_digest != checkpoint.digest:
-                raise ValueError("rollback checkpoint does not match request")
-            if rollback.regression_vector_digest != request.current_vector.digest:
-                raise ValueError("rollback vector does not match request")
-            if rollback.regression_threshold != request.regression_threshold:
-                raise ValueError("rollback threshold does not match request")
-            safety_result = execution.safety_result
-            final_snapshot = (
-                safety_result.final_snapshot if safety_result is not None else None
-            )
-            final_snapshot_digest = (
-                final_snapshot.digest if final_snapshot is not None else None
-            )
-            if rollback.final_snapshot_digest != final_snapshot_digest:
-                raise ValueError("rollback final snapshot does not match execution")
-            restoration = execution.restoration
-            if restoration is not None:
-                if restoration.baseline_snapshot_digest != checkpoint.snapshot.digest:
-                    raise ValueError("restoration baseline does not match checkpoint")
-                if restoration.actual_snapshot_digest != final_snapshot_digest:
-                    raise ValueError("restoration snapshot does not match execution")
-        return self
-
-
-def _build_regression_recovery_evidence_graph(
-    request: RegressionRecoveryRequest,
-    outcome: RegressionRecoveryOutcome,
-) -> RegressionRecoveryEvidenceGraph:
-    rollback = outcome.rollback_record
-    rollback_digest = rollback.digest if rollback is not None else None
-    index = RegressionRecoveryEvidenceIndex(
-        request_digest=request.digest,
-        outcome_digest=outcome.digest,
-        rollback_record_digest=rollback_digest,
-        request_path=f"request-{request.digest.removeprefix('sha256:')}.json",
-        outcome_path=f"outcome-{outcome.digest.removeprefix('sha256:')}.json",
-        rollback_record_path=(
-            f"rollback-{rollback_digest.removeprefix('sha256:')}.json"
-            if rollback_digest is not None
-            else None
-        ),
-    )
-    return RegressionRecoveryEvidenceGraph(
-        request=request,
-        outcome=outcome,
-        index=index,
-    )
 
 
 def _persist_regression_recovery_evidence_graph(
@@ -1736,7 +1600,7 @@ def run_regression_recovery(
             raise RuntimeError(reason) from error
 
         try:
-            graph = _build_regression_recovery_evidence_graph(request, outcome)
+            graph = build_regression_recovery_evidence_graph(request, outcome)
             _persist_regression_recovery_evidence_graph(evidence_dir, graph)
         except Exception as error:
             reason = (
