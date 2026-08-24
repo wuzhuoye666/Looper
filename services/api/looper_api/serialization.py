@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import Counter
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from looper_core.contracts import Direction, ExperimentSpec
@@ -29,7 +29,10 @@ from looper_api.models import (
 
 
 def _iso(value: datetime | None) -> str | None:
-    return value.isoformat() if value else None
+    if value is None:
+        return None
+    aware = value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+    return aware.astimezone(UTC).isoformat().replace("+00:00", "Z")
 
 
 _METRIC_DECLARATION_FIELDS = (
@@ -171,11 +174,21 @@ def target_view(record: TargetRecord) -> dict[str, Any]:
         status = "offline"
     fingerprint = record.fingerprint_json or {}
     inventory = record.inventory_json or {}
+    display_snapshot = fingerprint.get("cloud_display")
+    display_fingerprint = fingerprint
+    display_inventory = inventory
+    if isinstance(display_snapshot, dict):
+        snapshot_fingerprint = display_snapshot.get("fingerprint")
+        snapshot_inventory = display_snapshot.get("inventory")
+        if isinstance(snapshot_fingerprint, dict):
+            display_fingerprint = snapshot_fingerprint
+        if isinstance(snapshot_inventory, dict):
+            display_inventory = snapshot_inventory
 
     # Cloud inventory records created by older syncs kept hardware fields in
     # inventory_json, while external targets keep them in fingerprint_json.
     def first_value(*keys: str) -> Any:
-        for source in (fingerprint, inventory):
+        for source in (display_fingerprint, display_inventory):
             for key in keys:
                 value = source.get(key)
                 if value is not None and value != "":
@@ -199,7 +212,7 @@ def target_view(record: TargetRecord) -> dict[str, Any]:
         # Some Linux probes report the architecture in processor while the
         # detailed model is available under cpu.model_name.
         processor = None
-        for source in (fingerprint, inventory):
+        for source in (display_fingerprint, display_inventory):
             cpu_details = source.get("cpu")
             if isinstance(cpu_details, dict):
                 processor = cpu_details.get("model_name") or cpu_details.get("model")
@@ -250,11 +263,15 @@ def target_view(record: TargetRecord) -> dict[str, Any]:
         ),
         "status": status,
         "framework": (
-            inventory.get("framework")
-            or fingerprint.get("system")
-            or (f"镜像 {inventory.get('image_id')}" if inventory.get("image_id") else None)
+            display_inventory.get("framework")
+            or display_fingerprint.get("system")
+            or (
+                f"镜像 {display_inventory.get('image_id')}"
+                if display_inventory.get("image_id")
+                else None
+            )
         ),
-        "version": fingerprint.get("release"),
+        "version": display_fingerprint.get("release"),
         "hardware": " · ".join(str(item) for item in hardware_parts if item),
         "lastSeenAt": _iso(record.last_inventory_seen_at or record.updated_at),
         "tags": record.capabilities_json,

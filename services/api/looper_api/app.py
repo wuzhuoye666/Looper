@@ -313,7 +313,7 @@ async def _cloud_ssh_recovery() -> None:
             await asyncio.to_thread(_retry_pending_cloud_ssh_sync, settings)
         except Exception:
             logger.exception("Pending cloud SSH recovery failed")
-        await asyncio.sleep(30)
+        await asyncio.sleep(2)
 
 
 @asynccontextmanager

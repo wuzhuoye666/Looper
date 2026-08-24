@@ -615,6 +615,17 @@ def connect_existing_target(
 
     discovered = probe(request)
     now = utc_now()
+    if target.provider in _CLOUD_PROVIDERS:
+        existing_fingerprint = dict(target.fingerprint_json or {})
+        cloud_display = existing_fingerprint.get("cloud_display")
+        if not isinstance(cloud_display, dict):
+            target.fingerprint_json = {
+                **existing_fingerprint,
+                "cloud_display": {
+                    "inventory": dict(target.inventory_json or {}),
+                    "fingerprint": existing_fingerprint,
+                },
+            }
     target.capabilities_json = sorted(
         set(target.capabilities_json)
         | set(discovered.capabilities)
