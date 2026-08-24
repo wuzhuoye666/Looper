@@ -1296,6 +1296,91 @@ def run_dynamic_phase_session(
     )
 
 
+@system_opt_app.command("dynamic-reactivate")
+def evaluate_dynamic_reactivation(
+    run_path: Path = typer.Option(..., "--run", exists=True, dir_okay=False),
+    gate_contract_path: Path = typer.Option(
+        ..., "--gate-contract", exists=True, dir_okay=False
+    ),
+    max_reactivations: int = typer.Option(..., "--max-reactivations", min=0),
+    slo_violation_windows: int = typer.Option(..., "--slo-violation-windows", min=1),
+    reactivations_used: int = typer.Option(0, "--reactivations-used", min=0),
+    windows_since_stop: int = typer.Option(..., "--windows-since-stop", min=0),
+    consecutive_slo_violations: int | None = typer.Option(
+        None,
+        "--consecutive-slo-violations",
+        min=0,
+        help="observed violations since the stop; default derives the trailing violations",
+    ),
+    identity_drift_events_since_stop: int = typer.Option(
+        0, "--identity-drift-events-since-stop", min=0
+    ),
+    output: Path = typer.Option(..., "--output", dir_okay=False),
+) -> None:
+    """Judge between-phase reactivation eligibility for a stopped dynamic phase.
+
+    D5: eligibility never auto-restarts anything — whether to reopen the
+    phase is the task owner's decision. Windows observed after the stop are
+    operator-recorded facts (``--windows-since-stop`` etc.); the trailing
+    SLO violations of the phase itself seed ``consecutive_slo_violations``
+    unless the operator supplies an explicit count.
+    """
+
+    from looper_core.system_opt.dynamic_loop import DynamicPhaseRun
+    from looper_core.system_opt.reactivation import (
+        ReactivationPolicy,
+        ReactivationState,
+        evaluate_reactivation,
+    )
+
+    run = DynamicPhaseRun.model_validate(_read_json(run_path))
+    gate_contract = DynamicPhaseGateContract.model_validate_json(
+        gate_contract_path.read_text(encoding="utf-8")
+    )
+    if (
+        run.stop_gate_decision is None
+        or run.stop_gate_decision.contract_digest != gate_contract.digest
+    ):
+        raise typer.BadParameter(
+            "the run was not gated by this gate contract (digest mismatch)"
+        )
+    violations = consecutive_slo_violations
+    if violations is None:
+        violations = 0
+        for record in reversed(run.windows):
+            if record.slo_met is False:
+                violations += 1
+            else:
+                break
+    decision = evaluate_reactivation(
+        gate_contract,
+        ReactivationPolicy(
+            max_reactivations=max_reactivations,
+            slo_violation_windows=slo_violation_windows,
+        ),
+        ReactivationState(
+            reactivations_used=reactivations_used,
+            windows_since_stop=windows_since_stop,
+            consecutive_slo_violations=violations,
+            identity_drift_events_since_stop=identity_drift_events_since_stop,
+        ),
+        evidence_digest=run.digest,
+    )
+    _write_json(output, decision)
+    console.print_json(
+        json.dumps(
+            {
+                "eligible": decision.eligible,
+                "trigger": decision.trigger.value if decision.trigger else None,
+                "reason": decision.reason,
+                "note": "eligibility is not an auto-restart; the task owner decides",
+                "decision_digest": decision.digest,
+                "output": str(output.resolve()),
+            }
+        )
+    )
+
+
 @app.command("init")
 def initialize() -> None:
     init_database()
