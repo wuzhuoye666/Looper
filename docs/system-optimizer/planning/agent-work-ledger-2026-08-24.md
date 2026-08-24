@@ -40,18 +40,19 @@ phase-gate audit
 | G3 O1 开销 A/B + 动态证据落盘 | GPT agent；glm5.3 验收 | 历史起点 `f46bc16`；agent worktree；主线接收于 `2a3f0dd` | `dynamic_collection.py`、对应 tests；依赖 O2 evidence 模型 | `pushed`。首个成功窗 disabled→enabled；后窗 enabled 并绑定首窗 overhead；原子 digest 文件+固定索引；当时聚焦 15、全仓 772、Ruff/diff 通过 |
 | Z-L6C 可执行退化恢复 | glm5.3 | `system-optimizer-impl`；主线 `e70a85b` | `rollback/regression.py`、rollback schema/loader、tests；依赖 S8/S9 | `pushed`。只接受 S9 promoted last-good；显式 U_regression threshold；L1 精确恢复；失败 needs-attention；聚焦 33、System Optimizer 448、全仓 781、Ruff/diff 通过 |
 | G4 dynamic-run 异常生命周期 | GPT agent；glm5.3 验收 | agent commit `5744c47`，主线基线 `e70a85b`；GPT `Looper-l4-fix/system-optimizer-pkg-b` | 仅 `cli.py`、`test_system_opt_dynamic_cli.py`；依赖 G3 persistence | `pushed` 为 `83a6b15`。异常后先恢复再持久化；恢复失败 needs-attention；lease 最终释放。聚焦 43、System Optimizer 451、全仓 784、Ruff/diff 通过 |
-| D4 dynamic evidence replay | DeepSeek agent | 初交 `25f8146` 基于 `2a3f0dd`；`Looper-system-optimizer-deepseek-batch1` | `dynamic_replay.py` + tests；D4-R 可小范围共享 evidence filename helper | `rework`。初交可接受伪造 window 与重复 O2 probe；只比较组件集合、未核 component→overhead/identity 映射，因此禁止合入。D4-R 必须同步最新主线（当前 `e704b88`）后交新 commit |
-| D5 phase-gate 风险/单变更合同 | DeepSeek agent | 同 DeepSeek 独立 worktree；同步最新主线（当前 `e704b88`） | 第一阶段只读设计；不得改代码 | `assigned-proposal`。当前循环没有执行前风险分类和 change-count 信号；禁止默认 risky 定义。需提 API、计数时点、quota 边界、兼容与测试矩阵，用户确认后才实施 |
-| G5 L6c CLI 生命周期接线 | GPT agent | `Looper-l4-fix/system-optimizer-pkg-b`；开工先同步 `origin/system-optimizer-impl@e704b88` | `services/api/looper_api/cli.py`、新/现有 L6c CLI tests；只读 `rollback/regression.py` | `assigned`。详见下节；不得碰 replay、phase-gate、dynamic_collection、DeepSeek 文件；agent 不 push/merge |
+| D4 dynamic evidence replay | DeepSeek agent | 初交 `25f8146` 基于 `2a3f0dd`；`Looper-system-optimizer-deepseek-batch1` | `dynamic_replay.py` + tests；D4-R 可小范围共享 evidence filename helper | `rework`。初交可接受伪造 window 与重复 O2 probe；只比较组件集合、未核 component→overhead/identity 映射，因此禁止合入。D4-R 最小任务合同基线 `e704b88`，交付前必须同步最新主线 |
+| D5 phase-gate 风险/单变更合同 | DeepSeek agent | 同 DeepSeek 独立 worktree；最小任务合同基线 `e704b88`，交付前同步最新主线 | 第一阶段只读设计；不得改代码 | `assigned-proposal`。当前循环没有执行前风险分类和 change-count 信号；禁止默认 risky 定义。需提 API、计数时点、quota 边界、兼容与测试矩阵，用户确认后才实施 |
+| G5 L6c CLI 生命周期接线 | GPT agent | `Looper-l4-fix/system-optimizer-pkg-b`；最小任务合同基线 `e704b88`，交付前同步最新主线 | `services/api/looper_api/cli.py`、新/现有 L6c CLI tests；只读 `rollback/regression.py` | `assigned`。详见下节；不得碰 replay、phase-gate、dynamic_collection、DeepSeek 文件；agent 不 push/merge |
 | Z-GOV-01 Agent 台账与状态对齐 | glm5.3 | `system-optimizer-impl@83a6b15` | governance/planning/architecture docs | `pushed`：规范本体 `e0da65e`，状态收口 `e704b88`，远端 `origin/system-optimizer-impl@e704b88`。docs-only，`git diff --check` 通过，未运行 pytest |
-| Z-BASE-01 2026-08-24 实现重新基线 | glm5.3 | `system-optimizer-impl@e704b88` | planning/architecture docs；不碰 agent 代码写集合 | `in-progress`。冻结动态纵向切片、证据/replay、G4、L6c 与 D4/D5/G5 的真实完成边界 |
+| Z-BASE-01 2026-08-24 实现重新基线 | glm5.3 | `system-optimizer-impl@e704b88` | planning/architecture docs；不碰 agent 代码写集合 | `integrated` 于 `da06607`，push 待本记录提交后一并执行。冻结动态纵向切片、证据/replay、G4、L6c 与 D4/D5/G5 的真实完成边界；docs-only，`git diff --check` 通过，未运行 pytest |
 
 ## G5 给 GPT 的正式任务合同
 
 目标：为已经落地的 `rollback.regression.execute_regression_recovery()` 增加一个显式、
 可故障注入的 CLI 生命周期入口；不重新实现 L6c 纯逻辑。
 
-1. 开工三联自证后，将工作分支同步到 `origin/system-optimizer-impl@e704b88`；报告
+1. 开工三联自证后，确认最小任务合同基线
+   `origin/system-optimizer-impl@e704b88`，并在交付前同步最新主线；报告
    实际 HEAD/parent，不把旧 commit 写成最新主线。
 2. CLI 从版本化 `RegressionRecoveryRequest` JSON 读取 checkpoint、当前 S8 向量、显式
    threshold 和触发证据。不得提供 threshold、last-good、normalization 的默认值或推导。
@@ -78,6 +79,7 @@ run 内 window identity 不变；重复 O2 probe digest。另需覆盖组件 ove
 
 ## GitHub 代理记录
 
-用户指定后续 GitHub 访问走端口 `65532`。主机与代理协议尚未由用户明确；glm5.3 暂按
-`http://127.0.0.1:65532` 候选理解，但在确认前不写持久 Git 配置。网络命令必须在验收
-报告中记录实际代理参数和远端结果。
+用户指定后续 GitHub 访问走端口 `65532`。2026-08-24 已用单次命令参数
+`http.proxy=http://127.0.0.1:65532` 与 `https.proxy=http://127.0.0.1:65532` 成功 push
+`83a6b15..e704b88`；未写持久 Git 配置。后续网络命令必须继续记录实际代理参数和远端
+结果。
