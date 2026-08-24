@@ -5,7 +5,7 @@ import type {
   InstanceNetworkResolution, InstanceNetworkResolveRequest,
   DashboardData, Experiment, GlobalSearchResult, ListResponse, PostOptimizationStatus, SelectionAdvisorRequest,
   SelectionAdvisorResponse, SourceDiscovery, SourceDiscoveryProviderConfig, SourceDiscoveryReadiness,
-  Target, TargetDestroyPreview, TargetDestroyResult, VariabilityData,
+  BenchmarkTargetOptions, Target, TargetDestroyPreview, TargetDestroyResult, VariabilityData,
 } from './types';
 
 export const API_BASE = (import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000/api/v1').replace(/\/$/, '');
@@ -100,6 +100,9 @@ export const api = {
   startPostOptimization: (id: string) => request<PostOptimizationStatus>(`/experiments/${encodeURIComponent(id)}/post-optimization`, { method: 'POST' }),
   variability: (id: string) => request<VariabilityData>(`/experiments/${encodeURIComponent(id)}/variability`),
   benchmarks: async () => list(await request<Benchmark[] | ListResponse<Benchmark> | { data?: Benchmark[] }>('/benchmarks')),
+  benchmarkTargetOptions: (benchmarkId: string, version: string) => request<BenchmarkTargetOptions>(
+    `/benchmarks/${encodeURIComponent(benchmarkId)}/versions/${encodeURIComponent(version)}/target-options`,
+  ),
   benchmarkRegistration: (id: string) => request<BenchmarkRegistration>(`/benchmark-registrations/${encodeURIComponent(id)}`),
   createBenchmarkRegistration: (draft: BenchmarkRegistrationDraft) => request<BenchmarkRegistration>(
     '/benchmark-registrations', { method: 'POST', body: JSON.stringify(draft) },
@@ -118,7 +121,7 @@ export const api = {
     },
   ),
   createBenchmarkSmokeRun: (
-    benchmarkId: string, version: string, payload: { targetId?: string; workloadId?: string; parameters?: Record<string, unknown>; inputBindings?: Record<string, unknown> } = {},
+    benchmarkId: string, version: string, payload: { targetId: string; workloadId?: string; parameters?: Record<string, unknown>; inputBindings?: Record<string, unknown> },
   ) => request<Experiment>(
     `/benchmarks/${encodeURIComponent(benchmarkId)}/versions/${encodeURIComponent(version)}/smoke-runs`,
     { method: 'POST', body: JSON.stringify(payload) },

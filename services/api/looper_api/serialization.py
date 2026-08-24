@@ -10,6 +10,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from looper_api.analysis_service import build_analysis_snapshot
+from looper_api.benchmark_compatibility import single_node_contract
 from looper_api.benchmark_defaults import benchmark_selection_defaults
 from looper_api.benchmark_registration import selection_scenario_document
 from looper_api.benchmark_runtime import (
@@ -155,6 +156,9 @@ def benchmark_view(
         # be delivered to a target and executed. Stage-0 contracts remain in
         # the catalog for research, but are never presented as runnable choices.
         "selectionReady": scenario is not None and selectable,
+        "singleNodeReady": bool(
+            scenario is not None and selectable and single_node_contract(manifest) is not None
+        ),
         "selectable": selectable,
         "executionModel": adapter.get("executionModel", "custom"),
         "inputs": adapter.get("inputs", []),

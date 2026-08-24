@@ -37,6 +37,11 @@ from looper_core.state import (
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from looper_api.benchmark_compatibility import (
+    BenchmarkTargetCompatibilityError,
+    assert_target_compatible,
+    require_single_node_contract,
+)
 from looper_api.benchmark_runtime import deployment_capabilities
 from looper_api.events import append_event
 from looper_api.models import (
@@ -182,6 +187,18 @@ def _validate_experiment_spec(
         installed_scenario = ScenarioBenchmarkSpec.model_validate(manifest_scenario)
         if installed_scenario.model_dump(mode="json") != spec.scenario.model_dump(mode="json"):
             raise SchedulerError("selection scenario must match the installed manifest")
+        require_single_node_contract(manifest)
+        if len(spec.target_ids) != 1:
+            raise BenchmarkTargetCompatibilityError(
+                "单机 Benchmark 必须且只能选择一台机器",
+                [{
+                    "code": "single_target_required",
+                    "field": "targetIds",
+                    "required": 1,
+                    "actual": len(spec.target_ids),
+                    "message": "单机 Benchmark 不允许提交多个机器 ID",
+                }],
+            )
 
     workload_ids = {item["id"] for item in manifest["spec"]["workloads"]}
     selected_workloads = set(spec.workload_ids or workload_ids)
@@ -190,7 +207,20 @@ def _validate_experiment_spec(
     for target_id in spec.target_ids:
         target = session.get(TargetRecord, target_id)
         if target is None:
+            if spec.mode == ExperimentMode.SELECTION:
+                raise BenchmarkTargetCompatibilityError(
+                    "所选资源不存在",
+                    [{
+                        "code": "target_not_found",
+                        "field": "targetIds",
+                        "required": "已登记的活动资源",
+                        "actual": target_id,
+                        "message": "资源可能已被删除或尚未同步",
+                    }],
+                )
             raise SchedulerError(f"target {target_id!r} does not exist")
+        if spec.mode == ExperimentMode.SELECTION:
+            assert_target_compatible(manifest, target)
         if target.lifecycle_status != "active":
             raise SchedulerError(
                 f"target {target_id!r} is {target.lifecycle_status} and cannot be selected"
@@ -688,9 +718,37 @@ def _require_start_readiness(
     ):
         raise SchedulerError("selection frontier requires a reference offered load")
     required_capabilities = deployment_capabilities(benchmark.manifest_json)
+    if spec.mode == ExperimentMode.SELECTION:
+        require_single_node_contract(benchmark.manifest_json)
+        if len(spec.target_ids) != 1:
+            raise BenchmarkTargetCompatibilityError(
+                "单机 Benchmark 必须且只能选择一台机器",
+                [{
+                    "code": "single_target_required",
+                    "field": "targetIds",
+                    "required": 1,
+                    "actual": len(spec.target_ids),
+                    "message": "单机 Benchmark 不允许提交多个机器 ID",
+                }],
+            )
     for target_id in spec.target_ids:
         target = session.get(TargetRecord, target_id)
-        if target is None or not target.runnable:
+        if target is None:
+            if spec.mode == ExperimentMode.SELECTION:
+                raise BenchmarkTargetCompatibilityError(
+                    "所选资源不存在",
+                    [{
+                        "code": "target_not_found",
+                        "field": "targetIds",
+                        "required": "已登记的活动资源",
+                        "actual": target_id,
+                        "message": "资源可能已被删除或尚未同步",
+                    }],
+                )
+            raise SchedulerError(f"target {target_id!r} has no runnable worker")
+        if spec.mode == ExperimentMode.SELECTION:
+            assert_target_compatible(benchmark.manifest_json, target)
+        elif not target.runnable:
             raise SchedulerError(f"target {target_id!r} has no runnable worker")
         missing_capabilities = sorted(required_capabilities - set(target.capabilities_json))
         if missing_capabilities:

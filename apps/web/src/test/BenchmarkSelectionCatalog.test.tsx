@@ -21,7 +21,7 @@ describe('选型研究 Benchmark 目录', () => {
         {
           id: 'registered.adapter', key: 'registered.adapter@1.0.0',
           name: 'Registered Adapter', version: '1.0.0', category: 'database',
-          selectionReady: true, runnable: true, packageReady: true, tags: ['python'],
+          selectionReady: true, singleNodeReady: true, runnable: true, packageReady: true, tags: ['python'],
           selectionDefaults: { repeats: 3, timeout: 1200, seed: 101 },
           scenario: {
             id: 'registered.adapter', name: 'Registered Adapter',
@@ -33,7 +33,7 @@ describe('选型研究 Benchmark 目录', () => {
         {
           id: 'alternate.adapter', key: 'alternate.adapter@2.0.0',
           name: 'Alternate Adapter', version: '2.0.0', category: 'database',
-          selectionReady: true, runnable: true, packageReady: true, tags: ['python'],
+          selectionReady: true, singleNodeReady: true, runnable: true, packageReady: true, tags: ['python'],
           selectionDefaults: { repeats: 7, timeout: 2400, seed: 202 },
           scenario: {
             id: 'alternate.adapter', name: 'Alternate Adapter',
@@ -47,7 +47,14 @@ describe('选型研究 Benchmark 目录', () => {
           name: 'Incomplete Adapter', version: '1.0.0', category: 'unclassified',
           selectionReady: false, runnable: false,
         },
-      ] } : url.endsWith('/targets') ? { items: [{ id: 'target-a', name: 'Target A', type: 'external', provider: 'fixture', status: 'online', runnable: true, tags: ['python'] }] } : { items: [] };
+      ] } : url.includes('/target-options') ? {
+        benchmarkId: url.includes('alternate.adapter') ? 'alternate.adapter' : 'registered.adapter',
+        version: url.includes('alternate.adapter') ? '2.0.0' : '1.0.0',
+        topology: 'single-node', machineCount: 1,
+        nodeGroup: { id: 'target', role: 'target', requirements: {}, summary: { osFamilies: ['linux'], architectures: [], capabilities: ['python'] } },
+        environments: [{ id: 'external-ssh', label: '外部 SSH', compatibleCount: 1, targets: [{ id: 'target-a', name: 'Target A', provider: 'external', status: 'online', runnable: true, hardware: '8 vCPU / 32 GiB', tags: ['python'] }] }],
+        rejectedSummary: [],
+      } : { items: [] };
       return new Response(JSON.stringify(data), {
         status: 200, headers: { 'Content-Type': 'application/json' },
       });
@@ -73,7 +80,8 @@ describe('选型研究 Benchmark 目录', () => {
     await waitFor(() => expect(scenario).toHaveValue('registered.adapter@1.0.0'));
     fireEvent.change(scenario, { target: { value: 'alternate.adapter@2.0.0' } });
     await waitFor(() => expect(scenario).toHaveValue('alternate.adapter@2.0.0'));
-    const target = await screen.findByRole('checkbox');
+    fireEvent.change(await screen.findByLabelText('测试环境'), { target: { value: 'external-ssh' } });
+    const target = await screen.findByRole('radio');
     fireEvent.click(target);
     const next = screen.getByRole('button', { name: /下一步/ });
     expect(next).toBeEnabled();

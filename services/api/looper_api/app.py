@@ -52,6 +52,15 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from looper_api.analysis_service import build_analysis_snapshot
+from looper_api.benchmark_compatibility import (
+    BenchmarkTargetCompatibilityError,
+    assert_target_compatible,
+    incompatibility_summary,
+    require_single_node_contract,
+    requirement_summary,
+    target_compatibility,
+    target_environment,
+)
 from looper_api.benchmark_defaults import benchmark_selection_defaults
 from looper_api.benchmark_packages import (
     MAX_PACKAGE_BYTES,
@@ -378,6 +387,7 @@ async def origin_guard(request: Request, call_next: Any) -> Any:
 
 
 @app.exception_handler(SchedulerError)
+@app.exception_handler(BenchmarkTargetCompatibilityError)
 @app.exception_handler(WorkerError)
 @app.exception_handler(InvalidTransition)
 @app.exception_handler(TencentInventoryError)
@@ -996,6 +1006,100 @@ def list_benchmarks(session: SessionDependency) -> dict[str, Any]:
     }
 
 
+@app.get("/api/v1/benchmarks/{benchmark_id}/versions/{version}/target-options")
+def benchmark_target_options(
+    benchmark_id: str,
+    version: str,
+    session: SessionDependency,
+) -> dict[str, Any]:
+    benchmark = session.scalar(
+        select(BenchmarkRecord).where(
+            BenchmarkRecord.benchmark_id == benchmark_id,
+            BenchmarkRecord.version == version,
+        )
+    )
+    if benchmark is None:
+        raise HTTPException(status_code=404, detail="benchmark version not found")
+    current = session.scalar(
+        select(BenchmarkRecord)
+        .where(BenchmarkRecord.benchmark_id == benchmark_id)
+        .order_by(BenchmarkRecord.installed_at.desc(), BenchmarkRecord.key.desc())
+        .limit(1)
+    )
+    if current is None or current.key != benchmark.key:
+        raise BenchmarkTargetCompatibilityError(
+            "Benchmark 版本已被替换，请重新选择当前版本",
+            [{
+                "code": "benchmark_version_replaced",
+                "field": "benchmark.version",
+                "required": current.version if current else None,
+                "actual": version,
+                "message": "只能为当前目录版本选择资源",
+            }],
+        )
+    registration = session.scalar(
+        select(BenchmarkRegistrationRecord).where(
+            BenchmarkRegistrationRecord.benchmark_key == benchmark.key,
+            BenchmarkRegistrationRecord.status == "registered",
+        )
+    )
+    view = benchmark_view(benchmark, registration)
+    if not view["selectionReady"]:
+        raise BenchmarkTargetCompatibilityError(
+            "Benchmark 当前不可用于选型研究",
+            [{
+                "code": "benchmark_not_selection_ready",
+                "field": "benchmark.selectionReady",
+                "required": True,
+                "actual": False,
+                "message": "Benchmark 尚未具备可信且可执行的选型包",
+            }],
+        )
+    node_group = require_single_node_contract(benchmark.manifest_json)
+    compatible_by_environment: dict[str, dict[str, Any]] = {}
+    rejected: list[list[dict[str, Any]]] = []
+    targets = list(
+        session.scalars(
+            select(TargetRecord)
+            .where(TargetRecord.lifecycle_status == "active")
+            .order_by(TargetRecord.provider, TargetRecord.name, TargetRecord.id)
+        )
+    )
+    for target in targets:
+        constraints = target_compatibility(benchmark.manifest_json, target)
+        if constraints:
+            rejected.append(constraints)
+            continue
+        environment_id, label = target_environment(target)
+        environment = compatible_by_environment.setdefault(
+            environment_id,
+            {"id": environment_id, "label": label, "targets": []},
+        )
+        environment["targets"].append(target_view(target))
+    environments = sorted(
+        (
+            {**environment, "compatibleCount": len(environment["targets"])}
+            for environment in compatible_by_environment.values()
+        ),
+        key=lambda item: (item["label"], item["id"]),
+    )
+    scenario = benchmark.manifest_json["spec"].get("scenario") or {}
+    return {
+        "benchmarkId": benchmark.benchmark_id,
+        "version": benchmark.version,
+        "topology": scenario.get("topology"),
+        "machineCount": 1,
+        "nodeGroup": {
+            "id": node_group["id"],
+            "role": node_group["role"],
+            "requirements": node_group.get("requirements") or {},
+            "summary": requirement_summary(benchmark.manifest_json),
+        },
+        "environments": environments,
+        "rejectedSummary": incompatibility_summary(rejected),
+    }
+
+
 @app.post(
     "/api/v1/benchmarks/{benchmark_id}/versions/{version}/smoke-runs",
     status_code=202,
@@ -1498,9 +1602,13 @@ def create_experiment_endpoint(
 
 @app.post("/api/v1/demo/experiments", status_code=201)
 def create_demo_experiment_endpoint(
-    session: SessionDependency, name: str = "Compression Pareto study"
+    session: SessionDependency,
+    target_id: str,
+    name: str = "Compression Pareto study",
 ) -> dict[str, Any]:
-    record = create_experiment(session, create_demo_request(name))
+    request = create_demo_request(name)
+    request.spec.target_ids = [target_id]
+    record = create_experiment(session, request)
     session.commit()
     return experiment_view(session, record, detail=True)
 
@@ -1514,10 +1622,11 @@ def _normalize_create_request(payload: dict[str, Any], session: Session) -> Expe
     request = create_demo_request(str(payload.get("name") or "Compression Pareto study"))
     request.description = str(payload.get("description") or request.description)
     target_id = payload.get("targetId")
-    if target_id:
-        if str(target_id) == "local":
-            raise SchedulerError("local execution is disabled; select an external server")
-        request.spec.target_ids = [str(target_id)]
+    if not target_id:
+        raise SchedulerError("targetId is required; select an active runnable server")
+    if str(target_id) == "local":
+        raise SchedulerError("local execution is disabled; select an external server")
+    request.spec.target_ids = [str(target_id)]
     benchmark_id = payload.get("benchmarkId")
     if benchmark_id and benchmark_id not in {
         "looper.demo.compression",
@@ -1590,12 +1699,37 @@ def _selection_create_request(payload: dict[str, Any], session: Session) -> Expe
             "selected benchmark is not directly testable; install a trusted executable package "
             "with automatic target provisioning"
         )
+    require_single_node_contract(benchmark.manifest_json)
     scenario = ScenarioBenchmarkSpec.model_validate(scenario_document)
 
     raw_target_ids = payload.get("targetIds")
     if not isinstance(raw_target_ids, list) or not raw_target_ids:
         raise SchedulerError("selection study requires at least one target")
     target_ids = [str(target_id) for target_id in raw_target_ids]
+    if len(target_ids) != 1:
+        raise BenchmarkTargetCompatibilityError(
+            "单机 Benchmark 必须且只能选择一台机器",
+            [{
+                "code": "single_target_required",
+                "field": "targetIds",
+                "required": 1,
+                "actual": len(target_ids),
+                "message": "单机 Benchmark 不允许提交多个机器 ID",
+            }],
+        )
+    selected_target = session.get(TargetRecord, target_ids[0])
+    if selected_target is None:
+        raise BenchmarkTargetCompatibilityError(
+            "所选资源不存在",
+            [{
+                "code": "target_not_found",
+                "field": "targetIds[0]",
+                "required": "已登记的活动资源",
+                "actual": target_ids[0],
+                "message": "资源可能已被删除或尚未同步",
+            }],
+        )
+    assert_target_compatible(benchmark.manifest_json, selected_target)
     placement_pair_id = str(payload.get("placementPairId") or "placement-1")
     supplied_bindings = payload.get("targetBindings")
     binding_overrides = (

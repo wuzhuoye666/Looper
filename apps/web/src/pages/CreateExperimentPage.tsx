@@ -6,7 +6,7 @@ import { BackLink } from '../components/Layout';
 import { ErrorState } from '../components/States';
 import { TargetSshButton } from '../components/TargetSshButton';
 import { api } from '../lib/api';
-import type { Benchmark, Target } from '../lib/types';
+import type { Benchmark, BenchmarkTargetRequirementSummary } from '../lib/types';
 
 const steps = [
   { label: '采购问题', icon: ClipboardCheck },
@@ -14,24 +14,30 @@ const steps = [
   { label: '证据协议', icon: Server },
 ];
 
-function targetEnvironment(target: Pick<Target, 'type' | 'provider' | 'id'>): string {
-  if (target.type === 'local') return '本地工作站';
-  if (target.provider === 'alibaba-ecs' || target.id.startsWith('cloud:alibaba:')) return '阿里云 ECS';
-  if (target.provider === 'tencent-cvm' || target.id.startsWith('cloud:tencent:')) return '腾讯云 CVM';
-  if (target.type === 'external') return '外部 SSH';
-  return target.provider || target.type || '其他';
-}
-
 const FALLBACK_SELECTION_DEFAULTS = { repeats: 5, timeout: 86400, seed: 20260301 };
 
 function selectionDefaults(benchmark?: Pick<Benchmark, 'selectionDefaults'>) {
   return benchmark?.selectionDefaults || FALLBACK_SELECTION_DEFAULTS;
 }
 
+const OS_LABELS: Record<string, string> = { linux: 'Linux', windows: 'Windows', macos: 'macOS', aix: 'AIX', other: '其他' };
+const ARCH_LABELS: Record<string, string> = { x86_64: 'x86_64', aarch64: 'ARM64', ppc64le: 'ppc64le', riscv64: 'RISC-V', other: '其他' };
+
+function requirementLabels(summary?: BenchmarkTargetRequirementSummary): string[] {
+  if (!summary) return [];
+  const labels: string[] = [];
+  if (summary.osFamilies.length) labels.push(`系统：${summary.osFamilies.map(value => OS_LABELS[value] || value).join(' / ')}`);
+  if (summary.architectures.length) labels.push(`架构：${summary.architectures.map(value => ARCH_LABELS[value] || value).join(' / ')}`);
+  if (summary.minimumLogicalCpus != null) labels.push(`CPU：至少 ${summary.minimumLogicalCpus} 个逻辑核`);
+  if (summary.minimumMemoryGiB != null) labels.push(`内存：至少 ${summary.minimumMemoryGiB} GiB`);
+  if (summary.capabilities.length) labels.push(`基础能力：${summary.capabilities.join('、')}`);
+  return labels;
+}
+
 export function CreateExperimentPage() {
   const navigate = useNavigate();
   const [step, setStep] = useState(0);
-  const [environmentFilter, setEnvironmentFilter] = useState('all');
+  const [environmentFilter, setEnvironmentFilter] = useState('');
   const [form, setForm] = useState({
     name: '',
     description: '',
@@ -42,13 +48,12 @@ export function CreateExperimentPage() {
     ...FALLBACK_SELECTION_DEFAULTS,
   });
   const benchmarks = useQuery({ queryKey: ['benchmarks'], queryFn: api.benchmarks });
-  const targets = useQuery({ queryKey: ['targets', 'active'], queryFn: () => api.targets(false), refetchInterval: 10_000 });
   const benchmarkOptions = useMemo(
     () => benchmarks.data?.items || [],
     [benchmarks.data],
   );
   const selectableBenchmarks = useMemo(
-    () => benchmarkOptions.filter(item => item.selectionReady && item.runnable && item.packageReady),
+    () => benchmarkOptions.filter(item => item.singleNodeReady && item.runnable && item.packageReady),
     [benchmarkOptions],
   );
   useEffect(() => {
@@ -67,28 +72,27 @@ export function CreateExperimentPage() {
     });
   }, [selectableBenchmarks]);
   const selectedBenchmark = selectableBenchmarks.find(item => (item.key || item.id) === form.benchmarkKey);
-  const targetItems = targets.data?.items || [];
-  const environmentOptions = useMemo(
-    () => Array.from(new Set(targetItems.map(targetEnvironment))).sort((left, right) => left.localeCompare(right, 'zh-CN')),
-    [targetItems],
-  );
-  const visibleTargets = useMemo(
-    () => environmentFilter === 'all' ? targetItems : targetItems.filter(target => targetEnvironment(target) === environmentFilter),
-    [environmentFilter, targetItems],
-  );
-  const selectedEnvironmentCount = new Set(form.targetIds.map(targetId => {
-    const target = targetItems.find(item => item.id === targetId);
-    return target ? targetEnvironment(target) : '';
-  }).filter(Boolean)).size;
-  const requiredCapabilities = new Set(selectedBenchmark?.deploymentRequirements || selectedBenchmark?.tags || []);
-  const targetReady = (target: { runnable?: boolean; tags?: string[] }) => target.runnable && [...requiredCapabilities].every(capability => target.tags?.includes(capability));
-  const targetState = (target: { runnable?: boolean; tags?: string[] }) => {
-    if (!target.runnable) return 'Worker 未就绪';
-    const missingHost = [...requiredCapabilities].filter(capability => !target.tags?.includes(capability));
-    if (missingHost.length) return `缺少基础能力：${missingHost.join('、')}`;
-    const autoDeploy = (selectedBenchmark?.provisionedCapabilities || []).filter(capability => !target.tags?.includes(capability));
-    return autoDeploy.length ? `可自动部署：${autoDeploy.join('、')}` : '环境已就绪';
-  };
+  const targetOptions = useQuery({
+    queryKey: ['benchmark-target-options', selectedBenchmark?.id, selectedBenchmark?.version],
+    queryFn: () => api.benchmarkTargetOptions(selectedBenchmark!.id, selectedBenchmark!.version!),
+    enabled: Boolean(selectedBenchmark?.id && selectedBenchmark?.version),
+    refetchInterval: 10_000,
+  });
+  const environments = targetOptions.data?.environments || [];
+  const selectedEnvironment = environments.find(environment => environment.id === environmentFilter);
+  const visibleTargets = selectedEnvironment?.targets || [];
+  const requirements = requirementLabels(targetOptions.data?.nodeGroup.summary);
+  useEffect(() => { setEnvironmentFilter(''); }, [form.benchmarkKey]);
+  useEffect(() => {
+    if (!targetOptions.data || form.targetIds.length === 0) return;
+    const targetStillCompatible = targetOptions.data.environments.some(environment =>
+      environment.id === environmentFilter
+      && environment.targets.some(target => target.id === form.targetIds[0]),
+    );
+    if (!targetStillCompatible) {
+      setForm(current => ({ ...current, targetIds: [], targetBindings: {} }));
+    }
+  }, [environmentFilter, form.targetIds, targetOptions.data]);
   const mutation = useMutation({
     mutationFn: () => api.createExperiment({
       mode: 'selection',
@@ -121,24 +125,18 @@ export function CreateExperimentPage() {
   const update = (key: string, value: string | number) => {
     setForm(current => ({ ...current, [key]: value }));
   };
-  const toggleTarget = (targetId: string, label: string) => {
-    setForm(current => {
-      const selected = current.targetIds.includes(targetId);
-      const targetBindings = { ...current.targetBindings };
-      if (selected) delete targetBindings[targetId];
-      else targetBindings[targetId] = {
+  const selectTarget = (targetId: string, label: string) => {
+    setForm(current => ({
+      ...current,
+      targetIds: [targetId],
+      targetBindings: {
+        [targetId]: {
         variantId: targetId,
         label,
         placementPairId: 'placement-1',
-      };
-      return {
-        ...current,
-        targetIds: selected
-          ? current.targetIds.filter(id => id !== targetId)
-          : [...current.targetIds, targetId],
-        targetBindings,
-      };
-    });
+        },
+      },
+    }));
   };
   const updateBinding = (targetId: string, key: 'variantId' | 'placementPairId', value: string) => {
     setForm(current => ({
@@ -188,6 +186,7 @@ export function CreateExperimentPage() {
             <select required value={form.benchmarkKey} onChange={event => {
               const benchmarkKey = event.currentTarget.value;
               const benchmark = selectableBenchmarks.find(item => (item.key || item.id) === benchmarkKey);
+              mutation.reset();
               setForm(current => ({
                 ...current,
                 ...selectionDefaults(benchmark),
@@ -205,34 +204,41 @@ export function CreateExperimentPage() {
             <div><span>决策问题</span><strong>{selectedBenchmark.scenario.decision_question}</strong></div>
             <div><span>主指标</span><strong>{selectedBenchmark.primaryMetric}</strong></div>
             <div><span>拓扑</span><strong>{selectedBenchmark.scenario.topology}</strong></div>
-            <div><span>执行状态</span><strong>可自动部署并测试</strong></div>
+            <div><span>机器数量</span><strong>{targetOptions.data?.machineCount ?? 1}</strong></div>
           </div>}
+          {requirements.length > 0 && <div className="benchmark-requirements full"><strong>机器合同要求</strong><div className="tags">{requirements.map(label => <span key={label}>{label}</span>)}</div></div>}
           <div className="full">
             <div className="candidate-toolbar">
               <div>
                 <span className="field-label">候选资源 *</span>
-                <small className="candidate-selection-count">已选 {form.targetIds.length} 个 · {selectedEnvironmentCount} 个测试环境</small>
+                <small className="candidate-selection-count">单机 Benchmark 只能选择 1 台机器</small>
               </div>
               <label className="candidate-environment-filter">
                 <span>测试环境</span>
-                <select value={environmentFilter} onChange={event => setEnvironmentFilter(event.target.value)}>
-                  <option value="all">全部环境</option>
-                  {environmentOptions.map(environment => <option key={environment} value={environment}>{environment}</option>)}
+                <select value={environmentFilter} disabled={targetOptions.isLoading || environments.length === 0} onChange={event => {
+                  setEnvironmentFilter(event.target.value);
+                  setForm(current => ({ ...current, targetIds: [], targetBindings: {} }));
+                  mutation.reset();
+                }}>
+                  <option value="">请选择测试环境</option>
+                  {environments.map(environment => <option key={environment.id} value={environment.id}>{environment.label}（{environment.compatibleCount} 台可用）</option>)}
                 </select>
               </label>
             </div>
             <div className="target-choice-list">
-              {visibleTargets.map(target => <div key={target.id} className={`target-choice-row ${form.targetIds.includes(target.id) ? 'selected' : targetReady(target) ? '' : 'disabled'}`}>
+              {targetOptions.isLoading && <div className="target-choice-empty">正在按 Benchmark 合同检查资源…</div>}
+              {targetOptions.isError && <ErrorState error={targetOptions.error} onRetry={() => targetOptions.refetch()}/>}
+              {!targetOptions.isLoading && !targetOptions.isError && environments.length === 0 && <div className="target-choice-empty"><strong>没有满足合同的测试资源</strong>{targetOptions.data?.rejectedSummary.slice(0, 3).map(item => <small key={item.code}>{item.message}（{item.count} 台）</small>)}</div>}
+              {!targetOptions.isLoading && !targetOptions.isError && environments.length > 0 && !environmentFilter && <div className="target-choice-empty">请先选择测试环境</div>}
+              {visibleTargets.map(target => <div key={target.id} className={`target-choice-row ${form.targetIds.includes(target.id) ? 'selected' : ''}`}>
                 <label>
-                  <input type="checkbox" disabled={!targetReady(target)} checked={form.targetIds.includes(target.id)} onChange={() => toggleTarget(target.id, target.name)} />
-                  <span><strong>{target.name}</strong><small><b>{targetEnvironment(target)}</b> · {target.hardware || target.id}</small></span>
-                  <em>{targetState(target)}</em>
+                  <input type="radio" name="benchmark-target" checked={form.targetIds.includes(target.id)} onChange={() => selectTarget(target.id, target.name)} />
+                  <span><strong>{target.name}</strong><small><b>{selectedEnvironment?.label}</b> · {target.hardware || target.id}</small></span>
+                  <em>符合合同 · 可执行</em>
                 </label>
                 <TargetSshButton target={target} compact/>
               </div>)}
-              {!visibleTargets.length && <div className="target-choice-empty">当前环境没有候选资源</div>}
             </div>
-            {selectedBenchmark?.provisionedCapabilities?.length ? <div className="notice info benchmark-auto-deploy-note"><Server size={18}/><div><strong>选择后由 Looper 自动准备目标机器</strong><p>启动实验时自动下发 Adapter 脚本，并安装或复用：{selectedBenchmark.provisionedCapabilities.join('、')}。用户无需预装测试套件。</p></div></div> : null}
             {form.targetIds.length > 0 && <div className="target-binding-editor">
               <div className="binding-header"><span>候选资源</span><span>SKU / Variant</span><span>Placement pair</span></div>
               {form.targetIds.map(targetId => {
@@ -244,7 +250,6 @@ export function CreateExperimentPage() {
                 </div>;
               })}
             </div>}
-            {targets.isError && <small>候选资源加载失败</small>}
           </div>
         </div>
       </fieldset>}

@@ -24,7 +24,7 @@ from looper_api.scheduler import SchedulerError, create_experiment, start_experi
 class BenchmarkSmokeRunRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
-    target_id: str = Field(default="local", alias="targetId", min_length=1, max_length=100)
+    target_id: str = Field(alias="targetId", min_length=1, max_length=100)
     workload_id: str | None = Field(default=None, alias="workloadId", max_length=120)
     parameters: dict[str, Any] = Field(default_factory=dict)
     input_bindings: dict[str, BenchmarkInputBinding] = Field(

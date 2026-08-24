@@ -35,6 +35,12 @@ Local mode supports one API process and a local disk. Do not put the database on
 
 The API runs `alembic upgrade head` before seeding. A pre-Alembic MVP database is adopted only when its complete table and column inventory matches the known schema; partial or foreign schemas fail startup. For controlled deployments, stop the API, back up the database, and migrate explicitly:
 
+> Revision `e1a6b5c4d3f2` permanently removes the legacy `local` target and every
+> experiment that references it (including attempts, observations, checks,
+> events, snapshots, and artifact links). Artifact blobs shared independently
+> are retained. Back up the SQLite database and artifact CAS before upgrading;
+> this data migration has no downgrade recovery.
+
 ```powershell
 .venv\Scripts\python.exe -m alembic upgrade head
 .venv\Scripts\python.exe -m alembic current

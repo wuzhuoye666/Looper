@@ -105,7 +105,7 @@ export interface Benchmark {
   executionBlocker?: string; executionBlockerReason?: string;
   deploymentRequirements?: string[]; provisionedCapabilities?: string[]; provisioning?: Record<string, unknown>; packageReady?: boolean; packageDigest?: string;
   decisionQuestion?: string; primaryMetric?: string; scenario?: ScenarioContract;
-  selectionReady?: boolean;
+  selectionReady?: boolean; singleNodeReady?: boolean;
   registrationId?: string; registrationStatus?: string;
   auditStatus?: 'legacy-unreviewed' | 'registered-not-admitted';
 }
@@ -146,6 +146,22 @@ export interface Target {
     processor?: string; logical_cpu_count?: number; memory_gib?: number; instance_type?: string; region?: string;
     system?: string; release?: string; architecture?: string; host_key_sha256?: string; host_key_type?: string;
   };
+}
+export interface BenchmarkTargetConstraint {
+  code: string; field: string; required: unknown; actual: unknown; message: string;
+}
+export interface BenchmarkTargetRequirementSummary {
+  osFamilies: string[]; architectures: string[]; minimumLogicalCpus?: number;
+  minimumMemoryGiB?: number; capabilities: string[];
+}
+export interface BenchmarkTargetEnvironment {
+  id: string; label: string; compatibleCount: number; targets: Target[];
+}
+export interface BenchmarkTargetOptions {
+  benchmarkId: string; version: string; topology?: string; machineCount: 1;
+  nodeGroup: { id: string; role: string; requirements: Record<string, unknown>; summary: BenchmarkTargetRequirementSummary };
+  environments: BenchmarkTargetEnvironment[];
+  rejectedSummary: Array<{ code: string; message: string; count: number }>;
 }
 export type DestroyedResourceKind = 'instance' | 'system-disk' | 'local-disk' | 'public-ip' | 'vpc' | 'subnet' | 'security-group';
 export interface DestroyedResource {
