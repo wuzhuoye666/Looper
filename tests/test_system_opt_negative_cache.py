@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime
 
+import looper_core.system_opt.negative_cache as cache_module
 import pytest
 from looper_core.system_opt.negative_cache import (
     NegativeCache,
@@ -82,6 +83,19 @@ class TestEvidenceRedLine:
         with pytest.raises(ValueError, match="sha256"):
             _entry(evidence_digests=["run-123"])
 
+    @pytest.mark.parametrize(
+        "digest",
+        [
+            "sha256:abc",
+            "sha256:" + "A" * 64,
+            "sha256:" + "a" * 63,
+            "sha256:" + "a" * 65,
+        ],
+    )
+    def test_malformed_sha256_evidence_is_rejected(self, digest):
+        with pytest.raises(ValueError, match="strict lowercase sha256"):
+            _entry(evidence_digests=[digest])
+
 
 class TestCacheBehaviour:
     def test_exact_identity_hits(self):
@@ -148,6 +162,52 @@ class TestJsonlStore:
         loaded = NegativeCache.load(path)
         assert loaded.entries[0].digest == entry.digest
 
+    def test_append_exposes_memory_entry_only_after_fsync(self, tmp_path, monkeypatch):
+        path = tmp_path / "negcache.jsonl"
+        cache = NegativeCache()
+        real_fsync = cache_module.os.fsync
+        observed_lengths = []
+
+        def observe_fsync(descriptor):
+            observed_lengths.append(len(cache))
+            real_fsync(descriptor)
+
+        monkeypatch.setattr(cache_module.os, "fsync", observe_fsync)
+        cache.append_to(path, _entry())
+
+        assert observed_lengths == [0]
+        assert len(cache) == 1
+        assert len(NegativeCache.load(path)) == 1
+
+    def test_append_replace_failure_preserves_disk_and_memory(self, tmp_path, monkeypatch):
+        path = tmp_path / "negcache.jsonl"
+        original = _entry()
+        cache = NegativeCache([original])
+        cache.dump(path)
+
+        def fail_replace(source, destination):
+            raise OSError(f"injected append replace failure for {destination}")
+
+        monkeypatch.setattr(cache_module.os, "replace", fail_replace)
+        with pytest.raises(OSError, match="injected append replace failure"):
+            cache.append_to(path, _entry(metric_id="replacement"))
+
+        assert [entry.digest for entry in cache.entries] == [original.digest]
+        loaded = NegativeCache.load(path)
+        assert [entry.digest for entry in loaded.entries] == [original.digest]
+        assert not list(tmp_path.glob(".negcache.jsonl.*.tmp"))
+
+    def test_append_rejects_truncated_existing_jsonl(self, tmp_path):
+        path = tmp_path / "negcache.jsonl"
+        path.write_bytes(b'{"partial": true}')
+        cache = NegativeCache()
+
+        with pytest.raises(ValueError, match="truncated final line"):
+            cache.append_to(path, _entry())
+
+        assert len(cache) == 0
+        assert path.read_bytes() == b'{"partial": true}'
+
 
 def true_line():
     return "not-a-valid-entry"
@@ -168,3 +228,21 @@ class TestDumpSnapshotSemantics:
         cache = NegativeCache([entry, _entry(metric_id="other")])
         assert len(cache.lookup_key(entry.identity.key)) == 2
         assert cache.lookup_key("sha256:" + "0" * 64) == []
+
+    def test_failed_atomic_replace_preserves_previous_snapshot(
+        self, tmp_path, monkeypatch
+    ):
+        path = tmp_path / "dump.jsonl"
+        original = _entry()
+        NegativeCache([original]).dump(path)
+
+        def fail_replace(source, destination):
+            raise OSError(f"injected replace failure for {destination}")
+
+        monkeypatch.setattr(cache_module.os, "replace", fail_replace)
+        with pytest.raises(OSError, match="injected replace failure"):
+            NegativeCache([_entry(metric_id="replacement")]).dump(path)
+
+        loaded = NegativeCache.load(path)
+        assert [entry.digest for entry in loaded.entries] == [original.digest]
+        assert not list(tmp_path.glob(".dump.jsonl.*.tmp"))

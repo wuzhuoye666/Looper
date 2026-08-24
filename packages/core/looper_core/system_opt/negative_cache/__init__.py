@@ -9,6 +9,9 @@
 from __future__ import annotations
 
 import json
+import os
+import re
+import tempfile
 from collections.abc import Mapping, Sequence
 from datetime import datetime
 from enum import StrEnum
@@ -57,8 +60,10 @@ class NegativeCacheEntry(StrictModel):
         if len(self.evidence_digests) != len(set(self.evidence_digests)):
             raise ValueError("evidence digests must be unique")
         for digest in self.evidence_digests:
-            if not digest.startswith("sha256:"):
-                raise ValueError("evidence digests must be sha256 references")
+            if re.fullmatch(_DIGEST_PATTERN, digest) is None:
+                raise ValueError(
+                    "evidence digests must be strict lowercase sha256 references"
+                )
         return self
 
     @property
@@ -74,6 +79,39 @@ def formula_versions_digest(formula_versions: Mapping[str, str]) -> str:
     if not formula_versions:
         raise ValueError("formula_versions must not be empty")
     return canonical_digest(dict(formula_versions))
+
+
+def _entry_line(entry: NegativeCacheEntry) -> str:
+    return json.dumps(entry.model_dump(mode="json"), sort_keys=True) + "\n"
+
+
+def _atomic_replace_bytes(path: Path, payload: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+        dir=path.parent,
+    )
+    temporary = Path(temporary_name)
+    descriptor_open = True
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            descriptor_open = False
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        if descriptor_open:
+            os.close(descriptor)
+        temporary.unlink(missing_ok=True)
+
+
+def _atomic_write_snapshot(path: Path, entries: Sequence[NegativeCacheEntry]) -> None:
+    """Replace a JSONL snapshot atomically after its bytes reach the file handle."""
+
+    payload = "".join(_entry_line(entry) for entry in entries).encode("utf-8")
+    _atomic_replace_bytes(path, payload)
 
 
 class NegativeCache:
@@ -116,18 +154,24 @@ class NegativeCache:
         return self.lookup_key(identity.key)
 
     def dump(self, path: Path) -> None:
-        """Write the full current state as a fresh snapshot (overwrites)."""
+        """Atomically publish the full current state as a fresh snapshot."""
 
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("w", encoding="utf-8", newline="\n") as handle:
-            for entry in self._entries:
-                handle.write(json.dumps(entry.model_dump(mode="json"), sort_keys=True) + "\n")
+        _atomic_write_snapshot(path, self._entries)
 
     def append_to(self, path: Path, entry: NegativeCacheEntry) -> None:
+        """Atomically append one logical line, then expose it through memory lookup.
+
+        The replacement preserves every existing byte and adds exactly one JSONL
+        record. A failed write/replace leaves both the prior file and the in-memory
+        index unchanged instead of publishing a partial trailing line.
+        """
+
+        existing = path.read_bytes() if path.exists() else b""
+        if existing and not existing.endswith(b"\n"):
+            raise ValueError(f"negative cache JSONL has a truncated final line: {path}")
+        payload = existing + _entry_line(entry).encode("utf-8")
+        _atomic_replace_bytes(path, payload)
         self.add(entry)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("a", encoding="utf-8", newline="\n") as handle:
-            handle.write(json.dumps(entry.model_dump(mode="json"), sort_keys=True) + "\n")
 
     @classmethod
     def load(cls, path: Path) -> NegativeCache:
