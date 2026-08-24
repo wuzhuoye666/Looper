@@ -1,0 +1,82 @@
+# System Optimizer 运维与验收手册（M5-01 草案）
+
+> 当前状态：synthetic M3 可运行；真实 CVM 动态闭环、REAL-L6C、REAL-SSH、REAL-S9
+> 尚未关闭。本手册不会把 readiness 或 collector smoke test 写成真实闭环成功。
+
+## 1. 三命令本地验收
+
+以下命令必须在仓库根目录、以 editable 方式安装当前工作树及开发依赖的 Python 环境执行，
+`<workspace>` 必须是空目录：
+
+```powershell
+python -m looper_api.cli system-opt validate --manifest <manifest.yaml> --policy <policy.yaml>
+python -m looper_api.cli system-opt m3-demo --workspace <workspace>
+python -m pytest tests/test_system_opt_dynamic_cli.py tests/test_system_opt_online_routing.py tests/test_system_opt_scenario_profile.py --basetemp=.artifacts/m5-focused
+```
+
+若环境未 editable install，必须显式把当前工作树的 `services/api`、`packages/core` 和
+`packages/benchmark-sdk` 放入 `PYTHONPATH`，避免误调用其它 worktree 的已安装包。每次运行
+保留命令、commit、Python/OS、target、UTC、退出码和 pytest summary。
+
+## 2. 真实运行前门禁
+
+1. 保存 `EnvironmentSnapshot`、manifest、state evidence、workload、pressure protocol 和 policy
+   digest，确认都属于同一目标。
+2. 逐项核对 backend capability、可执行文件 allowlist、writable roots、所有权交接和回读。
+3. 确认目标无未清 attention、非终态 post-apply receipt、过期 lease 或 legacy guard。
+4. 明确 owner、lease TTL、窗口数、采样窗、S4 scale、阈值、保留期和允许写集合；这些参数
+   都没有项目默认值。
+5. local-linux 必须显式 `--enable-real` 和既有确认字符串；远程写 API 当前不存在。
+
+readiness 只证明接口可读/可构建，不代表动态 A/B、收益、回滚或跨环境晋升通过。
+
+## 3. 运行中观察
+
+- `control/` 中的 receipt、dynamic collection/routing、scenario profile 和 recovery evidence
+  只能由对应原子发布入口产生；不要手工改摘要文件。
+- 每窗最多执行一个 change；风险预算在执行前检查；`apply_started` 后的失败按 durable receipt
+  恢复，不以 CLI 退出码单独判断是否写过配置。
+- 发现 identity drift、证据图损坏、非终态 post-apply receipt 或 attention 时停止新运行，
+  保存现场，不删除 guard/lease/pointer。
+
+## 4. 失败与恢复
+
+| 现象 | 处置 |
+|---|---|
+| apply 前失败 | 保留原异常链和失败证据；确认没有 `apply_started` 后再重试 |
+| apply 后异常 | 以 receipt/L1 结果判断 rollback；不得仅重跑命令 |
+| rollback 失败或回读不一致 | 标记 needs-attention，禁止同目标新 lease，人工核对真实状态 |
+| receipt/evidence 篡改、分叉、孤儿 | fail-closed，复制完整 control 目录供离线 replay |
+| SSH 断连 | 不推断远端状态；等待 REAL-SSH 合同下的重连、回读和 attention 流程 |
+| 动态退化 | 仅用 S9 promoted last-good 和显式 threshold 执行 L6c recovery |
+
+清 attention 必须有完整恢复证据，不得通过删除 attention 文件绕过。
+
+## 5. 证据归档
+
+归档至少包含：git commit、环境 snapshot、所有输入合同、原始 collector/workload 输出、
+content-addressed evidence、固定索引、receipt 全链、attention/lease 终态、命令和日志。
+`.artifacts/` 默认不提交 Git；若要长期保存，先确认脱敏、存储位置和保留期。
+
+## 6. schema 与迁移承诺
+
+- 已发布 v1/v1alpha1 模型保持显式分派，不就地改变 digest payload。
+- 新字段改变 canonical payload 时必须升 schema；旧 JSON 不静默回填。
+- DB typed EnvironmentSnapshot 双写、M4 API/event、RCP-02B reconciliation schema 尚未实现，
+  迁移脚本和回滚程序因此仍是 M5-01 的开放项。
+- candidate/hypothesis cache 共用 JSONL 但按 schema 分派；retention 必须显式提供。
+
+## 7. 当前已知限制
+
+- 腾讯云 CVM 尚无完整真实动态闭环，阿里云结果不可外推。
+- O2 PMU 取决于虚拟化透传；不可获取时必须记录 unavailable。
+- 单 NUMA 节点不能验证跨 NUMA 区分度。
+- REAL-S9 需要真实 accepted candidate 和第二授权环境，当前证据门未满足。
+- O3 trace、通用缓存/结果复用、E_m/S4-V2 属 M6+。
+- M4 目前只有 CLI/local backend 切片，没有权限化远程写 API 或 UI。
+
+## 8. 发布前剩余动作
+
+执行三命令验收并锁定准确入口；补 REAL-L6C/SSH 与至少一条真实动态闭环实录；完成
+EnvironmentSnapshot typed migration 和只读 API；登记每个 schema 的兼容矩阵、升级和回滚；
+最后将本文件从“草案”改为带 commit 和实测证据的发布版。

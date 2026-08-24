@@ -47,6 +47,7 @@ System Optimizer 是一个操作系统配置采集、人工管理和有限闭环
 ### 安全与执行
 
 - safety/execution-and-recovery.md：安全事务、单写者、漂移、崩溃恢复和多节点边界。
+- safety/operations-runbook.md：M5-01 运维、失败恢复、证据归档、迁移与已知限制草案。
 
 ### 规划与验收
 
@@ -58,6 +59,8 @@ System Optimizer 是一个操作系统配置采集、人工管理和有限闭环
 - planning/m1-state-ownership-recovery-contract-2026-08-23.md：M1 状态来源、逐项所有权授权、完整快照崩溃对账与未完成边界。
 - planning/m2-component-pressure-contract-2026-08-23.md：五组件口径、标准阶段合同、校准与正式门禁的边界。
 - planning/agent-work-ledger-2026-08-24.md：当前多 Agent 任务、依赖、交付、验收、合入和远端状态的唯一登记本。
+- planning/s4-02-target-local-scale-calibration-2026-08-24.md：无隐式默认的目标本地 scale/reference 校准任务包。
+- planning/m4-01-api-event-environment-contract-2026-08-24.md：只读优先 API、事件投影和 typed EnvironmentSnapshot 双写设计。
 
 ### 调研与历史
 
