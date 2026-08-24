@@ -283,6 +283,30 @@ describe('腾讯云购买网络选择', () => {
     expect(within(firstRow!).getByText('架构')).toHaveClass('instance-mobile-label');
     expect(within(firstRow!).getByText('库存')).toHaveClass('instance-mobile-label');
     expect(within(firstRow!).getAllByRole('button')).toHaveLength(1);
+    const search = screen.getByLabelText('搜索机型');
+    const instanceRequests = () => vi.mocked(fetch).mock.calls
+      .map(([request]) => String(request))
+      .filter(url => url.includes('/cloud/catalog/tencent/instance-type'));
+    const latestInstanceRequest = () => {
+      const requests = instanceRequests();
+      return requests[requests.length - 1];
+    };
+    const requestCountBeforeTyping = instanceRequests().length;
+    for (const value of ['S9.TEST.02', 'S9.TEST.0', 'S9.TEST.', 'S9.TEST', 'S9.TES']) {
+      fireEvent.change(search, { target: { value } });
+    }
+    expect(search).toHaveValue('S9.TES');
+    expect(instanceRequests()).toHaveLength(requestCountBeforeTyping);
+    fireEvent.click(screen.getByRole('button', { name: '确认' }));
+    await waitFor(() => expect(new URL(latestInstanceRequest()).searchParams.get('query')).toBe('S9.TES'));
+    const requestCountAfterConfirm = instanceRequests().length;
+    for (const value of ['S9.TE', 'S9.T', 'S9.', 'S9', 'S', '']) {
+      fireEvent.change(search, { target: { value } });
+    }
+    expect(search).toHaveValue('');
+    expect(instanceRequests()).toHaveLength(requestCountAfterConfirm);
+    fireEvent.click(screen.getByRole('button', { name: '确认' }));
+    await waitFor(() => expect(new URL(latestInstanceRequest()).searchParams.get('query')).toBeNull());
     fireEvent.click(screen.getByRole('button', { name: '加载更多（已显示 20 / 25）' }));
     await waitFor(() => expect(view.container.querySelectorAll('.cloud-results tbody tr')).toHaveLength(25));
 

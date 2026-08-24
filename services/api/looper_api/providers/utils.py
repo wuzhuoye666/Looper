@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import re
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from enum import Enum
@@ -10,7 +11,15 @@ from typing import Any
 
 from dotenv import dotenv_values
 
-from looper_api.cloud_contracts import CatalogFilters, ImageInfo, InstanceTypeInfo
+from looper_api.cloud_contracts import (
+    CatalogFilters,
+    ImageInfo,
+    InstanceTypeArchitectureFacet,
+    InstanceTypeFacets,
+    InstanceTypeFamilyFacet,
+    InstanceTypeInfo,
+    InstanceTypeKindFacet,
+)
 
 
 def sdk_installed(module: str) -> bool:
@@ -189,9 +198,22 @@ def instance_type_family_token(item: InstanceTypeInfo) -> str:
 def instance_type_family_kind(item: InstanceTypeInfo) -> str:
     token = instance_type_family_token(item).casefold()
     if item.provider.value == "alibaba":
+        if token.startswith("scc"):
+            return "hpc"
+        if token.startswith("ebm"):
+            return "bare-metal"
+        if token.startswith(("hfc", "hfg", "hfr")):
+            return "high-frequency"
+        if token.startswith(("g", "c", "r")) and re.search(r"ne(?:x)?$", token):
+            return "network-enhanced"
+        if token.startswith(("g", "c", "r")) and token.endswith("se"):
+            return "storage-enhanced"
+        if token.startswith(("g", "c", "r")) and re.search(r"\d+t$", token):
+            return "security-enhanced"
+        if token.startswith("re"):
+            return "memory-enhanced"
         for prefix, kind in (
             (("ebmgn", "vgn", "gn", "ga"), "heterogeneous"),
-            (("hfc",), "compute"),
             (("s",), "shared"),
             (("t",), "burstable"),
             (("e",), "economy"),
@@ -210,8 +232,20 @@ def instance_type_family_kind(item: InstanceTypeInfo) -> str:
         return "other"
     type_name = str(item.attributes.get("typeName") or "").casefold()
     upper = token.upper()
+    if upper.startswith(("HCC", "HPC", "SCC")) or any(
+        marker in type_name for marker in ("高性能计算集群", "超级计算集群")
+    ):
+        return "hpc"
+    if upper.startswith(("BMS", "CBM", "BM")) or "裸金属" in type_name:
+        return "bare-metal"
     if upper.startswith(("GN", "GI", "GA", "GT", "PNV", "GPU")) or "gpu" in type_name:
         return "heterogeneous"
+    if "高主频" in type_name:
+        return "high-frequency"
+    if "安全" in type_name:
+        return "security-enhanced"
+    if "存储增强" in type_name:
+        return "storage-enhanced"
     if upper.startswith(("IT", "IA")) or any(
         marker in type_name for marker in ("高io", "高 io", "存储")
     ):
@@ -247,21 +281,33 @@ def instance_type_labels(item: InstanceTypeInfo) -> tuple[str, str]:
                 "计算型",
                 "高主频计算型" if token.casefold().startswith("hfc") else "计算型",
             ),
+            "high-frequency": ("高主频型", "高主频型"),
             "memory": ("内存型", "内存型"),
+            "memory-enhanced": ("内存增强型", "内存增强型"),
             "storage": ("本地存储型", "本地 SSD 型"),
             "big-data": ("大数据型", "大数据型"),
+            "network-enhanced": ("网络增强型", "网络增强型"),
+            "storage-enhanced": ("存储增强型", "存储增强型"),
+            "security-enhanced": ("安全增强型", "安全增强型"),
             "heterogeneous": ("GPU/异构型", "GPU/异构计算型"),
+            "bare-metal": ("裸金属型", "弹性裸金属型"),
+            "hpc": ("高性能计算型", "高性能计算集群"),
         }
     else:
         labels = {
             "standard": ("标准型", "标准型"),
             "compute": ("计算型", "计算型"),
+            "high-frequency": ("高主频型", "高主频型"),
             "memory": ("内存型", "内存型"),
             "storage": ("存储型", "高 IO/存储型"),
             "big-data": ("大数据型", "大数据型"),
             "network": ("网络型", "网络优化型"),
+            "storage-enhanced": ("存储增强型", "存储增强型"),
+            "security-enhanced": ("安全增强型", "安全增强型"),
             "batch": ("批量型", "批量计算型"),
             "heterogeneous": ("GPU/异构型", "GPU/异构计算型"),
+            "bare-metal": ("裸金属型", "裸金属服务器"),
+            "hpc": ("高性能计算型", "高性能计算集群"),
         }
     if kind not in labels:
         return "其他类型", f"规格族 {token}"
@@ -278,9 +324,133 @@ def instance_type_labels(item: InstanceTypeInfo) -> tuple[str, str]:
 
 def enrich_instance_type_labels(item: InstanceTypeInfo) -> InstanceTypeInfo:
     type_label, family_label = instance_type_labels(item)
-    if not type_label or not family_label:
+    if not type_label or not family_label or item.provider.value not in {"alibaba", "tencent"}:
         return item
-    return item.model_copy(update={"type_label": type_label, "family_label": family_label})
+    token = instance_type_family_token(item)
+    kind = instance_type_family_kind(item)
+    type_name = str(item.attributes.get("typeName") or "").casefold()
+    normalized_architecture = (item.architecture or "").casefold().replace("-", "_")
+    if kind == "hpc":
+        selection_class = "hpc"
+    elif kind == "bare-metal":
+        selection_class = "bare-metal"
+    elif kind == "heterogeneous" or (item.gpu or 0) > 0 or "gpu" in type_name:
+        selection_class = "heterogeneous"
+    elif "arm" in normalized_architecture or "aarch" in normalized_architecture:
+        selection_class = "arm"
+    elif any(
+        marker in normalized_architecture for marker in ("x86", "amd64", "i386", "i686")
+    ):
+        selection_class = "x86"
+    else:
+        selection_class = "other"
+    return item.model_copy(
+        update={
+            "type_label": type_label,
+            "family_label": family_label,
+            "selection_class": selection_class,
+            "type_kind": kind,
+            "family_token": token,
+        }
+    )
+
+
+_SELECTION_CLASS_LABELS = {
+    "x86": "X86 计算",
+    "arm": "ARM 计算",
+    "heterogeneous": "异构计算",
+    "bare-metal": "裸金属服务器",
+    "hpc": "高性能计算集群",
+    "other": "其他架构",
+}
+_SELECTION_CLASS_ORDER = tuple(_SELECTION_CLASS_LABELS)
+_TYPE_KIND_ORDER = (
+    "standard", "shared", "burstable", "economy", "universal", "general", "compute",
+    "memory", "high-frequency", "big-data", "storage", "memory-enhanced",
+    "network", "network-enhanced", "storage-enhanced", "security-enhanced", "batch",
+    "heterogeneous", "bare-metal", "hpc", "other",
+)
+
+
+def instance_type_generation(item: InstanceTypeInfo) -> int | None:
+    match = re.search(r"\d+", item.family_token or instance_type_family_token(item))
+    return int(match.group()) if match else None
+
+
+def _natural_text_key(value: str) -> tuple[tuple[int, int | str], ...]:
+    return tuple(
+        (1, int(part)) if part.isdigit() else (0, part.casefold())
+        for part in re.split(r"(\d+)", value)
+        if part
+    )
+
+
+def build_instance_type_facets(items: list[InstanceTypeInfo]) -> InstanceTypeFacets:
+    enriched = [enrich_instance_type_labels(item) for item in items]
+    architectures: list[InstanceTypeArchitectureFacet] = []
+    for architecture in _SELECTION_CLASS_ORDER:
+        architecture_items = [item for item in enriched if item.selection_class == architecture]
+        if not architecture_items:
+            continue
+        kinds: list[InstanceTypeKindFacet] = []
+        available_kinds = {item.type_kind or "other" for item in architecture_items}
+        ordered_kinds = [kind for kind in _TYPE_KIND_ORDER if kind in available_kinds]
+        ordered_kinds.extend(sorted(available_kinds.difference(ordered_kinds)))
+        for kind in ordered_kinds:
+            kind_items = [
+                item for item in architecture_items if (item.type_kind or "other") == kind
+            ]
+            family_groups: dict[str, list[InstanceTypeInfo]] = {}
+            for item in kind_items:
+                family_groups.setdefault(
+                    item.family_token or instance_type_family_token(item), []
+                ).append(item)
+            families = [
+                InstanceTypeFamilyFacet(
+                    value=token,
+                    label=group[0].family_label or f"规格族 {token}",
+                    count=len(group),
+                    generation=instance_type_generation(group[0]),
+                )
+                for token, group in family_groups.items()
+            ]
+            families.sort(
+                key=lambda facet: (
+                    facet.generation is None,
+                    -(facet.generation or 0),
+                    _natural_text_key(facet.value),
+                )
+            )
+            kinds.append(
+                InstanceTypeKindFacet(
+                    value=kind,
+                    label=kind_items[0].type_label or "其他类型",
+                    count=len(kind_items),
+                    families=families,
+                )
+            )
+        architectures.append(
+            InstanceTypeArchitectureFacet(
+                value=architecture,
+                label=_SELECTION_CLASS_LABELS[architecture],
+                count=len(architecture_items),
+                types=kinds,
+            )
+        )
+    return InstanceTypeFacets(architectures=architectures)
+
+
+def matches_instance_type_facets(item: InstanceTypeInfo, filters: CatalogFilters) -> bool:
+    enriched = enrich_instance_type_labels(item)
+    return not (
+        (filters.architecture_class and enriched.selection_class != filters.architecture_class)
+        or (filters.type_kind and enriched.type_kind != filters.type_kind)
+        or (
+            filters.family_token
+            and (enriched.family_token or "").casefold()
+            != filters.family_token.casefold()
+        )
+    )
 
 
 def instance_type_search_text(item: InstanceTypeInfo) -> str:
@@ -318,6 +488,8 @@ def filter_instance_types(
         if filters.min_memory_gib is not None and item.memory_gib < filters.min_memory_gib:
             continue
         if filters.max_memory_gib is not None and item.memory_gib > filters.max_memory_gib:
+            continue
+        if not matches_instance_type_facets(item, filters):
             continue
         result.append(item)
     return result

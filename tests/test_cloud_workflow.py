@@ -374,6 +374,14 @@ def test_full_catalog_paginates_searches_and_naturally_sorts_from_one_snapshot(
         "instance-type",
         CatalogFilters(region="ap-test", query=".620", limit=20),
     )
+    classified = catalog_search(
+        db_session,
+        app_settings,
+        reg,
+        ProviderId.TENCENT,
+        "instance-type",
+        CatalogFilters(region="ap-test", familyToken="S9", limit=20),
+    )
 
     assert first.total == 620
     assert first.next_offset == 20
@@ -385,6 +393,9 @@ def test_full_catalog_paginates_searches_and_naturally_sorts_from_one_snapshot(
     assert second.items[0]["id"] == "S9.TEST.21"
     assert searched.total == 1
     assert searched.items[0]["id"] == "S9.TEST.620"
+    assert classified.total == 620
+    assert first.instance_type_facets is not None
+    assert sum(item.count for item in first.instance_type_facets.architectures) == 620
     assert fake.catalog_calls == 1
 
     full_record = next(
@@ -395,7 +406,7 @@ def test_full_catalog_paginates_searches_and_naturally_sorts_from_one_snapshot(
                 CloudCatalogCacheRecord.resource_type == "instance-type",
             )
         )
-        if record.query_json.get("version") == 4
+        if record.query_json.get("version") == 6
     )
     full_record.expires_at = utc_now() - timedelta(seconds=1)
     db_session.commit()

@@ -125,14 +125,25 @@ describe('阿里云 ECS 选型助手', () => {
     });
 
     fireEvent.change(screen.getByLabelText('搜索候选机型'), { target: { value: 'ecs.i8i' } });
+    expect(requests[requests.length - 1].query).toBeUndefined();
+    expect(screen.getByText('内容尚未确认，当前结果保持不变')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '确认' }));
     expect(await screen.findByText('ecs.i8i.xlarge')).toBeInTheDocument();
     await waitFor(() => expect(requests[requests.length - 1]).toMatchObject({ query: 'ecs.i8i', offset: 0, limit: 20 }));
     expect(screen.getByRole('heading', { name: '匹配 1 个候选' })).toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText('搜索候选机型'), { target: { value: '本地存储型' } });
+    expect(requests[requests.length - 1]).toMatchObject({ query: 'ecs.i8i' });
+    fireEvent.click(screen.getByRole('button', { name: '确认' }));
     await waitFor(() => expect(requests[requests.length - 1]).toMatchObject({ query: '本地存储型', offset: 0, limit: 20 }));
 
-    fireEvent.change(screen.getByLabelText('搜索候选机型'), { target: { value: '' } });
+    const search = screen.getByLabelText('搜索候选机型');
+    for (const value of ['本地存储', '本地存', '本地', '本', '']) {
+      fireEvent.change(search, { target: { value } });
+    }
+    expect(search).toHaveValue('');
+    expect(requests[requests.length - 1]).toMatchObject({ query: '本地存储型' });
+    fireEvent.click(screen.getByRole('button', { name: '确认' }));
     expect(await screen.findByText('ecs.i9i.xlarge')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /加载更多/ }));
     expect(await screen.findByText('ecs.i8i.xlarge')).toBeInTheDocument();

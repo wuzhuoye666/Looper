@@ -108,6 +108,31 @@ def test_search_filters_all_ranked_candidates_before_pagination() -> None:
     assert result.next_offset is None
 
 
+def test_facets_filter_ranked_candidates_without_changing_recommendation_order() -> None:
+    items = [
+        instance("ecs.g9i.large", "ecs.g9i"),
+        instance("ecs.g8i.large", "ecs.g8i"),
+        instance("ecs.c9i.large", "ecs.c9i"),
+    ]
+    unfiltered = advise(request(codeAvailability="available"), items)
+    filtered = advise(
+        request(
+            codeAvailability="available",
+            architectureClass="x86",
+            typeKind="general",
+        ),
+        items,
+    )
+
+    assert filtered.eligible_total == 3
+    assert filtered.total == 2
+    assert [item.id for item in filtered.items] == [
+        item.id for item in unfiltered.items if item.id.startswith("ecs.g")
+    ]
+    assert filtered.instance_type_facets is not None
+    assert filtered.instance_type_facets.architectures[0].count == 3
+
+
 def test_exact_configuration_and_architecture_are_hard_filters() -> None:
     items = [
         instance("ecs.g9i.xlarge", "ecs.g9i"),

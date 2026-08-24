@@ -299,11 +299,19 @@ export interface CloudKeyPair {
 export interface CloudInstanceType {
   provider: CloudProviderId; region: string; id: string; family?: string; cpu: number; memoryGib: number;
   typeLabel?: string; familyLabel?: string;
+  selectionClass?: InstanceSelectionClass; typeKind?: string; familyToken?: string;
   gpu?: number; gpuModel?: string; gpuMemoryGib?: number; architecture?: string;
   networkBandwidthRxGbps?: number; networkBandwidthTxGbps?: number; networkPpsRx?: number; networkPpsTx?: number;
   localStorageCount?: number; localStorageCapacityGib?: number; localStorageCategory?: string;
   zones: string[]; available?: boolean; attributes?: Record<string, unknown>;
 }
+export type InstanceSelectionClass = 'x86' | 'arm' | 'heterogeneous' | 'bare-metal' | 'hpc' | 'other';
+export interface InstanceTypeFamilyFacet { value: string; label: string; count: number; generation?: number | null; }
+export interface InstanceTypeKindFacet { value: string; label: string; count: number; families: InstanceTypeFamilyFacet[]; }
+export interface InstanceTypeArchitectureFacet {
+  value: InstanceSelectionClass; label: string; count: number; types: InstanceTypeKindFacet[];
+}
+export interface InstanceTypeFacets { architectures: InstanceTypeArchitectureFacet[]; }
 export type SelectionScenario = 'web-api' | 'microservices-rpc' | 'database' | 'cache' | 'search-logs' |
   'big-data-messaging' | 'game' | 'video' | 'ai' | 'development-test' | 'other';
 export interface SelectionAdvisorRequest {
@@ -313,6 +321,7 @@ export interface SelectionAdvisorRequest {
   localStorage: 'required' | 'not-required' | 'unknown'; minimumNetworkBandwidthGbps?: number;
   minimumNetworkPps?: number; codeAvailability: 'available' | 'unavailable' | 'unknown';
   architecture: 'x86' | 'arm' | 'unknown'; query?: string; offset: number; limit: number;
+  architectureClass?: InstanceSelectionClass; typeKind?: string; familyToken?: string;
 }
 export interface SelectionExclusionStage {
   code: string; label: string; before: number; after: number; removed: number;
@@ -325,6 +334,7 @@ export interface SelectionAdvisorResponse {
   eligibleTotal: number; offset: number; limit: number; nextOffset?: number; exclusionStages: SelectionExclusionStage[];
   mostRestrictiveStage?: SelectionExclusionStage; source: 'live' | 'cache' | 'stale-cache';
   fetchedAt: string; expiresAt: string; stale: boolean; warning?: string;
+  instanceTypeFacets?: InstanceTypeFacets;
 }
 export interface CloudImage {
   provider: CloudProviderId; region: string; id: string; name: string; platform?: string; architecture?: string;
@@ -334,6 +344,7 @@ export interface CloudCatalogResponse<T> {
   provider: CloudProviderId; resourceType: string; items: T[]; total: number;
   offset: number; limit: number; nextOffset?: number;
   source: 'live' | 'cache' | 'stale-cache'; fetchedAt: string; expiresAt: string; stale: boolean; warning?: string;
+  instanceTypeFacets?: InstanceTypeFacets;
 }
 export interface CloudPurchaseSpec {
   provider: CloudProviderId; region: string; zone: string; instanceType: string; cpu?: number; memoryGib?: number;

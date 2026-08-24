@@ -6,11 +6,20 @@ from typing import Literal
 
 from pydantic import Field, model_validator
 
-from looper_api.cloud_contracts import ApiModel, InstanceTypeInfo, ProviderId
+from looper_api.cloud_contracts import (
+    ApiModel,
+    CatalogFilters,
+    InstanceSelectionClass,
+    InstanceTypeFacets,
+    InstanceTypeInfo,
+    ProviderId,
+)
 from looper_api.providers.utils import (
+    build_instance_type_facets,
     enrich_instance_type_labels,
     instance_type_family_token,
     instance_type_search_text,
+    matches_instance_type_facets,
 )
 
 ScenarioId = Literal[
@@ -59,6 +68,9 @@ class SelectionAdvisorRequest(ApiModel):
     code_availability: Literal["available", "unavailable", "unknown"] = "unknown"
     architecture: Literal["x86", "arm", "unknown"] = "unknown"
     query: str | None = Field(default=None, max_length=120)
+    architecture_class: InstanceSelectionClass | None = None
+    type_kind: str | None = Field(default=None, max_length=60)
+    family_token: str | None = Field(default=None, max_length=80)
     offset: int = Field(default=0, ge=0)
     limit: int = Field(default=20, ge=1, le=100)
 
@@ -106,6 +118,7 @@ class SelectionAdvisorResponse(ApiModel):
     expires_at: str
     stale: bool = False
     warning: str | None = None
+    instance_type_facets: InstanceTypeFacets | None = None
 
 
 _ALIBABA_FAMILY_ORDERS: dict[str, list[set[str]]] = {
@@ -490,8 +503,19 @@ def advise_instance_types(
         ),
     )
     eligible_total = len(ranked)
+    instance_type_facets = build_instance_type_facets(ranked)
     query = (request.query or "").casefold()
-    searched = [item for item in ranked if not query or query in instance_type_search_text(item)]
+    facet_filters = CatalogFilters(
+        architectureClass=request.architecture_class,
+        typeKind=request.type_kind,
+        familyToken=request.family_token,
+    )
+    searched = [
+        item
+        for item in ranked
+        if (not query or query in instance_type_search_text(item))
+        and matches_instance_type_facets(item, facet_filters)
+    ]
     advised: list[AdvisedInstanceType] = []
     for item in searched[request.offset : request.offset + request.limit]:
         rank = _combined_family_rank(item, request)
@@ -523,4 +547,5 @@ def advise_instance_types(
         expiresAt=expires_at,
         stale=stale,
         warning=warning,
+        instanceTypeFacets=instance_type_facets,
     )

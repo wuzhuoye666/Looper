@@ -56,6 +56,7 @@ from looper_api.models import (
 from looper_api.providers.base import CloudProviderError
 from looper_api.providers.registry import CloudProviderRegistry
 from looper_api.providers.utils import (
+    build_instance_type_facets,
     cloud_target_id,
     filter_images,
     filter_instance_types,
@@ -266,7 +267,7 @@ def ensure_managed_security_group(
     return group.model_dump(mode="json", by_alias=True)
 
 
-_FULL_CATALOG_CACHE_VERSION = 5
+_FULL_CATALOG_CACHE_VERSION = 6
 _PAGED_CATALOG_KINDS = {"instance-type", "image"}
 
 
@@ -544,10 +545,21 @@ def catalog_search(
 ) -> CatalogResponse:
     snapshot = _catalog_snapshot(session, settings, registry, provider_id, kind, filters)
     items = snapshot.items
+    instance_type_facets = None
     if kind == "instance-type":
-        models = filter_instance_types(
-            [InstanceTypeInfo.model_validate(item) for item in items], filters
+        raw_models = [InstanceTypeInfo.model_validate(item) for item in items]
+        base_filters = filters.model_copy(
+            update={
+                "query": None,
+                "architecture_class": None,
+                "type_kind": None,
+                "family_token": None,
+                "offset": 0,
+            }
         )
+        base_models = filter_instance_types(raw_models, base_filters)
+        instance_type_facets = build_instance_type_facets(base_models)
+        models = filter_instance_types(base_models, filters)
         models.sort(
             key=lambda item: (
                 _instance_purchase_sort_rank(item),
@@ -611,6 +623,7 @@ def catalog_search(
         expiresAt=snapshot.expires_at,
         stale=snapshot.stale,
         warning=snapshot.warning,
+        instanceTypeFacets=instance_type_facets,
     )
 
 

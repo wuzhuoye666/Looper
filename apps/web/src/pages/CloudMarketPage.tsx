@@ -24,6 +24,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { PageHeader } from '../components/PageHeader';
 import { CloudSelectionAdvisor } from '../components/CloudSelectionAdvisor';
+import { InstanceTypeFacetFilter } from '../components/InstanceTypeFacetFilter';
 import { EmptyState, ErrorState, LoadingState } from '../components/States';
 import { api } from '../lib/api';
 import type {
@@ -37,6 +38,7 @@ import type {
   CloudSecurityGroup,
   CloudSubnet,
   CloudVpc,
+  InstanceSelectionClass,
 } from '../lib/types';
 
 const providerLabels: Record<CloudProviderId, string> = {
@@ -115,6 +117,9 @@ export function CloudMarketPage() {
   const [catalogSearch, setCatalogSearch] = useState('');
   const [minCpu, setMinCpu] = useState(0);
   const [minMemory, setMinMemory] = useState(0);
+  const [architectureClass, setArchitectureClass] = useState<InstanceSelectionClass | undefined>();
+  const [typeKind, setTypeKind] = useState<string | undefined>();
+  const [familyToken, setFamilyToken] = useState<string | undefined>();
   const [selectedType, setSelectedType] = useState<CloudInstanceType | null>(null);
   const [selectedImage, setSelectedImage] = useState<CloudImage | null>(null);
   const [defaultTypeId, setDefaultTypeId] = useState('');
@@ -182,7 +187,7 @@ export function CloudMarketPage() {
     staleTime: 300_000,
   });
   const catalog = useInfiniteQuery({
-    queryKey: ['cloud-catalog', provider, kind, region, zone, selectedType?.id, catalogSearch, minCpu, minMemory],
+    queryKey: ['cloud-catalog', provider, kind, region, zone, selectedType?.id, catalogSearch, minCpu, minMemory, architectureClass, typeKind, familyToken],
     queryFn: ({ pageParam }) => api.catalog<CloudInstanceType | CloudImage>(provider, kind, {
       region,
       zone: kind === 'instance-type' ? zone : undefined,
@@ -190,6 +195,9 @@ export function CloudMarketPage() {
       query: catalogSearch,
       min_cpu: kind === 'instance-type' && minCpu ? minCpu : undefined,
       min_memory_gib: kind === 'instance-type' && minMemory ? minMemory : undefined,
+      architecture_class: kind === 'instance-type' ? architectureClass : undefined,
+      type_kind: kind === 'instance-type' ? typeKind : undefined,
+      family_token: kind === 'instance-type' ? familyToken : undefined,
       offset: pageParam,
       limit: CATALOG_PAGE_SIZE,
     }),
@@ -306,6 +314,7 @@ export function CloudMarketPage() {
       setNetworkNotice(`${resolution.zoneAutomaticallySelected ? `已选择可售可用区 ${resolution.zone}` : `可用区 ${resolution.zone}`}；${resolution.vpcAction === 'created' ? '已创建' : '已复用'} VPC ${resolution.vpc.name} · ${resolution.vpc.id}；${resolution.subnetAction === 'created' ? '已创建' : '已复用'}子网 ${resolution.subnet.name} · ${resolution.subnet.id}；${groupNotice}`);
       setSelectionError('');
       setSearch('');
+      setCatalogSearch('');
       setStep('image');
       void queryClient.invalidateQueries({ queryKey: ['cloud-vpcs', provider, region] });
       void queryClient.invalidateQueries({ queryKey: ['cloud-subnets', provider, region] });
@@ -321,10 +330,6 @@ export function CloudMarketPage() {
     purchaseMutation.reset();
   };
 
-  useEffect(() => {
-    const timer = window.setTimeout(() => setCatalogSearch(search.trim()), 300);
-    return () => window.clearTimeout(timer);
-  }, [search]);
   useEffect(() => {
     if (!sshDefaults.data || sshPasswordInitialized.current) return;
     setSshAuthMethod('password');
@@ -353,6 +358,9 @@ export function CloudMarketPage() {
     setDefaultTypeId('');
     setDefaultImageId('');
     setSuppressTypeDefault(false);
+    setArchitectureClass(undefined);
+    setTypeKind(undefined);
+    setFamilyToken(undefined);
     setNetworkMode(provider === 'tencent' || provider === 'alibaba' ? 'catalog' : 'manual');
     setSshAuthMethod('password');
     if (sshDefaults.data) setSshPassword(sshDefaults.data.password || '');
@@ -380,6 +388,9 @@ export function CloudMarketPage() {
     setDefaultTypeId('');
     setDefaultImageId('');
     setSuppressTypeDefault(false);
+    setArchitectureClass(undefined);
+    setTypeKind(undefined);
+    setFamilyToken(undefined);
     setVpcId('');
     setSubnetId('');
     setSecurityGroupIds([]);
@@ -573,6 +584,9 @@ export function CloudMarketPage() {
   const changeZone = (next: string) => {
     resetTransientErrors();
     setZone(next);
+    setArchitectureClass(undefined);
+    setTypeKind(undefined);
+    setFamilyToken(undefined);
     setStep('instance');
     setSelectedType(null);
     setSelectedImage(null);
@@ -601,14 +615,17 @@ export function CloudMarketPage() {
     setSelectedType(instance);
     setSelectedImage(null);
     setSearch('');
+    setCatalogSearch('');
     setStep('image');
   };
   const continueWithImage = (image: CloudImage) => {
     resetTransientErrors();
     setSelectedImage(image);
     setSearch('');
+    setCatalogSearch('');
     setStep('configure');
   };
+  const confirmCatalogSearch = () => setCatalogSearch(search.trim());
 
   return <div className="page cloud-market-page">
     <PageHeader
@@ -635,14 +652,25 @@ export function CloudMarketPage() {
       {step === 'instance' ? <>
         <div className="field compact"><label htmlFor="market-region">地域</label><select id="market-region" value={region} onChange={event => setRegion(event.target.value)}><option value="">选择地域</option>{regions.data?.items.map(item => <option key={item.id} value={item.id}>{item.name} · {item.id}</option>)}</select></div>
         <div className="field compact"><label htmlFor="market-zone">可用区（可选）</label><select id="market-zone" value={zone} onChange={event => changeZone(event.target.value)} disabled={!region}><option value="">自动选择可售可用区</option>{zones.data?.items.map(item => <option key={item.id} value={item.id}>{item.name} · {item.id}</option>)}</select></div>
-        {!advisorOpen && <><div className="field compact numeric-filter"><label htmlFor="min-cpu">最低 vCPU</label><input id="min-cpu" type="number" min={0} value={minCpu} onChange={event => setMinCpu(Number(event.target.value))} /></div><div className="field compact numeric-filter"><label htmlFor="min-memory">最低内存 GiB</label><input id="min-memory" type="number" min={0} step={0.5} value={minMemory} onChange={event => setMinMemory(Number(event.target.value))} /></div><label className="search-field market-search"><Search size={16} /><span className="sr-only">搜索机型</span><input value={search} onChange={event => setSearch(event.target.value)} placeholder="搜索机型 ID、规格族或中文类型/分组" /></label></>}
+        {!advisorOpen && <><div className="field compact numeric-filter"><label htmlFor="min-cpu">最低 vCPU</label><input id="min-cpu" type="number" min={0} value={minCpu} onChange={event => setMinCpu(Number(event.target.value))} /></div><div className="field compact numeric-filter"><label htmlFor="min-memory">最低内存 GiB</label><input id="min-memory" type="number" min={0} step={0.5} value={minMemory} onChange={event => setMinMemory(Number(event.target.value))} /></div><form className="search-submit-group market-search-group" onSubmit={event => { event.preventDefault(); confirmCatalogSearch(); }}><label className="search-field market-search"><Search size={16} /><span className="sr-only">搜索机型</span><input aria-label="搜索机型" value={search} onChange={event => setSearch(event.target.value)} placeholder="搜索机型 ID、规格族或中文类型/分组" /></label><button type="submit" className="button primary search-confirm-button" disabled={search.trim() === catalogSearch}>确认</button></form></>}
         {selectionAdvisorSupported && <button type="button" className="button secondary advisor-toolbar-button" aria-expanded={advisorOpen} aria-controls="cloud-selection-advisor" onClick={advisorOpen ? closeAdvisor : openAdvisor}>{advisorOpen ? <><ChevronLeft size={14} />返回手动选型</> : <><Sparkles size={14} />打开选型助手</>}</button>}
       </> : <>
         <button type="button" className="button secondary" onClick={() => goToStep(step === 'image' ? 'instance' : 'image')}><ChevronLeft size={14} />返回修改{step === 'image' ? '机型' : '镜像'}</button>
         <div className="market-step-summary"><strong>{selectedType?.id}</strong><span>{zone || '尚未选择可用区'}{selectedImage ? ` · ${selectedImage.name}` : ''}</span></div>
-        {step === 'image' && <label className="search-field market-search"><Search size={16} /><span className="sr-only">搜索兼容镜像</span><input value={search} onChange={event => setSearch(event.target.value)} placeholder="搜索兼容镜像名称或 ID" /></label>}
+        {step === 'image' && <form className="search-submit-group market-search-group" onSubmit={event => { event.preventDefault(); confirmCatalogSearch(); }}><label className="search-field market-search"><Search size={16} /><span className="sr-only">搜索兼容镜像</span><input aria-label="搜索兼容镜像" value={search} onChange={event => setSearch(event.target.value)} placeholder="搜索兼容镜像名称或 ID" /></label><button type="submit" className="button primary search-confirm-button" disabled={search.trim() === catalogSearch}>确认</button></form>}
       </>}
     </section>}
+    {providerInfo?.credentialsConfigured && selectionAdvisorSupported && !advisorOpen && step === 'instance' && <InstanceTypeFacetFilter
+      facets={catalogResult?.instanceTypeFacets}
+      value={{ architectureClass, typeKind, familyToken }}
+      resetKey={`${provider}:${region}:${zone}:${minCpu}:${minMemory}`}
+      onChange={value => {
+        setArchitectureClass(value.architectureClass);
+        setTypeKind(value.typeKind);
+        setFamilyToken(value.familyToken);
+        setSuppressTypeDefault(true);
+      }}
+    />}
     {selectionError && <div className="notice danger"><AlertTriangle size={18} /><div><strong>无法继续选购</strong><p>{selectionError}</p></div></div>}
     {networkMutation.isPending && <div className="notice"><RefreshCw className="spin" size={18} /><div><strong>正在准备网络</strong><p>正在核对可售可用区，并复用或创建可购买的子网。</p></div></div>}
     {networkNotice && step !== 'instance' && <div className="notice"><CheckCircle2 size={18} /><div><strong>网络已准备</strong><p>{networkNotice}</p></div></div>}

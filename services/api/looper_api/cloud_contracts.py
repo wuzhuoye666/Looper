@@ -105,6 +105,36 @@ class KeyPairInfo(ApiModel):
     associated_instance_count: int = 0
 
 
+InstanceSelectionClass = Literal[
+    "x86", "arm", "heterogeneous", "bare-metal", "hpc", "other"
+]
+
+
+class InstanceTypeFamilyFacet(ApiModel):
+    value: str
+    label: str
+    count: int
+    generation: int | None = None
+
+
+class InstanceTypeKindFacet(ApiModel):
+    value: str
+    label: str
+    count: int
+    families: list[InstanceTypeFamilyFacet] = Field(default_factory=list)
+
+
+class InstanceTypeArchitectureFacet(ApiModel):
+    value: InstanceSelectionClass
+    label: str
+    count: int
+    types: list[InstanceTypeKindFacet] = Field(default_factory=list)
+
+
+class InstanceTypeFacets(ApiModel):
+    architectures: list[InstanceTypeArchitectureFacet] = Field(default_factory=list)
+
+
 class InstanceTypeInfo(ApiModel):
     provider: ProviderId
     region: str
@@ -112,6 +142,9 @@ class InstanceTypeInfo(ApiModel):
     family: str | None = None
     type_label: str | None = None
     family_label: str | None = None
+    selection_class: InstanceSelectionClass | None = None
+    type_kind: str | None = None
+    family_token: str | None = None
     cpu: int
     memory_gib: float
     gpu: float | None = None
@@ -166,6 +199,7 @@ class CatalogResponse(ApiModel):
     expires_at: datetime
     stale: bool = False
     warning: str | None = None
+    instance_type_facets: InstanceTypeFacets | None = None
 
 
 class CatalogFilters(ApiModel):
@@ -173,6 +207,9 @@ class CatalogFilters(ApiModel):
     zone: str | None = Field(default=None, max_length=64)
     vpc_id: str | None = Field(default=None, max_length=120)
     query: str | None = Field(default=None, max_length=120)
+    architecture_class: InstanceSelectionClass | None = None
+    type_kind: str | None = Field(default=None, max_length=60)
+    family_token: str | None = Field(default=None, max_length=80)
     min_cpu: int | None = Field(default=None, ge=1, le=1024)
     max_cpu: int | None = Field(default=None, ge=1, le=1024)
     min_memory_gib: float | None = Field(default=None, ge=0.25, le=65536)
