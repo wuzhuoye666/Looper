@@ -3,17 +3,22 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 import pytest
+from looper_core.canonical import canonical_digest
 from looper_core.system_opt.collector import (
     CollectedMetric,
     ComponentCollectionPlan,
+    ComponentCollectionRequest,
+    ComponentCollectionRun,
     ComponentCollectionScope,
     ComponentMetricSnapshot,
     MetricAvailability,
+    begin_component_collection,
 )
 from looper_core.system_opt.dynamic_collection import (
     DynamicCollectionUnavailable,
     O1LiveSource,
     O2ComponentProbe,
+    O2ComponentProbeEvidence,
     o1_live_source,
     o2_component_probe,
 )
@@ -97,6 +102,30 @@ class _Collector:
     def begin_collection(self, plan):
         self.events.append(f"begin:{plan.component}")
         return _Session(plan, self.events, fail_finish=self.fail_finish)
+
+
+def _collect_enabled_fixture_run(
+    plan: ComponentCollectionPlan, events: list[str]
+) -> ComponentCollectionRun:
+    collector = _Collector(plan.component, events)
+    opened = begin_component_collection(
+        plan, collector=collector, enabled=True, wall_clock=lambda: AT
+    )
+    request = ComponentCollectionRequest(
+        component=plan.component,
+        target_id=plan.target_id,
+        environment_digest=plan.environment_digest,
+        workload_phase_id=plan.workload_phase_id,
+        workload_source=plan.workload_source,
+        collector_id=plan.collector_id,
+        requested_metrics=plan.requested_metrics,
+        input_artifacts=[],
+        gate_values={},
+        interval_seconds=plan.interval_seconds,
+        scope=plan.scope,
+        measurement_identity={"window_id": "legacy", "observation_layer": "O2"},
+    )
+    return opened.finish(request)
 
 
 def _observation_window() -> ObservationWindow:
@@ -197,6 +226,7 @@ def test_o1_runtime_failure_cancels_other_open_component_sessions() -> None:
 
 def test_o2_collects_only_the_routed_component_and_returns_bound_evidence_digest() -> None:
     events: list[str] = []
+    monotonic_values = iter([10.0, 10.5, 20.0, 20.75])
     probe = o2_component_probe(
         plans=[_plan("cpu"), _plan("memory")],
         collectors={
@@ -206,6 +236,7 @@ def test_o2_collects_only_the_routed_component_and_returns_bound_evidence_digest
         window_seconds=0.5,
         sleep_fn=lambda seconds: events.append(f"sleep:{seconds}"),
         wall_clock=lambda: AT,
+        monotonic=lambda: next(monotonic_values),
     )
     assert isinstance(probe, O2ComponentProbe)
     hypothesis = ComponentHypothesis(
@@ -218,7 +249,7 @@ def test_o2_collects_only_the_routed_component_and_returns_bound_evidence_digest
 
     digest = probe(hypothesis, window)
 
-    assert events == ["begin:memory", "sleep:0.5", "finish:memory"]
+    assert events == ["sleep:0.5", "begin:memory", "sleep:0.5", "finish:memory"]
     evidence = probe.evidence_by_digest[digest]
     assert evidence.digest == digest
     assert evidence.hypothesis == hypothesis
@@ -228,7 +259,73 @@ def test_o2_collects_only_the_routed_component_and_returns_bound_evidence_digest
     assert evidence.collection_run.request.measurement_identity == {
         "window_id": "window-1",
         "observation_layer": "O2",
+        "hypothesis_digest": hypothesis.digest,
+        "observation_window_digest": window.digest,
     }
+    overhead_digest = evidence.collection_overhead_evidence_digest
+    assert overhead_digest is not None
+    overhead = probe.overhead_evidence_by_digest[overhead_digest]
+    assert overhead.digest == overhead_digest
+    assert overhead.collection_disabled_seconds == [0.5]
+    assert overhead.collection_enabled_seconds == [0.75]
+    assert overhead.collector_id == "fixture.memory"
+    assert "threshold" not in type(overhead).model_fields
+    assert "accepted" not in type(overhead).model_fields
+
+
+def test_o2_evidence_remains_compatible_without_overhead_binding() -> None:
+    events: list[str] = []
+    plan = _plan("cpu")
+    run = _collect_enabled_fixture_run(plan, events)
+    hypothesis = ComponentHypothesis(
+        hypothesis_id="hyp-cpu",
+        symptom_id="symptom-1",
+        component="cpu",
+        rank=1,
+    )
+    legacy_payload = {
+        "schema_version": "looper.o2-component-probe-evidence/v1alpha1",
+        "hypothesis": hypothesis.model_dump(mode="json"),
+        "observation_window_digest": _observation_window().digest,
+        "collection_run": run.model_dump(mode="json"),
+    }
+
+    legacy_digest = canonical_digest(legacy_payload)
+    loaded = O2ComponentProbeEvidence.model_validate(legacy_payload)
+
+    assert loaded.collection_overhead_evidence_digest is None
+    assert loaded.digest == legacy_digest
+
+
+def test_o2_failure_does_not_publish_partial_overhead_or_probe_evidence() -> None:
+    events: list[str] = []
+    probe = o2_component_probe(
+        plans=[_plan("cpu")],
+        collectors={"cpu": _Collector("cpu", events, fail_finish=True)},
+        window_seconds=0.25,
+        sleep_fn=lambda seconds: events.append(f"sleep:{seconds}"),
+        wall_clock=lambda: AT,
+        monotonic=iter([1.0, 1.25, 2.0]).__next__,
+    )
+    assert probe is not None
+    hypothesis = ComponentHypothesis(
+        hypothesis_id="hyp-cpu",
+        symptom_id="symptom-1",
+        component="cpu",
+        rank=1,
+    )
+
+    with pytest.raises(RuntimeError, match="fixture finish failed"):
+        probe(hypothesis, _observation_window())
+
+    assert events == [
+        "sleep:0.25",
+        "begin:cpu",
+        "sleep:0.25",
+        "finish:cpu",
+    ]
+    assert probe.evidence_by_digest == {}
+    assert probe.overhead_evidence_by_digest == {}
 
 
 def test_o2_returns_none_when_declared_probe_capability_is_unavailable() -> None:
