@@ -42,15 +42,28 @@ import yaml
 from pydantic import Field, TypeAdapter, model_validator
 
 from looper_core.analysis import aggregate
+from looper_core.canonical import canonical_digest
 from looper_core.contracts import StrictModel
 from looper_core.system_opt.collector import ComponentCollectionPlan
-from looper_core.system_opt.config_manifest import ConfigComponent, ConfigManifest
+from looper_core.system_opt.config_manifest import ConfigComponent, ConfigManifest, RiskLevel
 from looper_core.system_opt.executor import ExecutorBackend
 from looper_core.system_opt.hypothesis import (
     ComponentHypothesis,
     InterventionExperiment,
     SymptomRecord,
 )
+from looper_core.system_opt.intervention import (
+    INTERVENTION_RISK_SOURCE_SCHEMA,
+    InterventionOutcome,
+    InterventionPlan,
+    ReceiptOperation,
+    ReceiptStageV2,
+    RiskSource,
+    RiskSourceItem,
+    RiskSourceKind,
+    receipt_stage_for,
+)
+from looper_core.system_opt.intervention_receipt import AttentionSink, DurableReceiptStore
 from looper_core.system_opt.observation import parse_o0_metrics
 from looper_core.system_opt.policy import (
     MetricContract,
@@ -59,7 +72,14 @@ from looper_core.system_opt.policy import (
     PressureMethod,
     StatisticsPolicy,
 )
-from looper_core.system_opt.safety import SafetyController, SafetyState
+from looper_core.system_opt.safety import (
+    ObservedSafetyResult,
+    ProgressRecordError,
+    SafetyController,
+    SafetyProgressEvent,
+    SafetyProgressStage,
+    SafetyState,
+)
 from looper_core.system_opt.scoring import (
     ImprovementEvidence,
     MeasurementBatch,
@@ -75,6 +95,7 @@ from looper_core.system_opt.workload import (
 )
 
 HYPOTHESIS_PROPOSALS_SCHEMA = "looper.hypothesis-proposals/v1alpha1"
+HYPOTHESIS_PROPOSALS_V2_SCHEMA = "looper.hypothesis-proposals/v1alpha2"
 BUSINESS_POLICY_SCHEMA = "looper.business-retest-policy/v1alpha1"
 _DIGEST = r"^sha256:[0-9a-f]{64}$"
 
@@ -105,6 +126,23 @@ class RetestIdentityDrift(ValueError):
 
 class DynamicInterventionError(RuntimeError):
     """Safety-relevant intervention failure; the phase must stop (fail-closed)."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        plan_digest: str | None = None,
+        outcome: InterventionOutcome | None = None,
+        candidate_receipt_digest: str | None = None,
+        recovery_receipt_digest: str | None = None,
+        triggered_field: str = "intervention.execution",
+    ) -> None:
+        super().__init__(message)
+        self.plan_digest = plan_digest
+        self.outcome = outcome
+        self.candidate_receipt_digest = candidate_receipt_digest
+        self.recovery_receipt_digest = recovery_receipt_digest
+        self.triggered_field = triggered_field
 
 
 # ---------------------------------------------------------------------------
@@ -184,6 +222,63 @@ class HypothesisProposalsFile(StrictModel):
         return {p.hypothesis_id: p for p in self.proposals}
 
 
+class HypothesisProposalV2(StrictModel):
+    """A v2 proposal with explicit task risk; no implicit-low migration exists."""
+
+    hypothesis_id: str = Field(min_length=1, max_length=160)
+    component: ConfigComponent
+    rank: int = Field(ge=1)
+    rationale: str = Field(min_length=1, max_length=500)
+    change: dict[str, Any] = Field(min_length=1)
+    supporting_digests: list[str] = Field(default_factory=list)
+    risk: RiskLevel
+    risk_kind: RiskSourceKind
+    risk_rationale: str | None = Field(default=None, min_length=1, max_length=1000)
+
+    @model_validator(mode="after")
+    def validate_risk_claim(self) -> HypothesisProposalV2:
+        if self.risk_kind is RiskSourceKind.TASK_OVERRIDE:
+            if self.risk_rationale is None:
+                raise ValueError("task-override proposals require risk_rationale")
+        elif self.risk_rationale is not None:
+            raise ValueError("manifest-derived proposals cannot carry risk_rationale")
+        return self
+
+
+class HypothesisProposalsFileV2(StrictModel):
+    schema_version: Literal[HYPOTHESIS_PROPOSALS_V2_SCHEMA] = HYPOTHESIS_PROPOSALS_V2_SCHEMA
+    proposals: list[HypothesisProposalV2] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def unique_ids(self) -> HypothesisProposalsFileV2:
+        ids = [proposal.hypothesis_id for proposal in self.proposals]
+        if len(ids) != len(set(ids)):
+            raise ValueError("hypothesis proposal ids must be unique")
+        return self
+
+    def by_id(self) -> dict[str, HypothesisProposalV2]:
+        return {proposal.hypothesis_id: proposal for proposal in self.proposals}
+
+
+class DynamicInterventionExecution(StrictModel):
+    """A completed adapter execution with durable receipt associations."""
+
+    plan_digest: str = Field(pattern=_DIGEST)
+    outcome: InterventionOutcome
+    candidate_receipt_digest: str = Field(pattern=_DIGEST)
+    recovery_receipt_digest: str | None = Field(default=None, pattern=_DIGEST)
+
+    @model_validator(mode="after")
+    def bind_outcome(self) -> DynamicInterventionExecution:
+        if self.outcome.plan_digest != self.plan_digest:
+            raise ValueError("dynamic intervention outcome is not bound to its plan")
+        return self
+
+    @property
+    def digest(self) -> str:
+        return canonical_digest(self.model_dump(mode="json", exclude_none=False))
+
+
 class BusinessRetestPolicy(StrictModel):
     """Every number behind S6/S7 on the business metric is an explicit task input."""
 
@@ -229,9 +324,7 @@ class FileLoadIdentity:
             self._policy.window_poll_seconds,
             self._policy.window_wait_timeout_seconds,
         )
-        return LoadCommandIdentity.model_validate(
-            json.loads(path.read_text(encoding="utf-8"))
-        )
+        return LoadCommandIdentity.model_validate(json.loads(path.read_text(encoding="utf-8")))
 
 
 class FileO0Source:
@@ -274,11 +367,46 @@ class FileHypothesisProposals:
         ]
 
 
+class FileHypothesisProposalsV2:
+    """Expose v2 declarative proposals to the unchanged hypothesis ledger."""
+
+    def __init__(self, proposals: HypothesisProposalsFileV2) -> None:
+        self._proposals = proposals.proposals
+
+    def __call__(self, symptom: SymptomRecord) -> list[ComponentHypothesis]:
+        return [
+            ComponentHypothesis(
+                hypothesis_id=proposal.hypothesis_id,
+                symptom_id=symptom.symptom_id,
+                component=proposal.component,
+                rank=proposal.rank,
+                supporting_digests=list(proposal.supporting_digests),
+            )
+            for proposal in self._proposals
+        ]
+
+
 def load_hypothesis_proposals(path: Path) -> HypothesisProposalsFile:
     document = yaml.safe_load(path.read_text(encoding="utf-8"))
     if not isinstance(document, dict):
         raise ValueError(f"hypothesis proposals file is not a mapping: {path}")
     return HypothesisProposalsFile.model_validate(document)
+
+
+def load_hypothesis_proposals_versioned(
+    path: Path,
+) -> HypothesisProposalsFile | HypothesisProposalsFileV2:
+    """Dispatch by schema without filling v2 risk fields into legacy input."""
+
+    document = yaml.safe_load(path.read_text(encoding="utf-8"))
+    if not isinstance(document, dict):
+        raise ValueError(f"hypothesis proposals file is not a mapping: {path}")
+    version = document.get("schema_version")
+    if version == HYPOTHESIS_PROPOSALS_SCHEMA:
+        return HypothesisProposalsFile.model_validate(document)
+    if version == HYPOTHESIS_PROPOSALS_V2_SCHEMA:
+        return HypothesisProposalsFileV2.model_validate(document)
+    raise ValueError(f"unsupported hypothesis proposals schema: {version!r}")
 
 
 def load_business_policy(path: Path) -> BusinessRetestPolicy:
@@ -331,9 +459,7 @@ def build_business_batch_identity(contract: WorkloadContract, phase_id: str) -> 
 def build_business_metric_contract(
     contract: WorkloadContract, policy: BusinessRetestPolicy
 ) -> MetricContract:
-    spec = next(
-        (m for m in contract.o0_metrics if m.metric_id == policy.business_metric_id), None
-    )
+    spec = next((m for m in contract.o0_metrics if m.metric_id == policy.business_metric_id), None)
     if spec is None:
         raise ValueError(
             f"business metric '{policy.business_metric_id}' is not declared by the "
@@ -397,8 +523,7 @@ class BusinessRetestPlanner:
 
     def retest_window_ids(self, group_id: str) -> list[str]:
         return [
-            f"{group_id}-run{index}"
-            for index in range(1, self._policy.retest_window_count + 1)
+            f"{group_id}-run{index}" for index in range(1, self._policy.retest_window_count + 1)
         ]
 
     def read_window_batch(self, window_ids: Sequence[str]) -> MeasurementBatch:
@@ -430,12 +555,8 @@ class BusinessRetestPlanner:
             )
             window_values = parsed.get(self._policy.business_metric_id)
             if not window_values:
-                raise ValueError(
-                    f"window '{window_id}' output carries no business metric values"
-                )
-            values.append(
-                aggregate(window_values, self._metric_contract.aggregation)
-            )
+                raise ValueError(f"window '{window_id}' output carries no business metric values")
+            values.append(aggregate(window_values, self._metric_contract.aggregation))
         batch = MeasurementBatch(
             identity=build_business_batch_identity(self._contract, self._policy.phase_id),
             metrics={
@@ -461,9 +582,7 @@ class BusinessRetestPlanner:
             raise RetestIdentityDrift(
                 f"retest batch identity differs from the frozen baseline on {differing}"
             )
-        return bootstrap_improvement(
-            candidate, baseline, self._metric_contract, self._statistics
-        )
+        return bootstrap_improvement(candidate, baseline, self._metric_contract, self._statistics)
 
 
 # ---------------------------------------------------------------------------
@@ -534,9 +653,7 @@ class SafetyBackedIntervention:
             )
             return None
 
-        retest_ids = self._planner.retest_window_ids(
-            f"retest-{hypothesis.hypothesis_id}"
-        )
+        retest_ids = self._planner.retest_window_ids(f"retest-{hypothesis.hypothesis_id}")
         self._write_control(
             f"retest-request-{hypothesis.hypothesis_id}.json",
             {
@@ -582,6 +699,383 @@ class SafetyBackedIntervention:
         )
 
 
+class TwoStageSafetyBackedIntervention:
+    """Prepare without writes, then execute with durable candidate/recovery logs."""
+
+    def __init__(
+        self,
+        *,
+        controller: SafetyController,
+        manifest: ConfigManifest,
+        backend: ExecutorBackend,
+        fencing_token: int,
+        proposals: Mapping[str, HypothesisProposalV2],
+        planner: BusinessRetestPlanner,
+        layout: SessionLayout,
+        receipt_store: DurableReceiptStore,
+        attention_sink: AttentionSink,
+    ) -> None:
+        self._controller = controller
+        self._manifest = manifest
+        self._backend = backend
+        self._fencing_token = fencing_token
+        self._proposals = dict(proposals)
+        self._planner = planner
+        self._layout = layout
+        self._receipt_store = receipt_store
+        self._attention_sink = attention_sink
+
+    def prepare_intervention(self, hypothesis: ComponentHypothesis) -> InterventionPlan:
+        proposal = self._proposals.get(hypothesis.hypothesis_id)
+        if proposal is None:
+            raise DynamicInterventionError(f"unknown hypothesis '{hypothesis.hypothesis_id}'")
+        items = {
+            self._manifest.item_for_parameter(parameter_id).id: self._manifest.item_for_parameter(
+                parameter_id
+            )
+            for parameter_id in proposal.change
+        }
+        return InterventionPlan(
+            hypothesis=hypothesis,
+            change=dict(proposal.change),
+            risk=proposal.risk,
+            risk_source=RiskSource(
+                schema_version=INTERVENTION_RISK_SOURCE_SCHEMA,
+                kind=proposal.risk_kind,
+                manifest_digest=self._manifest.digest,
+                items=[
+                    RiskSourceItem(item_id=item_id, risk=items[item_id].risk)
+                    for item_id in sorted(items)
+                ],
+                rationale=proposal.risk_rationale,
+            ),
+        )
+
+    @staticmethod
+    def _progress_flags(stages: set[SafetyProgressStage]) -> dict[str, bool]:
+        apply_started = SafetyProgressStage.APPLY_STARTED in stages
+        return {
+            "write_attempted": apply_started,
+            "apply_started": apply_started,
+            "rollback_attempted": SafetyProgressStage.ROLLBACK_STARTED in stages,
+            "rollback_verified": SafetyProgressStage.ROLLBACK_VERIFIED in stages,
+        }
+
+    def _observer(self, current: list[Any], stages: set[SafetyProgressStage]):
+        def observe(event: SafetyProgressEvent) -> None:
+            stages.add(event.stage)
+            fields: dict[str, Any] = {"safety_state": event.safety_state}
+            if event.stage is SafetyProgressStage.SAFETY_TERMINAL:
+                fields["evidence_digest"] = event.evidence_digest
+            current[0] = self._receipt_store.advance(
+                current[0], receipt_stage_for(event.stage), **fields
+            )
+
+        return observe
+
+    def _attention(self, reason: str, evidence_digest: str) -> None:
+        self._attention_sink(reason[:2000], evidence_digest)
+
+    def _run_observed(
+        self,
+        *,
+        plan: InterventionPlan,
+        values: Mapping[str, Any],
+        execution_id: str,
+        operation: ReceiptOperation,
+        parent_receipt_digest: str | None = None,
+    ) -> tuple[ObservedSafetyResult, Any, set[SafetyProgressStage]]:
+        current = [
+            self._receipt_store.start(
+                plan=plan,
+                execution_id=execution_id,
+                operation=operation,
+                parent_receipt_digest=parent_receipt_digest,
+            )
+        ]
+        stages: set[SafetyProgressStage] = set()
+        try:
+            observed = self._controller.execute_observed(
+                self._manifest,
+                values,
+                self._backend,
+                fencing_token=self._fencing_token,
+                progress_observer=self._observer(current, stages),
+                keep=True,
+                keep_authorized=True,
+            )
+        except ProgressRecordError as error:
+            raise DynamicInterventionError(
+                f"receipt persistence failed before backend apply: {error}",
+                plan_digest=plan.digest,
+                candidate_receipt_digest=(
+                    current[0].digest
+                    if operation is ReceiptOperation.CANDIDATE
+                    else parent_receipt_digest
+                ),
+                recovery_receipt_digest=(
+                    current[0].digest if operation is ReceiptOperation.RECOVERY else None
+                ),
+                triggered_field="intervention.receipt",
+            ) from error
+        return observed, current[0], stages
+
+    def _restoration_values(
+        self, plan: InterventionPlan, observed: ObservedSafetyResult
+    ) -> dict[str, Any]:
+        snapshot = observed.result.snapshot
+        if snapshot is None:
+            raise DynamicInterventionError(
+                "candidate safety result has no baseline snapshot for recovery",
+                plan_digest=plan.digest,
+                triggered_field="intervention.recovery",
+            )
+        values: dict[str, Any] = {}
+        for parameter_id in plan.change:
+            item = self._manifest.item_for_parameter(parameter_id)
+            entry = snapshot.entries.get(item.id)
+            if entry is None or entry.value is None:
+                raise DynamicInterventionError(
+                    f"pre-apply snapshot lacks a value for '{parameter_id}'",
+                    plan_digest=plan.digest,
+                    triggered_field="intervention.recovery",
+                )
+            values[parameter_id] = entry.value
+        return values
+
+    def _operation_terminal(
+        self,
+        current: Any,
+        outcome: InterventionOutcome | None,
+        observed: ObservedSafetyResult,
+    ) -> Any:
+        fields: dict[str, Any] = {
+            "safety_state": outcome.safety_state if outcome else observed.result.state,
+            "evidence_digest": (outcome.evidence_digest if outcome else observed.result.digest),
+        }
+        if outcome is not None:
+            fields["outcome"] = outcome
+        return self._receipt_store.advance(current, ReceiptStageV2.OPERATION_TERMINAL, **fields)
+
+    def execute_intervention(
+        self, plan: InterventionPlan, execution_id: str
+    ) -> DynamicInterventionExecution:
+        candidate, candidate_head, candidate_stages = self._run_observed(
+            plan=plan,
+            values=plan.change,
+            execution_id=execution_id,
+            operation=ReceiptOperation.CANDIDATE,
+        )
+        flags = self._progress_flags(candidate_stages)
+        base_outcome = {
+            "plan_digest": plan.digest,
+            **flags,
+            "experiment": None,
+            "safety_state": candidate.result.state,
+            "evidence_digest": candidate.result.digest,
+        }
+        if candidate.progress_failures:
+            outcome = InterventionOutcome(**base_outcome)
+            self._attention(
+                "candidate receipt progress failed after apply; reconciliation required",
+                candidate.digest,
+            )
+            raise DynamicInterventionError(
+                "candidate receipt progress failed after backend apply",
+                plan_digest=plan.digest,
+                outcome=outcome,
+                candidate_receipt_digest=candidate_head.digest,
+                triggered_field="intervention.receipt",
+            )
+
+        if candidate.result.state is not SafetyState.KEPT:
+            outcome = InterventionOutcome(**base_outcome)
+            try:
+                terminal = self._operation_terminal(candidate_head, outcome, candidate)
+            except Exception as error:
+                if outcome.apply_started:
+                    self._attention(
+                        "candidate operation-terminal receipt failed", candidate_head.digest
+                    )
+                raise DynamicInterventionError(
+                    f"candidate operation-terminal receipt failed: {error}",
+                    plan_digest=plan.digest,
+                    outcome=outcome,
+                    candidate_receipt_digest=candidate_head.digest,
+                    triggered_field="intervention.receipt",
+                ) from error
+            if candidate.result.state is SafetyState.NEEDS_ATTENTION:
+                self._attention(
+                    candidate.result.reason or "candidate execution needs attention",
+                    terminal.digest,
+                )
+            return DynamicInterventionExecution(
+                plan_digest=plan.digest,
+                outcome=outcome,
+                candidate_receipt_digest=terminal.digest,
+            )
+
+        retest_ids = self._planner.retest_window_ids(f"retest-{plan.hypothesis.hypothesis_id}")
+        _atomic_write_json(
+            self._layout.control / f"retest-request-{plan.hypothesis.hypothesis_id}.json",
+            {
+                "hypothesis_id": plan.hypothesis.hypothesis_id,
+                "change": plan.change,
+                "window_ids": retest_ids,
+            },
+        )
+        retest_error: Exception | None = None
+        try:
+            batch = self._planner.read_window_batch(retest_ids)
+            evidence = self._planner.judge(batch)
+        except Exception as error:
+            retest_error = error
+            batch = None
+            evidence = None
+        experiment = (
+            InterventionExperiment(
+                measurement_batch_digest=batch.digest,
+                business_metric_id=self._planner.business_metric_id,
+                accepted=evidence.accepted,
+                business_lcb=evidence.lower,
+            )
+            if batch is not None and evidence is not None
+            else None
+        )
+        if experiment is not None and experiment.accepted:
+            outcome = InterventionOutcome(
+                plan_digest=plan.digest,
+                **flags,
+                experiment=experiment,
+                safety_state=candidate.result.state,
+                evidence_digest=batch.digest,
+            )
+            try:
+                terminal = self._operation_terminal(candidate_head, outcome, candidate)
+            except Exception as error:
+                self._attention(
+                    "candidate operation-terminal receipt failed after apply",
+                    candidate_head.digest,
+                )
+                raise DynamicInterventionError(
+                    f"candidate operation-terminal receipt failed: {error}",
+                    plan_digest=plan.digest,
+                    outcome=outcome,
+                    candidate_receipt_digest=candidate_head.digest,
+                    triggered_field="intervention.receipt",
+                ) from error
+            return DynamicInterventionExecution(
+                plan_digest=plan.digest,
+                outcome=outcome,
+                candidate_receipt_digest=terminal.digest,
+            )
+
+        restoration_values = self._restoration_values(plan, candidate)
+        try:
+            recovery, recovery_head, _ = self._run_observed(
+                plan=plan,
+                values=restoration_values,
+                execution_id=execution_id,
+                operation=ReceiptOperation.RECOVERY,
+                parent_receipt_digest=candidate_head.digest,
+            )
+        except DynamicInterventionError as error:
+            self._attention(
+                "recovery receipt failed after candidate apply",
+                error.recovery_receipt_digest or candidate_head.digest,
+            )
+            raise
+        except Exception as error:
+            self._attention(
+                "recovery receipt could not start after candidate apply",
+                candidate_head.digest,
+            )
+            raise DynamicInterventionError(
+                f"recovery receipt could not start: {error}",
+                plan_digest=plan.digest,
+                outcome=InterventionOutcome(**base_outcome),
+                candidate_receipt_digest=candidate_head.digest,
+                triggered_field="intervention.receipt",
+            ) from error
+        if recovery.progress_failures:
+            self._attention(
+                "recovery receipt progress failed; reconciliation required",
+                recovery.digest,
+            )
+            raise DynamicInterventionError(
+                "recovery receipt progress failed",
+                plan_digest=plan.digest,
+                outcome=InterventionOutcome(
+                    plan_digest=plan.digest,
+                    **flags,
+                    experiment=experiment,
+                    safety_state=recovery.result.state,
+                    evidence_digest=recovery.result.digest,
+                ),
+                candidate_receipt_digest=candidate_head.digest,
+                recovery_receipt_digest=recovery_head.digest,
+                triggered_field="intervention.receipt",
+            )
+        outcome = InterventionOutcome(
+            plan_digest=plan.digest,
+            **flags,
+            experiment=experiment,
+            safety_state=recovery.result.state,
+            evidence_digest=recovery.result.digest,
+        )
+        try:
+            recovery_terminal = self._operation_terminal(recovery_head, None, recovery)
+        except Exception as error:
+            self._attention("recovery operation-terminal receipt failed", recovery_head.digest)
+            raise DynamicInterventionError(
+                f"recovery operation-terminal receipt failed: {error}",
+                plan_digest=plan.digest,
+                outcome=outcome,
+                candidate_receipt_digest=candidate_head.digest,
+                recovery_receipt_digest=recovery_head.digest,
+                triggered_field="intervention.receipt",
+            ) from error
+        try:
+            candidate_terminal = self._operation_terminal(candidate_head, outcome, candidate)
+        except Exception as error:
+            self._attention(
+                "candidate operation-terminal receipt failed after recovery",
+                recovery_terminal.digest,
+            )
+            raise DynamicInterventionError(
+                f"candidate operation-terminal receipt failed after recovery: {error}",
+                plan_digest=plan.digest,
+                outcome=outcome,
+                candidate_receipt_digest=candidate_head.digest,
+                recovery_receipt_digest=recovery_terminal.digest,
+                triggered_field="intervention.receipt",
+            ) from error
+        if retest_error is not None:
+            self._attention(
+                "business retest failed after candidate apply; candidate was restored",
+                recovery_terminal.digest,
+            )
+            raise DynamicInterventionError(
+                f"business retest failed after candidate apply: {retest_error}",
+                plan_digest=plan.digest,
+                outcome=outcome,
+                candidate_receipt_digest=candidate_terminal.digest,
+                recovery_receipt_digest=recovery_terminal.digest,
+                triggered_field="intervention.execution",
+            ) from retest_error
+        if recovery.result.state is not SafetyState.KEPT:
+            self._attention(
+                recovery.result.reason or "candidate recovery failed",
+                recovery_terminal.digest,
+            )
+        return DynamicInterventionExecution(
+            plan_digest=plan.digest,
+            outcome=outcome,
+            candidate_receipt_digest=candidate_terminal.digest,
+            recovery_receipt_digest=recovery_terminal.digest,
+        )
+
+
 class FileRetestSource:
     """``retest`` adapter: judge one verification window group against the baseline."""
 
@@ -609,21 +1103,28 @@ __all__ = [
     "BusinessRetestPolicy",
     "BusinessRetestPlanner",
     "DynamicInterventionError",
+    "DynamicInterventionExecution",
     "FileHypothesisProposals",
+    "FileHypothesisProposalsV2",
     "FileLoadIdentity",
     "FileO0Source",
     "FileRetestSource",
     "HYPOTHESIS_PROPOSALS_SCHEMA",
+    "HYPOTHESIS_PROPOSALS_V2_SCHEMA",
     "HypothesisProposal",
+    "HypothesisProposalV2",
     "HypothesisProposalsFile",
+    "HypothesisProposalsFileV2",
     "RetestIdentityDrift",
     "SafetyBackedIntervention",
+    "TwoStageSafetyBackedIntervention",
     "SessionFileMissing",
     "SessionLayout",
     "build_business_batch_identity",
     "build_business_metric_contract",
     "load_business_policy",
     "load_hypothesis_proposals",
+    "load_hypothesis_proposals_versioned",
     "load_o1_collection_plans",
     "load_workload_contract",
 ]

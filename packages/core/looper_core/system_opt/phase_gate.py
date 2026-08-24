@@ -15,8 +15,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from enum import StrEnum
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import Field, model_validator
 
@@ -25,6 +26,7 @@ from looper_core.contracts import StrictModel
 from looper_core.system_opt.workload import BoundComparator
 
 DYNAMIC_PHASE_GATE_SCHEMA = "looper.dynamic-phase-gate/v1alpha1"
+DYNAMIC_PHASE_GATE_V2_SCHEMA = "looper.dynamic-phase-gate/v1alpha2"
 
 
 class GateStopClass(StrEnum):
@@ -88,6 +90,41 @@ class DynamicPhaseGateContract(StrictModel):
         return canonical_digest(self.model_dump(mode="json", exclude_none=False))
 
 
+class DynamicPhaseGateContractV2(StrictModel):
+    """Execution-gated contract used by the two-stage intervention loop.
+
+    Risk quota is enforced before execution by ``evaluate_intervention_gate``;
+    the v1 contract remains unchanged for deterministic replay.
+    """
+
+    schema_version: Literal[DYNAMIC_PHASE_GATE_V2_SCHEMA] = DYNAMIC_PHASE_GATE_V2_SCHEMA
+    workload_contract_digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    slo: SloTarget | None = None
+    convergence: ConvergencePolicy
+    budget: PhaseBudget
+    degradation: DegradationGate
+    identity_drift_action: Literal["stop-phase"] = "stop-phase"
+    reactivation_holdout_windows: int = Field(ge=1)
+    single_change_per_window: Literal[True] = True
+
+    @property
+    def digest(self) -> str:
+        return canonical_digest(self.model_dump(mode="json", exclude_none=False))
+
+
+def load_dynamic_phase_gate(
+    payload: Mapping[str, Any],
+) -> DynamicPhaseGateContract | DynamicPhaseGateContractV2:
+    """Dispatch by schema without migrating legacy evidence."""
+
+    version = payload.get("schema_version")
+    if version == DYNAMIC_PHASE_GATE_SCHEMA:
+        return DynamicPhaseGateContract.model_validate(payload)
+    if version == DYNAMIC_PHASE_GATE_V2_SCHEMA:
+        return DynamicPhaseGateContractV2.model_validate(payload)
+    raise ValueError(f"unsupported dynamic phase gate schema_version: {version!r}")
+
+
 class PhaseGateState(StrictModel):
     """Counters the dynamic loop maintains between gate evaluations.
 
@@ -131,15 +168,11 @@ class GateDecision(StrictModel):
         return canonical_digest(self.model_dump(mode="json", exclude_none=False))
 
 
-def evaluate_phase_gate(
-    contract: DynamicPhaseGateContract, state: PhaseGateState
-) -> GateDecision:
+def evaluate_phase_gate(contract: DynamicPhaseGateContract, state: PhaseGateState) -> GateDecision:
     """Evaluate the ending gate in the fixed order safety -> identity -> budget
     -> target -> convergence; every outcome carries the evidence digest."""
 
-    def decision(
-        stop_class: GateStopClass, field: str, reason: str
-    ) -> GateDecision:
+    def decision(stop_class: GateStopClass, field: str, reason: str) -> GateDecision:
         return GateDecision(
             stop=True,
             stop_class=stop_class,
@@ -185,10 +218,74 @@ def evaluate_phase_gate(
             f"risky interventions {state.risky_interventions} exceeded the task "
             f"risk quota {contract.budget.risk_quota}",
         )
-    if (
-        contract.slo is not None
-        and state.consecutive_slo_met_windows >= contract.slo.hold_windows
-    ):
+    if contract.slo is not None and state.consecutive_slo_met_windows >= contract.slo.hold_windows:
+        return decision(
+            GateStopClass.TARGET_MET,
+            "slo.hold_windows",
+            f"SLO met for {state.consecutive_slo_met_windows} consecutive "
+            f"windows (required hold {contract.slo.hold_windows})",
+        )
+    if state.consecutive_lcb_threshold_rounds >= contract.convergence.rounds:
+        return decision(
+            GateStopClass.CONVERGED,
+            "convergence.rounds",
+            f"business LCB stayed at or below {contract.convergence.lcb_threshold} "
+            f"for {state.consecutive_lcb_threshold_rounds} consecutive rounds "
+            f"(required {contract.convergence.rounds})",
+        )
+    return GateDecision(
+        stop=False,
+        reason="no stop class triggered; the dynamic phase continues",
+        contract_digest=contract.digest,
+        evidence_digest=state.evidence_digest,
+    )
+
+
+def evaluate_phase_gate_v2(
+    contract: DynamicPhaseGateContractV2, state: PhaseGateState
+) -> GateDecision:
+    """Evaluate v2 endings; risk quota belongs only to the pre-execution gate."""
+
+    def decision(stop_class: GateStopClass, field: str, reason: str) -> GateDecision:
+        return GateDecision(
+            stop=True,
+            stop_class=stop_class,
+            triggered_field=field,
+            reason=reason,
+            contract_digest=contract.digest,
+            evidence_digest=state.evidence_digest,
+        )
+
+    if state.degradation_events > 0:
+        return decision(
+            GateStopClass.SAFETY_TRIGGERED,
+            "degradation",
+            f"{state.degradation_events} degradation event(s) exceeded the task-"
+            f"declared gate on '{contract.degradation.metric_id}'; roll back and "
+            "stop this phase",
+        )
+    if state.identity_drift_events > 0:
+        return decision(
+            GateStopClass.WORKLOAD_VANISHED,
+            "identity_drift_action",
+            f"{state.identity_drift_events} workload identity drift event(s); the "
+            "evidence chain for this contract no longer covers the running load",
+        )
+    if state.interventions >= contract.budget.max_interventions:
+        return decision(
+            GateStopClass.BUDGET_EXHAUSTED,
+            "budget.max_interventions",
+            f"interventions {state.interventions} reached the task budget "
+            f"{contract.budget.max_interventions}",
+        )
+    if state.elapsed_seconds >= contract.budget.wall_clock_seconds:
+        return decision(
+            GateStopClass.BUDGET_EXHAUSTED,
+            "budget.wall_clock_seconds",
+            f"elapsed {state.elapsed_seconds:.3f}s reached the task wall-clock "
+            f"budget {contract.budget.wall_clock_seconds:.3f}s",
+        )
+    if contract.slo is not None and state.consecutive_slo_met_windows >= contract.slo.hold_windows:
         return decision(
             GateStopClass.TARGET_MET,
             "slo.hold_windows",
@@ -213,13 +310,17 @@ def evaluate_phase_gate(
 
 __all__ = [
     "DYNAMIC_PHASE_GATE_SCHEMA",
+    "DYNAMIC_PHASE_GATE_V2_SCHEMA",
     "ConvergencePolicy",
     "DegradationGate",
     "DynamicPhaseGateContract",
+    "DynamicPhaseGateContractV2",
     "GateDecision",
     "GateStopClass",
     "PhaseBudget",
     "PhaseGateState",
     "SloTarget",
     "evaluate_phase_gate",
+    "evaluate_phase_gate_v2",
+    "load_dynamic_phase_gate",
 ]

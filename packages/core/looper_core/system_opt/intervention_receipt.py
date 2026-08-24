@@ -30,9 +30,7 @@ from looper_core.system_opt.intervention import (
 RECEIPT_POINTER_SCHEMA = "looper.intervention-receipt-pointer/v1alpha1"
 _DIGEST = r"^sha256:[0-9a-f]{64}$"
 _CONTENT_NAME = re.compile(r"^[0-9a-f]{64}\.json$")
-_POINTER_NAME = re.compile(
-    r"^[0-9a-f]{64}\.(candidate|recovery)\.current\.json$"
-)
+_POINTER_NAME = re.compile(r"^[0-9a-f]{64}\.(candidate|recovery)\.current\.json$")
 _ALLOWED_SUCCESSORS = {
     ReceiptStageV2.PLANNED: {
         ReceiptStageV2.PREFLIGHT_COMPLETED,
@@ -56,6 +54,17 @@ _ALLOWED_SUCCESSORS = {
 }
 
 AttentionSink = Callable[[str, str], None]
+
+
+def _native_path(path: Path) -> str:
+    """Return an absolute Windows extended path so receipt names survive MAX_PATH."""
+
+    value = str(path.absolute())
+    if os.name != "nt" or value.startswith("\\\\?\\"):
+        return value
+    if value.startswith("\\\\"):
+        return "\\\\?\\UNC\\" + value.lstrip("\\")
+    return "\\\\?\\" + value
 
 
 class ReceiptStoreError(RuntimeError):
@@ -91,9 +100,7 @@ class DurableReceiptStore:
 
     @staticmethod
     def _execution_digest(plan_digest: str, execution_id: str) -> str:
-        return canonical_digest(
-            {"execution_id": execution_id, "plan_digest": plan_digest}
-        )
+        return canonical_digest({"execution_id": execution_id, "plan_digest": plan_digest})
 
     def _pointer_path(
         self, plan_digest: str, execution_id: str, operation: ReceiptOperation
@@ -112,35 +119,32 @@ class DurableReceiptStore:
         identity = self._execution_digest(plan_digest, execution_id).removeprefix("sha256:")
         path = self.root / f".{identity}.{operation.value}.guard"
         try:
-            descriptor = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            descriptor = os.open(_native_path(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
         except FileExistsError as error:
             raise ReceiptStoreError("receipt chain is busy") from error
         try:
             os.close(descriptor)
             yield
         finally:
-            if path.exists():
-                path.unlink()
+            if os.path.exists(_native_path(path)):
+                os.unlink(_native_path(path))
 
     @staticmethod
     def _atomic_write(path: Path, payload: dict[str, object]) -> None:
         temporary = path.parent / f".receipt-{os.getpid()}-{uuid4().hex}.tmp"
         try:
-            temporary.write_text(
-                json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2),
-                encoding="utf-8",
-            )
-            os.replace(temporary, path)
+            with open(_native_path(temporary), "w", encoding="utf-8") as stream:
+                stream.write(json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2))
+            os.replace(_native_path(temporary), _native_path(path))
         finally:
-            if temporary.exists():
-                temporary.unlink()
+            if os.path.exists(_native_path(temporary)):
+                os.unlink(_native_path(temporary))
 
     @staticmethod
     def _read_receipt(path: Path) -> InterventionExecutionReceiptV2:
         try:
-            receipt = InterventionExecutionReceiptV2.model_validate_json(
-                path.read_text(encoding="utf-8")
-            )
+            with open(_native_path(path), encoding="utf-8") as stream:
+                receipt = InterventionExecutionReceiptV2.model_validate_json(stream.read())
         except Exception as error:
             raise ReceiptStoreError(f"invalid receipt file: {path.name}") from error
         if path.name != f"{receipt.digest.removeprefix('sha256:')}.json":
@@ -148,17 +152,16 @@ class DurableReceiptStore:
         return receipt
 
     def _read_pointer(self, path: Path) -> InterventionReceiptPointer | None:
-        if not path.exists():
+        if not os.path.exists(_native_path(path)):
             return None
         try:
-            return InterventionReceiptPointer.model_validate_json(
-                path.read_text(encoding="utf-8")
-            )
+            with open(_native_path(path), encoding="utf-8") as stream:
+                return InterventionReceiptPointer.model_validate_json(stream.read())
         except Exception as error:
             raise ReceiptStoreError(f"invalid receipt pointer: {path.name}") from error
 
     def _all_receipts(self) -> dict[str, InterventionExecutionReceiptV2]:
-        if not self.root.exists():
+        if not os.path.exists(_native_path(self.root)):
             return {}
         receipts: dict[str, InterventionExecutionReceiptV2] = {}
         for path in sorted(self.root.glob("*.json"), key=lambda candidate: candidate.name):
@@ -265,9 +268,7 @@ class DurableReceiptStore:
         execution_id: str,
         operation: ReceiptOperation,
     ) -> InterventionExecutionReceiptV2 | None:
-        all_receipts, scoped = self._scope_receipts(
-            plan_digest, execution_id, operation
-        )
+        all_receipts, scoped = self._scope_receipts(plan_digest, execution_id, operation)
         pointer_path = self._pointer_path(plan_digest, execution_id, operation)
         pointer = self._read_pointer(pointer_path)
         if not scoped:
@@ -318,9 +319,10 @@ class DurableReceiptStore:
             ):
                 raise ReceiptStoreError("receipt pointer identity mismatch")
             pointed = scoped.get(pointer.receipt_digest)
-            if pointed is None or pointer.receipt_filename != self._content_path(
-                pointed.digest
-            ).name:
+            if (
+                pointed is None
+                or pointer.receipt_filename != self._content_path(pointed.digest).name
+            ):
                 raise ReceiptStoreError("receipt pointer is dangling")
             # A pointer to a valid ancestor is a recoverable content-before-pointer
             # crash seam. The unique chain head remains authoritative.
@@ -337,17 +339,40 @@ class DurableReceiptStore:
             raise ReceiptStoreError("receipt chain does not exist")
         return head
 
+    def heads(self) -> list[InterventionExecutionReceiptV2]:
+        """Return every verified operation head in deterministic identity order."""
+
+        receipts = self._all_receipts()
+        scopes = {
+            (receipt.plan_digest, receipt.execution_id, receipt.operation)
+            for receipt in receipts.values()
+        }
+        if os.path.exists(_native_path(self.root)):
+            for path in self.root.glob("*.current.json"):
+                pointer = self._read_pointer(path)
+                assert pointer is not None
+                scopes.add(
+                    (pointer.plan_digest, pointer.execution_id, pointer.operation)
+                )
+        heads: list[InterventionExecutionReceiptV2] = []
+        for plan_digest, execution_id, operation in sorted(
+            scopes, key=lambda scope: (scope[0], scope[1], scope[2].value)
+        ):
+            head = self.head(plan_digest, execution_id, operation)
+            if head is None:
+                raise ReceiptStoreError("receipt pointer exists without a chain")
+            heads.append(head)
+        return heads
+
     def _publish_receipt(self, receipt: InterventionExecutionReceiptV2) -> None:
         self.root.mkdir(parents=True, exist_ok=True)
         path = self._content_path(receipt.digest)
-        if path.exists():
+        if os.path.exists(_native_path(path)):
             existing = self._read_receipt(path)
             if existing != receipt:
                 raise ReceiptStoreError("existing receipt content is not idempotent")
         else:
-            self._atomic_write(
-                path, receipt.model_dump(mode="json", exclude_none=False)
-            )
+            self._atomic_write(path, receipt.model_dump(mode="json", exclude_none=False))
         pointer = InterventionReceiptPointer(
             execution_digest=receipt.execution_digest,
             plan_digest=receipt.plan_digest,
@@ -357,9 +382,7 @@ class DurableReceiptStore:
             receipt_filename=path.name,
         )
         self._atomic_write(
-            self._pointer_path(
-                receipt.plan_digest, receipt.execution_id, receipt.operation
-            ),
+            self._pointer_path(receipt.plan_digest, receipt.execution_id, receipt.operation),
             pointer.model_dump(mode="json", exclude_none=False),
         )
 
@@ -409,9 +432,7 @@ class DurableReceiptStore:
         overlap = protected & set(fields)
         if overlap:
             raise ReceiptStoreError(f"advance cannot override identity fields: {sorted(overlap)}")
-        with self._mutex(
-            current.plan_digest, current.execution_id, current.operation
-        ):
+        with self._mutex(current.plan_digest, current.execution_id, current.operation):
             candidate = InterventionExecutionReceiptV2(
                 plan_digest=current.plan_digest,
                 execution_id=current.execution_id,
@@ -423,9 +444,7 @@ class DurableReceiptStore:
                 **fields,
             )
             self._validate_successor(current, candidate)
-            head = self.verify_chain(
-                current.plan_digest, current.execution_id, current.operation
-            )
+            head = self.verify_chain(current.plan_digest, current.execution_id, current.operation)
             if head.digest != current.digest:
                 if head == candidate:
                     self._publish_receipt(head)
