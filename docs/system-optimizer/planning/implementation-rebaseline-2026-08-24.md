@@ -1,6 +1,6 @@
 # System Optimizer 实现重新基线（2026-08-24）
 
-> 状态：current delivery baseline。
+> 状态：current delivery baseline（历史快照；当前状态见文末 addendum，截至 `4f121cc`）。
 > 代码基线：`83a6b15`；治理文档基线：`e704b88`。
 > 目的：冻结当前真实能力、未验收边界和并行依赖；不以文件数或测试数代替里程碑出口。
 
@@ -56,3 +56,30 @@
 3. D5-I1 已验收；下一包 D5-I2 负责 prepare→gate→execute、预算计数和 receipt 持久化，
    不得扩大到未确认的阈值或自动决策。
 4. 三包稳定后再选择真实 Linux/CVM 动态会话与 L6c 故障演练；没有实测前成熟度不升级。
+
+---
+
+## 当前状态 addendum（截至 `origin/system-optimizer-impl@4f121cc`）
+
+> 本节是上方历史基线快照的**事后更新**，不改写上方"当前依赖和能力切片"与"开放项"
+> 的原始结论（其代码基线 `83a6b15` 是当时验收事实）。下列推进均以已合入主线 commit 为据。
+
+| 上表条目 | 当时结论 | 当前状态（commit） |
+|---|---|---|
+| D4 动态证据回放 | "初版 replay verifier 已拒绝，主线尚无获验收离线回放器" | 已落地：`dynamic_replay.py` `verify_dynamic_collection_evidence`（`1753cea`） |
+| L6c 独立回放 | （未列） | 已落地：`rollback/regression_evidence.py` `verify_regression_recovery_evidence`（G6 `b4caa93` + `a8bd45e`） |
+| D5-I2 | "dynamic-loop/backend/持久化接线未开始" | 已完成：L1 observer + durable receipt（`16c1fdd`）、dynamic-loop 两阶段接线（`8e657e5`）、CLI attention/restart reconcile（`2065a77`） |
+| risk_quota / single-change | "尚未消费 / 仍未调用；risky_interventions 仍无生产者" | 已被 `evaluate_intervention_gate` 执行前门禁消费（D5-I1 `0c69cdd` + `87d776c`），动态循环 `dynamic_loop.py` 已调用并按 `apply_started` 递增 `risky_interventions` |
+| receipt mutex | （未列） | RCP-02A 已落地：advisory lock（`fcntl.flock`/`msvcrt.locking`）+ 线程/进程/崩溃释放 + 未知/远程文件系统 fail-closed（`2d479b8` + 硬化 `990d087`）；RCP-02B（legacy guard 显式恢复）尚未实施 |
+
+### 仍未完成（M3 真实边界，保持，不得写成完成）
+
+- O1 evidence → S4 在线优先级推导（当前 v1 假设源仍为声明式提案文件 `FileHypothesisProposals`，待活体 O1 源替换）。
+- refuted hypothesis 第二类负缓存（L7 第二条目类型，SO-D019 留 open，schema 未获用户逐字段确认）。
+- M3 汇合集成（M3-INT）与场景 Profile（M3-PROFILE）。
+- O3 时间盒 trace 属 M6+，不是当前缺陷。
+
+### 真实环境验收（不能用 simulated 代替，仍未关闭）
+
+- REAL-L6C、REAL-SSH、REAL-S9 均未关闭。
+- 当前 CVM 只有 readiness / 直读代理证据（`4bfa29d` audit），不能写成完整真实闭环验收。

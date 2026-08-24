@@ -147,7 +147,7 @@ loop:
 | L8 引擎 | 调度（S3）、判断（S0/S2/S7）、打分（S4/S6）、排名晋升（S8/S9）、停止（S10） | 测量、写配置、私藏门禁 | 已实现 scorer/judge/scheduler/incumbent/loop；动态循环另在 `dynamic_loop.py`，真实 CVM 未验收 |
 | L7 缓存 | 负结果登记、查询、身份失效 | 替代当前测量（红线：同身份才跳过） | 新建；提前路线图 M6 的负结果部分（决策见治理日志） |
 | L6 回退 | 四级回退（候选/相位/退化/崩溃）+ 回退验证 | 评价收益 | a/d 已有真机验证；b 显式化；c 已实现 S8 显式阈值→S9 last-good 精确恢复及 G5 CLI 生命周期，真实退化演练待执行 |
-| L5 组件优化器 | 公式映射出配置建议+优先级、S5 搜索兜底、组件内打分 | 终裁、跨组件判断 | 改造：现 `SystemOptimizationEngine`+每组件 manifest/policy/protocol 即雏形，需把"组件内终裁"降格为"上报引擎" |
+| L5 组件优化器 | 公式映射出配置建议+优先级、S5 搜索兜底、组件内打分 | 终裁、跨组件判断 | 已降格完成：`ComponentOptimizer.suggest_candidates` 只产晋级建议（`accepted` 是组件内建议），终裁权在 L8 `judge.evaluate_candidate`；越域建议拒绝并留痕 |
 | L4 采集器 | 负载下按组件采指标（主指标+分布+微指标） | 加压、判定 | 新建；io500 telemetry 与 metrics.jsonl 是可复用雏形 |
 | L3 压力器 | 调现成工具构建受控负载 | 采集、判定 | 收编：StandardPressureProtocol+`*_pressure_measure.py`，压/采需解耦 |
 | L2 测量合同 | 统一包装压力+采集输出，digest 绑定 | — | 现有（含双范围 digest 命名规范） |
@@ -161,14 +161,14 @@ loop:
 | S0 | 身份可比性 | L8 判断器 / L2 | ✅ `comparable()` 真机用过 |
 | S1/S1.1 | 基线校准 + CV 门限派生 | L5 | ✅ `calibrate-pressure`/`derive-pressure-gate`，三组件真机 |
 | S2 | 不可补偿硬门禁 | L8 判断器 | ✅ `GateSpec`+`evaluate_hard_gates` |
-| S3 | 组件路由 | L8 调度器 | 🟡 workload 模式雏形，未真跑 |
+| S3 | 组件路由 | L8 调度器 | 静态 workload 模式雏形（未真跑）；动态 S3 假设路由已实现（`hypothesis.py` D2 三硬规则 + ≥2 竞争假设才许干预）并接入动态循环 |
 | S4 | 组件内二维优先级 | L8 打分器 / L5 | 🟡 F-PROJECT-002 v1alpha1 已采用并实现；逐 metric scale 校准、P/D/A/Q/T schema 迁移仍 open |
 | S5 | 动态合法搜索域 | L5 | ✅ `resolve_domain` 真机用过（dependency/risk 交集待核） |
 | S6 | 方向感知改善量 | L8 打分器 / L5 | ✅ `bootstrap_improvement`（F-PROJECT-S6-S7/v1） |
 | S7 | 稳健接受条件 | L8 判断器 | ✅ LCB>MDE 真机用过 |
 | S8 | 结果向量（含 U_regression） | L8 | ✅ `result_vector.py` 六维向量/Pareto；L6c 只消费已归一向量和任务显式阈值，G5 CLI 已接入安全生命周期 |
 | S9 | 晋升与组合复验 | L8 | ✅ `evaluate_promotion` + `verification.py` 复验生产者；无合格观测 fail-closed |
-| S10 | 显式停止状态（结束门禁） | L8 | ✅ 静态 `StopReason`；动态 `DynamicPhaseGateContract` 五类停止与防振荡字段已接循环；risk quota 执行前信号仍缺 |
+| S10 | 显式停止状态（结束门禁） | L8 | ✅ 静态 `StopReason`；动态 `DynamicPhaseGateContract` 五类停止与防振荡字段已接循环；risk quota 与 single-change 执行前门禁由 `evaluate_intervention_gate` 落地（D5-I1）并被动态循环消费 |
 | F-MENTOR-001/002/003 | 导师三层 | L8 | 001 已并入 S2；002/003 待校准（登记表已列前置条件） |
 
 ## 7. 与现有代码的差距与建议实现顺序
@@ -181,7 +181,7 @@ loop:
 4. **S8 + L6c**：核心执行桥与 G5 CLI 生命周期、证据落盘、租约/attention 接线均已完成；下一步是真实目标退化演练。
 5. **S9 组合复验**：合同和动态复验生产者已完成；真实已接受候选的跨环境验证仍开放。
 6. **L7 负缓存**：身份绑定 + 证据挂钩 + 失效规则（见 §2 红线）。
-7. **S10 相位级结束门禁 + 动态相位**：静态闭环稳定后进入动态优化实现。
+7. **S10 相位级结束门禁 + 动态相位**：已实现——`dynamic_loop.py`（六构件受门禁约束的有限循环）+ `dynamic_adapters.py`（真实接线：文件 O0/身份源、声明式假设提案、L1 keep 路径干预、业务复测判定、复验源）+ CLI `system-opt dynamic-run`（simulated/local-linux）+ 会话文件约定（`contracts/dynamic-session-files.md`）。真实 CVM 动态闭环仍未验收。
 
 顺序原则：先把"判断与打分的裁决权"收进引擎（1/2），再补观测（3）、系统级
 裁决（4/5），最后缓存（6）与动态相位（7）。负缓存虽列为第 6 步，其架构位置

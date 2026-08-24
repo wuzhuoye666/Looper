@@ -31,7 +31,7 @@
 | S0 可比性 | `scoring.comparable()` | 身份字段逐项比对 |
 | S1/S1.1 校准+CV 门 | CLI `calibrate-pressure` / `derive-pressure-gate` | 门 = 单侧 95% bootstrap 上界，target-local（今天两台机器两扇门：4.64% / 12.57%） |
 | S2 硬门禁 | `scoring.evaluate_hard_gates` | 不可被收益补偿 |
-| S3 路由 | 静态：tuning `routed_components`；动态：`hypothesis.py`（≥2 竞争假设才许干预）+ `intervention.py`（D5-I1 两阶段纯合同和执行前风险/单变更门禁） | D5-I2 动态循环执行与 receipt 持久化尚未接线 |
+| S3 路由 | 静态：tuning `routed_components`；动态：`hypothesis.py`（≥2 竞争假设才许干预）+ `intervention.py`（D5-I1 两阶段纯合同和执行前风险/单变更门禁） | D5-I2 已接线：`dynamic_loop.py` prepare→gate→execute（`evaluate_intervention_gate` 执行前 risk quota/single-change + `risky_interventions` 按 `apply_started` 递增）；`dynamic_adapters.py` `TwoStageSafetyBackedIntervention`；`intervention_receipt.py` durable receipt（candidate/recovery 双链，RCP-02A advisory lock）；`cli.py` attention/restart reconciliation |
 | S4 二维优先级 | `scoring.diagnostic_priorities` + F-PROJECT-002 `pressure_value`/`adverse_change`（显式 scale，方向-方法相容表在 policy 校验） | 样本充足度准入已落地（eligible_metric_ids）；E_m 完整版守提案门 |
 | S5 合法搜索域 | `domain.resolve_domain` | 能力∩授权 |
 | S6/S7 改善+接受 | `scoring.bootstrap_improvement`（F-PROJECT-S6-S7/v1alpha1） | **LCB>MDE 严格大于**；黄金数值被特征测试钉死 |
