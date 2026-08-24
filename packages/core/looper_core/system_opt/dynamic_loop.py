@@ -533,6 +533,10 @@ def run_dynamic_phase_v2(
     component_probe: Callable[[ComponentHypothesis, ObservationWindow], str] | None = None,
     retest: Callable[[str], RetestOutcome] | None = None,
     verification_window_count: int = 0,
+    refutation_sink: Callable[
+        [ComponentHypothesis, SymptomRecord, InterventionExperiment], None
+    ]
+    | None = None,
 ) -> DynamicPhaseRunV2:
     """Run the v2 prepare -> pre-execution gate -> execute state machine."""
 
@@ -781,7 +785,15 @@ def run_dynamic_phase_v2(
                                 action = WindowAction.VERIFIED
                                 promotion = evaluate_promotion(observations, promotion_contract)
                         else:
-                            ledger.refute(head.hypothesis_id, experiment.measurement_batch_digest)
+                            refuted = ledger.refute(
+                                head.hypothesis_id, experiment.measurement_batch_digest
+                            )
+                            if refutation_sink is not None:
+                                refutation_sink(
+                                    refuted,
+                                    ledger.symptom(refuted.symptom_id),
+                                    experiment,
+                                )
                             action = WindowAction.INTERVENED
                             note = "business retest rejected the hypothesis; restored and refuted"
                         if experiment is not None and experiment.business_lcb is not None:
