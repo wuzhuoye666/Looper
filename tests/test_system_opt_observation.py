@@ -46,6 +46,16 @@ IPERF3_JSON = (
     / "m2-network-cc-calibration-20260823"
     / "network-20260823T105619.260182Z-1.json"
 )
+SYSBENCH_CPU = (
+    ARTIFACTS
+    / "sysbench-o0-capture-20260823"
+    / "sysbench-cpu-threads2-time5.txt"
+)
+SYSBENCH_MEMORY = (
+    ARTIFACTS
+    / "sysbench-o0-capture-20260823"
+    / "sysbench-memory-threads2-1M-2G.txt"
+)
 
 START = datetime(2026, 8, 23, 12, 0, tzinfo=UTC)
 END = datetime(2026, 8, 23, 12, 2, tzinfo=UTC)
@@ -95,11 +105,51 @@ class TestParsersAgainstRealOutputs:
         ]
         assert parsed["iperf3.seconds"] == [pytest.approx(5.000362)]
 
+    def test_sysbench_cpu_real_fixture(self):
+        raw = SYSBENCH_CPU.read_text(encoding="utf-8")
+        parsed = parse_o0_metrics(
+            "sysbench",
+            [
+                "sysbench.events-per-second",
+                "sysbench.total-events",
+                "sysbench.total-time-seconds",
+                "sysbench.latency-avg-ms",
+                "sysbench.latency-p95-ms",
+                "sysbench.latency-max-ms",
+            ],
+            raw,
+        )
+
+        assert parsed["sysbench.events-per-second"] == [pytest.approx(2148.46)]
+        assert parsed["sysbench.total-events"] == [10747.0]
+        assert parsed["sysbench.total-time-seconds"] == [pytest.approx(5.0005)]
+        assert parsed["sysbench.latency-avg-ms"] == [pytest.approx(0.93)]
+        assert parsed["sysbench.latency-p95-ms"] == [pytest.approx(0.97)]
+        assert parsed["sysbench.latency-max-ms"] == [pytest.approx(27.62)]
+
+    def test_sysbench_memory_real_fixture(self):
+        raw = SYSBENCH_MEMORY.read_text(encoding="utf-8")
+        parsed = parse_o0_metrics(
+            "sysbench",
+            [
+                "sysbench.throughput-mib-per-sec",
+                "sysbench.total-events",
+                "sysbench.latency-p95-ms",
+            ],
+            raw,
+        )
+
+        assert parsed["sysbench.throughput-mib-per-sec"] == [pytest.approx(20049.42)]
+        assert parsed["sysbench.total-events"] == [2048.0]
+        assert parsed["sysbench.latency-p95-ms"] == [pytest.approx(0.13)]
+
     def test_unregistered_tool_and_metric_fail_closed(self):
         with pytest.raises(O0ParseError, match="no O0 parser registered"):
-            parse_o0_metrics("sysbench", ["sysbench.events-per-second"], "{}")
+            parse_o0_metrics("numactl", ["numactl.node-count"], "{}")
         with pytest.raises(O0ParseError, match="unregistered O0 metric"):
             parse_o0_metrics("stress-ng", ["stress-ng.not-a-field"], "metrics:\n- stressor: cpu\n")
+        with pytest.raises(O0ParseError, match="unregistered O0 metric"):
+            parse_o0_metrics("sysbench", ["sysbench.not-a-field"], "sysbench 1.0.20\n")
 
     def test_malformed_outputs_fail_closed(self):
         with pytest.raises(O0ParseError, match="invalid"):

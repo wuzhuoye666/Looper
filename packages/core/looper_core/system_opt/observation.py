@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from datetime import datetime
 from typing import Any, Literal
 
@@ -48,6 +49,17 @@ _IPERF3_FIELDS = {
     "iperf3.sum-received-bps": ("sum_received", "bits_per_second"),
     "iperf3.seconds": ("sum_received", "seconds"),
     "iperf3.retransmits": ("sum_sent", "retransmits"),
+}
+# sysbench 输出是纯文本（非 JSON/YAML），故登记 metric_id -> 正则捕获组。
+# 数值语义见 research/source-metric-inventory：events_per_sec / latency_* / throughput_mib_s。
+_SYSBENCH_FIELDS = {
+    "sysbench.events-per-second": r"events per second:\s+([0-9.]+)",
+    "sysbench.total-events": r"total number of events:\s+(\d+)",
+    "sysbench.total-time-seconds": r"total time:\s+([0-9.]+)s",
+    "sysbench.latency-avg-ms": r"avg:\s+([0-9.]+)",
+    "sysbench.latency-p95-ms": r"95th percentile:\s+([0-9.]+)",
+    "sysbench.latency-max-ms": r"max:\s+([0-9.]+)",
+    "sysbench.throughput-mib-per-sec": r"([0-9.]+)\s+MiB/sec",
 }
 
 
@@ -162,10 +174,26 @@ def _parse_iperf3(metric_ids: list[str], raw: str) -> dict[str, list[float]]:
     return result
 
 
+def _parse_sysbench(metric_ids: list[str], raw: str) -> dict[str, list[float]]:
+    result: dict[str, list[float]] = {}
+    for metric_id in metric_ids:
+        pattern = _SYSBENCH_FIELDS.get(metric_id)
+        if pattern is None:
+            raise O0ParseError(
+                f"unregistered O0 metric '{metric_id}' for tool sysbench"
+            )
+        match = re.search(pattern, raw)
+        if match is None:
+            raise O0ParseError(f"{metric_id}: sysbench output has no matching field")
+        result[metric_id] = [_require_float(float(match.group(1)), metric_id)]
+    return result
+
+
 _O0_PARSERS = {
     "stress-ng": _parse_stress_ng,
     "fio": _parse_fio,
     "iperf3": _parse_iperf3,
+    "sysbench": _parse_sysbench,
 }
 
 
