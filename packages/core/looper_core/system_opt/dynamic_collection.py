@@ -8,15 +8,16 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from math import isfinite
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import Field, model_validator
+from pydantic import Field, StringConstraints, model_validator
 
 from looper_core.canonical import canonical_digest
 from looper_core.contracts import StrictModel
@@ -40,6 +41,15 @@ DYNAMIC_COLLECTION_EVIDENCE_INDEX_SCHEMA = (
     "looper.dynamic-collection-evidence-index/v1alpha1"
 )
 _DIGEST = r"^sha256:[0-9a-f]{64}$"
+_COLLECTION_EVIDENCE_KINDS = frozenset(
+    {
+        "o1-collection-run",
+        "o1-overhead-evidence",
+        "o2-probe-evidence",
+        "o2-overhead-evidence",
+    }
+)
+_DigestStr = Annotated[str, StringConstraints(pattern=_DIGEST)]
 
 
 class DynamicCollectionUnavailable(RuntimeError):
@@ -535,15 +545,25 @@ class DynamicCollectionEvidenceIndex(StrictModel):
     schema_version: Literal[DYNAMIC_COLLECTION_EVIDENCE_INDEX_SCHEMA] = (
         DYNAMIC_COLLECTION_EVIDENCE_INDEX_SCHEMA
     )
-    o1_runs_by_window: dict[str, list[str]]
-    o1_overhead_digests_by_window: dict[str, dict[ComponentName, str]]
-    o2_probe_evidence_digests: list[str]
-    o2_overhead_evidence_digests: list[str]
+    o1_runs_by_window: dict[str, list[_DigestStr]]
+    o1_overhead_digests_by_window: dict[str, dict[ComponentName, _DigestStr]]
+    o2_probe_evidence_digests: list[_DigestStr]
+    o2_overhead_evidence_digests: list[_DigestStr]
 
 
-def _evidence_filename(kind: str, digest: str) -> str:
-    if not digest.startswith("sha256:"):
-        raise ValueError("collection evidence filename requires a sha256 digest")
+def collection_evidence_filename(kind: str, digest: str) -> str:
+    """Deterministic digest-addressed filename for one persisted evidence artifact.
+
+    Strictly validates both inputs so a forged digest can never escape the
+    control directory: ``kind`` must be one of the four registered evidence
+    kinds and ``digest`` must fully match ``^sha256:[0-9a-f]{64}$`` (lowercase
+    hex only, no path separators). Shared by the producer and the replay verifier.
+    """
+
+    if kind not in _COLLECTION_EVIDENCE_KINDS:
+        raise ValueError(f"unknown collection evidence kind: {kind!r}")
+    if re.fullmatch(_DIGEST, digest) is None:
+        raise ValueError(f"collection evidence digest is not sha256-shaped: {digest!r}")
     return f"{kind}-{digest.removeprefix('sha256:')}.json"
 
 
@@ -631,24 +651,24 @@ def persist_dynamic_collection_evidence(
         for runs in o1_source.runs_by_window.values():
             for run in runs:
                 _atomic_write_json(
-                    control_dir / _evidence_filename("o1-collection-run", run.digest),
+                    control_dir / collection_evidence_filename("o1-collection-run", run.digest),
                     run.model_dump(mode="json", exclude_none=False),
                 )
         for digest, evidence in o1_source.overhead_evidence_by_digest.items():
             _atomic_write_json(
-                control_dir / _evidence_filename("o1-overhead-evidence", digest),
+                control_dir / collection_evidence_filename("o1-overhead-evidence", digest),
                 evidence.model_dump(mode="json", exclude_none=False),
             )
 
     if o2_probe is not None:
         for digest, evidence in o2_probe.evidence_by_digest.items():
             _atomic_write_json(
-                control_dir / _evidence_filename("o2-probe-evidence", digest),
+                control_dir / collection_evidence_filename("o2-probe-evidence", digest),
                 evidence.model_dump(mode="json", exclude_none=False),
             )
         for digest, evidence in o2_probe.overhead_evidence_by_digest.items():
             _atomic_write_json(
-                control_dir / _evidence_filename("o2-overhead-evidence", digest),
+                control_dir / collection_evidence_filename("o2-overhead-evidence", digest),
                 evidence.model_dump(mode="json", exclude_none=False),
             )
 
@@ -675,5 +695,6 @@ __all__ = [
     "O2ComponentProbeEvidence",
     "o1_live_source",
     "o2_component_probe",
+    "collection_evidence_filename",
     "persist_dynamic_collection_evidence",
 ]
