@@ -31,7 +31,7 @@
 | S0 可比性 | `scoring.comparable()` | 身份字段逐项比对 |
 | S1/S1.1 校准+CV 门 | CLI `calibrate-pressure` / `derive-pressure-gate` | 门 = 单侧 95% bootstrap 上界，target-local（今天两台机器两扇门：4.64% / 12.57%） |
 | S2 硬门禁 | `scoring.evaluate_hard_gates` | 不可被收益补偿 |
-| S3 路由 | 静态：tuning `routed_components`；动态：`hypothesis.py`（≥2 竞争假设才许干预） | |
+| S3 路由 | 静态：tuning `routed_components`；动态：`hypothesis.py`（≥2 竞争假设才许干预）+ `intervention.py`（D5-I1 两阶段纯合同和执行前风险/单变更门禁） | D5-I2 动态循环执行与 receipt 持久化尚未接线 |
 | S4 二维优先级 | `scoring.diagnostic_priorities` + F-PROJECT-002 `pressure_value`/`adverse_change`（显式 scale，方向-方法相容表在 policy 校验） | 样本充足度准入已落地（eligible_metric_ids）；E_m 完整版守提案门 |
 | S5 合法搜索域 | `domain.resolve_domain` | 能力∩授权 |
 | S6/S7 改善+接受 | `scoring.bootstrap_improvement`（F-PROJECT-S6-S7/v1alpha1） | **LCB>MDE 严格大于**；黄金数值被特征测试钉死 |
@@ -89,5 +89,6 @@
 | `tests/test_system_opt_dynamic_collection.py` | 活体 O1/O2 采集（o1_live_source/o2_component_probe）+ O2 探测证据 |
 | `tests/test_system_opt_regression_rollback.py` | L6c：S9 last-good 绑定、显式 S8 阈值、L1 精确恢复与 needs-attention 故障路径 |
 | `tests/test_system_opt_regression_cli.py` | G5：L6c CLI 内容寻址证据图、固定索引、路径隔离、lease/attention 与组合故障生命周期 |
+| `tests/test_system_opt_intervention.py` | D5-I1：manifest 风险下界、RiskSource 身份、single-change/risk-quota 门禁、outcome/receipt 绑定 |
 | `tests/test_system_opt_dynamic_reactivate.py` | D5 重激活 A+B 资格判定 |
 | `tests/test_system_opt_dynamic_e2e.py` | 两侧合龙握手：runner 产窗 ↔ 引擎 FileO0Source/FileLoadIdentity/BusinessRetestPlanner，症状→干预→复验→晋升 |

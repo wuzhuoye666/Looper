@@ -30,7 +30,8 @@ S8/S9 contracts (existing)
 
 phase-gate audit
  └─ risk/change-count contract proposal (D5-R3, integrated draft e28153a)
-     └─ implementation (blocked until user confirms semantics)
+     └─ pure contract implementation (D5-I1, accepted 0c69cdd + 87d776c)
+         └─ dynamic-loop execution/receipt wiring (D5-I2 pending)
 ```
 
 ## 任务登记
@@ -41,7 +42,7 @@ phase-gate audit
 | Z-L6C 可执行退化恢复 | glm5.3 | `system-optimizer-impl`；主线 `e70a85b` | `rollback/regression.py`、rollback schema/loader、tests；依赖 S8/S9 | `pushed`。只接受 S9 promoted last-good；显式 U_regression threshold；L1 精确恢复；失败 needs-attention；聚焦 33、System Optimizer 448、全仓 781、Ruff/diff 通过 |
 | G4 dynamic-run 异常生命周期 | GPT agent；glm5.3 验收 | agent commit `5744c47`，主线基线 `e70a85b`；GPT `Looper-l4-fix/system-optimizer-pkg-b` | 仅 `cli.py`、`test_system_opt_dynamic_cli.py`；依赖 G3 persistence | `pushed` 为 `83a6b15`。异常后先恢复再持久化；恢复失败 needs-attention；lease 最终释放。聚焦 43、System Optimizer 451、全仓 784、Ruff/diff 通过 |
 | D4 dynamic evidence replay | DeepSeek agent；glm5.3 验收 | 最终 agent commit `16bd3e4`，实际 parent `1767ae3`；主线 `1753cea`；`Looper-system-optimizer-deepseek-batch1` | `dynamic_replay.py` + tests；共享严格校验的 `collection_evidence_filename` | `pushed`。D4-R4 保留 forged-window/重复 probe 历史反例，补齐 O1 集合级共享语义、O2 probe→overhead 一对一、完整身份/孤儿/畸形/digest 校验；索引与 helper 均在读证据前拒绝路径穿越。聚焦 42、System Optimizer 478 通过；全仓 811 中仅既有 cloud token 时间碰撞失败，单测复跑通过；Ruff/diff 通过。远端主线已含 `1753cea` |
-| D5 phase-gate 风险/单变更合同 | DeepSeek agent；glm5.3 验收 | 最终 agent commit `ce8f3e8`，实际 parent `16bd3e4`；主线 `e28153a` | 纯设计文档；未修改 phase-gate 实现 | `pushed-draft`。R3 采用 prepare→gate→execute 两阶段接口；risk 显式必填并绑定 manifest；plan digest 为计算属性；apply 后异常由 outcome/receipt 保留并计预算。preflight 计数、停类、风险冲突、receipt schema 四项仍待用户决定，确认前禁止编码。远端主线已含 `e28153a` |
+| D5 phase-gate 风险/单变更合同 | DeepSeek agent；glm5.3 验收 | 设计主线 `e28153a`；agent I1 `14aa741` + R1 `e5a78ff`；主线 `0c69cdd` + `87d776c` | `intervention.py`、对应 tests、合同文档；不接 `dynamic_loop.py`/backend | `accepted-i1`。两阶段纯合同、manifest 风险下界、kind/rationale、确定性 RiskSource、single-change/risk-quota 执行前门禁、plan/outcome/receipt digest 绑定已落地；历史风险绕过反例均转拒绝。合并态聚焦 57、System Optimizer 540、全仓 873、Ruff/py_compile/diff 通过。D5-I2 的循环计数、执行和 receipt 持久化仍待实现，不得把 I1 写成生产已接线 |
 | G5 L6c CLI 生命周期接线 | GPT agent 初交；glm5.3 接管修复/验收 | GPT `6fd88be`（parent `98f7e23`）；主线接入 `57b111e`，修复 `6e19fb5` | `services/api/looper_api/cli.py`、`tests/test_system_opt_regression_cli.py`；只读 `rollback/regression.py` | `accepted`。完整证据图先校验、digest 文件原子写且固定索引最后发布；恢复/发布/attention/output/lease 组合失败均保留原始上下文并按目标状态 fail-closed；local-linux 仍需显式确认。CLI 22、聚焦 45、System Optimizer 500、全仓 833、Ruff/diff 通过；`.artifacts/` 未跟踪未提交 |
 | Z-GOV-01 Agent 台账与状态对齐 | glm5.3 | `system-optimizer-impl@83a6b15` | governance/planning/architecture docs | `pushed`：规范本体 `e0da65e`，状态收口 `e704b88`，远端 `origin/system-optimizer-impl@e704b88`。docs-only，`git diff --check` 通过，未运行 pytest |
 | Z-BASE-01 2026-08-24 实现重新基线 | glm5.3 | `system-optimizer-impl@e704b88` | planning/architecture docs；不碰 agent 代码写集合 | `integrated` 于 `da06607`，push 待本记录提交后一并执行。冻结动态纵向切片、证据/replay、G4、L6c 与 D4/D5/G5 的真实完成边界；docs-only，`git diff --check` 通过，未运行 pytest |

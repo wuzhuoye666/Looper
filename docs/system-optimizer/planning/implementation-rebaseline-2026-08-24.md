@@ -27,8 +27,8 @@
 ## 当前并行任务
 
 - D4-R（DeepSeek）：修正动态证据 replay 的窗口、重复、组件映射和完整身份校验。
-- D5（DeepSeek）：只提交 risk quota 与 single-change 的执行前信号/API 提案；未经用户
-  确认不得编码。
+- D5-I1（DeepSeek，已验收）：risk quota 与 single-change 的两阶段纯合同、manifest
+  风险解析和执行 receipt 模型已落地；D5-I2 的 dynamic-loop/backend/持久化接线未开始。
 - G5（GPT 初交、glm5.3 接管修复/验收）：L6c CLI 生命周期、证据原子持久化、lease/attention/failure injection 已完成，主线修复提交 `6e19fb5`。
 - Z-BASE-01（glm5.3）：本重新基线与当前文档状态对齐，不修改并行代码写集合。
 
@@ -38,10 +38,10 @@
 
 ## 已确认的阻断或开放项
 
-1. `risk_quota` 当前没有执行前风险分类输入，`risky_interventions` 无生产者；属于合同
-   未接线，不能靠无依据自增修复。
-2. `single_change_per_window` 当前由循环结构隐式满足，但没有执行前 change-count 信号；
-   未来扩展无法由合同显式拒绝第二次变更。
+1. `risk_quota` 已有 manifest-bound 执行前风险解析和门禁 API，但 dynamic loop 尚未消费，
+   `risky_interventions` 仍无生产者；D5-I2 必须按 receipt 的 `apply_started` 据实计数。
+2. `single_change_per_window` 已有基于派生 `change_count` 的执行前拒绝 API，但动态循环
+   仍未调用；当前“每窗一次”仍只是旧循环结构的隐式行为。
 3. `identity_drift_action` 目前是只允许 `stop-phase` 的固定策略字段，不是可变行为选择；
    是否删除字段或保留为声明性固定策略需版本化提案。
 4. O1 overhead 的墙钟来自并发 collector 集合，只证明集合成员关系，不支持单 collector
@@ -53,5 +53,6 @@
 
 1. 先验收 D4-R，确保已落盘证据能够 fail-closed 回放；初版反例必须保留为负测。
 2. G5 已验收；下一步只在具备授权与显式 threshold 的真实目标上演练 L6c，不把模拟门禁等同于真机结论。
-3. 评审 D5 合同后由用户确认风险定义、quota 边界和 change-count API，再决定实施包。
+3. D5-I1 已验收；下一包 D5-I2 负责 prepare→gate→execute、预算计数和 receipt 持久化，
+   不得扩大到未确认的阈值或自动决策。
 4. 三包稳定后再选择真实 Linux/CVM 动态会话与 L6c 故障演练；没有实测前成熟度不升级。
