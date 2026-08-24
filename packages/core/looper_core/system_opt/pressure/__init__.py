@@ -15,7 +15,7 @@ from collections.abc import Callable, Sequence
 from datetime import datetime
 from enum import StrEnum
 from statistics import mean, median, stdev
-from typing import Literal
+from typing import Literal, Protocol
 
 import yaml
 from pydantic import Field, field_validator, model_validator
@@ -707,9 +707,18 @@ class PhasedPressureCollectionAdapter:
         )
 
 
+class CollectionOverheadRun(Protocol):
+    """Structural input required by the raw collection-overhead evidence builder."""
+
+    protocol_id: str
+    protocol_digest: str
+    collection_run: ComponentCollectionRun
+    elapsed_seconds: float
+
+
 def build_collection_overhead_evidence(
-    disabled_runs: Sequence[PressureCollectionResult],
-    enabled_runs: Sequence[PressureCollectionResult],
+    disabled_runs: Sequence[CollectionOverheadRun],
+    enabled_runs: Sequence[CollectionOverheadRun],
     *,
     collected_at: datetime,
 ) -> CollectionOverheadABEvidence:
@@ -851,6 +860,7 @@ def parse_standard_pressure_protocol_yaml(content: str) -> StandardPressureProto
 
 
 __all__ = [
+    "CollectionOverheadRun",
     "PhasedPressureCollectionAdapter",
     "PressureArtifactRequirement",
     "PressureCollectionContract",

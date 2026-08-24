@@ -8,7 +8,8 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable, Mapping, Sequence
-from datetime import datetime
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from math import isfinite
 from typing import Literal
 
@@ -17,6 +18,7 @@ from pydantic import Field, model_validator
 from looper_core.canonical import canonical_digest
 from looper_core.contracts import StrictModel
 from looper_core.system_opt.collector import (
+    CollectionOverheadABEvidence,
     ComponentCollectionPlan,
     ComponentCollectionRequest,
     ComponentCollectionRun,
@@ -28,6 +30,7 @@ from looper_core.system_opt.collector import (
 )
 from looper_core.system_opt.hypothesis import ComponentHypothesis
 from looper_core.system_opt.observation import ObservationWindow
+from looper_core.system_opt.pressure import build_collection_overhead_evidence
 
 O2_COMPONENT_PROBE_EVIDENCE_SCHEMA = "looper.o2-component-probe-evidence/v1alpha1"
 _DIGEST = r"^sha256:[0-9a-f]{64}$"
@@ -46,6 +49,7 @@ class O2ComponentProbeEvidence(StrictModel):
     hypothesis: ComponentHypothesis
     observation_window_digest: str = Field(pattern=_DIGEST)
     collection_run: ComponentCollectionRun
+    collection_overhead_evidence_digest: str | None = Field(default=None, pattern=_DIGEST)
 
     @model_validator(mode="after")
     def validate_bindings(self) -> O2ComponentProbeEvidence:
@@ -57,7 +61,10 @@ class O2ComponentProbeEvidence(StrictModel):
 
     @property
     def digest(self) -> str:
-        return canonical_digest(self.model_dump(mode="json", exclude_none=False))
+        payload = self.model_dump(mode="json", exclude_none=False)
+        if self.collection_overhead_evidence_digest is None:
+            payload.pop("collection_overhead_evidence_digest")
+        return canonical_digest(payload)
 
 
 def _validate_window_seconds(window_seconds: float) -> None:
@@ -99,7 +106,13 @@ def _request(
     *,
     window_id: str,
     observation_layer: Literal["O1", "O2"],
+    identity_bindings: Mapping[str, str] | None = None,
 ) -> ComponentCollectionRequest:
+    measurement_identity = {
+        "window_id": window_id,
+        "observation_layer": observation_layer,
+    }
+    measurement_identity.update(identity_bindings or {})
     return ComponentCollectionRequest(
         component=plan.component,
         target_id=plan.target_id,
@@ -112,10 +125,7 @@ def _request(
         gate_values={},
         interval_seconds=plan.interval_seconds,
         scope=plan.scope,
-        measurement_identity={
-            "window_id": window_id,
-            "observation_layer": observation_layer,
-        },
+        measurement_identity=measurement_identity,
     )
 
 
@@ -169,6 +179,7 @@ def _collect_window(
     window_seconds: float,
     sleep_fn: Callable[[float], None],
     wall_clock: Callable[[], datetime] | None,
+    identity_bindings: Mapping[str, str] | None = None,
 ) -> list[ComponentCollectionRun]:
     windows = _begin_all(plans, collectors, wall_clock=wall_clock)
     try:
@@ -177,7 +188,12 @@ def _collect_window(
         for plan, window in zip(plans, windows, strict=True):
             runs.append(
                 window.finish(
-                    _request(plan, window_id=window_id, observation_layer=observation_layer)
+                    _request(
+                        plan,
+                        window_id=window_id,
+                        observation_layer=observation_layer,
+                        identity_bindings=identity_bindings,
+                    )
                 )
             )
         return runs
@@ -230,8 +246,26 @@ class O1LiveSource:
         return [snapshot for snapshot in snapshots if snapshot is not None]
 
 
+@dataclass(frozen=True)
+class _O2OverheadRun:
+    protocol_id: str
+    protocol_digest: str
+    collection_run: ComponentCollectionRun
+    elapsed_seconds: float
+
+
 class O2ComponentProbe:
-    """Callable component-routed O2 probe retaining digest-addressed evidence."""
+    """Callable component-routed O2 probe retaining digest-addressed evidence.
+
+    Every routed O2 window is measured as one adjacent A/B pair.  The disabled
+    arm first waits for the requested window without entering collector code;
+    the enabled arm then runs ``begin_collection -> same wait -> finish`` for
+    the same component, plan, target, environment, and O2 window identity.
+    Pair order is deliberately fixed as disabled then enabled, so the evidence
+    records paired raw wall-clock durations but does not claim to remove serial
+    time drift.  No overhead threshold, acceptance verdict, or O2 authorization
+    is derived here; those remain upper-layer policy decisions.
+    """
 
     def __init__(
         self,
@@ -241,13 +275,16 @@ class O2ComponentProbe:
         window_seconds: float,
         sleep_fn: Callable[[float], None],
         wall_clock: Callable[[], datetime] | None,
+        monotonic: Callable[[], float],
     ) -> None:
         self._plans = dict(plans)
         self._collectors = dict(collectors)
         self._window_seconds = window_seconds
         self._sleep_fn = sleep_fn
         self._wall_clock = wall_clock
+        self._monotonic = monotonic
         self.evidence_by_digest: dict[str, O2ComponentProbeEvidence] = {}
+        self.overhead_evidence_by_digest: dict[str, CollectionOverheadABEvidence] = {}
 
     def __call__(
         self, hypothesis: ComponentHypothesis, window: ObservationWindow
@@ -258,6 +295,43 @@ class O2ComponentProbe:
             raise DynamicCollectionUnavailable(
                 f"no O2 live collection plan for routed component {component!r}"
             )
+        identity_bindings = {
+            "hypothesis_digest": hypothesis.digest,
+            "observation_window_digest": window.digest,
+        }
+        request = _request(
+            plan,
+            window_id=window.window_id,
+            observation_layer="O2",
+            identity_bindings=identity_bindings,
+        )
+        collector = self._collectors[plan.component]
+        protocol_id = "o2-component-probe-overhead-ab/v1alpha1"
+        protocol_digest = canonical_digest(
+            {
+                "protocol_id": protocol_id,
+                "pair_order": ["disabled", "enabled"],
+                "window_seconds": self._window_seconds,
+                "collection_plan_digest": plan.digest,
+            }
+        )
+
+        disabled_started = self._monotonic()
+        disabled_window = begin_component_collection(
+            plan,
+            collector=collector,
+            enabled=False,
+            wall_clock=self._wall_clock,
+        )
+        try:
+            self._sleep_fn(self._window_seconds)
+            disabled_run = disabled_window.finish(request)
+        except Exception:
+            disabled_window.cancel()
+            raise
+        disabled_elapsed = self._monotonic() - disabled_started
+
+        enabled_started = self._monotonic()
         run = _collect_window(
             [plan],
             self._collectors,
@@ -266,13 +340,36 @@ class O2ComponentProbe:
             window_seconds=self._window_seconds,
             sleep_fn=self._sleep_fn,
             wall_clock=self._wall_clock,
+            identity_bindings=identity_bindings,
         )[0]
+        enabled_elapsed = self._monotonic() - enabled_started
+        overhead = build_collection_overhead_evidence(
+            [
+                _O2OverheadRun(
+                    protocol_id=protocol_id,
+                    protocol_digest=protocol_digest,
+                    collection_run=disabled_run,
+                    elapsed_seconds=disabled_elapsed,
+                )
+            ],
+            [
+                _O2OverheadRun(
+                    protocol_id=protocol_id,
+                    protocol_digest=protocol_digest,
+                    collection_run=run,
+                    elapsed_seconds=enabled_elapsed,
+                )
+            ],
+            collected_at=(self._wall_clock or (lambda: datetime.now(UTC)))(),
+        )
         evidence = O2ComponentProbeEvidence(
             hypothesis=hypothesis,
             observation_window_digest=window.digest,
             collection_run=run,
+            collection_overhead_evidence_digest=overhead.digest,
         )
         digest = evidence.digest
+        self.overhead_evidence_by_digest[overhead.digest] = overhead
         self.evidence_by_digest[digest] = evidence
         return digest
 
@@ -311,6 +408,7 @@ def o2_component_probe(
     window_seconds: float,
     sleep_fn: Callable[[float], None] = time.sleep,
     wall_clock: Callable[[], datetime] | None = None,
+    monotonic: Callable[[], float] = time.perf_counter,
 ) -> O2ComponentProbe | None:
     """Build routed O2 callback, or ``None`` when declared capability is unavailable."""
 
@@ -327,6 +425,7 @@ def o2_component_probe(
         window_seconds=window_seconds,
         sleep_fn=sleep_fn,
         wall_clock=wall_clock,
+        monotonic=monotonic,
     )
 
 
