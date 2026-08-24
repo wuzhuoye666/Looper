@@ -291,9 +291,11 @@ ROLLBACK_VERIFIED -> SAFETY_TERMINAL
 SAFETY_TERMINAL -> OPERATION_TERMINAL
 ```
 
-  `PLANNED/PREFLIGHT_COMPLETED -> SAFETY_TERMINAL` 只表达 apply 前拒绝；其它提前 safety terminal
-  必须与相应 `safety_state` 一致。plan_digest、execution_id、operation、recovery parent 在整条链内
-  不得漂移。
+  `PLANNED -> SAFETY_TERMINAL` 只表达 preflight 完成前的零写拒绝；
+  `PREFLIGHT_COMPLETED -> SAFETY_TERMINAL` 还允许 snapshot 拒绝或“所有请求值均未改变”的零写
+  KEPT/ROLLED_BACK（以及外部漂移导致的 NEEDS_ATTENTION），但一律不得据此计预算。其它提前 safety
+  terminal 必须与相应 `safety_state` 一致。plan_digest、execution_id、operation、recovery parent 在
+  整条链内不得漂移。
 - **分叉检测 = 每个 predecessor 至多一个 successor**；同一 predecessor 出现两个不同 digest
   立即 fail-closed。`OPERATION_TERMINAL` 不得有 successor。
 - `outcome` 只允许出现在 CANDIDATE `OPERATION_TERMINAL`，且必须存在并通过
@@ -346,7 +348,9 @@ class DurableReceiptStore:
 核对 digest/字节语义后才视为幂等，不能仅凭 `Path.exists()` 跳过。pointer 文件使用版本化严格
 模型，只允许纯文件名和 canonical lowercase sha256；扫描重建仅消费匹配
 plan+execution+operation 的
-合法前缀文件，同范围断链、孤儿或多 head 一律拒绝。
+合法前缀文件，同范围断链、孤儿或多 head 一律拒绝。内容文件已发布而 pointer 仍指向该唯一链
+的合法祖先时，视为“内容成功、pointer 替换前崩溃”的可恢复缝：唯一内容链头优先，并在下一次
+写入时重发 pointer；pointer 指向链外、身份不符或内容不存在仍 fail-closed。
 
 ---
 

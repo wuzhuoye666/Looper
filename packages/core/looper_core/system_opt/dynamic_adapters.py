@@ -31,10 +31,12 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, Literal
+from uuid import uuid4
 
 import yaml
 from pydantic import Field, TypeAdapter, model_validator
@@ -75,6 +77,22 @@ from looper_core.system_opt.workload import (
 HYPOTHESIS_PROPOSALS_SCHEMA = "looper.hypothesis-proposals/v1alpha1"
 BUSINESS_POLICY_SCHEMA = "looper.business-retest-policy/v1alpha1"
 _DIGEST = r"^sha256:[0-9a-f]{64}$"
+
+
+def _atomic_write_json(path: Path, payload: Mapping[str, Any]) -> None:
+    """Publish one control JSON only after its complete payload is written to a temp file."""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.parent / f".control-{os.getpid()}-{uuid4().hex}.tmp"
+    try:
+        temporary.write_text(
+            json.dumps(dict(payload), ensure_ascii=False, sort_keys=True, indent=2),
+            encoding="utf-8",
+        )
+        os.replace(temporary, path)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
 
 
 class SessionFileMissing(TimeoutError):
@@ -484,9 +502,8 @@ class SafetyBackedIntervention:
         self._layout = layout
 
     def _write_control(self, name: str, payload: Mapping[str, Any]) -> Path:
-        self._layout.control.mkdir(parents=True, exist_ok=True)
         path = self._layout.control / name
-        path.write_text(json.dumps(dict(payload), indent=2), encoding="utf-8")
+        _atomic_write_json(path, payload)
         return path
 
     def __call__(self, hypothesis: ComponentHypothesis) -> InterventionExperiment | None:
@@ -575,10 +592,9 @@ class FileRetestSource:
     def __call__(self, verify_id: str) -> RetestOutcome:
         window_ids = self._planner.retest_window_ids(verify_id)
         control = self._layout.control / f"retest-request-{verify_id}.json"
-        self._layout.control.mkdir(parents=True, exist_ok=True)
-        control.write_text(
-            json.dumps({"verify_id": verify_id, "window_ids": window_ids}, indent=2),
-            encoding="utf-8",
+        _atomic_write_json(
+            control,
+            {"verify_id": verify_id, "window_ids": window_ids},
         )
         batch = self._planner.read_window_batch(window_ids)
         evidence = self._planner.judge(batch)

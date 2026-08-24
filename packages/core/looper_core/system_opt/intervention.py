@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import re
 from enum import StrEnum
-from typing import Any, Literal
+from typing import Any, Literal, Protocol
 
 from pydantic import Field, model_validator
 
@@ -37,15 +37,16 @@ from looper_core.system_opt.hypothesis import (
     InterventionExperiment,
 )
 from looper_core.system_opt.phase_gate import (
-    DynamicPhaseGateContract,
     GateDecision,
     GateStopClass,
+    PhaseBudget,
 )
-from looper_core.system_opt.safety import SafetyState
+from looper_core.system_opt.safety import SafetyProgressStage, SafetyState
 
 INTERVENTION_PLAN_SCHEMA = "looper.intervention-plan/v1alpha1"
 INTERVENTION_OUTCOME_SCHEMA = "looper.intervention-outcome/v1alpha1"
 INTERVENTION_RECEIPT_SCHEMA = "looper.intervention-execution-receipt/v1alpha1"
+INTERVENTION_RECEIPT_V2_SCHEMA = "looper.intervention-execution-receipt/v1alpha2"
 INTERVENTION_RISK_SOURCE_SCHEMA = "looper.intervention-risk-source/v1alpha1"
 _DIGEST = r"^sha256:[0-9a-f]{64}$"
 _RISK_RANK = {RiskLevel.LOW: 0, RiskLevel.MEDIUM: 1, RiskLevel.HIGH: 2}
@@ -63,6 +64,16 @@ def _require_digest(value: str, field: str) -> str:
 
 class InterventionContractError(ValueError):
     """Raised when a two-phase intervention contract is violated."""
+
+
+class InterventionGateContract(Protocol):
+    """The pre-execution subset shared by versioned dynamic gate contracts."""
+
+    single_change_per_window: bool
+    budget: PhaseBudget
+
+    @property
+    def digest(self) -> str: ...
 
 
 class RiskSourceKind(StrEnum):
@@ -162,6 +173,134 @@ class InterventionOutcome(StrictModel):
     @property
     def digest(self) -> str:
         return canonical_digest(self.model_dump(mode="json", exclude_none=False))
+
+
+class ReceiptStageV2(StrEnum):
+    PLANNED = "planned"
+    PREFLIGHT_COMPLETED = "preflight-completed"
+    APPLY_STARTED = "apply-started"
+    ROLLBACK_ATTEMPTED = "rollback-attempted"
+    ROLLBACK_VERIFIED = "rollback-verified"
+    SAFETY_TERMINAL = "safety-terminal"
+    OPERATION_TERMINAL = "operation-terminal"
+
+
+class ReceiptOperation(StrEnum):
+    CANDIDATE = "candidate"
+    RECOVERY = "recovery"
+
+
+_TERMINAL_SAFETY_STATES = {
+    SafetyState.REJECTED,
+    SafetyState.ROLLED_BACK,
+    SafetyState.KEPT,
+    SafetyState.NEEDS_ATTENTION,
+}
+
+
+class InterventionExecutionReceiptV2(StrictModel):
+    """One immutable node in a durable, execution-scoped intervention journal."""
+
+    schema_version: Literal[INTERVENTION_RECEIPT_V2_SCHEMA] = (
+        INTERVENTION_RECEIPT_V2_SCHEMA
+    )
+    plan_digest: str = Field(pattern=_DIGEST)
+    execution_id: str = Field(min_length=1, max_length=160)
+    operation: ReceiptOperation
+    stage: ReceiptStageV2
+    sequence: int = Field(ge=0)
+    predecessor_receipt_digest: str | None = Field(default=None, pattern=_DIGEST)
+    parent_receipt_digest: str | None = Field(default=None, pattern=_DIGEST)
+    plan: InterventionPlan | None = None
+    safety_state: SafetyState | None = None
+    evidence_digest: str | None = Field(default=None, pattern=_DIGEST)
+    outcome: InterventionOutcome | None = None
+    error: str | None = Field(default=None, min_length=1, max_length=2000)
+
+    @model_validator(mode="after")
+    def validate_node(self) -> InterventionExecutionReceiptV2:
+        if self.execution_id != self.execution_id.strip():
+            raise ValueError("execution_id cannot have surrounding whitespace")
+        if (self.sequence == 0) != (self.predecessor_receipt_digest is None):
+            raise ValueError("only the sequence-zero receipt may omit its predecessor")
+        if self.sequence == 0 and self.stage is not ReceiptStageV2.PLANNED:
+            raise ValueError("the first receipt must be planned")
+        if self.stage is ReceiptStageV2.PLANNED and self.sequence != 0:
+            raise ValueError("planned is only valid for the first receipt")
+
+        if self.operation is ReceiptOperation.CANDIDATE:
+            if self.parent_receipt_digest is not None:
+                raise ValueError("candidate receipts cannot have a recovery parent")
+            should_embed_plan = self.stage is ReceiptStageV2.PLANNED
+            if should_embed_plan != (self.plan is not None):
+                raise ValueError("only the candidate planned receipt must embed the plan")
+            if self.plan is not None and self.plan.digest != self.plan_digest:
+                raise ValueError("embedded plan digest does not match plan_digest")
+        else:
+            if self.parent_receipt_digest is None:
+                raise ValueError("recovery receipts require a candidate safety parent")
+            if self.plan is not None:
+                raise ValueError("recovery receipts cannot duplicate the plan")
+
+        terminal = self.stage in {
+            ReceiptStageV2.SAFETY_TERMINAL,
+            ReceiptStageV2.OPERATION_TERMINAL,
+        }
+        if terminal:
+            if self.safety_state not in _TERMINAL_SAFETY_STATES:
+                raise ValueError("terminal receipts require a terminal safety state")
+            if self.evidence_digest is None:
+                raise ValueError("terminal receipts require an evidence digest")
+        elif self.evidence_digest is not None:
+            raise ValueError("non-terminal receipts cannot carry terminal evidence")
+
+        expected_nonterminal_state = {
+            ReceiptStageV2.PLANNED: None,
+            ReceiptStageV2.PREFLIGHT_COMPLETED: SafetyState.PREFLIGHT,
+            ReceiptStageV2.APPLY_STARTED: SafetyState.APPLY,
+            ReceiptStageV2.ROLLBACK_ATTEMPTED: SafetyState.ROLLBACK,
+            ReceiptStageV2.ROLLBACK_VERIFIED: SafetyState.ROLLED_BACK,
+        }
+        expected = expected_nonterminal_state.get(self.stage)
+        if not terminal and self.safety_state is not expected:
+            raise ValueError("receipt safety_state does not match its progress stage")
+
+        candidate_terminal = (
+            self.operation is ReceiptOperation.CANDIDATE
+            and self.stage is ReceiptStageV2.OPERATION_TERMINAL
+        )
+        if candidate_terminal != (self.outcome is not None):
+            raise ValueError("only candidate operation-terminal must carry an outcome")
+        if self.outcome is not None:
+            if self.outcome.plan_digest != self.plan_digest:
+                raise ValueError("outcome plan digest does not match the receipt")
+            if self.outcome.evidence_digest != self.evidence_digest:
+                raise ValueError("outcome evidence digest does not match the receipt")
+            if self.outcome.safety_state is not self.safety_state:
+                raise ValueError("outcome safety state does not match the receipt")
+        return self
+
+    @property
+    def execution_digest(self) -> str:
+        return canonical_digest(
+            {"execution_id": self.execution_id, "plan_digest": self.plan_digest}
+        )
+
+    @property
+    def digest(self) -> str:
+        return canonical_digest(self.model_dump(mode="json", exclude_none=False))
+
+
+def receipt_stage_for(stage: SafetyProgressStage) -> ReceiptStageV2:
+    """Map every L1 progress stage to its durable receipt stage."""
+
+    return {
+        SafetyProgressStage.PREFLIGHT_COMPLETED: ReceiptStageV2.PREFLIGHT_COMPLETED,
+        SafetyProgressStage.APPLY_STARTED: ReceiptStageV2.APPLY_STARTED,
+        SafetyProgressStage.ROLLBACK_STARTED: ReceiptStageV2.ROLLBACK_ATTEMPTED,
+        SafetyProgressStage.ROLLBACK_VERIFIED: ReceiptStageV2.ROLLBACK_VERIFIED,
+        SafetyProgressStage.SAFETY_TERMINAL: ReceiptStageV2.SAFETY_TERMINAL,
+    }[stage]
 
 
 class ReceiptStage(StrEnum):
@@ -376,7 +515,7 @@ def evaluate_intervention_gate(
     *,
     plan: InterventionPlan,
     manifest: ConfigManifest,
-    contract: DynamicPhaseGateContract,
+    contract: InterventionGateContract,
     risky_interventions: int,
     evidence_digest: str,
 ) -> GateDecision | None:
@@ -446,12 +585,17 @@ __all__ = [
     "INTERVENTION_OUTCOME_SCHEMA",
     "INTERVENTION_PLAN_SCHEMA",
     "INTERVENTION_RECEIPT_SCHEMA",
+    "INTERVENTION_RECEIPT_V2_SCHEMA",
     "INTERVENTION_RISK_SOURCE_SCHEMA",
     "InterventionContractError",
     "InterventionExecutionReceipt",
+    "InterventionExecutionReceiptV2",
+    "InterventionGateContract",
     "InterventionOutcome",
     "InterventionPlan",
     "ReceiptStage",
+    "ReceiptOperation",
+    "ReceiptStageV2",
     "ResolvedPlanRisk",
     "ResolvedRiskItem",
     "RiskSource",
@@ -459,5 +603,6 @@ __all__ = [
     "RiskSourceKind",
     "evaluate_intervention_gate",
     "resolve_plan_risk",
+    "receipt_stage_for",
     "verify_outcome_binding",
 ]

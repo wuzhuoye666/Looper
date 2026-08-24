@@ -15,11 +15,13 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import threading
 from datetime import UTC, datetime
 from pathlib import Path
 
 import yaml
+from looper_core.system_opt import dynamic_adapters
 from looper_core.system_opt.demo import build_demo_manifest
 from looper_core.system_opt.dynamic_adapters import (
     BusinessRetestPlanner,
@@ -121,6 +123,35 @@ def _write_session_assets(root: Path) -> SessionLayout:
         encoding="utf-8",
     )
     return layout
+
+
+def test_retest_control_json_is_atomically_published(
+    tmp_path: Path, monkeypatch
+) -> None:
+    runner_module = _load_runner()
+    layout = SessionLayout(tmp_path / "session")
+    target = layout.control / "retest-request-race.json"
+    observed_during_replace: list[dict[str, list[str]]] = []
+    original_replace = dynamic_adapters.os.replace
+
+    def inspect_replace(source, destination) -> None:
+        payload = json.loads(Path(source).read_text(encoding="utf-8"))
+        assert payload["window_ids"]
+        observed_during_replace.append(runner_module.discover_retest_requests(layout))
+        original_replace(source, destination)
+
+    monkeypatch.setattr(dynamic_adapters.os, "replace", inspect_replace)
+    dynamic_adapters._atomic_write_json(target, {"window_ids": ["window-new-1"]})
+    dynamic_adapters._atomic_write_json(target, {"window_ids": ["window-new-2"]})
+
+    assert observed_during_replace == [
+        {},
+        {"retest-request-race.json": ["window-new-1"]},
+    ]
+    assert runner_module.discover_retest_requests(layout) == {
+        "retest-request-race.json": ["window-new-2"]
+    }
+    assert list(layout.control.glob(".control-*.tmp")) == []
 
 
 def test_runner_engine_end_to_end_handshake(tmp_path: Path) -> None:
