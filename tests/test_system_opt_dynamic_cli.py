@@ -28,6 +28,7 @@ from looper_core.system_opt.dynamic_adapters import HYPOTHESIS_PROPOSALS_V2_SCHE
 from looper_core.system_opt.dynamic_demo import (
     build_demo_initial_state,
     build_dynamic_demo_session,
+    build_m3_demo_session,
 )
 from looper_core.system_opt.dynamic_loop import run_dynamic_phase
 from looper_core.system_opt.hypothesis import (
@@ -48,6 +49,7 @@ from looper_core.system_opt.intervention_receipt import (
     ReceiptStoreError,
 )
 from looper_core.system_opt.lease import FileTargetGuard
+from looper_core.system_opt.negative_cache import NegativeCache
 from looper_core.system_opt.phase_gate import (
     DYNAMIC_PHASE_GATE_V2_SCHEMA,
     BoundComparator,
@@ -222,6 +224,39 @@ def test_dynamic_run_cli_simulated_end_to_end(tmp_path: Path) -> None:
     assert evidence_index.is_file()
 
 
+def test_m3_demo_command_runs_the_complete_synthetic_slice(tmp_path: Path) -> None:
+    workspace = tmp_path / "m3-demo"
+
+    result = runner.invoke(
+        app,
+        ["system-opt", "m3-demo", "--workspace", str(workspace)],
+    )
+
+    assert result.exit_code == 0, result.output
+    run = json.loads((workspace / "dynamic-run.json").read_text(encoding="utf-8"))
+    assert run["schema_version"] == "looper.dynamic-phase-run/v1alpha2"
+    assert run["promotion"]["promoted"] is True
+    control = workspace / "session" / "control"
+    assert (control / "online-routing-evidence-index.json").is_file()
+    assert (control / "scenario-profile-index.json").is_file()
+    assert (control / "phase-restoration.json").is_file()
+
+
+def test_m3_demo_command_refuses_a_nonempty_workspace(tmp_path: Path) -> None:
+    workspace = tmp_path / "m3-demo"
+    workspace.mkdir()
+    (workspace / "existing-evidence.json").write_text("{}", encoding="utf-8")
+
+    result = runner.invoke(
+        app,
+        ["system-opt", "m3-demo", "--workspace", str(workspace)],
+    )
+
+    assert result.exit_code != 0
+    assert "absent or empty" in result.output
+    assert (workspace / "existing-evidence.json").read_text(encoding="utf-8") == "{}"
+
+
 def test_dynamic_run_cli_v2_persists_terminal_receipts(tmp_path: Path) -> None:
     session = tmp_path / "session"
     build_dynamic_demo_session(session)
@@ -242,6 +277,99 @@ def test_dynamic_run_cli_v2_persists_terminal_receipts(tmp_path: Path) -> None:
     assert FileTargetGuard(tmp_path / "leases").current_attention(
         "demo-dynamic-target"
     ) is None
+
+
+def test_m3_demo_routes_online_and_persists_scenario_profile(tmp_path: Path) -> None:
+    session = tmp_path / "session"
+    build_m3_demo_session(session, environment_digest=_current_environment_digest())
+    inputs = _write_demo_inputs(tmp_path)
+    cache_path = session / "control" / "hypothesis-negative-cache.jsonl"
+
+    result = runner.invoke(
+        app,
+        _base_argv(session, inputs, tmp_path)
+        + [
+            "--backend",
+            "simulated",
+            "--initial-state",
+            str(inputs["initial"]),
+            "--online-routing",
+            "--hypothesis-cache",
+            str(cache_path),
+            "--hypothesis-cache-retention",
+            str(session / "hypothesis-cache-retention.json"),
+            "--scenario-profile",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    run = json.loads((tmp_path / "out.json").read_text(encoding="utf-8"))
+    assert run["schema_version"] == "looper.dynamic-phase-run/v1alpha2"
+    assert run["promotion"]["promoted"] is True
+    control = session / "control"
+    routing_index = json.loads(
+        (control / "online-routing-evidence-index.json").read_text(encoding="utf-8")
+    )
+    assert routing_index["evidence_digests_by_symptom"]
+    profile_index = json.loads(
+        (control / "scenario-profile-index.json").read_text(encoding="utf-8")
+    )
+    profile_file = control / (
+        "scenario-profile-"
+        + profile_index["profile_digest"].removeprefix("sha256:")
+        + ".json"
+    )
+    report_file = control / (
+        "scenario-profile-report-"
+        + profile_index["report_digest"].removeprefix("sha256:")
+        + ".json"
+    )
+    assert profile_file.is_file()
+    report = json.loads(report_file.read_text(encoding="utf-8"))
+    assert [item["baseline_kind"] for item in report["comparisons"]] == [
+        "original",
+        "general-profile",
+    ]
+    # The accepted path must not fabricate a refutation entry merely because
+    # a cache store was enabled.
+    assert not cache_path.exists()
+
+
+def test_m3_demo_caches_only_a_rejected_business_retest(tmp_path: Path) -> None:
+    session = tmp_path / "session"
+    build_m3_demo_session(session, environment_digest=_current_environment_digest())
+    inputs = _write_demo_inputs(tmp_path)
+    # Keep every identity fixed and change only the already-materialized business
+    # values so the first intervention is a comparable, executed rejection.
+    for window in sorted(session.glob("windows/retest-hyp-governor-performance-run*")):
+        (window / "o0.txt").write_text(_o0_yaml(390.0), encoding="utf-8")
+    cache_path = session / "control" / "hypothesis-negative-cache.jsonl"
+    argv = _base_argv(session, inputs, tmp_path)
+    argv[argv.index("--max-windows") + 1] = "3"
+
+    result = runner.invoke(
+        app,
+        argv
+        + [
+            "--backend",
+            "simulated",
+            "--initial-state",
+            str(inputs["initial"]),
+            "--online-routing",
+            "--hypothesis-cache",
+            str(cache_path),
+            "--hypothesis-cache-retention",
+            str(session / "hypothesis-cache-retention.json"),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    cache = NegativeCache.load(cache_path)
+    assert len(cache.hypothesis_entries) == 1
+    entry = cache.hypothesis_entries[0]
+    assert entry.identity.component.value == "cpu"
+    assert "hyp-governor-performance" in entry.detail
+    assert len(entry.evidence_digests) == 1
 
 
 def test_dynamic_run_cli_blocks_nonterminal_post_apply_receipt_before_lease(

@@ -121,7 +121,7 @@ class OnlineRoutingEvidenceIndex(StrictModel):
 def _atomic_write_json(path: Path, payload: Mapping[str, object]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temporary_name = tempfile.mkstemp(
-        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
+        prefix=".online-routing.", suffix=".tmp", dir=path.parent
     )
     temporary = Path(temporary_name)
     descriptor_open = True

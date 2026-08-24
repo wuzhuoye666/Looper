@@ -185,6 +185,30 @@ class SessionLayout:
         return self.root / "baseline-batch.json"
 
     @property
+    def online_routing_policy(self) -> Path:
+        return self.root / "online-routing-policy.yaml"
+
+    @property
+    def diagnostic_reference(self) -> Path:
+        return self.root / "diagnostic-reference.json"
+
+    @property
+    def online_o1_snapshots(self) -> Path:
+        return self.root / "online-o1-snapshots.json"
+
+    @property
+    def online_routing_contract(self) -> Path:
+        return self.root / "online-routing-contract.json"
+
+    @property
+    def hypothesis_cache_retention(self) -> Path:
+        return self.root / "hypothesis-cache-retention.json"
+
+    @property
+    def general_profile_baseline(self) -> Path:
+        return self.root / "general-profile-baseline.json"
+
+    @property
     def windows(self) -> Path:
         return self.root / "windows"
 

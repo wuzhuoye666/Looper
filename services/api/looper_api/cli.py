@@ -14,7 +14,10 @@ from looper_core.action_loop import VerificationPolicy
 from looper_core.adapters import load_and_apply_adapter
 from looper_core.canonical import canonical_digest
 from looper_core.manifest import load_and_validate_manifest
-from looper_core.system_opt.collector import BuiltinLinuxGuestCollector
+from looper_core.system_opt.collector import (
+    BuiltinLinuxGuestCollector,
+    ComponentMetricSnapshot,
+)
 from looper_core.system_opt.component import ComponentOptimizer
 from looper_core.system_opt.config_manifest import (
     ConfigItem,
@@ -45,6 +48,7 @@ from looper_core.system_opt.dynamic_adapters import (
     SafetyBackedIntervention,
     SessionLayout,
     TwoStageSafetyBackedIntervention,
+    build_business_metric_contract,
     load_business_policy,
     load_hypothesis_proposals_versioned,
     load_o1_collection_plans,
@@ -55,12 +59,21 @@ from looper_core.system_opt.dynamic_collection import (
     o2_component_probe,
     persist_dynamic_collection_evidence,
 )
-from looper_core.system_opt.dynamic_loop import run_dynamic_phase, run_dynamic_phase_v2
+from looper_core.system_opt.dynamic_demo import build_m3_demo_workspace
+from looper_core.system_opt.dynamic_loop import (
+    DynamicPhaseRunV2,
+    run_dynamic_phase,
+    run_dynamic_phase_v2,
+)
 from looper_core.system_opt.engine import EngineLoopConfig, run_engine_loop
 from looper_core.system_opt.executor import ConfigSnapshot
 from looper_core.system_opt.executor.local_linux import LocalLinuxBackend
 from looper_core.system_opt.executor.runner import SubprocessCommandRunner
 from looper_core.system_opt.executor.simulated import SimulatedBackend
+from looper_core.system_opt.hypothesis_cache import (
+    HypothesisCacheBinding,
+    HypothesisCacheRuntime,
+)
 from looper_core.system_opt.intervention import ReceiptStageV2
 from looper_core.system_opt.intervention_receipt import (
     DurableReceiptStore,
@@ -84,7 +97,16 @@ from looper_core.system_opt.measurement import (
     CommandMeasurementAdapter,
     MeasurementCommandSpec,
 )
-from looper_core.system_opt.negative_cache import NegativeCache
+from looper_core.system_opt.negative_cache import (
+    HypothesisCacheRetentionPolicy,
+    NegativeCache,
+    formula_versions_digest,
+)
+from looper_core.system_opt.online_routing import (
+    OnlineHypothesisSource,
+    OnlineRoutingContract,
+    persist_online_routing_evidence,
+)
 from looper_core.system_opt.phase_gate import (
     DynamicPhaseGateContract,
     DynamicPhaseGateContractV2,
@@ -113,6 +135,10 @@ from looper_core.system_opt.rollback.regression_evidence import (
     build_regression_recovery_evidence_graph,
 )
 from looper_core.system_opt.safety import SafetyController, SafetyPolicy, SafetyState
+from looper_core.system_opt.scenario_profile import (
+    build_scenario_profile_report,
+    persist_scenario_profile,
+)
 from looper_core.system_opt.scoring import MeasurementBatch
 from looper_core.system_opt.state_evidence import (
     OWNERSHIP_DECLARATION_SCHEMA,
@@ -344,6 +370,47 @@ def validate_system_optimizer_contracts(
                 "target_os": "linux",
             }
         )
+    )
+
+
+@system_opt_app.command("m3-demo")
+def run_m3_system_optimizer_demo(
+    workspace: Path = typer.Option(..., "--workspace", file_okay=False),
+) -> None:
+    """Run the complete synthetic M3 slice through the production CLI path."""
+
+    try:
+        assets = build_m3_demo_workspace(
+            workspace, environment_digest=_current_environment_digest()
+        )
+    except ValueError as error:
+        raise typer.BadParameter(str(error)) from error
+    run_dynamic_phase_session(
+        session_dir=assets["session"],
+        manifest_path=assets["manifest"],
+        state_evidence_path=assets["state_evidence"],
+        backend_kind="simulated",
+        initial_state=assets["initial_state"],
+        target_id="demo-dynamic-target",
+        owner_id="m3-demo-owner",
+        lease_root=assets["lease_root"],
+        lease_ttl_seconds=7200,
+        allow_executable=None,
+        writable_root=[],
+        max_windows=6,
+        probe_top_k=2,
+        verification_window_count=2,
+        o1_plans_path=None,
+        o1_window_seconds=None,
+        o2_window_seconds=None,
+        o2_source="window-digest",
+        enable_real=False,
+        confirmation="",
+        online_routing=True,
+        hypothesis_cache_path=assets["hypothesis_cache"],
+        hypothesis_cache_retention_path=assets["retention_policy"],
+        scenario_profile=True,
+        output=assets["output"],
     )
 
 
@@ -1185,6 +1252,17 @@ def run_dynamic_phase_session(
     ),
     enable_real: bool = typer.Option(False, "--enable-real"),
     confirmation: str = typer.Option("", "--confirmation"),
+    online_routing: bool = typer.Option(False, "--online-routing"),
+    hypothesis_cache_path: Path | None = typer.Option(
+        None, "--hypothesis-cache", dir_okay=False
+    ),
+    hypothesis_cache_retention_path: Path | None = typer.Option(
+        None,
+        "--hypothesis-cache-retention",
+        exists=True,
+        dir_okay=False,
+    ),
+    scenario_profile: bool = typer.Option(False, "--scenario-profile"),
     output: Path = typer.Option(..., "--output", dir_okay=False),
 ) -> None:
     """Run one dynamic phase over an externally loaded session directory.
@@ -1232,6 +1310,16 @@ def run_dynamic_phase_session(
         raise typer.BadParameter(
             "gate contract and hypothesis proposals must use the same schema generation"
         )
+    if online_routing and not durable_session:
+        raise typer.BadParameter("--online-routing requires v1alpha2 gate and proposals")
+    if (hypothesis_cache_path is None) != (hypothesis_cache_retention_path is None):
+        raise typer.BadParameter(
+            "--hypothesis-cache and --hypothesis-cache-retention must be provided together"
+        )
+    if hypothesis_cache_path is not None and not online_routing:
+        raise typer.BadParameter("hypothesis cache runtime requires --online-routing")
+    if scenario_profile and not online_routing:
+        raise typer.BadParameter("--scenario-profile requires --online-routing")
     if lease_ttl_seconds <= gate_contract.budget.wall_clock_seconds:
         raise typer.BadParameter(
             "lease TTL must exceed the gate contract wall-clock budget"
@@ -1255,6 +1343,7 @@ def run_dynamic_phase_session(
         except ValueError as error:
             raise typer.BadParameter(str(error)) from error
 
+    environment_digest = _current_environment_digest()
     manifest = parse_config_manifest_yaml(manifest_path.read_text(encoding="utf-8"))
     if backend_kind == "simulated":
         payload = _read_json(initial_state)
@@ -1274,7 +1363,7 @@ def run_dynamic_phase_session(
         manifest,
         target_id=target_id,
         actor_id=owner_id,
-        environment_digest=_current_environment_digest(),
+        environment_digest=environment_digest,
     )
     safety_policy = SafetyPolicy(
         allow_keep=True,
@@ -1350,6 +1439,88 @@ def run_dynamic_phase_session(
             baseline_batch=baseline_batch,
             layout=layout,
         )
+        online_source = None
+        cache_runtime = None
+        routing_contract = None
+        if online_routing:
+            required_online_assets = [
+                layout.online_routing_policy,
+                layout.diagnostic_reference,
+                layout.online_o1_snapshots,
+                layout.online_routing_contract,
+            ]
+            missing_online_assets = [
+                str(path) for path in required_online_assets if not path.is_file()
+            ]
+            if missing_online_assets:
+                raise typer.BadParameter(
+                    f"online routing assets are missing: {missing_online_assets}"
+                )
+            online_policy = parse_optimization_policy_yaml(
+                layout.online_routing_policy.read_text(encoding="utf-8")
+            )
+            diagnostic_reference = MeasurementBatch.model_validate_json(
+                layout.diagnostic_reference.read_text(encoding="utf-8")
+            )
+            snapshots = TypeAdapter(list[ComponentMetricSnapshot]).validate_json(
+                layout.online_o1_snapshots.read_text(encoding="utf-8")
+            )
+            routing_contract = OnlineRoutingContract.model_validate_json(
+                layout.online_routing_contract.read_text(encoding="utf-8")
+            )
+            if routing_contract.target_id != target_id:
+                raise typer.BadParameter("online routing contract targets a different target")
+            if routing_contract.environment_digest != environment_digest:
+                raise typer.BadParameter(
+                    "online routing contract targets a different environment"
+                )
+            excluded_components: set[str] = set()
+            if hypothesis_cache_path is not None:
+                assert hypothesis_cache_retention_path is not None
+                retention_policy = HypothesisCacheRetentionPolicy.model_validate_json(
+                    hypothesis_cache_retention_path.read_text(encoding="utf-8")
+                )
+                cache = (
+                    NegativeCache.load(hypothesis_cache_path)
+                    if hypothesis_cache_path.is_file()
+                    else NegativeCache()
+                )
+                metric_contract = build_business_metric_contract(contract, business_policy)
+                cache_runtime = HypothesisCacheRuntime(
+                    cache=cache,
+                    path=hypothesis_cache_path,
+                    binding=HypothesisCacheBinding(
+                        environment_digest=environment_digest,
+                        workload_contract_digest=contract.digest,
+                        symptom_class_digest=routing_contract.symptom_class_digest,
+                        metric_contract=metric_contract,
+                        refutation_policy_digest=canonical_digest(
+                            business_policy.model_dump(mode="json")
+                        ),
+                        formula_versions=dict(routing_contract.formula_versions),
+                        hypothesis_semantics_version=(
+                            routing_contract.hypothesis_semantics_version
+                        ),
+                    ),
+                    retention_policy=retention_policy,
+                )
+                assert isinstance(proposals, HypothesisProposalsFileV2)
+                excluded_components = cache_runtime.excluded_proposal_components(
+                    {
+                        proposal.hypothesis_id: proposal.component
+                        for proposal in proposals.proposals
+                    },
+                    at=datetime.now(UTC),
+                )
+            assert isinstance(proposals, HypothesisProposalsFileV2)
+            online_source = OnlineHypothesisSource(
+                proposals=proposals,
+                snapshots=snapshots,
+                reference=diagnostic_reference,
+                policy=online_policy,
+                routing_contract=routing_contract,
+                excluded_components=sorted(excluded_components),
+            )
         if legacy_session:
             assert isinstance(proposals, HypothesisProposalsFile)
             intervention = SafetyBackedIntervention(
@@ -1427,7 +1598,7 @@ def run_dynamic_phase_session(
                     contract=contract,
                     gate_contract=gate_contract,
                     promotion_contract=promotion_contract,
-                    environment_digest=_current_environment_digest(),
+                    environment_digest=environment_digest,
                     max_windows=max_windows,
                     probe_top_k=probe_top_k,
                     load_identity=FileLoadIdentity(layout, business_policy),
@@ -1448,12 +1619,16 @@ def run_dynamic_phase_session(
                     gate_contract=gate_contract,
                     manifest=manifest,
                     promotion_contract=promotion_contract,
-                    environment_digest=_current_environment_digest(),
+                    environment_digest=environment_digest,
                     max_windows=max_windows,
                     probe_top_k=probe_top_k,
                     load_identity=FileLoadIdentity(layout, business_policy),
                     o0_source=FileO0Source(layout, business_policy),
-                    hypothesis_source=FileHypothesisProposalsV2(proposals),
+                    hypothesis_source=(
+                        online_source
+                        if online_source is not None
+                        else FileHypothesisProposalsV2(proposals)
+                    ),
                     prepare_intervention=durable_intervention.prepare_intervention,
                     execute_intervention=durable_intervention.execute_intervention,
                     clock=lambda: datetime.now(UTC),
@@ -1461,6 +1636,18 @@ def run_dynamic_phase_session(
                     component_probe=o2_callback,
                     retest=FileRetestSource(planner, layout),
                     verification_window_count=verification_window_count,
+                    refutation_sink=(
+                        (
+                            lambda hypothesis, symptom, experiment: cache_runtime.record_refutation(
+                                hypothesis,
+                                symptom,
+                                experiment,
+                                recorded_at=datetime.now(UTC),
+                            )
+                        )
+                        if cache_runtime is not None
+                        else None
+                    ),
                 )
         except Exception as error:
             run_error = error
@@ -1521,6 +1708,7 @@ def run_dynamic_phase_session(
                     now=datetime.now(UTC),
                 )
 
+            evidence_errors: list[Exception] = []
             try:
                 persist_dynamic_collection_evidence(
                     layout.control,
@@ -1528,7 +1716,18 @@ def run_dynamic_phase_session(
                     o2_probe=live_o2,
                 )
             except Exception as error:
-                evidence_error = error
+                evidence_errors.append(error)
+            if online_source is not None:
+                try:
+                    persist_online_routing_evidence(layout.control, online_source)
+                except Exception as error:
+                    evidence_errors.append(error)
+            if evidence_errors:
+                evidence_error = RuntimeError(
+                    "; ".join(
+                        f"{type(error).__name__}: {error}" for error in evidence_errors
+                    )
+                )
 
         if run_error is not None:
             detail = f"dynamic phase failed: {type(run_error).__name__}: {run_error}"
@@ -1579,10 +1778,51 @@ def run_dynamic_phase_session(
             raise RuntimeError(detail) from restoration_audit_error
         if evidence_error is not None:
             raise RuntimeError(
-                f"dynamic collection evidence persistence failed: "
+                f"dynamic evidence persistence failed: "
                 f"{type(evidence_error).__name__}: {evidence_error}"
             ) from evidence_error
         assert run is not None
+        scenario_profile_index = None
+        if scenario_profile:
+            if not isinstance(run, DynamicPhaseRunV2):
+                raise RuntimeError("scenario Profile requires a v1alpha2 dynamic run")
+            if run.promotion is None or not run.promotion.promoted:
+                raise RuntimeError("scenario Profile requires a promoted candidate")
+            if not layout.general_profile_baseline.is_file():
+                raise RuntimeError("general Profile baseline evidence is missing")
+            assert isinstance(proposals, HypothesisProposalsFileV2)
+            assert routing_contract is not None
+            proposal = proposals.by_id()[run.promotion.candidate_id]
+            candidate_batch = planner.read_window_batch(
+                planner.retest_window_ids(f"retest-{proposal.hypothesis_id}")
+            )
+            original_improvement = planner.judge(candidate_batch)
+            general_profile_baseline = MeasurementBatch.model_validate_json(
+                layout.general_profile_baseline.read_text(encoding="utf-8")
+            )
+            general_planner = BusinessRetestPlanner(
+                contract=contract,
+                policy=business_policy,
+                baseline_batch=general_profile_baseline,
+                layout=layout,
+            )
+            general_improvement = general_planner.judge(candidate_batch)
+            report = build_scenario_profile_report(
+                run=run,
+                manifest=manifest,
+                proposal=proposal,
+                environment_digest=environment_digest,
+                workload_contract_digest=contract.digest,
+                formula_versions_digest=formula_versions_digest(
+                    routing_contract.formula_versions
+                ),
+                candidate_batch=candidate_batch,
+                original_baseline=baseline_batch,
+                general_profile_baseline=general_profile_baseline,
+                original_improvement=original_improvement,
+                general_profile_improvement=general_improvement,
+            )
+            scenario_profile_index = persist_scenario_profile(layout.control, report)
         _write_json(output, run.model_dump(mode="json"))
     finally:
         guard.release(lease)
@@ -1608,6 +1848,17 @@ def run_dynamic_phase_session(
                 "run_digest": run.digest,
                 "o1_live_collection": live_o1 is not None,
                 "o2_probe_source": "live" if live_o2 is not None else o2_source,
+                "online_routing": online_source is not None,
+                "hypothesis_negative_cache": (
+                    str(hypothesis_cache_path.resolve())
+                    if hypothesis_cache_path is not None
+                    else None
+                ),
+                "scenario_profile_report_digest": (
+                    scenario_profile_index.report_digest
+                    if scenario_profile_index is not None
+                    else None
+                ),
                 "output": str(output.resolve()),
             }
         )

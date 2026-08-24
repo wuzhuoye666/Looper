@@ -19,29 +19,60 @@ workload/gate/promotion 合同、业务复测策略、冻结基线、竞争假�
 
 from __future__ import annotations
 
+import hashlib
+import json
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import yaml
 
+from looper_core.canonical import canonical_digest
 from looper_core.contracts import Aggregation
-from looper_core.system_opt.config_manifest import ConfigComponent
+from looper_core.system_opt.collector import (
+    CollectedMetric,
+    ComponentMetricSnapshot,
+    MetricAvailability,
+)
+from looper_core.system_opt.config_manifest import ConfigComponent, ConfigManifest
+from looper_core.system_opt.demo import (
+    build_demo_manifest,
+    build_demo_policy,
+    build_workload_reference,
+)
 from looper_core.system_opt.dynamic_adapters import (
     BusinessRetestPolicy,
     HypothesisProposal,
     HypothesisProposalsFile,
+    HypothesisProposalsFileV2,
+    HypothesisProposalV2,
     SessionLayout,
     build_business_batch_identity,
 )
+from looper_core.system_opt.negative_cache import (
+    HYPOTHESIS_SEMANTICS_VERSION,
+    HypothesisCacheRetentionPolicy,
+)
+from looper_core.system_opt.online_routing import OnlineRoutingContract
 from looper_core.system_opt.phase_gate import (
     BoundComparator,
     ConvergencePolicy,
     DegradationGate,
     DynamicPhaseGateContract,
+    DynamicPhaseGateContractV2,
     PhaseBudget,
     SloTarget,
 )
+from looper_core.system_opt.policy import OptimizationMode
 from looper_core.system_opt.result_vector import PromotionContract
 from looper_core.system_opt.scoring import MeasurementBatch, MetricEvidence
+from looper_core.system_opt.state_evidence import (
+    STATE_EVIDENCE_SCHEMA,
+    ConfigStateRecord,
+    ConfigurationStateEvidence,
+    OwnershipDisposition,
+    PersistenceDisposition,
+    StateSource,
+)
 from looper_core.system_opt.workload import (
     BoundComparator as WorkloadBoundComparator,
 )
@@ -293,6 +324,144 @@ def build_dynamic_demo_session(root: Path) -> SessionLayout:
     return layout
 
 
+def build_m3_demo_session(root: Path, *, environment_digest: str) -> SessionLayout:
+    """Build the durable v2 demo plus online O1 routing/cache/profile assets."""
+
+    layout = build_dynamic_demo_session(root)
+    contract = build_demo_workload_contract()
+    gate_v1 = build_demo_gate_contract(contract.digest)
+    gate_v2 = DynamicPhaseGateContractV2.model_validate(
+        {
+            **gate_v1.model_dump(mode="json"),
+            "schema_version": "looper.dynamic-phase-gate/v1alpha2",
+        }
+    )
+    layout.gate_contract.write_text(gate_v2.model_dump_json(indent=2), encoding="utf-8")
+
+    proposals_v2 = HypothesisProposalsFileV2(
+        proposals=[
+            HypothesisProposalV2(
+                hypothesis_id=proposal.hypothesis_id,
+                component=proposal.component,
+                rank=proposal.rank,
+                rationale=proposal.rationale,
+                change=dict(proposal.change),
+                supporting_digests=list(proposal.supporting_digests),
+                risk="low",
+                risk_kind="manifest-derived",
+            )
+            for proposal in build_demo_proposals().proposals
+        ]
+    )
+    layout.hypothesis_proposals.write_text(
+        yaml.safe_dump(
+            proposals_v2.model_dump(mode="json"), allow_unicode=True, sort_keys=False
+        ),
+        encoding="utf-8",
+    )
+
+    policy = build_demo_policy(OptimizationMode.WORKLOAD)
+    layout.online_routing_policy.write_text(
+        yaml.safe_dump(policy.model_dump(mode="json"), allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+    )
+    reference = build_workload_reference(policy).model_copy(
+        update={
+            "identity": {
+                "target": "demo-dynamic-target",
+                "workload": contract.digest,
+                "phase": "steady-state",
+                "load_state": "loaded",
+                "tool": "looper-m3-simulated-o1/v1",
+                "statistics": "explicit-policy",
+            }
+        }
+    )
+    layout.diagnostic_reference.write_text(
+        reference.model_dump_json(indent=2), encoding="utf-8"
+    )
+    routing_contract = OnlineRoutingContract(
+        target_id="demo-dynamic-target",
+        environment_digest=environment_digest,
+        measurement_identity=dict(reference.identity),
+        pressure_protocol_digest=reference.pressure_protocol_digest,
+        formula_versions={
+            "F-PROJECT-S4-PIECEWISE-LINEAR": "v1alpha1",
+            "F-PROJECT-S6-S7": "v1alpha1",
+        },
+        symptom_class_digest=canonical_digest(
+            {
+                "kind": "business-slo-below-bound",
+                "metric_id": BUSINESS_METRIC,
+                "phase_id": PHASE_ID,
+            }
+        ),
+        hypothesis_semantics_version=HYPOTHESIS_SEMANTICS_VERSION,
+    )
+    layout.online_routing_contract.write_text(
+        routing_contract.model_dump_json(indent=2), encoding="utf-8"
+    )
+    retention = HypothesisCacheRetentionPolicy(
+        policy_id="m3-demo-explicit-identity-retention",
+        mode="identity-change-only",
+        expires_at=None,
+    )
+    layout.hypothesis_cache_retention.write_text(
+        retention.model_dump_json(indent=2), encoding="utf-8"
+    )
+
+    component_values = {
+        "cpu": {"cpu.utilization": 0.95},
+        "memory": {"memory.psi-some": 0.07},
+        "storage": {"storage.io-latency": 9.0},
+        "network": {"network.retransmits": 8.0},
+    }
+    snapshots: list[ComponentMetricSnapshot] = []
+    for sample_index in range(policy.statistics.baseline_repeats):
+        for component, metrics in component_values.items():
+            snapshots.append(
+                ComponentMetricSnapshot(
+                    component=component,
+                    target_id="demo-dynamic-target",
+                    environment_digest=environment_digest,
+                    collected_at=datetime(2026, 8, 24, tzinfo=UTC)
+                    + timedelta(seconds=sample_index),
+                    metrics={
+                        name: CollectedMetric(
+                            name=name,
+                            unit="synthetic",
+                            source="m3-demo-session",
+                            availability=MetricAvailability.READABLE,
+                            value=value,
+                        )
+                        for name, value in metrics.items()
+                    },
+                    counting_basis="one synthetic O1 sample for online-routing demo only",
+                )
+            )
+    layout.online_o1_snapshots.write_text(
+        "[\n"
+        + ",\n".join(snapshot.model_dump_json(indent=2) for snapshot in snapshots)
+        + "\n]\n",
+        encoding="utf-8",
+    )
+
+    general_baseline = MeasurementBatch(
+        identity=build_business_batch_identity(contract, PHASE_ID),
+        metrics={
+            BUSINESS_METRIC: MetricEvidence(
+                metric_id=BUSINESS_METRIC,
+                values=[399.5, 400.2, 399.8, 400.5, 400.0],
+            )
+        },
+        gate_values={},
+    )
+    layout.general_profile_baseline.write_text(
+        general_baseline.model_dump_json(indent=2), encoding="utf-8"
+    )
+    return layout
+
+
 def build_demo_initial_state() -> dict[str, object]:
     """SimulatedBackend initial state: item id -> starting value."""
 
@@ -303,11 +472,98 @@ def build_demo_initial_state() -> dict[str, object]:
     }
 
 
+def build_demo_state_evidence(
+    manifest: ConfigManifest, *, environment_digest: str
+) -> ConfigurationStateEvidence:
+    """Build explicit synthetic ownership evidence for the simulated target only."""
+
+    locator = "demo://m3-simulated-target"
+    source = StateSource(
+        kind="user-declaration",
+        locator=locator,
+        content_sha256=hashlib.sha256(locator.encode()).hexdigest(),
+        line=1,
+        raw_value=None,
+    )
+    return ConfigurationStateEvidence(
+        schema_version=STATE_EVIDENCE_SCHEMA,
+        target_id="demo-dynamic-target",
+        manifest_digest=manifest.digest,
+        environment_digest=environment_digest,
+        collected_at=datetime(2026, 8, 24, tzinfo=UTC),
+        source_scope=[locator],
+        assignments=[],
+        records=[
+            ConfigStateRecord(
+                item_id=item.id,
+                parameter_id=item.parameter_id,
+                persistence=PersistenceDisposition.UNKNOWN,
+                persistent_value=None,
+                ownership=OwnershipDisposition.UNOWNED,
+                owner_id=None,
+                pinned=False,
+                sources=[source],
+                reason="synthetic demo: no external writer exists in SimulatedBackend",
+            )
+            for item in manifest.items
+        ],
+        counting_basis="one synthetic UNOWNED record per demo manifest item",
+    )
+
+
+def build_m3_demo_workspace(
+    root: Path, *, environment_digest: str
+) -> dict[str, Path]:
+    """Materialize every input needed by the one-command simulated M3 demo.
+
+    Existing non-empty directories are refused so a demo cannot overwrite or
+    be mistaken for previously collected evidence.
+    """
+
+    if root.exists() and any(root.iterdir()):
+        raise ValueError("M3 demo workspace must be absent or empty")
+    root.mkdir(parents=True, exist_ok=True)
+    session = root / "session"
+    build_m3_demo_session(session, environment_digest=environment_digest)
+    manifest = build_demo_manifest()
+    manifest_path = root / "manifest.yaml"
+    manifest_path.write_text(
+        yaml.safe_dump(
+            manifest.model_dump(mode="json"), allow_unicode=True, sort_keys=False
+        ),
+        encoding="utf-8",
+    )
+    state_evidence_path = root / "state-evidence.json"
+    state_evidence_path.write_text(
+        build_demo_state_evidence(
+            manifest, environment_digest=environment_digest
+        ).model_dump_json(indent=2),
+        encoding="utf-8",
+    )
+    initial_state_path = root / "initial-state.json"
+    initial_state_path.write_text(
+        json.dumps(build_demo_initial_state(), indent=2), encoding="utf-8"
+    )
+    return {
+        "session": session,
+        "manifest": manifest_path,
+        "state_evidence": state_evidence_path,
+        "initial_state": initial_state_path,
+        "output": root / "dynamic-run.json",
+        "lease_root": root / "leases",
+        "hypothesis_cache": session / "control" / "hypothesis-negative-cache.jsonl",
+        "retention_policy": session / "hypothesis-cache-retention.json",
+    }
+
+
 __all__ = [
     "build_demo_business_policy",
     "build_demo_gate_contract",
     "build_demo_initial_state",
     "build_demo_proposals",
+    "build_demo_state_evidence",
     "build_demo_workload_contract",
     "build_dynamic_demo_session",
+    "build_m3_demo_session",
+    "build_m3_demo_workspace",
 ]
