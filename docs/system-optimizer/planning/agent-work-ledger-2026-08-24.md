@@ -45,6 +45,7 @@ phase-gate audit
 | G5 L6c CLI 生命周期接线 | GPT agent | `Looper-l4-fix/system-optimizer-pkg-b`；最小任务合同基线 `e704b88`，交付前同步最新主线 | `services/api/looper_api/cli.py`、新/现有 L6c CLI tests；只读 `rollback/regression.py` | `assigned`。详见下节；不得碰 replay、phase-gate、dynamic_collection、DeepSeek 文件；agent 不 push/merge |
 | Z-GOV-01 Agent 台账与状态对齐 | glm5.3 | `system-optimizer-impl@83a6b15` | governance/planning/architecture docs | `pushed`：规范本体 `e0da65e`，状态收口 `e704b88`，远端 `origin/system-optimizer-impl@e704b88`。docs-only，`git diff --check` 通过，未运行 pytest |
 | Z-BASE-01 2026-08-24 实现重新基线 | glm5.3 | `system-optimizer-impl@e704b88` | planning/architecture docs；不碰 agent 代码写集合 | `integrated` 于 `da06607`，push 待本记录提交后一并执行。冻结动态纵向切片、证据/replay、G4、L6c 与 D4/D5/G5 的真实完成边界；docs-only，`git diff --check` 通过，未运行 pytest |
+| Z-CI-01 cloud confirmation 全量 flaky | glm5.3 | `system-optimizer-impl@98f7e23`；主线 `bcc4a6f` | 仅 `tests/test_cloud_workflow.py`；不碰 GPT/DeepSeek 写集合 | `pushed`。测试手工过期数据库字段但未推进时钟，Windows 同 tick 下 renew token 可与 prepare token 相同；测试显式推进 1 秒，不修改生产 token 合同。目标 1、cloud workflow 22、全仓 811 全部通过；Ruff/diff 通过。依赖感知同步规则另见 `a5c549f` |
 
 ## G5 给 GPT 的正式任务合同
 
