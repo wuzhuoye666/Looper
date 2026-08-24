@@ -45,7 +45,7 @@ packages/core/looper_core/system_opt/
 |---|---|---|---|
 | 0 | L0–L2 | 现有 | 现有 101 个 system_opt 测试全绿（已满足） |
 | 1 | L4 采集器 | collector.py | ✅ 2026-08-23 修复后通过（42 项 L4 测试；原 13 项仅为基础基线，不代表压/采解耦合同完整） |
-| 2 | L6 回退器 | `rollback/__init__.py` + `rollback/regression.py` | ✅ 核心执行 2026-08-24 通过（四级记录/相位恢复三态；L6c S8 显式阈值→S9 last-good→L1 精确恢复；CLI 生命周期属 G5） |
+| 2 | L6 回退器 | `rollback/__init__.py` + `rollback/regression.py` + API CLI | ✅ 核心执行与 G5 CLI 生命周期 2026-08-24 通过（四级记录/相位恢复三态；L6c S8 显式阈值→S9 last-good→L1 精确恢复；原子证据图、lease/attention fail-closed） |
 | 3 | L7 负缓存 | negative_cache.py | ✅ 2026-08-23 通过（17 测试：四分量身份敏感/无证据拒收/JSONL 追加/坏行报错） |
 | 4 | L8 引擎 | engine/ | ✅ 2026-08-23 通过（11 测试：打分排序/判断器否定理由完整/调度器缓存跳过与显式耗尽） |
 | 5 | L5 改造 | tuning.py 等 | 组件内终裁降格为上报引擎（单独后续阶段，不在本轮） |
@@ -142,7 +142,7 @@ envelope 必须校验：
 |---|---|---|
 | a 候选级 | 每个候选测完 | 现有（tuning 闭环内 safety rollback），本模块只登记记录模型 |
 | b 相位级 | 搜索结束无优化（S10 停止） | `verify_phase_restoration(actual, baseline)`：快照 digest 全等才算恢复；不等 → `needs-attention` |
-| c 退化级 | 已采纳变更后续退化（S8 的 U_regression 低于任务显式阈值） | `rollback/regression.py`：只接受 S9 promoted last-good 完整快照，经 L1 精确恢复；失败 needs-attention；CLI 生命周期接线属 G5 |
+| c 退化级 | 已采纳变更后续退化（S8 的 U_regression 低于任务显式阈值） | `rollback/regression.py` + API CLI：只接受 S9 promoted last-good 完整快照，经 L1 精确恢复；失败 needs-attention；G5 已提供内容寻址证据图、固定索引及 lease/attention 生命周期 |
 | d 崩溃级 | 进程崩溃/租约过期 | 现有 reconcile-expired-lease / recover-attention 路径，本模块登记引用 |
 
 验收门禁：相位级恢复判定（全等/不等/缺项三态）纯逻辑测试；四级记录模型

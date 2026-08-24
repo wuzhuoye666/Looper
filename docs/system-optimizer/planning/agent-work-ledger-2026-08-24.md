@@ -26,7 +26,7 @@ O1 live A/B + evidence persistence (G3, pushed 2a3f0dd)
 
 S8/S9 contracts (existing)
  └─ executable L6c regression recovery (Z-L6C, pushed e70a85b)
-     └─ L6c CLI lifecycle integration (G5, GPT assigned)
+     └─ L6c CLI lifecycle integration (G5, GPT initial delivery + glm5.3 takeover accepted)
 
 phase-gate audit
  └─ risk/change-count contract proposal (D5-R3, integrated draft e28153a)
@@ -42,7 +42,7 @@ phase-gate audit
 | G4 dynamic-run 异常生命周期 | GPT agent；glm5.3 验收 | agent commit `5744c47`，主线基线 `e70a85b`；GPT `Looper-l4-fix/system-optimizer-pkg-b` | 仅 `cli.py`、`test_system_opt_dynamic_cli.py`；依赖 G3 persistence | `pushed` 为 `83a6b15`。异常后先恢复再持久化；恢复失败 needs-attention；lease 最终释放。聚焦 43、System Optimizer 451、全仓 784、Ruff/diff 通过 |
 | D4 dynamic evidence replay | DeepSeek agent；glm5.3 验收 | 最终 agent commit `16bd3e4`，实际 parent `1767ae3`；主线 `1753cea`；`Looper-system-optimizer-deepseek-batch1` | `dynamic_replay.py` + tests；共享严格校验的 `collection_evidence_filename` | `pushed`。D4-R4 保留 forged-window/重复 probe 历史反例，补齐 O1 集合级共享语义、O2 probe→overhead 一对一、完整身份/孤儿/畸形/digest 校验；索引与 helper 均在读证据前拒绝路径穿越。聚焦 42、System Optimizer 478 通过；全仓 811 中仅既有 cloud token 时间碰撞失败，单测复跑通过；Ruff/diff 通过。远端主线已含 `1753cea` |
 | D5 phase-gate 风险/单变更合同 | DeepSeek agent；glm5.3 验收 | 最终 agent commit `ce8f3e8`，实际 parent `16bd3e4`；主线 `e28153a` | 纯设计文档；未修改 phase-gate 实现 | `pushed-draft`。R3 采用 prepare→gate→execute 两阶段接口；risk 显式必填并绑定 manifest；plan digest 为计算属性；apply 后异常由 outcome/receipt 保留并计预算。preflight 计数、停类、风险冲突、receipt schema 四项仍待用户决定，确认前禁止编码。远端主线已含 `e28153a` |
-| G5 L6c CLI 生命周期接线 | GPT agent | `Looper-l4-fix/system-optimizer-pkg-b`；最小任务合同基线 `e704b88`，交付前同步最新主线 | `services/api/looper_api/cli.py`、新/现有 L6c CLI tests；只读 `rollback/regression.py` | `assigned`。详见下节；不得碰 replay、phase-gate、dynamic_collection、DeepSeek 文件；agent 不 push/merge |
+| G5 L6c CLI 生命周期接线 | GPT agent 初交；glm5.3 接管修复/验收 | GPT `6fd88be`（parent `98f7e23`）；主线接入 `57b111e`，修复 `6e19fb5` | `services/api/looper_api/cli.py`、`tests/test_system_opt_regression_cli.py`；只读 `rollback/regression.py` | `accepted`。完整证据图先校验、digest 文件原子写且固定索引最后发布；恢复/发布/attention/output/lease 组合失败均保留原始上下文并按目标状态 fail-closed；local-linux 仍需显式确认。CLI 22、聚焦 45、System Optimizer 500、全仓 833、Ruff/diff 通过；`.artifacts/` 未跟踪未提交 |
 | Z-GOV-01 Agent 台账与状态对齐 | glm5.3 | `system-optimizer-impl@83a6b15` | governance/planning/architecture docs | `pushed`：规范本体 `e0da65e`，状态收口 `e704b88`，远端 `origin/system-optimizer-impl@e704b88`。docs-only，`git diff --check` 通过，未运行 pytest |
 | Z-BASE-01 2026-08-24 实现重新基线 | glm5.3 | `system-optimizer-impl@e704b88` | planning/architecture docs；不碰 agent 代码写集合 | `integrated` 于 `da06607`，push 待本记录提交后一并执行。冻结动态纵向切片、证据/replay、G4、L6c 与 D4/D5/G5 的真实完成边界；docs-only，`git diff --check` 通过，未运行 pytest |
 | Z-CI-01 cloud confirmation 全量 flaky | glm5.3 | `system-optimizer-impl@98f7e23`；主线 `bcc4a6f` | 仅 `tests/test_cloud_workflow.py`；不碰 GPT/DeepSeek 写集合 | `pushed`。测试手工过期数据库字段但未推进时钟，Windows 同 tick 下 renew token 可与 prepare token 相同；测试显式推进 1 秒，不修改生产 token 合同。目标 1、cloud workflow 22、全仓 811 全部通过；Ruff/diff 通过。依赖感知同步规则另见 `a5c549f` |

@@ -22,14 +22,14 @@
 | 动态 workload 纵向切片 | 外部负载合同与 session runner；O0 四解析器；多假设路由；O1/O2；业务复测、复验、门禁、重激活；CLI simulated E2E | 真实业务 workload 与 CVM 动态闭环未验收；声明式假设仍未由 O1 在线 S4 推导替换；L7 假设级负缓存仍 open |
 | 动态采集开销与证据 | O2 相邻 disabled→enabled；O1 首个成功窗一次配对、后窗复用绑定；四类 digest 文件与固定索引落 `control/` | D4 初版 replay verifier 已拒绝，当前主线尚无获验收的离线回放器；固定索引不是真实性根信任 |
 | 动态异常恢复 | G4 保证 dynamic-run 异常后先恢复，再持久化采集证据；恢复失败写 attention；最外层释放 lease | `phase-restoration.json` 的更广泛证据生命周期仍由后续包审计；不能将 CLI simulated 测试写成真机故障演练 |
-| L6c 运行期退化恢复 | S8 `u_regression` + 任务显式 threshold；只接受 S9 promoted last-good 完整快照；经 L1 精确恢复，失败 needs-attention；rollback v1alpha2 + legacy loader | 尚无 CLI 生命周期和持久化入口（G5）；尚无真实目标运行期退化演练；threshold 数值不得跨任务默认 |
+| L6c 运行期退化恢复 | S8 `u_regression` + 任务显式 threshold；只接受 S9 promoted last-good 完整快照；经 L1 精确恢复，失败 needs-attention；rollback v1alpha2 + legacy loader；G5 CLI 已接入原子内容寻址证据图、固定索引、lease/attention 与故障生命周期 | 尚无真实目标运行期退化演练；threshold 数值不得跨任务默认 |
 
 ## 当前并行任务
 
 - D4-R（DeepSeek）：修正动态证据 replay 的窗口、重复、组件映射和完整身份校验。
 - D5（DeepSeek）：只提交 risk quota 与 single-change 的执行前信号/API 提案；未经用户
   确认不得编码。
-- G5（GPT）：L6c CLI 生命周期、证据原子持久化、lease/attention/failure injection。
+- G5（GPT 初交、glm5.3 接管修复/验收）：L6c CLI 生命周期、证据原子持久化、lease/attention/failure injection 已完成，主线修复提交 `6e19fb5`。
 - Z-BASE-01（glm5.3）：本重新基线与当前文档状态对齐，不修改并行代码写集合。
 
 具体 owner、worktree、基线和验收状态只在
@@ -52,6 +52,6 @@
 ## 下一集成顺序
 
 1. 先验收 D4-R，确保已落盘证据能够 fail-closed 回放；初版反例必须保留为负测。
-2. 独立验收 G5，关闭 L6c 从纯逻辑到 CLI 安全生命周期的缺口。
+2. G5 已验收；下一步只在具备授权与显式 threshold 的真实目标上演练 L6c，不把模拟门禁等同于真机结论。
 3. 评审 D5 合同后由用户确认风险定义、quota 边界和 change-count API，再决定实施包。
 4. 三包稳定后再选择真实 Linux/CVM 动态会话与 L6c 故障演练；没有实测前成熟度不升级。
