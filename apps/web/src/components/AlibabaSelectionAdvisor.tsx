@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { api } from '../lib/api';
 import { SELECTION_SCENARIOS } from '../lib/selectionScenarios';
 import { InstanceTypeFacetFilter } from './InstanceTypeFacetFilter';
+import { InstancePricePreview } from './InstancePricePreview';
 import type {
   AdvisedCloudInstanceType,
   CloudInstanceType,
@@ -321,6 +322,7 @@ function CandidateCard({ item, selected, onSelect }: { item: AdvisedCloudInstanc
     <div className="candidate-heading"><span className={`match-tier ${item.matchTier}`}>{item.matchTier === 'preferred' ? '优先匹配' : item.matchTier === 'suitable' ? '适合' : '其他候选'}</span><span className={`stock-label ${item.available === true ? 'available' : 'unknown'}`}>{item.available === true ? '库存可用' : '库存未知'}</span></div>
     <h3>{item.id}</h3><p>{item.typeLabel || '其他类型'} · {item.familyLabel || `规格族 ${item.family || item.id}`} · {item.architecture || '架构未知'}</p>
     <div className="candidate-facts"><span><strong>{item.cpu}</strong>vCPU</span><span><strong>{formatNumber(item.memoryGib)}</strong>GiB 内存</span>{item.gpu ? <span><strong>{formatNumber(item.gpu)}</strong>GPU</span> : null}{bandwidth ? <span><strong>{formatNumber(bandwidth)}</strong>Gbit/s</span> : null}{pps ? <span><strong>{pps.toLocaleString()}</strong>PPS</span> : null}</div>
+    <InstancePricePreview item={item} />
     <ul className="candidate-reasons">{item.reasons.map(reason => <li key={reason}><Check size={12} />{reason}</li>)}</ul>
     {item.warnings.length > 0 && <ul className="candidate-warnings">{item.warnings.map(warning => <li key={warning}><AlertTriangle size={12} />{warning}</li>)}</ul>}
     <button type="button" className={`button ${selected ? 'primary' : 'secondary'}`} onClick={onSelect}>{selected ? <><Check size={14} />已选择</> : '选择此机型'}</button>

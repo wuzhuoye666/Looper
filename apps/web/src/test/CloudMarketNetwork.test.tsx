@@ -27,11 +27,11 @@ function catalog(resourceType: string, items: unknown[], total = items.length, o
   };
 }
 
-function renderMarket() {
+function renderMarket(route = '/cloud/market') {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={client}>
-      <MemoryRouter initialEntries={['/cloud/market']} future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+      <MemoryRouter initialEntries={[route]} future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         <App />
       </MemoryRouter>
     </QueryClientProvider>,
@@ -294,6 +294,7 @@ describe('腾讯云购买网络选择', () => {
     expect(within(firstRow!).getByText('规格')).toHaveClass('instance-mobile-label');
     expect(within(firstRow!).getByText('架构')).toHaveClass('instance-mobile-label');
     expect(within(firstRow!).getByText('库存')).toHaveClass('instance-mobile-label');
+    expect(within(firstRow!).getByLabelText(/预估价格约 0\.248 元每小时，月约 181 元/)).toBeInTheDocument();
     expect(within(firstRow!).getAllByRole('button')).toHaveLength(1);
     const search = screen.getByLabelText('搜索机型');
     const instanceRequests = () => vi.mocked(fetch).mock.calls
@@ -355,5 +356,20 @@ describe('腾讯云购买网络选择', () => {
     expect(within(image).getByRole('option', { name: /Custom Linux test image/ })).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: '腾讯云 CVM · 镜像' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '选择并继续' })).not.toBeInTheDocument();
+  });
+
+  it('从选型助手进入时恢复机型并自动打开购买配置', async () => {
+    renderMarket('/cloud/market?provider=tencent&region=ap-test&zone=ap-test-1&instanceType=S9.TEST');
+
+    await screen.findByRole('heading', { name: '购买草稿' }, { timeout: 5000 });
+    expect(screen.getByText('已选机型').parentElement).toHaveTextContent('S9.TEST · 4 vCPU / 8 GiB');
+    expect(screen.getAllByText(/ap-test-1/).length).toBeGreaterThan(0);
+    expect(vi.mocked(fetch).mock.calls.some(([request]) => {
+      const url = String(request);
+      return url.includes('/cloud/catalog/tencent/instance-type')
+        && new URL(url).searchParams.get('query') === 'S9.TEST';
+    })).toBe(true);
+    expect(vi.mocked(fetch).mock.calls.some(([request]) =>
+      String(request).includes('/cloud/network/tencent/resolve-instance-network'))).toBe(true);
   });
 });

@@ -19,9 +19,10 @@ import {
   XCircle,
 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { PageHeader } from '../components/PageHeader';
 import { InstanceTypeFacetFilter } from '../components/InstanceTypeFacetFilter';
+import { InstancePricePreview } from '../components/InstancePricePreview';
 import { EmptyState, ErrorState, LoadingState } from '../components/States';
 import { api } from '../lib/api';
 import type {
@@ -159,19 +160,42 @@ function imageLabel(image: CloudImage) {
   return `${image.name} · ${image.id}${image.sizeGib ? ` · ${image.sizeGib} GiB` : ''}`;
 }
 
+function marketProvider(value: string | null): CloudProviderId | null {
+  return value && ['tencent', 'alibaba', 'volcengine', 'baidu'].includes(value)
+    ? value as CloudProviderId
+    : null;
+}
+
 export function CloudMarketPage() {
   const navigate = useNavigate();
+  const location = useLocation();
+  const [searchParams] = useSearchParams();
   const queryClient = useQueryClient();
   const providers = useQuery({ queryKey: ['cloud-providers'], queryFn: api.providers, staleTime: 30_000 });
   const readiness = useQuery({ queryKey: ['cloud-purchase-readiness'], queryFn: api.purchaseReadiness, staleTime: 15_000 });
   const auth = useQuery({ queryKey: ['cloud-auth-status'], queryFn: api.cloudAuthStatus, staleTime: 15_000 });
   const available = providers.data?.items || [];
-  const [provider, setProvider] = useState<CloudProviderId>('tencent');
-  const [region, setRegion] = useState('');
-  const [zone, setZone] = useState('');
+  const routeState = location.state as { preselectedInstance?: CloudInstanceType } | null;
+  const preselectedInstance = routeState?.preselectedInstance;
+  const requestedProvider = marketProvider(searchParams.get('provider')) || preselectedInstance?.provider || 'tencent';
+  const requestedRegion = searchParams.get('region') || preselectedInstance?.region || '';
+  const requestedZone = searchParams.get('zone') || preselectedInstance?.zones?.[0] || '';
+  const requestedInstanceType = searchParams.get('instanceType') || preselectedInstance?.id || '';
+  const initialMarketParams = useRef({
+    provider: requestedProvider,
+    region: requestedRegion,
+    zone: requestedZone,
+    instanceType: requestedInstanceType,
+  });
+  const providerReset = useRef(false);
+  const regionReset = useRef(false);
+  const requestedInstanceApplied = useRef(false);
+  const [provider, setProvider] = useState<CloudProviderId>(requestedProvider);
+  const [region, setRegion] = useState(requestedRegion);
+  const [zone, setZone] = useState(requestedZone);
   const [step, setStep] = useState<MarketStep>('instance');
-  const [search, setSearch] = useState('');
-  const [catalogSearch, setCatalogSearch] = useState('');
+  const [search, setSearch] = useState(requestedInstanceType);
+  const [catalogSearch, setCatalogSearch] = useState(requestedInstanceType);
   const [minCpu, setMinCpu] = useState(1);
   const [minMemory, setMinMemory] = useState(1);
   const [minCpuDraft, setMinCpuDraft] = useState('1');
@@ -405,9 +429,20 @@ export function CloudMarketPage() {
   }, [step, provider, region, sshAuthMethod]);
   useEffect(() => {
     setStep('instance');
-    setRegion('');
-    setZone('');
-    setSelectedType(null);
+    const isInitialRoute = !providerReset.current && provider === initialMarketParams.current.provider;
+    providerReset.current = true;
+    if (isInitialRoute) {
+      setRegion(initialMarketParams.current.region);
+      setZone(initialMarketParams.current.zone);
+      setSearch(initialMarketParams.current.instanceType);
+      setCatalogSearch(initialMarketParams.current.instanceType);
+    } else {
+      setRegion('');
+      setZone('');
+      setSelectedType(null);
+      setSearch('');
+      setCatalogSearch('');
+    }
     setSelectedImage(null);
     setDefaultTypeId('');
     setDefaultImageId('');
@@ -436,8 +471,18 @@ export function CloudMarketPage() {
   }, [provider, publicIpSupported]);
   useEffect(() => {
     setStep('instance');
-    setZone('');
-    setSelectedType(null);
+    const isInitialRoute = !regionReset.current && region === initialMarketParams.current.region;
+    regionReset.current = true;
+    if (isInitialRoute) {
+      setZone(initialMarketParams.current.zone);
+      setSearch(initialMarketParams.current.instanceType);
+      setCatalogSearch(initialMarketParams.current.instanceType);
+    } else {
+      setZone('');
+      setSelectedType(null);
+      setSearch('');
+      setCatalogSearch('');
+    }
     setSelectedImage(null);
     setDefaultTypeId('');
     setDefaultImageId('');
@@ -474,6 +519,15 @@ export function CloudMarketPage() {
 
   useEffect(() => {
     if (kind !== 'instance-type' || suppressTypeDefault || selectedType || !items.length) return;
+    const requested = initialMarketParams.current.instanceType
+      ? (items as CloudInstanceType[]).find(item => item.id === initialMarketParams.current.instanceType) || preselectedInstance
+      : undefined;
+    if (requested && !requestedInstanceApplied.current) {
+      requestedInstanceApplied.current = true;
+      setSuppressTypeDefault(true);
+      continueWithInstance(requested);
+      return;
+    }
     const preferred = (items as CloudInstanceType[]).find(item => item.available !== false && item.attributes?.purchaseCompatible !== false);
     if (preferred) {
       setSelectedType(preferred);
@@ -810,7 +864,7 @@ function PurchaseReadiness({ provider, maxHourlyAmount, authRequired, authentica
 }
 
 function InstanceTypeTable({ items, selected, busy, onSelect }: { items: CloudInstanceType[]; selected: CloudInstanceType | null; busy: boolean; onSelect: (value: CloudInstanceType) => void }) {
-  return <div className="table-wrap cloud-instance-table"><table><thead><tr><th>机型</th><th>规格</th><th>架构</th><th>库存提示</th><th /></tr></thead><tbody>{items.map(item => { const purchaseCompatible = item.attributes?.purchaseCompatible !== false; const blockedReason = typeof item.attributes?.purchaseBlockReason === 'string' ? item.attributes.purchaseBlockReason : ''; const classification = item.typeLabel && item.familyLabel ? `${item.typeLabel} · ${item.familyLabel}` : item.family || '未标注规格族'; return <tr key={item.id} className={selected?.id === item.id ? 'selected-row' : ''}><td className="instance-primary"><strong>{item.id}</strong><span className="cell-meta">{classification}</span>{blockedReason && <span className="cell-meta">{blockedReason}</span>}</td><td className="instance-detail"><span className="instance-mobile-label" aria-hidden="true">规格</span>{item.cpu} vCPU · {item.memoryGib} GiB</td><td className="instance-detail"><span className="instance-mobile-label" aria-hidden="true">架构</span>{item.architecture || '—'}</td><td className="instance-detail"><span className="instance-mobile-label" aria-hidden="true">库存</span><span className={`stock-label ${item.available === true && purchaseCompatible ? 'available' : item.available === false ? 'unavailable' : 'unknown'}`}>{!purchaseCompatible ? '不兼容 VPC' : item.available === true ? '可用' : item.available === false ? '不足' : '未知'}</span></td><td className="instance-action"><button className="button secondary compact-button" disabled={busy || item.available === false || !purchaseCompatible} onClick={() => onSelect(item)}>{!purchaseCompatible ? '不可购买' : item.available === false ? '不可用' : busy ? '准备中…' : '选择并继续'}</button></td></tr>; })}</tbody></table></div>;
+  return <div className="table-wrap cloud-instance-table"><table><thead><tr><th>机型</th><th>规格</th><th>架构</th><th>库存提示</th><th>预览价格</th><th /></tr></thead><tbody>{items.map(item => { const purchaseCompatible = item.attributes?.purchaseCompatible !== false; const blockedReason = typeof item.attributes?.purchaseBlockReason === 'string' ? item.attributes.purchaseBlockReason : ''; const classification = item.typeLabel && item.familyLabel ? `${item.typeLabel} · ${item.familyLabel}` : item.family || '未标注规格族'; return <tr key={item.id} className={selected?.id === item.id ? 'selected-row' : ''}><td className="instance-primary"><strong>{item.id}</strong><span className="cell-meta">{classification}</span>{blockedReason && <span className="cell-meta">{blockedReason}</span>}</td><td className="instance-detail"><span className="instance-mobile-label" aria-hidden="true">规格</span>{item.cpu} vCPU · {item.memoryGib} GiB</td><td className="instance-detail"><span className="instance-mobile-label" aria-hidden="true">架构</span>{item.architecture || '—'}</td><td className="instance-detail"><span className="instance-mobile-label" aria-hidden="true">库存</span><span className={`stock-label ${item.available === true && purchaseCompatible ? 'available' : item.available === false ? 'unavailable' : 'unknown'}`}>{!purchaseCompatible ? '不兼容 VPC' : item.available === true ? '可用' : item.available === false ? '不足' : '未知'}</span></td><td className="instance-price-cell"><InstancePricePreview item={item} compact /></td><td className="instance-action"><button className="button secondary compact-button" disabled={busy || item.available === false || !purchaseCompatible} onClick={() => onSelect(item)}>{!purchaseCompatible ? '不可购买' : item.available === false ? '不可用' : busy ? '准备中…' : '选择并继续'}</button></td></tr>; })}</tbody></table></div>;
 }
 
 function ImageTable({ items, selected, onSelect }: { items: CloudImage[]; selected: CloudImage | null; onSelect: (value: CloudImage) => void }) {

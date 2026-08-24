@@ -205,6 +205,22 @@ export function CreateExperimentPage() {
     setAdvisorZone('');
     setAdvisorSelection(null);
   };
+  const openPurchaseMarket = (instance = advisorSelection) => {
+    if (!instance || !advisorRegion) return;
+    const params = new URLSearchParams({
+      provider: advisorProvider,
+      region: advisorRegion,
+      instanceType: instance.id,
+    });
+    if (advisorZone) params.set('zone', advisorZone);
+    navigate(`/cloud/market?${params.toString()}`, {
+      state: { preselectedInstance: instance },
+    });
+  };
+  const selectAdvisorInstance = (instance: CloudInstanceType | null) => {
+    setAdvisorSelection(instance);
+    if (instance) openPurchaseMarket(instance);
+  };
 
   return <div className="page narrow-page">
     <BackLink to="/experiments">返回选型研究</BackLink>
@@ -234,10 +250,11 @@ export function CreateExperimentPage() {
         onRegionChange={changeAdvisorRegion}
         onZoneChange={value => { setAdvisorZone(value); setAdvisorSelection(null); }}
         selected={advisorSelection}
-        onSelect={setAdvisorSelection}
+        onSelect={selectAdvisorInstance}
       />}
-      {advisorSelection && <div className="research-advisor-selection"><div><span>已选建议规格</span><strong>{advisorSelection.id} · {advisorSelection.cpu} vCPU / {advisorSelection.memoryGib} GiB</strong><small>{ADVISOR_PROVIDERS.find(item => item.id === advisorProvider)?.label} · {advisorRegion} · {advisorZone || '自动可用区'}</small></div><button type="button" className="button primary" onClick={() => navigate('/cloud/market')}>打开云资源市场<ChevronRight size={15} /></button></div>}
+      {advisorSelection && <div className="research-advisor-selection"><div><span>已选建议规格</span><strong>{advisorSelection.id} · {advisorSelection.cpu} vCPU / {advisorSelection.memoryGib} GiB</strong><small>{ADVISOR_PROVIDERS.find(item => item.id === advisorProvider)?.label} · {advisorRegion} · {advisorZone || '自动可用区'}</small></div><button type="button" className="button primary" onClick={() => openPurchaseMarket()}>打开购买配置<ChevronRight size={15} /></button></div>}
     </section>}
+    {!advisorOpen && <>
     <ol className="stepper" aria-label="创建步骤">
       {steps.map((item, index) => <li className={index === step ? 'active' : index < step ? 'done' : ''} key={item.label}>
         <span>{index < step ? <Check size={15} /> : index + 1}</span>
@@ -342,5 +359,6 @@ export function CreateExperimentPage() {
         </button>
       </div>
     </form>
+    </>}
   </div>;
 }
