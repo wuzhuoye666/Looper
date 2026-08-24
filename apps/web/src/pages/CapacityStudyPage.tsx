@@ -158,8 +158,8 @@ export function CapacityStudyPage() {
     finally { setActionPending(''); }
   }
 
-  if (query.isLoading || !query.data || !draft) return <div className="page"><LoadingState label="正在读取容量测试"/></div>;
   if (query.isError) return <div className="page"><ErrorState error={query.error} onRetry={() => query.refetch()}/></div>;
+  if (query.isLoading || !query.data || !draft) return <div className="page"><LoadingState label="正在读取容量测试"/></div>;
   const study = query.data;
   if (study.status !== 'draft') return <CapacityRunView study={study} tab={tab} setTab={setTab} pending={actionPending} error={actionError} onCancel={() => void action('cancel')} onCleanup={() => void action('cleanup')} onRefresh={() => void query.refetch()}/>;
   const targets = targetsQuery.data?.items || [];

@@ -166,6 +166,45 @@ def test_source_archive_is_encrypted_expires_and_requires_same_digest(
 
 
 @pytest.mark.asyncio
+async def test_capacity_draft_revision_is_atomic_across_sessions(
+    db_session: object, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = _settings(tmp_path)
+    source, _payload = _source(db_session, settings)
+
+    async def build(*_args: object, **_kwargs: object) -> BuildPlan:
+        return _build_plan()
+
+    monkeypatch.setattr(capacity, "run_build_plan_harness", build)
+    study = await create_capacity_study(db_session, source, settings)  # type: ignore[arg-type]
+    db_session.commit()  # type: ignore[attr-defined]
+    factory = sessionmaker(bind=db_session.get_bind(), expire_on_commit=False)  # type: ignore[attr-defined]
+
+    with factory() as first, factory() as second:
+        first_record = first.get(type(study), study.id)
+        second_record = second.get(type(study), study.id)
+        assert first_record is not None and second_record is not None
+        first_draft = CapacityDraft.model_validate(first_record.draft_json)
+        second_draft = CapacityDraft.model_validate(second_record.draft_json)
+
+        update_capacity_study(
+            first,
+            first_record,
+            CapacityDraftUpdate(expectedRevision=1, currentStep=1, draft=first_draft),
+        )
+        first.commit()
+
+        with pytest.raises(CapacityError) as conflict:
+            update_capacity_study(
+                second,
+                second_record,
+                CapacityDraftUpdate(expectedRevision=1, currentStep=2, draft=second_draft),
+            )
+        assert conflict.value.status_code == 409
+        assert conflict.value.code == "capacity_revision_conflict"
+
+
+@pytest.mark.asyncio
 async def test_capacity_draft_constraints_revision_preflight_and_partial_start(
     db_session: object, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -207,12 +246,14 @@ async def test_capacity_draft_constraints_revision_preflight_and_partial_start(
     ):
         session.add(target)
     update_capacity_study(
+        session,
         study,
         CapacityDraftUpdate(expectedRevision=1, currentStep=4, draft=draft),
     )
     assert study.revision == 2
     with pytest.raises(CapacityError, match="another session"):
         update_capacity_study(
+            session,
             study,
             CapacityDraftUpdate(expectedRevision=1, currentStep=4, draft=draft),
         )
@@ -312,6 +353,36 @@ def test_build_plan_rejects_global_or_privileged_compose_names() -> None:
     failures = capacity._build_plan_constraints(plan)
     assert any("global container name" in item for item in failures)
     assert any("privileged" in item for item in failures)
+
+
+@pytest.mark.parametrize(
+    ("compose", "message"),
+    [
+        (
+            "services:\n  app:\n    build: .\n    privileged: yes\n",
+            "privileged",
+        ),
+        (
+            "services:\n  app:\n    build: .\n    network_mode: 'host'\n",
+            "host network",
+        ),
+        (
+            "services:\n  app:\n    build: .\n    volumes:\n"
+            "      - type: bind\n        source: /etc\n        target: /host-etc\n",
+            "host paths",
+        ),
+        (
+            "services:\n  app:\n    build:\n      context: .\n      ssh: default\n",
+            "SSH agent",
+        ),
+    ],
+)
+def test_build_plan_rejects_semantic_compose_escape_variants(
+    compose: str, message: str
+) -> None:
+    plan = _build_plan()
+    plan.compose = compose
+    assert any(message in item for item in capacity._build_plan_constraints(plan))
 
 
 def test_build_plan_script_detects_zip_root_and_orders_database_migrations(
@@ -515,6 +586,7 @@ async def test_build_plan_repair_runs_script_before_agent_and_records_evidence(
     bypass.build.approved = True
     with pytest.raises(CapacityError, match="scripted build validation"):
         update_capacity_study(
+            db_session,  # type: ignore[arg-type]
             study,
             CapacityDraftUpdate(expectedRevision=1, currentStep=0, draft=bypass),
         )

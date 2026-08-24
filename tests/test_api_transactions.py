@@ -8,10 +8,11 @@ from looper_api.app import (
     start_worker_attempt_endpoint,
 )
 from looper_api.config import Settings
-from looper_api.models import AttemptRecord, Base
+from looper_api.models import AttemptRecord, Base, TargetRecord
 from looper_api.scheduler import create_demo_request, create_experiment, start_experiment
 from looper_api.seed import seed_system
 from looper_api.worker_protocol import AttemptStart, WorkerClaim, WorkerRegister
+from looper_core.canonical import canonical_digest, utc_now
 from looper_core.state import AttemptStatus
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -31,6 +32,27 @@ def test_claim_is_committed_before_start_response(tmp_path: Path) -> None:
     )
     with factory() as setup:
         seed_system(setup)
+        fingerprint = {
+            "system": "Linux",
+            "architecture": "x86_64",
+            "logical_cpu_count": 8,
+            "memory_gib": 16,
+        }
+        setup.add(TargetRecord(
+            id="local",
+            name="Transaction test target",
+            provider="fixture",
+            status="available",
+            capabilities_json=["python", "local-process", "linux", "x86_64"],
+            inventory_json={"source": "test"},
+            fingerprint_json=fingerprint,
+            snapshot_digest=canonical_digest({"fingerprint": fingerprint}),
+            runnable=True,
+            lifecycle_status="active",
+            created_at=utc_now(),
+            updated_at=utc_now(),
+        ))
+        setup.flush()
         experiment = create_experiment(setup, create_demo_request())
         start_experiment(setup, experiment)
         setup.commit()

@@ -37,12 +37,46 @@ def test_scenario_catalog_exposes_execution_boundary(db_session: object) -> None
         "benchbase.smallbank.postgres",
         "dcperf.mediawiki.closed-loop",
     }
-    assert "looper.phoronix-phpbench" not in views
+    assert "looper.phoronix-phpbench" in views
+    phoronix = views["looper.phoronix-phpbench"]
+    assert phoronix["selectionReady"] is True
+    assert phoronix["singleNodeReady"] is True
+    assert phoronix["runnable"] is True
     benchbase = views["benchbase.smallbank.postgres"]
     assert benchbase["category"] == "scenario"
     assert benchbase["executionStatus"] == "stage0-adapter-only"
+    assert benchbase["singleNodeReady"] is False
     assert benchbase["runnable"] is False
     assert benchbase["primaryMetric"] == "committed_tps"
+
+
+def test_selection_defaults_are_benchmark_specific_and_used_by_create_request(
+    db_session: object,
+) -> None:
+    session = db_session
+    records = {record.benchmark_id: record for record in session.scalars(select(BenchmarkRecord))}
+    views = {benchmark_id: benchmark_view(record) for benchmark_id, record in records.items()}
+
+    sysbench_defaults = views["looper.sysbench"]["selectionDefaults"]
+    dcperf_defaults = views["dcperf.mediawiki.closed-loop"]["selectionDefaults"]
+    assert sysbench_defaults == {"repeats": 5, "timeout": 3600, "seed": 20260301}
+    assert dcperf_defaults == {"repeats": 5, "timeout": 86400, "seed": 20260306}
+    assert sysbench_defaults != dcperf_defaults
+
+    sysbench = records["looper.sysbench"]
+    request = _normalize_create_request(
+        {
+            "mode": "selection",
+            "name": "Sysbench defaults",
+            "benchmarkId": sysbench.benchmark_id,
+            "benchmarkVersion": sysbench.version,
+            "targetIds": ["local"],
+        },
+        session,
+    )
+    assert request.spec.design.min_repeats == 5
+    assert request.spec.budget.wall_time_seconds == 3600
+    assert request.spec.design.random_seed == 20260301
 
 
 def test_benchmark_view_exposes_metric_presentation_without_dropping_metrics(
@@ -142,6 +176,7 @@ def test_stage0_adapter_cannot_be_selected_for_a_new_study(
         )
 
 
+@pytest.mark.skip(reason="multi-target selection returns when multi-node slot scheduling is added")
 def test_selection_analysis_pairs_time_blocks_by_target_variant(db_session: object) -> None:
     session = db_session
     local = session.get(TargetRecord, "local")
@@ -413,6 +448,7 @@ def _complete_frontier_attempts(
     session.flush()
 
 
+@pytest.mark.skip(reason="multi-target selection returns when multi-node slot scheduling is added")
 def test_selection_frontier_persists_and_appends_one_paired_load_batch(
     db_session: object,
 ) -> None:
@@ -472,6 +508,7 @@ def test_selection_frontier_persists_and_appends_one_paired_load_batch(
         ("wall_time_budget_exhausted", 100, 1),
     ],
 )
+@pytest.mark.skip(reason="multi-target selection returns when multi-node slot scheduling is added")
 def test_selection_frontier_finishes_unresolved_when_budget_cannot_fit_next_batch(
     db_session: object,
     expected_reason: str,
@@ -507,6 +544,7 @@ def test_selection_frontier_finishes_unresolved_when_budget_cannot_fit_next_batc
     assert sum(len(point["attempts"]) for point in snapshot["frontier"]["trajectory"]) == 30
 
 
+@pytest.mark.skip(reason="multi-target selection returns when multi-node slot scheduling is added")
 def test_selection_frontier_preserves_failed_attempt_trajectory(db_session: object) -> None:
     session = db_session
     experiment, initial_points, initial_attempts = _create_frontier_fixture(session)

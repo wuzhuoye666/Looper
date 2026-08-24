@@ -13,6 +13,7 @@ from typing import Any
 
 from cryptography.fernet import Fernet, InvalidToken
 
+from looper_api.cloud_contracts import CloudSshCredentials
 from looper_api.config import Settings
 from looper_api.external_targets import ConnectExternalTargetRequest
 
@@ -141,7 +142,7 @@ class EncryptedSshCredentialStore:
 
     def _document(self) -> dict[str, Any]:
         if not self.store_path.exists():
-            return {"version": _STORE_VERSION, "credentials": {}}
+            return {"version": _STORE_VERSION, "credentials": {}, "pending": {}}
         try:
             document = json.loads(self.store_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as error:
@@ -152,6 +153,9 @@ class EncryptedSshCredentialStore:
             or not isinstance(document.get("credentials"), dict)
         ):
             raise RemoteCredentialError("remote Worker credential store has an unknown format")
+        pending = document.setdefault("pending", {})
+        if not isinstance(pending, dict):
+            raise RemoteCredentialError("remote Worker pending credential store is invalid")
         return document
 
     def _write_document(self, document: dict[str, Any]) -> None:
@@ -217,14 +221,76 @@ class EncryptedSshCredentialStore:
             ciphertext = Fernet(self._key(create=True)).encrypt(plaintext).decode("ascii")
             document = self._document()
             document["credentials"][target_id] = ciphertext
+            document["pending"].pop(target_id, None)
             self._write_document(document)
         return True
+
+    def save_pending(self, target_id: str, credentials: CloudSshCredentials) -> bool:
+        """Encrypt purchase credentials until an explicit SSH probe can pin the host key."""
+
+        if not self.enabled or not credentials.remember_credentials:
+            return False
+
+        def secret(value: Any) -> str | None:
+            return value.get_secret_value() if value is not None else None
+
+        payload = {
+            "port": credentials.port,
+            "username": credentials.username,
+            "auth_method": credentials.auth_method,
+            "password": secret(credentials.password),
+            "private_key": secret(credentials.private_key),
+            "passphrase": secret(credentials.passphrase),
+        }
+        plaintext = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        with self._lock:
+            ciphertext = Fernet(self._key(create=True)).encrypt(plaintext).decode("ascii")
+            document = self._document()
+            document["pending"][target_id] = ciphertext
+            self._write_document(document)
+        return True
+
+    def verified_target_ids(self) -> list[str]:
+        if not self.enabled or not self.store_path.exists():
+            return []
+        with self._lock:
+            return sorted(self._document()["credentials"])
+
+    def pending_target_ids(self) -> list[str]:
+        if not self.enabled or not self.store_path.exists():
+            return []
+        with self._lock:
+            return sorted(self._document()["pending"])
 
     def target_ids(self) -> list[str]:
         if not self.enabled or not self.store_path.exists():
             return []
         with self._lock:
-            return sorted(self._document()["credentials"])
+            document = self._document()
+            return sorted(set(document["credentials"]) | set(document["pending"]))
+
+    def load_pending(self, target_id: str, endpoint: str) -> ConnectExternalTargetRequest:
+        if not self.enabled:
+            raise RemoteCredentialError("SSH credential persistence is disabled")
+        with self._lock:
+            ciphertext = self._document()["pending"].get(target_id)
+            if not isinstance(ciphertext, str):
+                raise RemoteCredentialError("pending SSH credentials were not found")
+            try:
+                plaintext = Fernet(self._key(create=False)).decrypt(ciphertext.encode("ascii"))
+                payload = json.loads(plaintext)
+                return ConnectExternalTargetRequest.model_validate(
+                    {
+                        **payload,
+                        "endpoint": endpoint,
+                        "deploy_worker": True,
+                        "remember_credentials": True,
+                    }
+                )
+            except (InvalidToken, UnicodeError, json.JSONDecodeError, ValueError) as error:
+                raise RemoteCredentialError(
+                    "pending SSH credentials could not be decrypted or validated"
+                ) from error
 
     def load(self, target_id: str) -> ConnectExternalTargetRequest:
         if not self.enabled:

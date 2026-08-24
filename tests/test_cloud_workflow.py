@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from decimal import Decimal
 
+import looper_api.cloud_service as cloud_service_module
 import pytest
 from looper_api.cloud_contracts import (
     CatalogFilters,
@@ -28,6 +29,7 @@ from looper_api.cloud_service import (
     catalog_search,
     confirm_order,
     create_quote,
+    delete_order,
     get_order_evidence,
     get_order_reconciliation_context,
     global_search,
@@ -43,12 +45,15 @@ from looper_api.models import (
     CloudCatalogCacheRecord,
     CloudOrderRecord,
     CloudQuoteRecord,
+    EventRecord,
     TargetRecord,
 )
 from looper_api.providers.base import CloudProvider, CloudProviderError
 from looper_api.providers.registry import CloudProviderRegistry
+from looper_api.remote_credentials import EncryptedSshCredentialStore
 from looper_api.serialization import target_view
 from looper_core.canonical import canonical_digest, utc_now
+from pydantic import SecretStr
 from sqlalchemy import select, text, update
 from sqlalchemy.orm import Session
 
@@ -58,13 +63,14 @@ class FakeProvider(CloudProvider):
     display_name = "Fake Tencent"
     sdk_package = "fake"
 
-    def __init__(self, *, ambiguous: bool = False) -> None:
+    def __init__(self, *, ambiguous: bool = False, public_ip: str | None = None) -> None:
         self.catalog_calls = 0
         self.instance_items: list[InstanceTypeInfo] | None = None
         self.image_items: list[ImageInfo] | None = None
         self.purchase_calls: list[str] = []
         self.destroy_calls: list[str] = []
         self.ambiguous = ambiguous
+        self.public_ip = public_ip
         self.fail_catalog = False
         self.quote_amount = Decimal("0.42")
 
@@ -141,7 +147,13 @@ class FakeProvider(CloudProvider):
             details={"stock": "advisory"},
         )
 
-    def purchase(self, spec: CloudPurchaseSpec, *, client_token: str) -> ProviderPurchaseResult:
+    def purchase(
+        self,
+        spec: CloudPurchaseSpec,
+        *,
+        client_token: str,
+        launch_password: SecretStr | None = None,
+    ) -> ProviderPurchaseResult:
         self.purchase_calls.append(client_token)
         if self.ambiguous:
             raise CloudProviderError("simulated timeout", code="timeout", ambiguous=True)
@@ -155,6 +167,8 @@ class FakeProvider(CloudProvider):
                     region=spec.region,
                     zone=spec.zone,
                     status="PENDING",
+                    public_ip=self.public_ip,
+                    public_ip_present=self.public_ip is not None,
                 )
             ],
         )
@@ -184,6 +198,12 @@ def test_cloud_ssh_credentials_accept_camel_case_remember_flag() -> None:
 
     assert credentials.remember_credentials is False
     assert credentials.model_dump(by_alias=True)["rememberCredentials"] is False
+
+def test_settings_default_cloud_auth_method_is_password(tmp_path) -> None:
+    app_settings = Settings(_env_file=None, data_dir=tmp_path)
+
+    assert app_settings.default_ssh_auth_method == "password"
+
 
 def spec() -> CloudPurchaseSpec:
     return CloudPurchaseSpec(
@@ -220,6 +240,7 @@ def settings(tmp_path, *, live: bool = False) -> Settings:
         live_purchase_providers="tencent" if live else "",
         purchase_confirmation_secret="x" * 48,
         operator_token="o" * 48 if live else "",
+        default_ssh_password="StrongPassword1#",
     )
 
 
@@ -353,6 +374,14 @@ def test_full_catalog_paginates_searches_and_naturally_sorts_from_one_snapshot(
         "instance-type",
         CatalogFilters(region="ap-test", query=".620", limit=20),
     )
+    classified = catalog_search(
+        db_session,
+        app_settings,
+        reg,
+        ProviderId.TENCENT,
+        "instance-type",
+        CatalogFilters(region="ap-test", familyToken="S9", limit=20),
+    )
 
     assert first.total == 620
     assert first.next_offset == 20
@@ -364,6 +393,9 @@ def test_full_catalog_paginates_searches_and_naturally_sorts_from_one_snapshot(
     assert second.items[0]["id"] == "S9.TEST.21"
     assert searched.total == 1
     assert searched.items[0]["id"] == "S9.TEST.620"
+    assert classified.total == 620
+    assert first.instance_type_facets is not None
+    assert sum(item.count for item in first.instance_type_facets.architectures) == 620
     assert fake.catalog_calls == 1
 
     full_record = next(
@@ -374,7 +406,7 @@ def test_full_catalog_paginates_searches_and_naturally_sorts_from_one_snapshot(
                 CloudCatalogCacheRecord.resource_type == "instance-type",
             )
         )
-        if record.query_json.get("version") == 4
+        if record.query_json.get("version") == 6
     )
     full_record.expires_at = utc_now() - timedelta(seconds=1)
     db_session.commit()
@@ -649,6 +681,44 @@ def test_confirm_purchase_is_idempotent_and_naturalizes_target(db_session, tmp_p
     assert view["framework"] == "镜像 img-test"
 
 
+def test_delete_order_removes_unsubmitted_order_events_and_rejects_submitted_order(
+    db_session, tmp_path
+) -> None:
+    fake = FakeProvider()
+    reg = registry(fake)
+    app_settings = settings(tmp_path, live=True)
+    quote = create_quote(db_session, app_settings, reg, spec(), "quote-key-delete")
+    prepared = prepare_order(db_session, app_settings, quote["id"], "order-key-delete")
+
+    delete_order(db_session, prepared["id"])
+
+    assert db_session.get(CloudOrderRecord, prepared["id"]) is None
+    assert db_session.get(CloudQuoteRecord, quote["id"]) is not None
+    assert not list(
+        db_session.scalars(
+            select(EventRecord).where(
+                EventRecord.entity_type == "cloud_order",
+                EventRecord.entity_id == prepared["id"],
+            )
+        )
+    )
+
+    submitted_quote = create_quote(
+        db_session, app_settings, reg, spec(), "quote-key-delete-submitted"
+    )
+    submitted = purchase_quote(
+        db_session,
+        app_settings,
+        reg,
+        submitted_quote["id"],
+        "order-key-delete-submitted",
+    )
+    with pytest.raises(CloudWorkflowError) as exc_info:
+        delete_order(db_session, submitted["id"])
+    assert exc_info.value.status_code == 409
+    assert db_session.get(CloudOrderRecord, submitted["id"]) is not None
+
+
 def test_purchase_quote_completes_order_without_browser_confirmation(db_session, tmp_path) -> None:
     fake = FakeProvider()
     reg = registry(fake)
@@ -674,6 +744,127 @@ def test_purchase_quote_completes_order_without_browser_confirmation(db_session,
     assert result["instanceIds"] == ["ins-fake-1"]
     assert replay["id"] == result["id"]
     assert len(fake.purchase_calls) == 1
+
+
+def test_default_password_purchase_remembers_credentials_and_auto_connects(
+    db_session, tmp_path, monkeypatch
+) -> None:
+    fake = FakeProvider(public_ip="203.0.113.10")
+    reg = registry(fake)
+    app_settings = settings(tmp_path, live=True)
+    observed: dict[str, object] = {}
+    host_key = "SHA256:" + "B" * 43
+
+    def connect(_session, target, request):
+        observed["request"] = request
+        target.fingerprint_json = {**target.fingerprint_json, "host_key_sha256": host_key}
+        return target
+
+    def deploy(request, _target, _settings):
+        observed["deploy_request"] = request
+        return {"status": "deployed", "workerId": "fake-worker"}
+
+    monkeypatch.setattr(cloud_service_module, "connect_existing_target", connect)
+    monkeypatch.setattr(cloud_service_module, "deploy_remote_worker", deploy)
+
+    quote = create_quote(db_session, app_settings, reg, spec(), "quote-key-password-auto-ssh")
+    result = purchase_quote(
+        db_session,
+        app_settings,
+        reg,
+        quote["id"],
+        "order-key-password-auto-ssh",
+        remember_credentials=True,
+    )
+
+    assert result["status"] == "submitted"
+    target = db_session.scalar(select(TargetRecord).where(TargetRecord.provider == "tencent"))
+    assert target is not None
+    assert target.runnable is True
+    assert target.inventory_json["autoSsh"]["status"] == "connected"
+    request = observed["request"]
+    assert request.auth_method == "password"
+    assert request.password is not None
+    assert request.password.get_secret_value() == "StrongPassword1#"
+    saved = EncryptedSshCredentialStore(app_settings).load(target.id)
+    assert saved.auth_method == "password"
+    assert saved.password is not None
+    assert saved.password.get_secret_value() == "StrongPassword1#"
+
+
+def test_pending_password_credentials_retry_after_endpoint_appears(
+    db_session, tmp_path, monkeypatch
+) -> None:
+    fake = FakeProvider()
+    reg = registry(fake)
+    app_settings = settings(tmp_path, live=True)
+    quote = create_quote(db_session, app_settings, reg, spec(), "quote-key-pending-retry")
+    result = purchase_quote(
+        db_session,
+        app_settings,
+        reg,
+        quote["id"],
+        "order-key-pending-retry",
+        remember_credentials=True,
+    )
+
+    assert result["status"] == "submitted"
+    target = db_session.scalar(select(TargetRecord).where(TargetRecord.provider == "tencent"))
+    assert target is not None
+    assert target.inventory_json["autoSsh"]["status"] == "waiting_endpoint"
+    target.inventory_json = {
+        **target.inventory_json,
+        "endpoint": "203.0.113.11",
+        "public_ip": "203.0.113.11",
+        "public_ip_present": True,
+    }
+    db_session.flush()
+    assert target.id in EncryptedSshCredentialStore(app_settings).pending_target_ids()
+
+    def connect(_session, target, _request):
+        target.fingerprint_json = {
+            **target.fingerprint_json,
+            "host_key_sha256": "SHA256:" + "C" * 43,
+        }
+        return target
+
+    monkeypatch.setattr(cloud_service_module, "connect_existing_target", connect)
+    monkeypatch.setattr(
+        cloud_service_module,
+        "deploy_remote_worker",
+        lambda _request, _target, _settings: {"status": "deployed"},
+    )
+
+    assert cloud_service_module.retry_pending_cloud_ssh(db_session, app_settings) == 1
+    db_session.commit()
+    db_session.refresh(target)
+    assert target.runnable is True
+    assert target.inventory_json["autoSsh"]["status"] == "connected"
+    assert target.id in EncryptedSshCredentialStore(app_settings).verified_target_ids()
+
+
+def test_private_key_auth_remains_available_when_selected(tmp_path) -> None:
+    key_path = tmp_path / "cloud-key.pem"
+    key_path.write_text(
+        "-----BEGIN OPENSSH PRIVATE KEY-----\nkey\n-----END OPENSSH PRIVATE KEY-----\n"
+    )
+    app_settings = Settings(
+        _env_file=None,
+        data_dir=tmp_path,
+        default_ssh_auth_method="private-key",
+        default_ssh_private_key_path=str(key_path),
+    )
+
+    credentials = cloud_service_module._default_cloud_ssh_credentials(
+        app_settings,
+        remember_credentials=True,
+    )
+
+    assert credentials.auth_method == "private-key"
+    assert credentials.private_key is not None
+    assert credentials.private_key.get_secret_value().startswith(
+        "-----BEGIN OPENSSH PRIVATE KEY-----"
+    )
 
 
 def test_ambiguous_provider_result_is_not_automatically_retried(db_session, tmp_path) -> None:

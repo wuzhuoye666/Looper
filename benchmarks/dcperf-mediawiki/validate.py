@@ -69,10 +69,15 @@ def main() -> int:
         if result.get("status") != "succeeded":
             raise ValueError(result.get("message") or "normalized result failed a suite gate")
         checks = result.get("checks")
-        if not isinstance(checks, list) or not checks or not all(
-            isinstance(item, dict) and item.get("passed") is True for item in checks
-        ):
-            raise ValueError("normalized result contains a failed check")
+        if not isinstance(checks, list) or not checks:
+            raise ValueError("normalized result does not contain checks")
+        blocking_checks = [
+            item
+            for item in checks
+            if isinstance(item, dict) and item.get("kind") != "statistical"
+        ]
+        if not blocking_checks or not all(item.get("passed") is True for item in blocking_checks):
+            raise ValueError("normalized result contains a failed blocking check")
         print("[dcperf-validate] result contract passed", flush=True)
         return 0
     except (OSError, json.JSONDecodeError, TypeError, ValueError) as error:

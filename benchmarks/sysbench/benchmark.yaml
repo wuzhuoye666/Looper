@@ -261,3 +261,4 @@ spec:
   x-extensions:
     bootstrapCatalog: true
     executionStatus: executable
+    selectionDefaults: {repeats: 5, timeoutSeconds: 3600, seed: 20260301}

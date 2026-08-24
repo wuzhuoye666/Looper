@@ -128,6 +128,7 @@ class DiscoveredExternalTarget(BaseModel):
     memory_gib: float = Field(gt=0, le=100000)
     host_key_sha256: str = Field(pattern=r"^SHA256:[A-Za-z0-9+/]{43}$")
     host_key_type: str = Field(min_length=1, max_length=80)
+    capabilities: list[str] = Field(default_factory=list, max_length=64)
 
 
 _LINUX_DISCOVERY_COMMAND = "\n".join(
@@ -139,7 +140,7 @@ _LINUX_DISCOVERY_COMMAND = "\n".join(
             "'$1==\"PRETTY_NAME\" {value=substr($0,index($0,\"=\")+1); "
             "gsub(/^\"|\"$/, \"\", value); print value; exit}' "
             "/etc/os-release 2>/dev/null); "
-            "if [ -n \"$value\" ]; then printf '%s\\n' \"$value\"; else uname -s; fi)"
+            "if [ -n \"$value\" ]; then printf '%s\n' \"$value\"; else uname -s; fi)"
         ),
         "printf 'kernel='; uname -sr",
         "printf 'architecture='; uname -m",
@@ -147,16 +148,48 @@ _LINUX_DISCOVERY_COMMAND = "\n".join(
             "printf 'processor='; (value=$(awk -F: '/^(model name|Hardware|Processor)/ "
             "{value=$2; sub(/^[[:space:]]+/, \"\", value); "
             "if (length(value)>0) {print value; exit}}' /proc/cpuinfo 2>/dev/null); "
-            "if [ -n \"$value\" ]; then printf '%s\\n' \"$value\"; "
+            "if [ -n \"$value\" ]; then printf '%s\n' \"$value\"; "
             "else p=$(uname -p 2>/dev/null); "
-            "case \"$p\" in ''|unknown|aarch64) printf '%s\\n' \"$(uname -m)\" ;; "
-            "*) printf '%s\\n' \"$p\" ;; esac; fi)"
+            "case \"$p\" in ''|unknown|aarch64) printf '%s\n' \"$(uname -m)\" ;; "
+            "*) printf '%s\n' \"$p\" ;; esac; fi)"
         ),
         (
             "printf 'logical_cpu_count='; "
             "(getconf _NPROCESSORS_ONLN 2>/dev/null || nproc 2>/dev/null)"
         ),
         "printf 'memory_kib='; awk '/^MemTotal:/ {print $2; exit}' /proc/meminfo",
+        (
+            "printf 'os_id='; (value=$(awk -F= '$1==\"ID\" {value=substr($0,index($0,\"=\")+1); "
+            "gsub(/^\"|\"$/, \"\", value); if (length(value)>0) {print value; exit}}' "
+            "/etc/os-release 2>/dev/null); printf '%s\n' \"$value\")"
+        ),
+        (
+            "printf 'os_version_id='; (value=$(awk -F= "
+            "'$1==\"VERSION_ID\" {value=substr($0,index($0,\"=\")+1); "
+            "gsub(/^\"|\"$/, \"\", value); if (length(value)>0) {print value; exit}}' "
+            "/etc/os-release 2>/dev/null); printf '%s\n' \"$value\")"
+        ),
+        "printf 'cap_uid='; id -u 2>/dev/null",
+        (
+            "printf 'cap_sudo='; if command -v sudo >/dev/null 2>&1 && "
+            "sudo -n true >/dev/null 2>&1; then printf '1\n'; else printf '0\n'; fi"
+        ),
+        (
+            "printf 'cap_systemd='; if [ -d /run/systemd/system ] && "
+            "command -v systemctl >/dev/null 2>&1; then printf '1\n'; else printf '0\n'; fi"
+        ),
+        (
+            "printf 'cap_perf='; if command -v perf >/dev/null 2>&1; "
+            "then printf '1\n'; else printf '0\n'; fi"
+        ),
+        (
+            "printf 'cap_perl='; if command -v perl >/dev/null 2>&1; "
+            "then printf '1\n'; else printf '0\n'; fi"
+        ),
+        (
+            "printf 'cap_python='; if command -v python3 >/dev/null 2>&1; "
+            "then printf '1\n'; else printf '0\n'; fi"
+        ),
     )
 )
 
@@ -164,6 +197,35 @@ _LINUX_DISCOVERY_COMMAND = "\n".join(
 def _clean_probe_value(value: str, maximum: int) -> str:
     normalized = " ".join(value.replace("\x00", "").split())
     return normalized[:maximum]
+
+
+def _host_capabilities_from_probe(values: dict[str, str]) -> list[str]:
+    """Map probed host facts to the capability vocabulary used by manifests."""
+    capabilities = {"local-process"}
+    os_id = values.get("os_id", "").strip().casefold()
+    version_id = values.get("os_version_id", "").strip()
+    # The discovery command is POSIX/Linux only, so the family tag is always true.
+    capabilities.add("linux")
+    if os_id:
+        capabilities.add(os_id)
+        if version_id:
+            capabilities.add(f"{os_id}-{version_id}")
+    for key, capability in (
+        ("cap_systemd", "systemd"),
+        ("cap_perf", "perf"),
+        ("cap_perl", "perl"),
+        ("cap_python", "python"),
+    ):
+        if values.get(key) == "1":
+            capabilities.add(capability)
+    if values.get("cap_uid") == "0":
+        capabilities.add("root")
+    if values.get("cap_sudo") == "1":
+        # The deployer elevates the remote Worker through passwordless sudo,
+        # so root-required benchmarks can be delivered to this account as well.
+        capabilities.add("sudo")
+        capabilities.add("root")
+    return sorted(capabilities)
 
 
 def _parse_linux_inventory(output: str, host_key: Any) -> DiscoveredExternalTarget:
@@ -178,6 +240,14 @@ def _parse_linux_inventory(output: str, host_key: Any) -> DiscoveredExternalTarg
             "processor",
             "logical_cpu_count",
             "memory_kib",
+            "os_id",
+            "os_version_id",
+            "cap_uid",
+            "cap_sudo",
+            "cap_systemd",
+            "cap_perf",
+            "cap_perl",
+            "cap_python",
         }:
             values[key] = _clean_probe_value(value, 200)
     required = {
@@ -209,6 +279,7 @@ def _parse_linux_inventory(output: str, host_key: Any) -> DiscoveredExternalTarg
         memory_gib=memory_gib,
         host_key_sha256=f"SHA256:{digest}",
         host_key_type=str(host_key.get_name()),
+        capabilities=_host_capabilities_from_probe(values),
     )
 
 
@@ -487,7 +558,9 @@ def connect_external_target(
                 logical_cpu_count=discovered.logical_cpu_count,
                 memory_gib=discovered.memory_gib,
             ),
-            capabilities=["ssh", discovered.architecture.casefold()],
+            capabilities=sorted(
+                {"ssh", discovered.architecture.casefold(), *discovered.capabilities}
+            ),
             runnable=False,
         ),
     )
@@ -542,6 +615,22 @@ def connect_existing_target(
 
     discovered = probe(request)
     now = utc_now()
+    if target.provider in _CLOUD_PROVIDERS:
+        existing_fingerprint = dict(target.fingerprint_json or {})
+        cloud_display = existing_fingerprint.get("cloud_display")
+        if not isinstance(cloud_display, dict):
+            target.fingerprint_json = {
+                **existing_fingerprint,
+                "cloud_display": {
+                    "inventory": dict(target.inventory_json or {}),
+                    "fingerprint": existing_fingerprint,
+                },
+            }
+    target.capabilities_json = sorted(
+        set(target.capabilities_json)
+        | set(discovered.capabilities)
+        | {"ssh", discovered.architecture.casefold()}
+    )
     target.inventory_json = {
         **target.inventory_json,
         "source": "ssh-discovery",

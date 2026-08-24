@@ -35,6 +35,7 @@ describe('外部机器 SSH 自动发现', () => {
   it('只提交连接信息并展示服务端发现的机器参数', async () => {
     renderDialog();
 
+    expect(screen.getByLabelText('连接方式 *')).toHaveValue('password');
     fireEvent.change(screen.getByLabelText('IP / 主机名 *'), { target: { value: '10.0.0.8' } });
     fireEvent.change(screen.getByLabelText('用户名 *'), { target: { value: 'ubuntu' } });
     fireEvent.change(screen.getByLabelText('连接方式 *'), { target: { value: 'password' } });
@@ -62,6 +63,7 @@ describe('外部机器 SSH 自动发现', () => {
   it('默认使用 root:22 并通过文件导入私钥，可关闭凭据保存', async () => {
     renderDialog();
 
+    fireEvent.change(screen.getByLabelText('连接方式 *'), { target: { value: 'private-key' } });
     const keyFile = new File(['-----BEGIN OPENSSH PRIVATE KEY-----\nTEST\n-----END OPENSSH PRIVATE KEY-----'], 'Looper.pem', { type: 'application/x-pem-file' });
     fireEvent.change(screen.getByLabelText('SSH 私钥文件 *'), { target: { files: [keyFile] } });
     await waitFor(() => expect(screen.getByText('Looper.pem')).toBeInTheDocument());

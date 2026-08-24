@@ -180,6 +180,140 @@ def deploy_remote_worker(
         return _deploy_remote_worker_impl(request, target, settings)
 
 
+def _remote_login_identity(client: Any) -> tuple[bool, str, str]:
+    """Return (elevate, uid, gid) for the SSH login account.
+
+    A non-root account with working passwordless "sudo -n" elevates the
+    deployed Worker, so root-required benchmarks (e.g. the DCPerf managed
+    provisioner) run without a root SSH login.
+    """
+    uid = _run(client, "id -u", timeout=30).strip()
+    gid = _run(client, "id -g", timeout=30).strip()
+    if uid == "0":
+        return False, uid, gid
+    answer = _run(
+        client,
+        "if command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; "
+        "then printf '1\n'; else printf '0\n'; fi",
+        timeout=30,
+    ).strip()
+    return answer == "1", uid, gid
+
+
+def _python_requirement_check() -> str:
+    """Python -c expression accepting only interpreters at the platform floor."""
+
+    return "import sys; sys.exit(0 if (3, 12) <= sys.version_info[:2] < (3, 15) else 1)"
+
+
+def _select_remote_python(client: Any, *, timeout: int = 60) -> str:
+    """Return the first interpreter on PATH that satisfies the platform floor."""
+
+    probe = (
+        "for p in python3.13 python3.12 python3.11 python3; do "
+        "if command -v \"$p\" >/dev/null 2>&1 && \"$p\" -c "
+        f"'{_python_requirement_check()}' 2>/dev/null; then "
+        "printf '%s' \"$p\"; exit 0; fi; done; exit 1"
+    )
+    return _run(client, probe, timeout=timeout).strip()
+
+
+def _install_remote_python(client: Any, privilege_prefix: str) -> str:
+    """Install a distro Python >= 3.12 and return its interpreter name.
+
+    Debian/Ubuntu ship 3.12 natively (24.04) or through the deadsnakes PPA
+    (22.04). Distros without apt are rejected with a manual-install hint.
+    """
+
+    prefix = privilege_prefix or ""
+    apt = f"{prefix}env DEBIAN_FRONTEND=noninteractive "
+    script = (
+        "set -e; "
+        "command -v apt-get >/dev/null 2>&1 || { "
+        "printf '%s' 'no apt-get; install Python 3.12+ manually and retry' >&2; exit 1; }; "
+        f"{prefix}apt-get update -qq >/dev/null; "
+        f"{apt}apt-get install -y -qq python3.12 python3.12-venv >/dev/null || {{ "
+        f"{apt}apt-get install -y -qq software-properties-common >/dev/null; "
+        f"{prefix}add-apt-repository -y ppa:deadsnakes/ppa >/dev/null; "
+        f"{prefix}apt-get update -qq >/dev/null; "
+        f"{apt}apt-get install -y -qq python3.12 python3.12-venv >/dev/null; }}; "
+        "printf 'python3.12'"
+    )
+    output = _run(client, script, timeout=900).strip()
+    if output:
+        return output
+    selected = _select_remote_python(client, timeout=60)
+    if selected:
+        return selected
+    raise ExternalTargetError(
+        "unable to obtain a Python >= 3.12 runtime; install Python 3.12+ on the "
+        "remote host and retry the deployment"
+    )
+
+
+def _ensure_remote_python(client: Any, privilege_prefix: str) -> str:
+    """Return a floor-compliant remote interpreter, installing one if needed."""
+
+    try:
+        selected = _select_remote_python(client)
+    except ExternalTargetError:
+        selected = ""
+    return selected or _install_remote_python(client, privilege_prefix)
+
+
+def _venv_satisfies_floor(client: Any, venv_python: str) -> bool:
+    """Return True when the venv interpreter meets the platform requirement."""
+
+    try:
+        _run(client, f"{venv_python} -c '{_python_requirement_check()}'", timeout=60)
+        return True
+    except ExternalTargetError:
+        return False
+
+
+def _ensure_remote_venv(
+    client: Any,
+    remote_root: PurePosixPath,
+    remote_python: str,
+    privilege_prefix: str,
+) -> None:
+    """Recreate the Worker venv when its interpreter is below the floor."""
+
+    venv_python = f"{remote_root}/venv/bin/python"
+    if _venv_satisfies_floor(client, venv_python):
+        return
+    _run(client, f"{privilege_prefix}rm -rf {remote_root}/venv", timeout=60)
+    try:
+        _run(
+            client,
+            f"{privilege_prefix}{shlex.quote(remote_python)} -m venv {remote_root}/venv",
+            timeout=300,
+        )
+    except ExternalTargetError:
+        # Typical cause: the interpreter exists but its -venv package is missing.
+        try:
+            _run(
+                client,
+                f"{privilege_prefix}apt-get update -qq && "
+                f"{privilege_prefix}env DEBIAN_FRONTEND=noninteractive "
+                f"apt-get install -y -qq {shlex.quote(remote_python)}-venv",
+                timeout=900,
+            )
+        except ExternalTargetError as package_error:
+            raise ExternalTargetError(
+                f"remote Python venv support is unavailable: {package_error}"
+            ) from package_error
+        _run(
+            client,
+            f"{privilege_prefix}{shlex.quote(remote_python)} -m venv {remote_root}/venv",
+            timeout=300,
+        )
+    if not _venv_satisfies_floor(client, venv_python):
+        raise ExternalTargetError(
+            f"Worker venv at {venv_python} is not Python >= 3.12 after recreation"
+        )
+
+
 def _deploy_remote_worker_impl(
     request: ConnectExternalTargetRequest,
     target: TargetRecord,
@@ -199,6 +333,9 @@ def _deploy_remote_worker_impl(
         connected_fingerprint = f"SHA256:{remote_digest.rstrip('=')}"
         if observed and connected_fingerprint != observed:
             raise ExternalTargetError("SSH host key changed after inventory discovery")
+
+        elevate, login_uid, login_gid = _remote_login_identity(client)
+        privilege_prefix = "sudo -n " if elevate else ""
 
         worker_api_url, remote_port, transport_mode = _worker_api_endpoint(settings, transport)
         worker_id = f"remote-{canonical_digest({'target': target.id})[-16:]}"
@@ -235,32 +372,30 @@ def _deploy_remote_worker_impl(
         finally:
             sftp.close()
 
+        # The Worker needs a Python >= 3.12 interpreter (platform floor). Old
+        # distros (e.g. Ubuntu 22.04 with Python 3.10) would otherwise build a
+        # venv whose worker dies on import (datetime.UTC is 3.11+), leaving the
+        # target "deployed" but never registered and reclassified as
+        # inventory-only by the next inventory sync.
+        remote_python = _ensure_remote_python(client, privilege_prefix)
+        _ensure_remote_venv(client, remote_root, remote_python, privilege_prefix)
+
         bootstrap = " && ".join(
             (
                 (
-                    f"python3 -m venv {remote_root}/venv || "
-                    "(command -v apt-get >/dev/null && "
-                    "if test \"$(id -u)\" = 0; then "
-                    "apt-get update -qq && env DEBIAN_FRONTEND=noninteractive "
-                    "apt-get install -y -qq python3-venv; else "
-                    "sudo -n apt-get update -qq && sudo -n env "
-                    "DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3-venv; fi && "
-                    f"python3 -m venv {remote_root}/venv)"
-                ),
-                (
-                    f"{remote_root}/venv/bin/python -m pip install "
+                    f"{privilege_prefix}{remote_root}/venv/bin/python -m pip install "
                     "--disable-pip-version-check -q 'httpx>=0.28,<1' 'psutil>=7,<8' "
                     "'pydantic>=2.11,<3' 'PyYAML>=6,<7' 'jsonschema>=4.24,<5' "
                     "'python-dotenv>=1.0,<2'"
                 ),
-                f"rm -rf {remote_root}/source",
-                f"mkdir -p {remote_root}/source",
+                f"{privilege_prefix}rm -rf {remote_root}/source",
+                f"{privilege_prefix}mkdir -p {remote_root}/source",
                 (
-                    f"{remote_root}/venv/bin/python -m zipfile -e "
+                    f"{privilege_prefix}{remote_root}/venv/bin/python -m zipfile -e "
                     f"{remote_root}/source.zip {remote_root}/source"
                 ),
                 (
-                    "for pid in $(pgrep -f "
+                    f"{privilege_prefix}for pid in $(pgrep -f "
                     f"{shlex.quote('[l]ooper_worker.main.*--worker-id ' + worker_id)} "
                     "2>/dev/null || true); do kill \"$pid\" 2>/dev/null || true; done; "
                     f"if test -f {remote_root}/worker.pid; then "
@@ -268,6 +403,13 @@ def _deploy_remote_worker_impl(
                 ),
             )
         )
+        if elevate:
+            # Root-owned artifacts from this bootstrap must stay reusable by the
+            # login user on the next deploy (SFTP upload happens before bootstrap).
+            bootstrap = (
+                f"{privilege_prefix}mkdir -p {remote_root} && {bootstrap} && "
+                f"{privilege_prefix}chown -R {login_uid}:{login_gid} {remote_root}"
+            )
         _run(client, bootstrap, timeout=600)
 
         python_path = ":".join(
@@ -287,10 +429,12 @@ def _deploy_remote_worker_impl(
         detached = (
             f"cd {remote_root}/source && nohup {worker_command} "
             f">{remote_root}/worker.log 2>&1 </dev/null & "
-            f"pid=$!; printf '%s\\n' \"$pid\" >{remote_root}/worker.pid; "
-            "printf '%s\\n' \"$pid\""
+            f"pid=$!; printf '%s\n' \"$pid\" >{remote_root}/worker.pid; "
+            "printf '%s\n' \"$pid\""
         )
         launch = f"sh -c {shlex.quote(detached)}"
+        if elevate:
+            launch = f"sudo -n {launch}"
         remote_pid = _launch_background(client, launch)
 
         if transport_mode == "direct":
@@ -309,6 +453,14 @@ def _deploy_remote_worker_impl(
             "remotePid": remote_pid,
             "transport": transport_mode,
             "restartSafe": transport_mode == "direct",
+            "privilege": (
+                "root"
+                if not elevate and login_uid == "0"
+                else "sudo"
+                if elevate
+                else "user"
+            ),
+            "elevatedViaSudo": elevate,
             "deployedAt": utc_now().isoformat(),
         }
     except Exception:

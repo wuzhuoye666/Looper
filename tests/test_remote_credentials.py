@@ -7,6 +7,7 @@ import looper_api.app as app_module
 import pytest
 from cryptography.fernet import Fernet
 from looper_api import remote_recovery
+from looper_api.cloud_contracts import CloudSshCredentials
 from looper_api.config import Settings
 from looper_api.external_targets import ConnectExternalTargetRequest
 from looper_api.remote_credentials import (
@@ -52,6 +53,35 @@ def test_ssh_credentials_round_trip_without_plaintext_at_rest(tmp_path) -> None:
     assert recovered.deploy_worker is True
 
 
+def test_pending_purchase_credentials_are_encrypted_and_not_recovered_on_startup(tmp_path) -> None:
+    settings = Settings(_env_file=None, data_dir=tmp_path)
+    store = EncryptedSshCredentialStore(settings)
+    credentials = CloudSshCredentials(
+        username="root",
+        authMethod="password",
+        password="StrongPassword1#",
+        rememberCredentials=True,
+    )
+    target_id = "tencent:ap-test:ins-pending"
+
+    assert store.save_pending(target_id, credentials) is True
+    assert target_id in store.target_ids()
+    assert target_id in store.pending_target_ids()
+    assert target_id not in store.verified_target_ids()
+    assert target_id not in remote_recovery.remembered_target_ids(settings)
+    assert b"StrongPassword1#" not in settings.remote_credential_store_path.read_bytes()
+
+    request = store.load_pending(target_id, "203.0.113.8")
+    assert request.endpoint == "203.0.113.8"
+    assert request.password is not None
+    assert request.password.get_secret_value() == "StrongPassword1#"
+
+    host_key = "SHA256:" + "A" * 43
+    assert store.save(target_id, request, host_key) is True
+    assert target_id not in store.pending_target_ids()
+    assert target_id in store.verified_target_ids()
+
+
 def test_tampered_ciphertext_fails_closed(tmp_path) -> None:
     settings = Settings(_env_file=None, data_dir=tmp_path)
     store = EncryptedSshCredentialStore(settings)
@@ -89,6 +119,7 @@ def test_recovery_pins_host_key_and_redeploys_remembered_target(tmp_path, monkey
         provider="external",
         lifecycle_status="active",
         fingerprint_json={"host_key_sha256": host_key},
+        inventory_json={"endpoint": "10.0.0.8"},
     )
 
     class FakeSession:
@@ -166,6 +197,7 @@ def test_manual_ssh_test_reuses_saved_credentials_and_restores_worker(
         provider="external",
         lifecycle_status="active",
         fingerprint_json={"host_key_sha256": host_key},
+        inventory_json={"endpoint": "10.0.0.8"},
     )
 
     class FakeSession:

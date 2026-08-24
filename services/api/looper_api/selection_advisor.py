@@ -6,7 +6,21 @@ from typing import Literal
 
 from pydantic import Field, model_validator
 
-from looper_api.cloud_contracts import ApiModel, InstanceTypeInfo, ProviderId
+from looper_api.cloud_contracts import (
+    ApiModel,
+    CatalogFilters,
+    InstanceSelectionClass,
+    InstanceTypeFacets,
+    InstanceTypeInfo,
+    ProviderId,
+)
+from looper_api.providers.utils import (
+    build_instance_type_facets,
+    enrich_instance_type_labels,
+    instance_type_family_token,
+    instance_type_search_text,
+    matches_instance_type_facets,
+)
 
 ScenarioId = Literal[
     "web-api",
@@ -54,6 +68,9 @@ class SelectionAdvisorRequest(ApiModel):
     code_availability: Literal["available", "unavailable", "unknown"] = "unknown"
     architecture: Literal["x86", "arm", "unknown"] = "unknown"
     query: str | None = Field(default=None, max_length=120)
+    architecture_class: InstanceSelectionClass | None = None
+    type_kind: str | None = Field(default=None, max_length=60)
+    family_token: str | None = Field(default=None, max_length=80)
     offset: int = Field(default=0, ge=0)
     limit: int = Field(default=20, ge=1, le=100)
 
@@ -101,6 +118,7 @@ class SelectionAdvisorResponse(ApiModel):
     expires_at: str
     stale: bool = False
     warning: str | None = None
+    instance_type_facets: InstanceTypeFacets | None = None
 
 
 _ALIBABA_FAMILY_ORDERS: dict[str, list[set[str]]] = {
@@ -133,10 +151,7 @@ _TENCENT_FAMILY_ORDERS: dict[str, list[set[str]]] = {
 
 
 def _family_token(item: InstanceTypeInfo) -> str:
-    source = (item.family or item.id).casefold()
-    if source.startswith("ecs."):
-        source = source[4:]
-    return source.split(".", 1)[0]
+    return instance_type_family_token(item).casefold()
 
 
 def _alibaba_family_kind(item: InstanceTypeInfo) -> str:
@@ -488,16 +503,24 @@ def advise_instance_types(
         ),
     )
     eligible_total = len(ranked)
+    instance_type_facets = build_instance_type_facets(ranked)
     query = (request.query or "").casefold()
+    facet_filters = CatalogFilters(
+        architectureClass=request.architecture_class,
+        typeKind=request.type_kind,
+        familyToken=request.family_token,
+    )
     searched = [
         item
         for item in ranked
-        if not query or query in f"{item.id} {item.family or ''}".casefold()
+        if (not query or query in instance_type_search_text(item))
+        and matches_instance_type_facets(item, facet_filters)
     ]
     advised: list[AdvisedInstanceType] = []
     for item in searched[request.offset : request.offset + request.limit]:
         rank = _combined_family_rank(item, request)
         reasons, warnings, tier = _reasons_and_warnings(item, request, rank)
+        item = enrich_instance_type_labels(item)
         advised.append(
             AdvisedInstanceType(
                 **item.model_dump(), matchTier=tier, reasons=reasons, warnings=warnings
@@ -524,4 +547,5 @@ def advise_instance_types(
         expiresAt=expires_at,
         stale=stale,
         warning=warning,
+        instanceTypeFacets=instance_type_facets,
     )

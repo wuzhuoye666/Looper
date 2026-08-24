@@ -929,11 +929,17 @@ def fetch_source_command(
 
 
 @demo_app.command("create")
-def create_demo(name: str = "Compression Pareto study", start: bool = False) -> None:
+def create_demo(
+    target_id: str = typer.Option(..., "--target-id"),
+    name: str = "Compression Pareto study",
+    start: bool = False,
+) -> None:
     init_database()
     with session_scope() as session:
         seed_system(session)
-        experiment = create_experiment(session, create_demo_request(name))
+        request = create_demo_request(name)
+        request.spec.target_ids = [target_id]
+        experiment = create_experiment(session, request)
         if start:
             start_experiment(session, experiment)
         console.print(experiment.id)

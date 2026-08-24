@@ -1,11 +1,11 @@
 import type {
   AnalysisData, Benchmark, BenchmarkRegistration, BenchmarkRegistrationDraft, CloudCatalogResponse, CloudImage, CloudInstanceType, CloudOrder,
-  CloudOrderEvent, CloudOrderEvidence, CloudProviderId, CloudProviderInfo, CloudPurchaseReadiness, CloudPurchaseSpec,
+  CloudOrderEvent, CloudOrderEvidence, CloudProviderId, CloudProviderInfo, CloudPurchaseReadiness, CloudPurchaseSpec, CloudSshDefaults,
   CloudKeyPair, CloudQuote, CloudReconciliationContext, CloudRegion, CloudSecurityGroup, CloudSubnet, CloudVpc, CloudZone,
   InstanceNetworkResolution, InstanceNetworkResolveRequest,
   DashboardData, Experiment, GlobalSearchResult, ListResponse, PostOptimizationStatus, SelectionAdvisorRequest,
   SelectionAdvisorResponse, SourceDiscovery, SourceDiscoveryProviderConfig, SourceDiscoveryReadiness, CapacityDraft, CapacityStudy,
-  Target, TargetDestroyPreview, TargetDestroyResult, VariabilityData,
+  BenchmarkTargetOptions, Target, TargetDestroyPreview, TargetDestroyResult, VariabilityData,
 } from './types';
 
 export const API_BASE = (import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000/api/v1').replace(/\/$/, '');
@@ -121,6 +121,9 @@ export const api = {
   startPostOptimization: (id: string) => request<PostOptimizationStatus>(`/experiments/${encodeURIComponent(id)}/post-optimization`, { method: 'POST' }),
   variability: (id: string) => request<VariabilityData>(`/experiments/${encodeURIComponent(id)}/variability`),
   benchmarks: async () => list(await request<Benchmark[] | ListResponse<Benchmark> | { data?: Benchmark[] }>('/benchmarks')),
+  benchmarkTargetOptions: (benchmarkId: string, version: string) => request<BenchmarkTargetOptions>(
+    `/benchmarks/${encodeURIComponent(benchmarkId)}/versions/${encodeURIComponent(version)}/target-options`,
+  ),
   benchmarkRegistration: (id: string) => request<BenchmarkRegistration>(`/benchmark-registrations/${encodeURIComponent(id)}`),
   createBenchmarkRegistration: (draft: BenchmarkRegistrationDraft) => request<BenchmarkRegistration>(
     '/benchmark-registrations', { method: 'POST', body: JSON.stringify(draft) },
@@ -139,7 +142,7 @@ export const api = {
     },
   ),
   createBenchmarkSmokeRun: (
-    benchmarkId: string, version: string, payload: { targetId?: string; workloadId?: string; parameters?: Record<string, unknown>; inputBindings?: Record<string, unknown> } = {},
+    benchmarkId: string, version: string, payload: { targetId: string; workloadId?: string; parameters?: Record<string, unknown>; inputBindings?: Record<string, unknown> },
   ) => request<Experiment>(
     `/benchmarks/${encodeURIComponent(benchmarkId)}/versions/${encodeURIComponent(version)}/smoke-runs`,
     { method: 'POST', body: JSON.stringify(payload) },
@@ -185,6 +188,7 @@ export const api = {
   localOperatorSession: () => request<{ token: string }>('/operator/local-session', { method: 'POST' }),
   cloudAuthStatus: () => api.operatorSession(),
   purchaseReadiness: () => request<CloudPurchaseReadiness>('/cloud/purchase-readiness'),
+  cloudSshDefaults: () => request<CloudSshDefaults>('/cloud/ssh-defaults'),
   providers: async () => list(await request<CloudProviderInfo[] | ListResponse<CloudProviderInfo>>('/cloud/providers')),
   catalog: <T>(provider: CloudProviderId, kind: string, params: Record<string, string | number | undefined> = {}) =>
     request<CloudCatalogResponse<T>>(`/cloud/catalog/${provider}/${kind}${query(params)}`),
@@ -203,8 +207,8 @@ export const api = {
   securityGroups: (provider: CloudProviderId, region: string) =>
     api.catalog<CloudSecurityGroup>(provider, 'security-group', { region }),
   keyPairs: (provider: CloudProviderId, region: string) => api.catalog<CloudKeyPair>(provider, 'key-pair', { region }),
-  ensureManagedSecurityGroup: (provider: CloudProviderId, region: string) =>
-    request<CloudSecurityGroup>(`/cloud/network/${provider}/managed-security-group${query({ region })}`, { method: 'POST' }),
+  ensureManagedSecurityGroup: (provider: CloudProviderId, region: string, vpcId?: string) =>
+    request<CloudSecurityGroup>(`/cloud/network/${provider}/managed-security-group${query({ region, vpc_id: vpcId })}`, { method: 'POST' }),
   resolveInstanceNetwork: (provider: CloudProviderId, payload: InstanceNetworkResolveRequest, key: string) =>
     request<InstanceNetworkResolution>(`/cloud/network/${provider}/resolve-instance-network`, {
       method: 'POST', headers: { 'Idempotency-Key': key }, body: JSON.stringify(payload),
@@ -213,11 +217,12 @@ export const api = {
   quote: (spec: CloudPurchaseSpec, key: string) => request<CloudQuote>('/cloud/quotes', {
     method: 'POST', headers: { 'Idempotency-Key': key }, body: JSON.stringify({ spec }),
   }),
-  purchaseQuote: (quoteId: string, key: string, payload?: { rememberCredentials?: boolean }) => request<CloudOrder>('/cloud/orders/purchase', {
+  purchaseQuote: (quoteId: string, key: string, payload?: { sshAuthMethod?: 'password' | 'private-key'; sshPassword?: string; rememberCredentials?: boolean }) => request<CloudOrder>('/cloud/orders/purchase', {
     method: 'POST', headers: { 'Idempotency-Key': key }, body: JSON.stringify({ quoteId, ...payload }),
   }),
   orders: async (status = '') => list(await request<CloudOrder[] | ListResponse<CloudOrder>>(`/cloud/orders${status ? `?status=${encodeURIComponent(status)}` : ''}`)),
   order: (id: string) => request<CloudOrder>(`/cloud/orders/${encodeURIComponent(id)}`),
+  deleteOrder: (id: string) => request<void>(`/cloud/orders/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   orderEvents: async (id: string) => list(await request<CloudOrderEvent[] | ListResponse<CloudOrderEvent>>(`/cloud/orders/${encodeURIComponent(id)}/events`)),
   orderReconciliationContext: (id: string) => request<CloudReconciliationContext>(`/cloud/orders/${encodeURIComponent(id)}/reconciliation-context`),
   orderEvidence: (id: string) => request<CloudOrderEvidence>(`/cloud/orders/${encodeURIComponent(id)}/evidence`),

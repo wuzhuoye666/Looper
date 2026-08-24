@@ -10,6 +10,7 @@ import zipfile
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
 from importlib.resources import files
+from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import (
@@ -27,7 +28,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from looper_core.canonical import utc_now
+from looper_core.canonical import canonical_digest, utc_now
 from looper_core.cas import FileSystemCAS
 from looper_core.contracts import (
     Aggregation,
@@ -51,6 +52,16 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from looper_api.analysis_service import build_analysis_snapshot
+from looper_api.benchmark_compatibility import (
+    BenchmarkTargetCompatibilityError,
+    assert_target_compatible,
+    incompatibility_summary,
+    require_single_node_contract,
+    requirement_summary,
+    target_compatibility,
+    target_environment,
+)
+from looper_api.benchmark_defaults import benchmark_selection_defaults
 from looper_api.benchmark_packages import (
     MAX_PACKAGE_BYTES,
     BenchmarkPackageError,
@@ -92,6 +103,7 @@ from looper_api.capacity import (
 from looper_api.cloud_contracts import (
     CatalogFilters,
     InstanceNetworkResolveRequest,
+    InstanceSelectionClass,
     InstanceTypeInfo,
     OrderPrepareRequest,
     OrderResolveRequest,
@@ -105,6 +117,7 @@ from looper_api.cloud_service import (
     catalog_inventory,
     catalog_search,
     create_quote,
+    delete_order,
     destroy_target,
     destroy_target_preview,
     ensure_managed_security_group,
@@ -123,6 +136,7 @@ from looper_api.cloud_service import (
     recover_interrupted_orders,
     resolve_instance_network,
     resolve_unknown_order,
+    retry_pending_cloud_ssh,
 )
 from looper_api.config import Settings, get_settings
 from looper_api.database import SessionLocal, get_session, init_database
@@ -320,6 +334,23 @@ async def _remote_worker_recovery() -> None:
             await asyncio.sleep(30)
 
 
+def _retry_pending_cloud_ssh_sync(settings: Settings) -> int:
+    with SessionLocal() as session:
+        connected = retry_pending_cloud_ssh(session, settings)
+        session.commit()
+        return connected
+
+
+async def _cloud_ssh_recovery() -> None:
+    settings = get_settings()
+    while True:
+        try:
+            await asyncio.to_thread(_retry_pending_cloud_ssh_sync, settings)
+        except Exception:
+            logger.exception("Pending cloud SSH recovery failed")
+        await asyncio.sleep(2)
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
@@ -334,15 +365,19 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         session.commit()
     sweeper = asyncio.create_task(_lease_sweeper())
     remote_recovery = asyncio.create_task(_remote_worker_recovery())
+    cloud_ssh_recovery = asyncio.create_task(_cloud_ssh_recovery())
     try:
         yield
     finally:
         sweeper.cancel()
         remote_recovery.cancel()
+        cloud_ssh_recovery.cancel()
         with suppress(asyncio.CancelledError):
             await sweeper
         with suppress(asyncio.CancelledError):
             await remote_recovery
+        with suppress(asyncio.CancelledError):
+            await cloud_ssh_recovery
 
 
 app = FastAPI(
@@ -378,6 +413,7 @@ async def origin_guard(request: Request, call_next: Any) -> Any:
 
 
 @app.exception_handler(SchedulerError)
+@app.exception_handler(BenchmarkTargetCompatibilityError)
 @app.exception_handler(WorkerError)
 @app.exception_handler(InvalidTransition)
 @app.exception_handler(TencentInventoryError)
@@ -490,6 +526,32 @@ def cloud_purchase_readiness(
     registry: ProviderRegistryDependency,
 ) -> dict[str, Any]:
     return purchase_readiness(app_settings, registry)
+
+
+@app.get("/api/v1/cloud/ssh-defaults")
+def cloud_ssh_defaults(
+    app_settings: SettingsDependency,
+    _operator: ConfiguredOperatorDependency,
+) -> JSONResponse:
+    password = (
+        app_settings.default_ssh_password.get_secret_value()
+        if app_settings.default_ssh_password
+        else ""
+    )
+    key_path = Path(app_settings.default_ssh_private_key_path).expanduser()
+    return JSONResponse(
+        {
+            "username": app_settings.default_ssh_username.strip() or "root",
+            "port": app_settings.default_ssh_port,
+            "authMethod": app_settings.default_ssh_auth_method,
+            "password": password,
+            "passwordConfigured": bool(password),
+            "privateKeyConfigured": bool(
+                app_settings.default_ssh_private_key_path and key_path.is_file()
+            ),
+        },
+        headers={"Cache-Control": "no-store, private", "Pragma": "no-cache"},
+    )
 
 
 def operator_session_status(
@@ -747,7 +809,7 @@ def update_capacity_study_draft(
     record = session.get(CapacityStudyRecord, study_id)
     if record is None:
         raise HTTPException(status_code=404, detail="capacity study not found")
-    update_capacity_study(record, request)
+    update_capacity_study(session, record, request)
     session.commit()
     return capacity_view(session, record, app_settings)
 
@@ -874,6 +936,9 @@ def cloud_catalog(
     zone: str | None = Query(default=None, max_length=64),
     vpc_id: str | None = Query(default=None, max_length=120),
     query: str | None = Query(default=None, max_length=120),
+    architecture_class: InstanceSelectionClass | None = Query(default=None),
+    type_kind: str | None = Query(default=None, max_length=60),
+    family_token: str | None = Query(default=None, max_length=80),
     min_cpu: int | None = Query(default=None, ge=1, le=1024),
     max_cpu: int | None = Query(default=None, ge=1, le=1024),
     min_memory_gib: float | None = Query(default=None, ge=0.25, le=65536),
@@ -900,6 +965,9 @@ def cloud_catalog(
         zone=zone,
         vpcId=vpc_id,
         query=query,
+        architectureClass=architecture_class,
+        typeKind=type_kind,
+        familyToken=family_token,
         minCpu=min_cpu,
         maxCpu=max_cpu,
         minMemoryGib=min_memory_gib,
@@ -957,8 +1025,15 @@ def cloud_managed_security_group(
     registry: ProviderRegistryDependency,
     _operator: OperatorDependency,
     region: str = Query(min_length=2, max_length=64),
+    vpc_id: str | None = Query(default=None, min_length=1, max_length=120),
 ) -> dict[str, Any]:
-    result = ensure_managed_security_group(session, registry, provider, region)
+    result = ensure_managed_security_group(
+        session,
+        registry,
+        provider,
+        region,
+        vpc_id=vpc_id,
+    )
     session.commit()
     return result
 
@@ -1030,6 +1105,8 @@ def cloud_order_purchase(
         request.quote_id,
         idempotency_key,
         request.ssh_credentials,
+        request.ssh_auth_method,
+        request.ssh_password.get_secret_value() if request.ssh_password else None,
         request.remember_credentials,
     )
 
@@ -1053,6 +1130,15 @@ def cloud_order_get(
     _operator: OperatorDependency,
 ) -> dict[str, Any]:
     return get_order(session, app_settings, order_id)
+
+
+@app.delete("/api/v1/cloud/orders/{order_id}", status_code=204)
+def cloud_order_delete(
+    order_id: str,
+    session: SessionDependency,
+    _operator: OperatorDependency,
+) -> None:
+    delete_order(session, order_id)
 
 
 @app.get("/api/v1/cloud/orders/{order_id}/events")
@@ -1122,6 +1208,100 @@ def list_benchmarks(session: SessionDependency) -> dict[str, Any]:
     return {
         "items": [benchmark_view(item, registrations.get(item.key)) for item in current],
         "total": len(current),
+    }
+
+
+@app.get("/api/v1/benchmarks/{benchmark_id}/versions/{version}/target-options")
+def benchmark_target_options(
+    benchmark_id: str,
+    version: str,
+    session: SessionDependency,
+) -> dict[str, Any]:
+    benchmark = session.scalar(
+        select(BenchmarkRecord).where(
+            BenchmarkRecord.benchmark_id == benchmark_id,
+            BenchmarkRecord.version == version,
+        )
+    )
+    if benchmark is None:
+        raise HTTPException(status_code=404, detail="benchmark version not found")
+    current = session.scalar(
+        select(BenchmarkRecord)
+        .where(BenchmarkRecord.benchmark_id == benchmark_id)
+        .order_by(BenchmarkRecord.installed_at.desc(), BenchmarkRecord.key.desc())
+        .limit(1)
+    )
+    if current is None or current.key != benchmark.key:
+        raise BenchmarkTargetCompatibilityError(
+            "Benchmark 版本已被替换，请重新选择当前版本",
+            [{
+                "code": "benchmark_version_replaced",
+                "field": "benchmark.version",
+                "required": current.version if current else None,
+                "actual": version,
+                "message": "只能为当前目录版本选择资源",
+            }],
+        )
+    registration = session.scalar(
+        select(BenchmarkRegistrationRecord).where(
+            BenchmarkRegistrationRecord.benchmark_key == benchmark.key,
+            BenchmarkRegistrationRecord.status == "registered",
+        )
+    )
+    view = benchmark_view(benchmark, registration)
+    if not view["selectionReady"]:
+        raise BenchmarkTargetCompatibilityError(
+            "Benchmark 当前不可用于选型研究",
+            [{
+                "code": "benchmark_not_selection_ready",
+                "field": "benchmark.selectionReady",
+                "required": True,
+                "actual": False,
+                "message": "Benchmark 尚未具备可信且可执行的选型包",
+            }],
+        )
+    node_group = require_single_node_contract(benchmark.manifest_json)
+    compatible_by_environment: dict[str, dict[str, Any]] = {}
+    rejected: list[list[dict[str, Any]]] = []
+    targets = list(
+        session.scalars(
+            select(TargetRecord)
+            .where(TargetRecord.lifecycle_status == "active")
+            .order_by(TargetRecord.provider, TargetRecord.name, TargetRecord.id)
+        )
+    )
+    for target in targets:
+        constraints = target_compatibility(benchmark.manifest_json, target)
+        if constraints:
+            rejected.append(constraints)
+            continue
+        environment_id, label = target_environment(target)
+        environment = compatible_by_environment.setdefault(
+            environment_id,
+            {"id": environment_id, "label": label, "targets": []},
+        )
+        environment["targets"].append(target_view(target))
+    environments = sorted(
+        (
+            {**environment, "compatibleCount": len(environment["targets"])}
+            for environment in compatible_by_environment.values()
+        ),
+        key=lambda item: (item["label"], item["id"]),
+    )
+    scenario = benchmark.manifest_json["spec"].get("scenario") or {}
+    return {
+        "benchmarkId": benchmark.benchmark_id,
+        "version": benchmark.version,
+        "topology": scenario.get("topology"),
+        "machineCount": 1,
+        "nodeGroup": {
+            "id": node_group["id"],
+            "role": node_group["role"],
+            "requirements": node_group.get("requirements") or {},
+            "summary": requirement_summary(benchmark.manifest_json),
+        },
+        "environments": environments,
+        "rejectedSummary": incompatibility_summary(rejected),
     }
 
 
@@ -1394,7 +1574,32 @@ def test_target_ssh_connection(
     target = session.get(TargetRecord, target_id)
     if target is None:
         raise HTTPException(status_code=404, detail="target not found")
-    request = remembered_target_request(target, app_settings)
+    endpoint = str((target.inventory_json or {}).get("endpoint") or "")
+    if not endpoint:
+        raise ExternalTargetError("cloud target has no reachable endpoint")
+    store = EncryptedSshCredentialStore(app_settings)
+    if target.id in store.verified_target_ids():
+        request = remembered_target_request(target, app_settings)
+    else:
+        try:
+            request = store.load_pending(target.id, endpoint)
+        except RemoteCredentialError:
+            if target.provider == "external":
+                raise
+            credentials = _default_cloud_ssh_credentials(
+                app_settings,
+                remember_credentials=True,
+                auth_method="password",
+            )
+            request = ConnectExternalTargetRequest(
+                endpoint=endpoint,
+                port=credentials.port,
+                username=credentials.username,
+                auth_method="password",
+                password=credentials.password,
+                deploy_worker=True,
+                remember_credentials=True,
+            )
     refreshed = (
         connect_external_target(session, request)
         if target.provider == "external"
@@ -1404,12 +1609,24 @@ def test_target_ssh_connection(
         raise ExternalTargetError("SSH endpoint no longer resolves to the selected target")
     session.commit()
     deployment = deploy_remote_worker(request, refreshed, app_settings)
+    host_key = str(refreshed.fingerprint_json.get("host_key_sha256") or "")
+    remembered = store.save(refreshed.id, request, host_key)
     if target.provider != "external":
         refreshed.status = "available"
         refreshed.runnable = True
+        refreshed.inventory_json = {
+            **(refreshed.inventory_json or {}),
+            "autoSsh": {
+                "status": "connected",
+                "deployment": deployment.get("status", "deployed"),
+            },
+        }
+        refreshed.snapshot_digest = canonical_digest(
+            {"fingerprint": refreshed.fingerprint_json, "inventory": refreshed.inventory_json}
+        )
         session.commit()
     result = target_view(refreshed)
-    result["credentialsRemembered"] = True
+    result["credentialsRemembered"] = remembered
     result["connectionTest"] = {
         "status": "connected",
         "testedAt": utc_now().isoformat(),
@@ -1590,9 +1807,13 @@ def create_experiment_endpoint(
 
 @app.post("/api/v1/demo/experiments", status_code=201)
 def create_demo_experiment_endpoint(
-    session: SessionDependency, name: str = "Compression Pareto study"
+    session: SessionDependency,
+    target_id: str,
+    name: str = "Compression Pareto study",
 ) -> dict[str, Any]:
-    record = create_experiment(session, create_demo_request(name))
+    request = create_demo_request(name)
+    request.spec.target_ids = [target_id]
+    record = create_experiment(session, request)
     session.commit()
     return experiment_view(session, record, detail=True)
 
@@ -1606,10 +1827,11 @@ def _normalize_create_request(payload: dict[str, Any], session: Session) -> Expe
     request = create_demo_request(str(payload.get("name") or "Compression Pareto study"))
     request.description = str(payload.get("description") or request.description)
     target_id = payload.get("targetId")
-    if target_id:
-        if str(target_id) == "local":
-            raise SchedulerError("local execution is disabled; select an external server")
-        request.spec.target_ids = [str(target_id)]
+    if not target_id:
+        raise SchedulerError("targetId is required; select an active runnable server")
+    if str(target_id) == "local":
+        raise SchedulerError("local execution is disabled; select an external server")
+    request.spec.target_ids = [str(target_id)]
     benchmark_id = payload.get("benchmarkId")
     if benchmark_id and benchmark_id not in {
         "looper.demo.compression",
@@ -1682,12 +1904,37 @@ def _selection_create_request(payload: dict[str, Any], session: Session) -> Expe
             "selected benchmark is not directly testable; install a trusted executable package "
             "with automatic target provisioning"
         )
+    require_single_node_contract(benchmark.manifest_json)
     scenario = ScenarioBenchmarkSpec.model_validate(scenario_document)
 
     raw_target_ids = payload.get("targetIds")
     if not isinstance(raw_target_ids, list) or not raw_target_ids:
         raise SchedulerError("selection study requires at least one target")
     target_ids = [str(target_id) for target_id in raw_target_ids]
+    if len(target_ids) != 1:
+        raise BenchmarkTargetCompatibilityError(
+            "单机 Benchmark 必须且只能选择一台机器",
+            [{
+                "code": "single_target_required",
+                "field": "targetIds",
+                "required": 1,
+                "actual": len(target_ids),
+                "message": "单机 Benchmark 不允许提交多个机器 ID",
+            }],
+        )
+    selected_target = session.get(TargetRecord, target_ids[0])
+    if selected_target is None:
+        raise BenchmarkTargetCompatibilityError(
+            "所选资源不存在",
+            [{
+                "code": "target_not_found",
+                "field": "targetIds[0]",
+                "required": "已登记的活动资源",
+                "actual": target_ids[0],
+                "message": "资源可能已被删除或尚未同步",
+            }],
+        )
+    assert_target_compatible(benchmark.manifest_json, selected_target)
     placement_pair_id = str(payload.get("placementPairId") or "placement-1")
     supplied_bindings = payload.get("targetBindings")
     binding_overrides = (
@@ -1726,9 +1973,12 @@ def _selection_create_request(payload: dict[str, Any], session: Session) -> Expe
     if metric_declaration is None:
         raise SchedulerError("scenario primary metric is not declared")
     config = payload.get("config") if isinstance(payload.get("config"), dict) else {}
-    repeats = int(config.get("repeats", payload.get("repeats", 5)))
-    seed = int(config.get("seed", payload.get("seed", 20260301)))
-    wall_time_seconds = int(config.get("timeout", payload.get("timeout", 86400)))
+    defaults = benchmark_selection_defaults(benchmark.manifest_json)
+    repeats = int(config.get("repeats", payload.get("repeats", defaults["repeats"])))
+    seed = int(config.get("seed", payload.get("seed", defaults["seed"])))
+    wall_time_seconds = int(
+        config.get("timeout", payload.get("timeout", defaults["timeout"]))
+    )
     raw_input_bindings = payload.get("inputBindings")
     input_bindings = (
         {

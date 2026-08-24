@@ -24,10 +24,14 @@ from pathlib import Path
 from typing import Any
 
 SOURCE_REVISION = "9308c3e3c404e0466f0a2929f15ddcf62b2215f6"
-EXPECTED_PLATFORM = {"ID": "ubuntu", "VERSION_ID": "22.04", "ARCH": "x86_64"}
+EXPECTED_PLATFORM = {"ID": "ubuntu", "ARCH": "x86_64"}
+SUPPORTED_UBUNTU_RELEASES = {"22.04", "24.04"}
 HHVM_BIN = Path("/usr/local/hphpi/legacy/bin/hhvm")
 HHVM_LIB = Path("/opt/local/hhvm-3.30/lib")
 MARKER_NAME = "dcperf-mediawiki-ready.json"
+DOWNLOAD_BLOCK_BYTES = 1024 * 1024
+DOWNLOAD_ROUTE_PROBE_SECONDS = 15.0
+DOWNLOAD_ROUTE_MIN_MIB_PER_SECOND = 0.25
 
 
 class PrepareError(RuntimeError):
@@ -92,11 +96,12 @@ def check_host() -> None:
         )
     release = read_os_release()
     if release.get("ID") != EXPECTED_PLATFORM["ID"]:
-        fail(f"unsupported distribution: expected Ubuntu 22.04, got {release.get('ID', 'unknown')}")
-    if release.get("VERSION_ID") != EXPECTED_PLATFORM["VERSION_ID"]:
+        fail(f"unsupported distribution: expected Ubuntu, got {release.get('ID', 'unknown')}")
+    release_id = release.get("VERSION_ID", "")
+    if release_id not in SUPPORTED_UBUNTU_RELEASES:
         fail(
-            "unsupported Ubuntu release: expected 22.04, got "
-            f"{release.get('VERSION_ID', 'unknown')}"
+            "unsupported Ubuntu release: expected one of "
+            f"{sorted(SUPPORTED_UBUNTU_RELEASES)}, got {release_id or 'unknown'}"
         )
     architecture = os.uname().machine if hasattr(os, "uname") else "unknown"
     if architecture not in {"x86_64", "amd64"}:
@@ -116,8 +121,12 @@ def load_lock(root: Path) -> dict[str, Any]:
         fail(f"cannot read dependency lock: {error}")
     if lock.get("schemaVersion") != "looper.dependency-lock/v1":
         fail("unsupported dependency lock schema")
-    if lock.get("platform", {}).get("release") != "22.04":
-        fail("dependency lock is not pinned to Ubuntu 22.04")
+    platform = lock.get("platform", {})
+    supported_releases = set(platform.get("compatibleReleases", []))
+    if not supported_releases:
+        supported_releases = {str(platform.get("release", ""))}
+    if not supported_releases >= SUPPORTED_UBUNTU_RELEASES:
+        fail("dependency lock does not cover all supported Ubuntu releases")
     assets = lock.get("assets")
     if not isinstance(assets, list) or not assets:
         fail("dependency lock does not declare assets")
@@ -134,7 +143,7 @@ def asset(lock: dict[str, Any], asset_id: str) -> dict[str, Any]:
 def sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(1024 * 1024), b""):
+        for block in iter(lambda: stream.read(DOWNLOAD_BLOCK_BYTES), b""):
             digest.update(block)
     return digest.hexdigest()
 
@@ -143,45 +152,120 @@ def fetch(asset_spec: dict[str, Any], directory: Path) -> Path:
     directory.mkdir(parents=True, exist_ok=True)
     safe_id = str(asset_spec["id"]).replace("/", "_")
     destination = directory / (safe_id + ".download")
+    temporary = destination.with_suffix(".part")
     expected = str(asset_spec["sha256"]).removeprefix("sha256:")
+    declared = asset_spec.get("bytes")
+    expected_bytes = int(declared) if declared is not None else None
     if destination.is_file() and sha256_file(destination) == expected:
         log(f"reusing verified asset {asset_spec['id']}")
         return destination
     if destination.exists():
         destination.unlink()
-    temporary = destination.with_suffix(".part")
-    temporary.unlink(missing_ok=True)
-    request = urllib.request.Request(
+
+    offset = temporary.stat().st_size if temporary.is_file() else 0
+    if offset:
+        log(f"resuming {asset_spec['id']} from {offset / (1024 * 1024):.1f} MiB")
+    else:
+        log(f"downloading {asset_spec['id']}")
+    source_urls = [
+        *(str(item) for item in asset_spec.get("mirrors", [])),
         str(asset_spec["url"]),
-        headers={"User-Agent": "Looper-DCPerf-provisioner/1"},
-    )
-    log(f"downloading {asset_spec['id']}")
-    try:
-        with (
-            urllib.request.urlopen(request, timeout=180) as response,
-            temporary.open("wb") as stream,
-        ):
-            digest = hashlib.sha256()
-            total = 0
-            while True:
-                block = response.read(1024 * 1024)
-                if not block:
-                    break
-                stream.write(block)
-                digest.update(block)
-                total += len(block)
-    except Exception as error:
-        temporary.unlink(missing_ok=True)
-        fail(f"download failed for {asset_spec['id']}: {error}")
-    actual = digest.hexdigest()
+    ]
+    route_errors: list[str] = []
+    completed = False
+    total = offset
+    for route_number, source_url in enumerate(source_urls, start=1):
+        headers = {"User-Agent": "Looper-DCPerf-provisioner/2"}
+        if offset:
+            headers["Range"] = f"bytes={offset}-"
+        request = urllib.request.Request(source_url, headers=headers)
+        try:
+            response = urllib.request.urlopen(request, timeout=180)
+            log(f"using download route {route_number}/{len(source_urls)}")
+        except Exception as error:
+            route_errors.append(str(error))
+            log(f"download route {route_number}/{len(source_urls)} unavailable: {error}")
+            continue
+        try:
+            with response:
+                resumed = offset > 0 and getattr(response, "status", 200) == 206
+                if offset and not resumed:
+                    log("upstream does not support range requests; restarting this asset")
+                    offset = 0
+                total = offset
+                started = time.monotonic()
+                last_report = started
+                mode = "ab" if resumed else "wb"
+                with temporary.open(mode) as stream:
+                    while True:
+                        block = response.read(DOWNLOAD_BLOCK_BYTES)
+                        if not block:
+                            completed = True
+                            break
+                        stream.write(block)
+                        stream.flush()
+                        total += len(block)
+                        now = time.monotonic()
+                        elapsed = max(now - started, 0.001)
+                        speed = (total - offset) / elapsed / (1024 * 1024)
+                        if now - last_report >= 5:
+                            downloaded = total / (1024 * 1024)
+                            if expected_bytes:
+                                percent = min(100.0, total * 100 / expected_bytes)
+                                log(
+                                    f"downloading {asset_spec['id']}: {downloaded:.1f} MiB / "
+                                    f"{expected_bytes / (1024 * 1024):.1f} MiB "
+                                    f"({percent:.1f}%) at {speed:.2f} MiB/s"
+                                )
+                            else:
+                                log(
+                                    f"downloading {asset_spec['id']}: {downloaded:.1f} MiB "
+                                    f"at {speed:.2f} MiB/s"
+                                )
+                            last_report = now
+                        if (
+                            route_number < len(source_urls)
+                            and elapsed >= DOWNLOAD_ROUTE_PROBE_SECONDS
+                            and speed < DOWNLOAD_ROUTE_MIN_MIB_PER_SECOND
+                        ):
+                            log(
+                                f"download route {route_number}/{len(source_urls)} is slow "
+                                f"({speed:.2f} MiB/s); trying the next route"
+                            )
+                            completed = False
+                            break
+        except Exception as error:
+            route_errors.append(str(error))
+            log(
+                f"download route {route_number}/{len(source_urls)} interrupted: {error}; "
+                "trying the next route"
+            )
+        offset = temporary.stat().st_size if temporary.exists() else 0
+        if completed and (expected_bytes is None or total == expected_bytes):
+            break
+        if completed and expected_bytes is not None and total != expected_bytes:
+            route_errors.append(f"route ended after {total} of {expected_bytes} bytes")
+            completed = False
+    if not completed:
+        saved = temporary.stat().st_size if temporary.exists() else 0
+        fail(
+            f"all download routes failed for {asset_spec['id']} after "
+            f"{saved / (1024 * 1024):.1f} MiB; next run will resume: "
+            f"{'; '.join(route_errors) or 'no route completed the asset'}"
+        )
+    if expected_bytes is not None and total != expected_bytes:
+        if total > expected_bytes:
+            temporary.unlink(missing_ok=True)
+        fail(
+            f"incomplete download for {asset_spec['id']}: expected {expected_bytes}, "
+            f"got {total}; next run will resume"
+        )
+    actual = sha256_file(temporary)
     if actual != expected:
         temporary.unlink(missing_ok=True)
         fail(f"checksum mismatch for {asset_spec['id']}: expected {expected}, got {actual}")
-    declared_bytes = asset_spec.get("bytes")
-    if declared_bytes is not None and int(declared_bytes) != total:
-        temporary.unlink(missing_ok=True)
-        fail(f"size mismatch for {asset_spec['id']}: expected {declared_bytes}, got {total}")
     temporary.replace(destination)
+    log(f"verified download {asset_spec['id']} ({total / (1024 * 1024):.1f} MiB)")
     return destination
 
 
@@ -214,9 +298,22 @@ def extract_archive(archive: Path, destination: Path) -> None:
                     name = name[len(root_prefix) + 1 :]
                 if not name:
                     continue
-                if member.issym() or member.islnk():
-                    fail(f"symbolic links are not accepted in dependency archive: {member.name}")
                 target = safe_member_path(destination, name)
+                if member.issym():
+                    link_name = str(member.linkname)
+                    link_target = (target.parent / link_name).resolve()
+                    base = destination.resolve()
+                    if (
+                        not link_name
+                        or Path(link_name).is_absolute()
+                        or link_target != base and base not in link_target.parents
+                    ):
+                        fail(f"unsafe symbolic link in dependency archive: {member.name}")
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.symlink_to(link_name)
+                    continue
+                if member.islnk():
+                    fail(f"hard links are not accepted in dependency archive: {member.name}")
                 if member.isdir():
                     target.mkdir(parents=True, exist_ok=True)
                     continue
@@ -276,12 +373,18 @@ def hhvm_version() -> str:
     if not HHVM_BIN.is_file() or not os.access(HHVM_BIN, os.X_OK):
         return ""
     try:
+        environment = os.environ.copy()
+        environment["LD_LIBRARY_PATH"] = (
+            str(HHVM_LIB)
+            + (":" + environment["LD_LIBRARY_PATH"] if environment.get("LD_LIBRARY_PATH") else "")
+        )
         completed = subprocess.run(
             [str(HHVM_BIN), "--version"],
             text=True,
             capture_output=True,
             timeout=30,
             check=False,
+            env=environment,
         )
     except (OSError, subprocess.TimeoutExpired):
         return ""
@@ -297,13 +400,17 @@ def install_hhvm(archive: Path) -> None:
         log("existing HHVM executable is not the pinned 3.30 build; reinstalling")
     stage = Path(tempfile.mkdtemp(prefix="looper-hhvm-"))
     try:
+        log("extracting hhvm-3.30 archive")
         extract_archive(archive, stage)
+        log("HHVM archive extracted; locating installer")
         installer = find_one(stage, "pour-hhvm.sh")
         if installer is not None:
+            log("installing HHVM with pour-hhvm.sh")
             run(["bash", str(installer)], cwd=installer.parent, timeout=3600)
         else:
             installer = find_one(stage, "install.sh")
             if installer is not None:
+                log("installing HHVM with install.sh")
                 run(["bash", str(installer)], cwd=installer.parent, timeout=3600)
         if not HHVM_BIN.is_file():
             candidate = find_one(stage, "hhvm")
@@ -346,6 +453,59 @@ def configure_database(dcperf_root: Path) -> None:
         ["bash", "-c", f"mysql -u root --password=password < {shlex_quote(str(grants))}"],
         timeout=180,
     )
+
+
+def configure_mediawiki_measurement_hook(dcperf_root: Path) -> None:
+    """Keep the pinned RecentChanges request valid with the 2014 fixture DB."""
+
+    hook = dcperf_root / "packages/mediawiki/perf-record.sh"
+    if not hook.is_file():
+        fail(f"pinned DCPerf perf-record hook is missing: {hook}")
+    hook.write_text(
+        """#!/bin/bash
+set -e
+
+# The pinned MediaWiki fixture contains recentchanges rows from 2014. Refresh
+# only their timestamps after workload warmup so Special:RecentChanges remains
+# a successful upstream request without changing the URL mix or row count.
+mysql --user=root --password=password mw_bench \\
+  --execute="UPDATE recentchanges SET rc_timestamp = DATE_FORMAT(UTC_TIMESTAMP(), '%Y%m%d%H%i%s');"
+
+sleep 30
+if [ -f "perf.data" ]; then
+  exit 0
+fi
+if [ "${DCPERF_PERF_RECORD}" = "1" ]; then
+  sudo nohup bash -xec "sleep 30; timeout -s INT 5 perf record -a -g;" \\
+    > /tmp/mw-perf-record.log 2>&1 &
+fi
+""",
+        encoding="utf-8",
+    )
+    hook.chmod(0o755)
+
+
+def configure_mediawiki_recentchanges_compatibility(dcperf_root: Path) -> None:
+    """Avoid HHVM repo-authoritative evals while retaining RecentChanges rows."""
+
+    settings = dcperf_root / "oss-performance/targets/mediawiki/LocalSettings.php"
+    if not settings.is_file():
+        fail(f"pinned MediaWiki LocalSettings source is missing: {settings}")
+    marker = "// Looper: use the non-eval RecentChanges renderer under Repo.Authoritative."
+    content = settings.read_text(encoding="utf-8")
+    if marker not in content:
+        settings.write_text(
+            content.rstrip()
+            + "\n\n"
+            + marker
+            + "\n$wgDefaultUserOptions['usenewrc'] = 0;\n",
+            encoding="utf-8",
+        )
+
+
+def configure_mediawiki_runtime(dcperf_root: Path) -> None:
+    configure_mediawiki_measurement_hook(dcperf_root)
+    configure_mediawiki_recentchanges_compatibility(dcperf_root)
 
 
 def shlex_quote(value: str) -> str:
@@ -400,6 +560,10 @@ def build_dependencies(lock: dict[str, Any], cache: Path) -> Path:
     shutil.copy2(composer_archive, oss_root / "composer.phar")
     env = os.environ.copy()
     env["LD_LIBRARY_PATH"] = str(HHVM_LIB) + ":" + env.get("LD_LIBRARY_PATH", "")
+    composer_home = oss_root / ".composer-home"
+    composer_home.mkdir(parents=True, exist_ok=True)
+    env["HOME"] = str(composer_home)
+    env["COMPOSER_HOME"] = str(composer_home)
     run(
         [str(HHVM_BIN), "composer.phar", "install", "--no-interaction", "--prefer-dist"],
         cwd=oss_root,
@@ -464,11 +628,13 @@ def main() -> int:
         cache.mkdir(parents=True, exist_ok=True)
         marker = cache / MARKER_NAME
         if prepared_cache_valid(cache):
+            configure_mediawiki_runtime(cache / "runtime/dcperf")
             log("verified managed DCPerf environment is already prepared")
             return 0
         install_system_packages(lock, marker)
         install_hhvm(fetch(asset(lock, "hhvm-3.30"), cache / "assets"))
         dcperf_root = build_dependencies(lock, cache)
+        configure_mediawiki_runtime(dcperf_root)
         run(
             [sys.executable, "-m", "compileall", "-q", str(dcperf_root / "benchpress")], timeout=300
         )

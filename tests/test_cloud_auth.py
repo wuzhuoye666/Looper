@@ -77,6 +77,45 @@ def test_local_operator_session_is_loopback_only(tmp_path) -> None:
         app.dependency_overrides.clear()
 
 
+def test_cloud_ssh_defaults_are_authenticated_and_not_cacheable(tmp_path) -> None:
+    token = "o" * 48
+    settings = Settings(
+        _env_file=None,
+        data_dir=tmp_path,
+        operator_token=token,
+        default_ssh_auth_method="password",
+        default_ssh_password="StrongPassword1#",
+    )
+
+    async def exercise():
+        app.dependency_overrides[get_settings] = lambda: settings
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://testserver"
+        ) as client:
+            denied = await client.get("/api/v1/cloud/ssh-defaults")
+            allowed = await client.get(
+                "/api/v1/cloud/ssh-defaults",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            return denied, allowed
+
+    try:
+        denied, allowed = asyncio.run(exercise())
+        assert denied.status_code == 401
+        assert allowed.status_code == 200
+        assert allowed.headers["cache-control"] == "no-store, private"
+        assert allowed.json() == {
+            "username": "root",
+            "port": 22,
+            "authMethod": "password",
+            "password": "StrongPassword1#",
+            "passwordConfigured": True,
+            "privateKeyConfigured": False,
+        }
+    finally:
+        app.dependency_overrides.clear()
+
+
 def test_purchase_readiness_explains_and_clears_tencent_blockers(monkeypatch, tmp_path) -> None:
     monkeypatch.delenv("TENCENTCLOUD_SECRET_ID", raising=False)
     monkeypatch.delenv("TENCENTCLOUD_SECRET_KEY", raising=False)

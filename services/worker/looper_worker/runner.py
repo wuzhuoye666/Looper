@@ -310,6 +310,37 @@ def _cleanup_container(engine: str, name: str) -> None:
             )
 
 
+def _read_log_chunk(path: Path, offset: int, limit: int = 7000) -> tuple[int, str]:
+    try:
+        with path.open("rb") as stream:
+            stream.seek(offset)
+            data = stream.read(limit)
+    except OSError:
+        return offset, ""
+    return offset + len(data), data.decode("utf-8", errors="replace")
+
+
+def _display_command(argv: list[str]) -> str:
+    sensitive = re.compile(r"password|secret|token|credential|private[-_]key", re.IGNORECASE)
+    displayed: list[str] = []
+    mask_next = False
+    for value in argv:
+        if mask_next:
+            displayed.append("***")
+            mask_next = False
+            continue
+        if sensitive.search(value):
+            if "=" in value:
+                key, _separator, _secret = value.partition("=")
+                displayed.append(f"{key}=***")
+            else:
+                displayed.append(value)
+                mask_next = True
+            continue
+        displayed.append(value)
+    return subprocess.list2cmdline(displayed)
+
+
 class LocalAttemptRunner:
     def __init__(
         self,
@@ -340,6 +371,30 @@ class LocalAttemptRunner:
             # Backwards compatibility for third-party/testing clients that
             # implement the v1 heartbeat without optional phase fields.
             self.client.heartbeat(attempt_id, fencing_token)
+
+    def _report_log(
+        self,
+        attempt_id: str,
+        fencing_token: int,
+        *,
+        log_id: str,
+        stage: str,
+        stream: str,
+        text: str,
+    ) -> dict[str, Any]:
+        try:
+            return self.client.heartbeat(
+                attempt_id,
+                fencing_token,
+                log_id=log_id,
+                log_stage=stage,
+                log_stream=stream,
+                log_text=text,
+            )
+        except TypeError:
+            # Older test clients and third-party workers can still run without
+            # the optional terminal stream fields.
+            return self.client.heartbeat(attempt_id, fencing_token)
 
     def run_claim(self, claim: dict[str, Any]) -> dict[str, Any]:
         attempt_id = str(claim["attemptId"])
@@ -395,12 +450,22 @@ class LocalAttemptRunner:
                 benchmark_root = (Path(repository_root) / str(relative_root)).resolve()
         if not benchmark_root.is_dir():
             raise RunnerError("the deployed Worker does not contain this Benchmark package")
-        dependency_cache = (
-            self.work_root
-            / "dependency-cache"
-            / str(manifest["metadata"]["id"])
-            / str(manifest["metadata"]["version"])
+        cache_root = (
+            self.work_root / "dependency-cache" / str(manifest["metadata"]["id"])
         ).resolve()
+        provisioning = runtime.get("provisioning") or {}
+        cache_identity = str(
+            provisioning.get("cacheKey") or manifest["metadata"]["version"]
+        ).removeprefix("sha256:")
+        cache_leaf = re.sub(r"[^A-Za-z0-9._-]+", "_", cache_identity)
+        dependency_cache = cache_root / cache_leaf
+        legacy_cache = cache_root / str(manifest["metadata"]["version"])
+        if not dependency_cache.exists() and legacy_cache.is_dir():
+            cache_root.mkdir(parents=True, exist_ok=True)
+            try:
+                legacy_cache.replace(dependency_cache)
+            except OSError:
+                dependency_cache = legacy_cache
         dependency_cache.mkdir(parents=True, exist_ok=True)
         self._report_phase(
             attempt_id,
@@ -726,6 +791,59 @@ class LocalAttemptRunner:
                     1.0,
                     min(10.0, max(1.0, float(lease_seconds) / 3.0), max(1.0, timeout / 3.0)),
                 )
+                log_offsets = {"stdout": 0, "stderr": 0}
+                log_run_id = str(time.time_ns())
+                try:
+                    command_heartbeat = self._report_log(
+                        attempt_id,
+                        fencing_token,
+                        log_id=f"{log_run_id}:command",
+                        stage=stage,
+                        stream="command",
+                        text=f"$ {_display_command(argv)}\n",
+                    )
+                except httpx.HTTPError as error:
+                    return StageResult(
+                        stage,
+                        process.poll(),
+                        "failed",
+                        f"control-plane heartbeat failed: {error}",
+                        stdout_path,
+                        stderr_path,
+                    )
+                if command_heartbeat.get("cancelRequested"):
+                    return StageResult(
+                        stage,
+                        process.poll(),
+                        "cancelled",
+                        "cancellation requested",
+                        stdout_path,
+                        stderr_path,
+                    )
+
+                def emit_available_logs() -> tuple[bool, str | None]:
+                    for stream_name, stream_path in (("stdout", stdout_path), ("stderr", stderr_path)):
+                        while True:
+                            start_offset = log_offsets[stream_name]
+                            end_offset, text = _read_log_chunk(stream_path, start_offset)
+                            if not text:
+                                break
+                            log_offsets[stream_name] = end_offset
+                            try:
+                                response = self._report_log(
+                                    attempt_id,
+                                    fencing_token,
+                                    log_id=f"{log_run_id}:{stream_name}:{start_offset}",
+                                    stage=stage,
+                                    stream=stream_name,
+                                    text=text,
+                                )
+                            except httpx.HTTPError as error:
+                                return False, f"control-plane heartbeat failed: {error}"
+                            if response.get("cancelRequested"):
+                                return True, "cancellation requested"
+                    return False, None
+
                 while process.poll() is None:
                     elapsed = time.monotonic() - started
                     if elapsed - last_heartbeat >= heartbeat_interval:
@@ -750,6 +868,16 @@ class LocalAttemptRunner:
                                 stdout_path,
                                 stderr_path,
                             )
+                        cancelled_by_control_plane, log_error = emit_available_logs()
+                        if log_error:
+                            return StageResult(
+                                stage,
+                                process.poll(),
+                                "cancelled" if cancelled_by_control_plane else "failed",
+                                log_error,
+                                stdout_path,
+                                stderr_path,
+                            )
                     if elapsed >= timeout:
                         return StageResult(
                             stage,
@@ -771,6 +899,16 @@ class LocalAttemptRunner:
                             stderr_path,
                         )
                     time.sleep(0.1)
+                cancelled_by_control_plane, log_error = emit_available_logs()
+                if log_error:
+                    return StageResult(
+                        stage,
+                        process.poll(),
+                        "cancelled" if cancelled_by_control_plane else "failed",
+                        log_error,
+                        stdout_path,
+                        stderr_path,
+                    )
             finally:
                 if process.poll() is None:
                     _terminate_tree(process.pid)

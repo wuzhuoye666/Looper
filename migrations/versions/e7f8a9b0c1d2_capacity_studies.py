@@ -1,7 +1,7 @@
 """add retained source archives and capacity studies
 
 Revision ID: e7f8a9b0c1d2
-Revises: d2c4e6f8a1b3
+Revises: e1a6b5c4d3f2
 Create Date: 2026-08-24 14:00:00.000000
 """
 
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "e7f8a9b0c1d2"
-down_revision: str | Sequence[str] | None = "d2c4e6f8a1b3"
+down_revision: str | Sequence[str] | None = "e1a6b5c4d3f2"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

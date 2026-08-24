@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import time
 from datetime import timedelta
 from decimal import Decimal
 from typing import Any
 
 from looper_core.canonical import canonical_digest, canonical_json, utc_now
+from pydantic import SecretStr
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -162,6 +164,8 @@ class TencentCvmProvider(CloudProvider):
                 "instance-types",
                 "images",
                 "vpcs",
+                "managed-vpc",
+                "empty-vpc-cleanup",
                 "subnets",
                 "managed-subnet",
                 "security-groups",
@@ -236,6 +240,8 @@ class TencentCvmProvider(CloudProvider):
                 f"Tencent Cloud VPC {method} failed: {message}",
                 code=str(code),
                 retryable=str(code) in {"RequestLimitExceeded", "InternalError"},
+                ambiguous=method in {"CreateVpc", "CreateSubnet"}
+                and ambiguous_create_error(provider_code, error),
                 details={"requestId": request_id} if request_id else {},
             ) from error
 
@@ -286,6 +292,8 @@ class TencentCvmProvider(CloudProvider):
                     name=str(item.VpcName or item.VpcId),
                     cidrBlock=attr(item, "CidrBlock"),
                     isDefault=bool(attr(item, "IsDefault", default=False)),
+                    tags=(tags := _tag_map(attr(item, "TagSet", default=[]))),
+                    managed=tags.get("managedBy", "").casefold() == "looper",
                 )
                 for item in rows
             )
@@ -294,6 +302,57 @@ class TencentCvmProvider(CloudProvider):
             if not rows or len(rows) < 100 or (total is not None and offset >= int(total)):
                 break
         return items
+
+    def create_managed_vpc(
+        self,
+        *,
+        region: str,
+        cidr_block: str,
+        name: str,
+        client_token: str,
+    ) -> VpcInfo:
+        del client_token  # Tencent CreateVpc has no client-token field.
+        from tencentcloud.vpc.v20170312 import models
+
+        request = models.CreateVpcRequest()
+        request.from_json_string(
+            canonical_json(
+                {
+                    "VpcName": name,
+                    "CidrBlock": cidr_block,
+                    "Tags": [
+                        {"Key": "managedBy", "Value": "looper"},
+                        {"Key": "purpose", "Value": "cloud-purchase"},
+                    ],
+                }
+            )
+        )
+        response = self._vpc_call("CreateVpc", region, request)
+        item = attr(response, "Vpc")
+        vpc_id = attr(item, "VpcId")
+        if not vpc_id:
+            raise CloudProviderError(
+                "Tencent Cloud created a VPC without returning its id",
+                code="ambiguous_response",
+                ambiguous=True,
+            )
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            visible = next(
+                (candidate for candidate in self.list_vpcs(region) if candidate.id == str(vpc_id)),
+                None,
+            )
+            if visible is not None:
+                visible.tags.setdefault("managedBy", "looper")
+                visible.tags.setdefault("purpose", "cloud-purchase")
+                visible.managed = True
+                return visible
+            time.sleep(1)
+        raise CloudProviderError(
+            "Tencent Cloud VPC creation is not yet visible",
+            code="ambiguous_response",
+            ambiguous=True,
+        )
 
     def list_subnets(self, region: str, zone: str, vpc_id: str) -> list[SubnetInfo]:
         return self._list_subnets(region, vpc_id=vpc_id, zone=zone)
@@ -408,6 +467,7 @@ class TencentCvmProvider(CloudProvider):
                 recommended = tags.get(
                     "managedBy", ""
                 ).lower() == "looper" or name.lower().startswith("looper")
+                managed = tags.get("managedBy", "").casefold() == "looper"
                 items.append(
                     SecurityGroupInfo(
                         provider=self.id,
@@ -418,6 +478,7 @@ class TencentCvmProvider(CloudProvider):
                         isDefault=bool(attr(item, "IsDefault", default=False)),
                         recommended=recommended,
                         tags=tags,
+                        managed=managed,
                     )
                 )
             offset += len(rows)
@@ -456,14 +517,25 @@ class TencentCvmProvider(CloudProvider):
                 break
         return items
 
-    def ensure_managed_security_group(self, region: str) -> SecurityGroupInfo:
+    def ensure_managed_security_group(
+        self,
+        region: str,
+        *,
+        vpc_id: str | None = None,
+        client_token: str | None = None,
+    ) -> SecurityGroupInfo:
+        del vpc_id, client_token
         groups = self.list_security_groups(region)
-        recommended = [item for item in groups if item.recommended]
-        if recommended:
-            return sorted(
-                recommended,
-                key=lambda item: (item.name != "looper-private-outbound", item.id),
-            )[0]
+        matching = [
+            item
+            for item in groups
+            if item.name == "looper-ssh-access"
+            and item.tags.get("managedBy", "").casefold() == "looper"
+            and item.tags.get("purpose", "").casefold() == "cloud-purchase"
+            and item.tags.get("policyVersion", "").casefold() == "ssh-v1"
+        ]
+        if matching:
+            return sorted(matching, key=lambda item: item.id)[0]
 
         from tencentcloud.vpc.v20170312 import models
 
@@ -471,10 +543,18 @@ class TencentCvmProvider(CloudProvider):
         request.from_json_string(
             canonical_json(
                 {
-                    "GroupName": "looper-private-outbound",
-                    "GroupDescription": "Looper managed: no ingress, allow IPv4 egress",
+                    "GroupName": "looper-ssh-access",
+                    "GroupDescription": "Looper managed: SSH ingress and IPv4 egress",
                     "SecurityGroupPolicySet": {
-                        "Ingress": [],
+                        "Ingress": [
+                            {
+                                "Protocol": "TCP",
+                                "Port": "22",
+                                "CidrBlock": "0.0.0.0/0",
+                                "Action": "ACCEPT",
+                                "PolicyDescription": "Looper managed public SSH",
+                            }
+                        ],
                         "Egress": [
                             {
                                 "Protocol": "ALL",
@@ -485,14 +565,37 @@ class TencentCvmProvider(CloudProvider):
                             }
                         ],
                     },
-                    "Tags": [{"Key": "managedBy", "Value": "looper"}],
+                    "Tags": [
+                        {"Key": "managedBy", "Value": "looper"},
+                        {"Key": "purpose", "Value": "cloud-purchase"},
+                        {"Key": "policyVersion", "Value": "ssh-v1"},
+                    ],
                 }
             )
         )
-        response = self._vpc_call("CreateSecurityGroupWithPolicies", region, request)
+        try:
+            response = self._vpc_call("CreateSecurityGroupWithPolicies", region, request)
+        except CloudProviderError:
+            recovered = [
+                item
+                for item in self.list_security_groups(region)
+                if item.name == "looper-ssh-access"
+                and item.tags.get("managedBy", "").casefold() == "looper"
+                and item.tags.get("purpose", "").casefold() == "cloud-purchase"
+                and item.tags.get("policyVersion", "").casefold() == "ssh-v1"
+            ]
+            if not recovered:
+                raise
+            return sorted(recovered, key=lambda item: item.id)[0]
         item = response.SecurityGroup
         tags = _tag_map(attr(item, "TagSet", default=[]))
-        tags.setdefault("managedBy", "looper")
+        tags.update(
+            {
+                "managedBy": "looper",
+                "purpose": "cloud-purchase",
+                "policyVersion": "ssh-v1",
+            }
+        )
         return SecurityGroupInfo(
             provider=self.id,
             region=region,
@@ -502,6 +605,7 @@ class TencentCvmProvider(CloudProvider):
             isDefault=bool(attr(item, "IsDefault", default=False)),
             recommended=True,
             tags=tags,
+            managed=True,
         )
 
     def search_instance_types(self, filters: CatalogFilters) -> list[InstanceTypeInfo]:
@@ -711,10 +815,23 @@ class TencentCvmProvider(CloudProvider):
             },
         )
 
-    def purchase(self, spec: CloudPurchaseSpec, *, client_token: str) -> ProviderPurchaseResult:
+    def purchase(
+        self,
+        spec: CloudPurchaseSpec,
+        *,
+        client_token: str,
+        launch_password: SecretStr | None = None,
+    ) -> ProviderPurchaseResult:
         from tencentcloud.cvm.v20170312 import models
 
         payload = self._run_payload(spec)
+        if launch_password is not None:
+            if spec.key_pair_id:
+                raise CloudProviderError(
+                    "launch password and key pair cannot be used together",
+                    code="invalid_request",
+                )
+            payload["LoginSettings"] = {"Password": launch_password.get_secret_value()}
         payload.update({"ClientToken": client_token, "InstanceName": spec.instance_name})
         request = models.RunInstancesRequest()
         request.from_json_string(canonical_json(payload))
@@ -821,6 +938,37 @@ class TencentCvmProvider(CloudProvider):
                 )
         return released
 
+    def delete_vpc_if_empty(self, *, region: str, vpc_id: str) -> DestroyedResource:
+        from tencentcloud.vpc.v20170312 import models
+
+        try:
+            vpc = next((item for item in self.list_vpcs(region) if item.id == vpc_id), None)
+            if vpc is None:
+                return DestroyedResource(kind="vpc", id=vpc_id, note="VPC 已不存在")
+            if vpc.is_default:
+                return DestroyedResource(
+                    kind="vpc", id=vpc_id, released=False, note="默认 VPC 按安全策略保留"
+                )
+            subnets = self.list_vpc_subnets(region, vpc_id)
+            if subnets:
+                return DestroyedResource(
+                    kind="vpc",
+                    id=vpc_id,
+                    released=False,
+                    note=f"VPC 仍包含 {len(subnets)} 个子网，保留不动",
+                )
+            request = models.DeleteVpcRequest()
+            request.from_json_string(canonical_json({"VpcId": vpc_id}))
+            self._vpc_call("DeleteVpc", region, request)
+            return DestroyedResource(kind="vpc", id=vpc_id, note="空闲非默认 VPC 已删除")
+        except CloudProviderError as error:
+            return DestroyedResource(
+                kind="vpc",
+                id=vpc_id,
+                released=False,
+                note=f"VPC 清理暂缓：{error}",
+            )
+
     @staticmethod
     def _delete_managed_subnet(
         region: str, vpc_id: str, subnet_id: str, models: Any
@@ -867,16 +1015,46 @@ class TencentCvmProvider(CloudProvider):
             )
             response = provider._vpc_call("DescribeSecurityGroups", region, describe)
             rows = list(response.SecurityGroupSet or [])
-            name = str(attr(rows[0], "SecurityGroupName", default="") or "") if rows else ""
+            is_default = bool(attr(rows[0], "IsDefault", default=False)) if rows else False
             tags = _tag_map(attr(rows[0], "TagSet", default=[])) if rows else {}
-            if tags.get("managedBy", "").casefold() != "looper" and not name.casefold().startswith(
-                "looper"
-            ):
+            managed = (
+                tags.get("managedBy", "").casefold() == "looper"
+                and tags.get("purpose", "").casefold() == "cloud-purchase"
+                and tags.get("policyVersion", "").casefold() == "ssh-v1"
+            )
+            if is_default or not managed:
                 return DestroyedResource(
                     kind="security-group",
                     id=security_group_id,
                     released=False,
-                    note="非 Looper 纳管安全组，保留不动",
+                    note=(
+                        "默认安全组按安全策略保留"
+                        if is_default
+                        else "非 Looper 纳管安全组，保留不动"
+                    ),
+                )
+            associations = models.DescribeSecurityGroupAssociationStatisticsRequest()
+            associations.from_json_string(
+                canonical_json({"SecurityGroupIds": [security_group_id]})
+            )
+            association_response = provider._vpc_call(
+                "DescribeSecurityGroupAssociationStatistics", region, associations
+            )
+            statistics = list(
+                attr(
+                    association_response,
+                    "SecurityGroupAssociationStatisticsSet",
+                    default=[],
+                )
+                or []
+            )
+            total = int(attr(statistics[0], "TotalCount", default=0) or 0) if statistics else 0
+            if total:
+                return DestroyedResource(
+                    kind="security-group",
+                    id=security_group_id,
+                    released=False,
+                    note=f"安全组仍关联 {total} 个云资源，保留不动",
                 )
             delete = models.DeleteSecurityGroupRequest()
             delete.from_json_string(canonical_json({"SecurityGroupId": security_group_id}))
@@ -1038,7 +1216,10 @@ def _upsert_instance(session: Session, region: str, instance: Any) -> TargetReco
         "image_id": instance.ImageId,
         "os_name": instance.OsName,
     }
-    capabilities = ["tencent-cvm", "inventory"]
+    capabilities = sorted(
+        (set(record.capabilities_json) if record is not None else set())
+        | {"tencent-cvm", 'inventory'}
+    )
     snapshot = {
         "provider": "tencent",
         "capabilities": capabilities,

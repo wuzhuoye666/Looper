@@ -11,7 +11,7 @@ def test_configuration_driven_package_creates_one_attempt_smoke_run(db_session) 
         db_session,
         "looper.fixture.config-driven",
         "1.1.0",
-        BenchmarkSmokeRunRequest(parameters={"scale": 2}),
+        BenchmarkSmokeRunRequest(targetId="local", parameters={"scale": 2}),
     )
     attempts = list(
         db_session.scalars(

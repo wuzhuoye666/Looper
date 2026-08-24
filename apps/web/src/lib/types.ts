@@ -63,6 +63,7 @@ export interface Experiment {
   createdAt?: string; updatedAt?: string; owner?: string; attempts?: number; maxAttempts?: number;
   objective?: string; decisionQuestion?: string; scenario?: ScenarioContract; comparison?: SelectionComparison;
   metricDefinitions?: Record<string, MetricDefinition>;
+  resultSections?: BenchmarkResultSection[];
   config?: Record<string, unknown>; evaluations?: Evaluation[]; artifacts?: Artifact[];
   activePhase?: string; activePhaseDetail?: string;
 }
@@ -99,25 +100,39 @@ export interface MetricDefinition {
   description?: string;
   presentation?: MetricPresentation;
 }
+export interface BenchmarkResultSection {
+  id: string;
+  label: string;
+  description?: string;
+  metrics: string[];
+}
 export interface BenchmarkWorkload {
   id: string;
   name: string;
   metrics?: Record<string, MetricDefinition>;
 }
+export interface BenchmarkSelectionDefaults {
+  repeats: number;
+  timeout: number;
+  seed: number;
+}
+
 export interface Benchmark {
   id: string; key?: string; name: string; description?: string; category?: string; version?: string; metrics?: string[];
   metricDefinitions?: Record<string, MetricDefinition>;
+  resultSections?: BenchmarkResultSection[];
   workloads?: BenchmarkWorkload[];
   executionModel?: BenchmarkExecutionModel;
   inputs?: BenchmarkInputDeclaration[];
   infrastructure?: Record<string, unknown>;
   auditPolicy?: Record<string, unknown>;
+  selectionDefaults?: BenchmarkSelectionDefaults;
   executionPolicy?: Record<string, unknown>;
   cases?: number; updatedAt?: string; tags?: string[]; license?: string; runnable?: boolean; selectable?: boolean; executionStatus?: string;
   executionBlocker?: string; executionBlockerReason?: string;
   deploymentRequirements?: string[]; provisionedCapabilities?: string[]; provisioning?: Record<string, unknown>; packageReady?: boolean; packageDigest?: string;
   decisionQuestion?: string; primaryMetric?: string; scenario?: ScenarioContract;
-  selectionReady?: boolean;
+  selectionReady?: boolean; singleNodeReady?: boolean;
   registrationId?: string; registrationStatus?: string;
   auditStatus?: 'legacy-unreviewed' | 'registered-not-admitted';
 }
@@ -151,6 +166,7 @@ export interface Target {
   inventoryMissCount?: number; archivedAt?: string; archiveReason?: string;
   tags?: string[]; runnable?: boolean;
   credentialsRemembered?: boolean;
+  sshAutomation?: { status: 'manual' | 'waiting_endpoint' | 'connected' | 'failed'; deployment?: string; message?: string };
   deployment?: { active?: boolean; status?: string; workerId?: string; remotePid?: number; remotePort?: number; transport?: string; restartSafe?: boolean; deployedAt?: string };
   connectionTest?: { status: 'connected'; testedAt: string; hostKeySha256?: string };
   fingerprint?: {
@@ -158,7 +174,23 @@ export interface Target {
     system?: string; release?: string; architecture?: string; host_key_sha256?: string; host_key_type?: string;
   };
 }
-export type DestroyedResourceKind = 'instance' | 'system-disk' | 'local-disk' | 'public-ip' | 'subnet' | 'security-group';
+export interface BenchmarkTargetConstraint {
+  code: string; field: string; required: unknown; actual: unknown; message: string;
+}
+export interface BenchmarkTargetRequirementSummary {
+  osFamilies: string[]; architectures: string[]; minimumLogicalCpus?: number;
+  minimumMemoryGiB?: number; capabilities: string[];
+}
+export interface BenchmarkTargetEnvironment {
+  id: string; label: string; compatibleCount: number; targets: Target[];
+}
+export interface BenchmarkTargetOptions {
+  benchmarkId: string; version: string; topology?: string; machineCount: 1;
+  nodeGroup: { id: string; role: string; requirements: Record<string, unknown>; summary: BenchmarkTargetRequirementSummary };
+  environments: BenchmarkTargetEnvironment[];
+  rejectedSummary: Array<{ code: string; message: string; count: number }>;
+}
+export type DestroyedResourceKind = 'instance' | 'system-disk' | 'local-disk' | 'public-ip' | 'vpc' | 'subnet' | 'security-group';
 export interface DestroyedResource {
   kind: DestroyedResourceKind; id: string; released: boolean; note?: string;
 }
@@ -292,6 +324,7 @@ export interface CloudRegion { provider: CloudProviderId; id: string; name: stri
 export interface CloudZone { provider: CloudProviderId; region: string; id: string; name: string; available?: boolean }
 export interface CloudVpc {
   provider: CloudProviderId; region: string; id: string; name: string; cidrBlock?: string; isDefault: boolean;
+  tags?: Record<string, string>; managed?: boolean;
 }
 export interface CloudSubnet {
   provider: CloudProviderId; region: string; zone: string; vpcId: string; id: string; name: string;
@@ -303,11 +336,12 @@ export interface InstanceNetworkResolveRequest {
 export interface InstanceNetworkResolution {
   provider: CloudProviderId; region: string; instanceType: string; zone: string; eligibleZones: string[];
   vpc: CloudVpc; subnet: CloudSubnet; zoneAutomaticallySelected: boolean;
-  subnetAction: 'reused' | 'created'; warnings: string[];
+  securityGroup?: CloudSecurityGroup; vpcAction: 'reused' | 'created'; subnetAction: 'reused' | 'created';
+  securityGroupAction: 'reused' | 'created' | 'selection-required'; warnings: string[];
 }
 export interface CloudSecurityGroup {
   provider: CloudProviderId; region: string; id: string; name: string; description?: string;
-  isDefault: boolean; recommended: boolean; tags: Record<string, string>;
+  vpcId?: string; isDefault: boolean; recommended: boolean; tags: Record<string, string>; managed: boolean;
 }
 export interface CloudKeyPair {
   provider: CloudProviderId; region: string; id: string; name: string; description?: string;
@@ -315,11 +349,20 @@ export interface CloudKeyPair {
 }
 export interface CloudInstanceType {
   provider: CloudProviderId; region: string; id: string; family?: string; cpu: number; memoryGib: number;
+  typeLabel?: string; familyLabel?: string;
+  selectionClass?: InstanceSelectionClass; typeKind?: string; familyToken?: string;
   gpu?: number; gpuModel?: string; gpuMemoryGib?: number; architecture?: string;
   networkBandwidthRxGbps?: number; networkBandwidthTxGbps?: number; networkPpsRx?: number; networkPpsTx?: number;
   localStorageCount?: number; localStorageCapacityGib?: number; localStorageCategory?: string;
   zones: string[]; available?: boolean; attributes?: Record<string, unknown>;
 }
+export type InstanceSelectionClass = 'x86' | 'arm' | 'heterogeneous' | 'bare-metal' | 'hpc' | 'other';
+export interface InstanceTypeFamilyFacet { value: string; label: string; count: number; generation?: number | null; }
+export interface InstanceTypeKindFacet { value: string; label: string; count: number; families: InstanceTypeFamilyFacet[]; }
+export interface InstanceTypeArchitectureFacet {
+  value: InstanceSelectionClass; label: string; count: number; types: InstanceTypeKindFacet[];
+}
+export interface InstanceTypeFacets { architectures: InstanceTypeArchitectureFacet[]; }
 export type SelectionScenario = 'web-api' | 'microservices-rpc' | 'database' | 'cache' | 'search-logs' |
   'big-data-messaging' | 'game' | 'video' | 'ai' | 'development-test' | 'other';
 export interface SelectionAdvisorRequest {
@@ -329,6 +372,7 @@ export interface SelectionAdvisorRequest {
   localStorage: 'required' | 'not-required' | 'unknown'; minimumNetworkBandwidthGbps?: number;
   minimumNetworkPps?: number; codeAvailability: 'available' | 'unavailable' | 'unknown';
   architecture: 'x86' | 'arm' | 'unknown'; query?: string; offset: number; limit: number;
+  architectureClass?: InstanceSelectionClass; typeKind?: string; familyToken?: string;
 }
 export interface SelectionExclusionStage {
   code: string; label: string; before: number; after: number; removed: number;
@@ -341,6 +385,7 @@ export interface SelectionAdvisorResponse {
   eligibleTotal: number; offset: number; limit: number; nextOffset?: number; exclusionStages: SelectionExclusionStage[];
   mostRestrictiveStage?: SelectionExclusionStage; source: 'live' | 'cache' | 'stale-cache';
   fetchedAt: string; expiresAt: string; stale: boolean; warning?: string;
+  instanceTypeFacets?: InstanceTypeFacets;
 }
 export interface CloudImage {
   provider: CloudProviderId; region: string; id: string; name: string; platform?: string; architecture?: string;
@@ -350,12 +395,17 @@ export interface CloudCatalogResponse<T> {
   provider: CloudProviderId; resourceType: string; items: T[]; total: number;
   offset: number; limit: number; nextOffset?: number;
   source: 'live' | 'cache' | 'stale-cache'; fetchedAt: string; expiresAt: string; stale: boolean; warning?: string;
+  instanceTypeFacets?: InstanceTypeFacets;
 }
 export interface CloudPurchaseSpec {
   provider: CloudProviderId; region: string; zone: string; instanceType: string; cpu?: number; memoryGib?: number;
   imageId: string; instanceName: string; count: number; billingMode: 'postpaid'; vpcId: string; subnetId: string;
   securityGroupIds: string[]; keyPairId?: string; systemDiskType?: string; systemDiskGib: number;
   publicIp: boolean; internetBandwidthMbps: number; tags: Record<string, string>;
+}
+export interface CloudSshDefaults {
+  username: string; port: number; authMethod: 'password' | 'private-key'; password: string;
+  passwordConfigured: boolean; privateKeyConfigured: boolean;
 }
 export interface CloudQuote {
   id: string; provider: CloudProviderId; status: string; spec: CloudPurchaseSpec; specDigest: string;

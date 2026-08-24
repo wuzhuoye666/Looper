@@ -40,7 +40,7 @@ from looper_core.contracts import (
 from looper_core.manifest import load_and_validate_manifest
 from looper_core.state import ExperimentStatus
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from looper_api.config import Settings
@@ -78,6 +78,33 @@ class CapacityError(ValueError):
 
 class CapacityModel(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+
+def _commit_revisioned_draft(
+    session: Session,
+    record: CapacityStudyRecord,
+    expected_revision: int,
+    values: dict[str, Any],
+) -> CapacityStudyRecord:
+    result = session.execute(
+        update(CapacityStudyRecord)
+        .where(
+            CapacityStudyRecord.id == record.id,
+            CapacityStudyRecord.status == "draft",
+            CapacityStudyRecord.revision == expected_revision,
+        )
+        .values(**values)
+    )
+    if result.rowcount != 1:
+        session.expire_all()
+        raise CapacityError(
+            "capacity draft changed in another session; reload before continuing",
+            status_code=409,
+            code="capacity_revision_conflict",
+        )
+    session.expire(record)
+    session.refresh(record)
+    return record
 
 
 class BuildEvidence(CapacityModel):
@@ -242,22 +269,63 @@ def _strip_json(content: str) -> str:
 
 
 def _build_plan_constraints(plan: BuildPlan) -> list[str]:
-    combined = f"{plan.dockerfile}\n{plan.compose}".casefold()
-    failures = []
-    forbidden = {
-        "privileged: true": "Compose may not use privileged containers",
-        "network_mode: host": "Compose may not use the host network",
-        "/var/run/docker.sock": "Compose may not mount the Docker socket",
-        "pid: host": "Compose may not join the host PID namespace",
-        "container_name:": "Compose may not reserve a global container name",
-    }
-    for marker, message in forbidden.items():
-        if marker in combined:
+    failures: list[str] = []
+    try:
+        document = yaml.safe_load(plan.compose)
+    except yaml.YAMLError:
+        return ["Compose YAML must parse before it can be approved"]
+    services = document.get("services") if isinstance(document, dict) else None
+    if not isinstance(services, dict) or not services:
+        return ["Compose document must declare services"]
+
+    def add(message: str) -> None:
+        if message not in failures:
             failures.append(message)
-    if re.search(r"(?m)^\s*-\s*/[^:\n]+:", plan.compose):
-        failures.append("Compose may not bind arbitrary absolute host paths")
-    if "services:" not in plan.compose:
-        failures.append("Compose document must declare services")
+
+    def normalized(value: Any) -> str:
+        return str(value or "").strip().casefold()
+
+    for service in services.values():
+        if not isinstance(service, dict):
+            add("Compose services must be mappings")
+            continue
+        if service.get("privileged") is True or normalized(service.get("privileged")) in {
+            "1",
+            "true",
+            "yes",
+        }:
+            add("Compose may not use privileged containers")
+        if normalized(service.get("network_mode")) == "host":
+            add("Compose may not use the host network")
+        if normalized(service.get("pid")) == "host":
+            add("Compose may not join the host PID namespace")
+        if normalized(service.get("ipc")) == "host":
+            add("Compose may not join the host IPC namespace")
+        if service.get("container_name"):
+            add("Compose may not reserve a global container name")
+        if any(service.get(key) for key in ("cap_add", "devices", "device_cgroup_rules")):
+            add("Compose may not add host capabilities or devices")
+        if service.get("security_opt"):
+            add("Compose may not override container security policy")
+        build = service.get("build")
+        if isinstance(build, dict) and build.get("ssh"):
+            add("Compose builds may not forward the host SSH agent")
+
+        for volume in service.get("volumes") or []:
+            source = ""
+            volume_type = ""
+            if isinstance(volume, str):
+                source = volume.split(":", 1)[0].strip()
+                volume_type = "bind" if source.startswith(("/", "~")) else ""
+            elif isinstance(volume, dict):
+                source = str(volume.get("source") or volume.get("src") or "").strip()
+                volume_type = normalized(volume.get("type"))
+            if "docker.sock" in source.casefold():
+                add("Compose may not mount the Docker socket")
+            if source.startswith(("/", "~")) or (
+                volume_type == "bind" and not source.startswith(("./", "../"))
+            ):
+                add("Compose may not bind arbitrary host paths")
     return failures
 
 
@@ -820,18 +888,16 @@ async def repair_capacity_build_plan(
     repaired.approved = False
     draft.build = repaired
     revision_before = record.revision
-    record.revision += 1
-    record.draft_json = draft.model_dump(mode="json", by_alias=True)
-    record.preflight_json = {}
-    record.updated_at = utc_now()
+    revision_after = revision_before + 1
+    updated_at = utc_now()
     validations.append(
         {
             "attempt": len(validations) + 1,
-            "at": record.updated_at.isoformat(),
+            "at": updated_at.isoformat(),
             "mode": "script+agent" if agent_used else "script",
             "agentUsed": agent_used,
             "revisionBefore": revision_before,
-            "revisionAfter": record.revision,
+            "revisionAfter": revision_after,
             "unresolvedBefore": before,
             "blockers": list(repaired.unresolved),
             "advisories": list(repaired.advisories),
@@ -846,11 +912,20 @@ async def repair_capacity_build_plan(
     )
     execution["buildValidations"] = validations
     execution.pop("buildRuntimeFailure", None)
-    record.execution_json = execution
-    record.error_code = None
-    record.error_message = None
-    session.flush()
-    return record
+    return _commit_revisioned_draft(
+        session,
+        record,
+        request.expected_revision,
+        {
+            "revision": revision_after,
+            "draft_json": draft.model_dump(mode="json", by_alias=True),
+            "preflight_json": {},
+            "execution_json": execution,
+            "error_code": None,
+            "error_message": None,
+            "updated_at": updated_at,
+        },
+    )
 
 
 def list_capacity_studies(session: Session, limit: int = 100) -> list[CapacityStudyRecord]:
@@ -862,7 +937,7 @@ def list_capacity_studies(session: Session, limit: int = 100) -> list[CapacitySt
 
 
 def update_capacity_study(
-    record: CapacityStudyRecord, request: CapacityDraftUpdate
+    session: Session, record: CapacityStudyRecord, request: CapacityDraftUpdate
 ) -> CapacityStudyRecord:
     if record.status != "draft":
         raise CapacityError("only a draft capacity study can be edited", status_code=409)
@@ -887,12 +962,18 @@ def update_capacity_study(
             status_code=409,
             code="capacity_build_approval_blocked",
         )
-    record.draft_json = request.draft.model_dump(mode="json", by_alias=True)
-    record.current_step = request.current_step
-    record.revision += 1
-    record.preflight_json = {}
-    record.updated_at = utc_now()
-    return record
+    return _commit_revisioned_draft(
+        session,
+        record,
+        request.expected_revision,
+        {
+            "draft_json": request.draft.model_dump(mode="json", by_alias=True),
+            "current_step": request.current_step,
+            "revision": request.expected_revision + 1,
+            "preflight_json": {},
+            "updated_at": utc_now(),
+        },
+    )
 
 
 def _valid_http_url(value: str) -> bool:
@@ -1132,12 +1213,10 @@ def start_capacity_study(
     active_targets = [target_id for target_id in draft.targets.sut_ids if target_id not in excluded]
     if not active_targets:
         raise CapacityError("at least one preflight-passing SUT is required")
-    record.status = "queued"
-    record.started_at = utc_now()
-    record.updated_at = record.started_at
+    started_at = utc_now()
     previous_execution = dict(record.execution_json or {})
-    record.execution_json = {
-        "phases": [{"id": "queued", "status": "running", "at": record.started_at.isoformat()}],
+    execution = {
+        "phases": [{"id": "queued", "status": "running", "at": started_at.isoformat()}],
         "buildValidations": list(previous_execution.get("buildValidations") or []),
         "selectedTargetIds": draft.targets.sut_ids,
         "excludedTargetIds": sorted(excluded),
@@ -1157,7 +1236,18 @@ def start_capacity_study(
         "runs": [],
         "currentNetwork": "internal",
     }
-    return record
+    return _commit_revisioned_draft(
+        session,
+        record,
+        request.expected_revision,
+        {
+            "status": "queued",
+            "revision": request.expected_revision + 1,
+            "started_at": started_at,
+            "updated_at": started_at,
+            "execution_json": execution,
+        },
+    )
 
 
 def capacity_view(
@@ -1444,7 +1534,7 @@ def _capacity_manifest(record: CapacityStudyRecord) -> dict[str, Any]:
                     {
                         "id": "target",
                         "role": "target",
-                        "count": {"minimum": 1, "default": 1, "maximum": 100},
+                        "count": {"minimum": 1, "default": 1, "maximum": 1},
                         "includedInScore": True,
                         "requirements": {"osFamilies": ["linux"]},
                         "placement": {"separateFrom": ["load-generator"], "dedicated": True},

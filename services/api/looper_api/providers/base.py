@@ -3,6 +3,8 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any
 
+from pydantic import SecretStr
+
 from looper_api.cloud_contracts import (
     CatalogFilters,
     CloudPurchaseSpec,
@@ -77,6 +79,18 @@ class CloudProvider(ABC):
             items.extend(self.list_subnets(region, zone.id, vpc_id))
         return items
 
+    def create_managed_vpc(
+        self,
+        *,
+        region: str,
+        cidr_block: str,
+        name: str,
+        client_token: str,
+    ) -> VpcInfo:
+        raise CloudProviderError(
+            "managed VPC creation is not supported", code="unsupported_operation"
+        )
+
     def create_managed_subnet(
         self,
         *,
@@ -99,7 +113,14 @@ class CloudProvider(ABC):
     def list_key_pairs(self, region: str) -> list[KeyPairInfo]:
         raise CloudProviderError("key pair catalog is not supported", code="unsupported_catalog")
 
-    def ensure_managed_security_group(self, region: str) -> SecurityGroupInfo:
+    def ensure_managed_security_group(
+        self,
+        region: str,
+        *,
+        vpc_id: str | None = None,
+        client_token: str | None = None,
+    ) -> SecurityGroupInfo:
+        del vpc_id, client_token
         raise CloudProviderError(
             "managed security group creation is not supported", code="unsupported_operation"
         )
@@ -109,7 +130,13 @@ class CloudProvider(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def purchase(self, spec: CloudPurchaseSpec, *, client_token: str) -> ProviderPurchaseResult:
+    def purchase(
+        self,
+        spec: CloudPurchaseSpec,
+        *,
+        client_token: str,
+        launch_password: SecretStr | None = None,
+    ) -> ProviderPurchaseResult:
         raise NotImplementedError
 
     def destroy(self, *, region: str, instance_ids: list[str]) -> ProviderDestroyResult:
@@ -132,3 +159,17 @@ class CloudProvider(ABC):
         other instances.
         """
         return []
+
+    def delete_vpc_if_empty(self, *, region: str, vpc_id: str) -> DestroyedResource:
+        """Delete one non-default VPC only when it has no remaining subnets.
+
+        Implementations must re-check both the VPC default flag and its subnet
+        inventory immediately before issuing the provider delete request. Provider
+        dependency checks remain the final guard against deleting an in-use VPC.
+        """
+        return DestroyedResource(
+            kind="vpc",
+            id=vpc_id,
+            released=False,
+            note="当前云厂商尚不支持自动清理空 VPC",
+        )

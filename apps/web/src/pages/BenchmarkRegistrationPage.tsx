@@ -65,7 +65,13 @@ export function BenchmarkRegistrationPage() {
   const [promptCopied, setPromptCopied] = useState(false);
   const [configurationName, setConfigurationName] = useState('');
   const [smokeBindings, setSmokeBindings] = useState<Record<string, { reference: string; digest: string }>>({});
+  const [smokeTargetId, setSmokeTargetId] = useState('');
   const [record, setRecord] = useState<BenchmarkRegistration>();
+  const smokeTargets = useQuery({
+    queryKey: ['targets', 'active', 'benchmark-smoke'],
+    queryFn: () => api.targets(false),
+    enabled: record?.status === 'registered' && record.draft.executionStatus === 'executable',
+  });
 
   const existing = useQuery({
     queryKey: ['benchmark-registration', resumeId],
@@ -115,6 +121,7 @@ export function BenchmarkRegistrationPage() {
     mutationFn: () => {
       if (!draft) throw new Error('Benchmark 尚未登记');
       return api.createBenchmarkSmokeRun(draft.benchmarkId, draft.version, {
+        targetId: smokeTargetId,
         inputBindings: Object.fromEntries(smokeInputs.filter(input => smokeBindings[input.id]?.reference).map(input => [input.id, {
           kind: input.kind,
           reference: smokeBindings[input.id].reference,
@@ -127,7 +134,7 @@ export function BenchmarkRegistrationPage() {
 
   const reset = () => {
     try { window.localStorage.removeItem(REGISTRATION_ID_KEY); } catch { /* Ignore storage failures. */ }
-    setRecord(undefined); setConfigurationName(''); setSmokeBindings({});
+    setRecord(undefined); setConfigurationName(''); setSmokeBindings({}); setSmokeTargetId('');
     navigate('/benchmarks/register', { replace: true });
   };
   const updateSmokeBinding = (inputId: string, key: 'reference' | 'digest', value: string) => {
@@ -180,7 +187,7 @@ export function BenchmarkRegistrationPage() {
     <PageHeader title="注册 Benchmark" description="注册页只导入标准接入包；身份、机器拓扑、执行方式、指标和证据均以 manifest 为唯一事实源。" actions={<>
       {record&&<button className="button secondary" onClick={reset}>{locked ? '注册另一个' : '更换配置'}</button>}
       {record?.readyToRegister&&!locked&&<button className="button primary" disabled={registerMutation.isPending} onClick={()=>registerMutation.mutate()}><ShieldCheck size={16}/>{registerMutation.isPending ? '正在登记…' : '登记到目录'}</button>}
-      {locked&&draft?.executionStatus==='executable'&&<button className="button primary" disabled={smokeMutation.isPending||!smokeBindingsReady} onClick={()=>smokeMutation.mutate()}><ShieldCheck size={16}/>创建冒烟实验</button>}
+      {locked&&draft?.executionStatus==='executable'&&<button className="button primary" disabled={smokeMutation.isPending||!smokeBindingsReady||!smokeTargetId} onClick={()=>smokeMutation.mutate()}><ShieldCheck size={16}/>创建冒烟实验</button>}
     </>}/>
 
     <section className={`registration-progress panel ${locked?'complete':record?.readyToRegister?'ready':record?'blocked':'idle'}`} aria-label="注册进度">
@@ -204,7 +211,7 @@ export function BenchmarkRegistrationPage() {
 
         <section className="panel registration-section"><div className="panel-heading"><div><h2>机器与拓扑</h2><p>多机套件由机器组定义数量范围、最低机型、放置关系和网络连接。</p></div><Network size={19}/></div>{nodeGroups.length?<div className="registration-node-groups">{nodeGroups.map(group=><article key={String(group.id)}><Server size={17}/><div><strong>{String(group.id)} · {String(group.role)}</strong><p>{countLabel(group)} · {requirementLabel(group)}</p></div></article>)}</div>:<div className="registration-empty-contract"><AlertTriangle size={17}/><span>未声明 spec.infrastructure；单机套件允许省略，多机/分布式套件会收到提醒。</span></div>}</section>
 
-        {locked&&draft?.executionStatus==='executable'&&smokeInputs.length>0&&<section className="panel registration-section"><div className="panel-heading"><div><h2>冒烟运行输入</h2><p>只绑定资源引用；secret 明文不会进入运行信封。</p></div></div><div className="form-grid registration-fields">{smokeInputs.map(input=><div className="full input-binding-field" key={input.id}><label><span>{input.id} · {input.kind}{input.required?' *':''}</span><input type={input.kind==='secret'?'password':'text'} value={smokeBindings[input.id]?.reference||''} onChange={event=>updateSmokeBinding(input.id,'reference',event.target.value)} placeholder={input.kind==='secret'?'secret://受管密钥名称':'资源引用 URI / 目标设备引用'}/><small>{input.description||'运行前绑定的协议输入。'}</small></label>{input.digestRequired&&<label><span>SHA-256 digest *</span><input value={smokeBindings[input.id]?.digest||''} onChange={event=>updateSmokeBinding(input.id,'digest',event.target.value)} placeholder="sha256:…"/></label>}</div>)}</div></section>}
+        {locked&&draft?.executionStatus==='executable'&&<section className="panel registration-section"><div className="panel-heading"><div><h2>冒烟运行资源与输入</h2><p>必须显式选择可执行机器；secret 明文不会进入运行信封。</p></div></div><div className="form-grid registration-fields"><label className="full"><span>测试机器 *</span><select required value={smokeTargetId} onChange={event=>setSmokeTargetId(event.target.value)}><option value="">请选择活动且可执行的机器</option>{(smokeTargets.data?.items||[]).filter(target=>target.runnable).map(target=><option key={target.id} value={target.id}>{target.name} · {target.hardware||target.id}</option>)}</select></label>{smokeInputs.map(input=><div className="full input-binding-field" key={input.id}><label><span>{input.id} · {input.kind}{input.required?' *':''}</span><input type={input.kind==='secret'?'password':'text'} value={smokeBindings[input.id]?.reference||''} onChange={event=>updateSmokeBinding(input.id,'reference',event.target.value)} placeholder={input.kind==='secret'?'secret://受管密钥名称':'资源引用 URI / 目标设备引用'}/><small>{input.description||'运行前绑定的协议输入。'}</small></label>{input.digestRequired&&<label><span>SHA-256 digest *</span><input value={smokeBindings[input.id]?.digest||''} onChange={event=>updateSmokeBinding(input.id,'digest',event.target.value)} placeholder="sha256:…"/></label>}</div>)}</div></section>}
 
         <details className="panel registration-manifest-details"><summary>查看完整 manifest</summary><pre>{JSON.stringify(manifest, null, 2)}</pre></details>
         <div className="registration-actions">{!locked&&<button type="button" className="button secondary" onClick={reset}>修改接入包后重新导入</button>}{locked&&<><span className="draft-saved"><CheckCircle2 size={15}/>已登记 {record.benchmarkKey}</span><Link className="button primary" to="/benchmarks">查看场景目录</Link></>}</div>

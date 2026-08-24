@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from pydantic import SecretStr
+
 from looper_api.cloud_contracts import (
     CatalogFilters,
     CloudPurchaseSpec,
@@ -293,7 +295,18 @@ class VolcengineEcsProvider(CloudProvider):
             },
         )
 
-    def purchase(self, spec: CloudPurchaseSpec, *, client_token: str) -> ProviderPurchaseResult:
+    def purchase(
+        self,
+        spec: CloudPurchaseSpec,
+        *,
+        client_token: str,
+        launch_password: SecretStr | None = None,
+    ) -> ProviderPurchaseResult:
+        if launch_password is not None:
+            raise CloudProviderError(
+                "password launch is not supported for Volcengine",
+                code="unsupported_operation",
+            )
         if spec.public_ip:
             raise CloudProviderError(
                 "Volcengine RunInstances requires an existing EIP address; automatic public IP "

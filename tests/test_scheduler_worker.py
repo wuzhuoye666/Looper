@@ -4,9 +4,10 @@ from pathlib import Path
 
 import pytest
 from looper_api.config import Settings
-from looper_api.models import AttemptRecord, BenchmarkRecord
+from looper_api.models import AttemptRecord, BenchmarkRecord, CheckRecord, EvaluationRecord
 from looper_api.scheduler import (
     SchedulerError,
+    _reconcile_evaluation,
     create_demo_request,
     create_experiment,
     start_experiment,
@@ -25,8 +26,9 @@ from looper_api.worker_service import (
     register_worker,
     start_attempt,
 )
+from looper_core.canonical import new_id, utc_now
 from looper_core.contracts import BenchmarkInputBinding, MetricObservation
-from looper_core.state import AttemptStatus, ExperimentStatus
+from looper_core.state import AttemptStatus, CandidateStatus, ExperimentStatus
 
 
 def test_demo_start_creates_baseline_and_candidate(db_session: object) -> None:
@@ -37,6 +39,38 @@ def test_demo_start_creates_baseline_and_candidate(db_session: object) -> None:
     attempts = session.query(AttemptRecord).filter_by(experiment_id=experiment.id).all()
     assert experiment.status == ExperimentStatus.QUEUED
     assert len(attempts) == 6
+
+
+def test_statistical_warning_does_not_make_completed_repeats_infeasible(
+    db_session: object,
+) -> None:
+    session = db_session
+    experiment = create_experiment(session, create_demo_request())
+    start_experiment(session, experiment)
+    evaluation = session.query(EvaluationRecord).filter_by(experiment_id=experiment.id).first()
+    assert evaluation is not None
+    attempts = session.query(AttemptRecord).filter_by(evaluation_id=evaluation.id).all()
+    assert len(attempts) == 3
+    for attempt in attempts:
+        attempt.status = AttemptStatus.SUCCEEDED
+        session.add(
+            CheckRecord(
+                id=new_id("check"),
+                attempt_id=attempt.id,
+                check_id="tail-sample-count",
+                passed=False,
+                scope="attempt",
+                kind="statistical",
+                message="tail evidence is below the preferred population",
+                details_json={"observed": 77317, "preferred": 100000},
+                created_at=utc_now(),
+            )
+        )
+    session.flush()
+
+    _reconcile_evaluation(session, experiment, evaluation)
+
+    assert evaluation.status == CandidateStatus.FEASIBLE
 
 
 def test_fencing_token_rejects_stale_worker(db_session: object, tmp_path: Path) -> None:
@@ -73,6 +107,80 @@ def test_fencing_token_rejects_stale_worker(db_session: object, tmp_path: Path) 
             attempt.id,
             AttemptHeartbeat(workerId=worker.id, fencingToken=1),
         )
+
+
+def test_worker_does_not_claim_above_its_concurrency(
+    db_session: object, tmp_path: Path
+) -> None:
+    session = db_session
+    settings = Settings(
+        data_dir=tmp_path,
+        database_url="sqlite://",
+        local_worker_token="secret",
+        lease_seconds=30,
+    )
+    experiment = create_experiment(session, create_demo_request())
+    start_experiment(session, experiment)
+    worker = register_worker(
+        session,
+        settings,
+        WorkerRegister(
+            workerId="worker-single-slot",
+            name="single slot worker",
+            token="secret",
+            capabilities=["python", "local-process"],
+            fingerprint={},
+            maxConcurrency=1,
+        ),
+    )
+
+    first_claim = claim_attempt(session, settings, worker)
+
+    assert first_claim is not None
+    assert claim_attempt(session, settings, worker) is None
+
+
+def test_worker_reregistration_requeues_its_interrupted_attempt(
+    db_session: object, tmp_path: Path
+) -> None:
+    session = db_session
+    settings = Settings(
+        data_dir=tmp_path,
+        database_url="sqlite://",
+        local_worker_token="secret",
+        lease_seconds=30,
+    )
+    experiment = create_experiment(session, create_demo_request())
+    start_experiment(session, experiment)
+    registration = WorkerRegister(
+        workerId="worker-restarted",
+        name="restarted worker",
+        token="secret",
+        capabilities=["python", "local-process"],
+        fingerprint={},
+        maxConcurrency=1,
+    )
+    worker = register_worker(session, settings, registration)
+    first_claim = claim_attempt(session, settings, worker)
+    assert first_claim is not None
+    start_attempt(
+        session,
+        first_claim["attemptId"],
+        AttemptStart(
+            workerId=worker.id,
+            fencingToken=first_claim["fencingToken"],
+            envelope=first_claim["envelope"],
+        ),
+    )
+
+    worker = register_worker(session, settings, registration)
+    recovered = session.get(AttemptRecord, first_claim["attemptId"])
+    second_claim = claim_attempt(session, settings, worker)
+
+    assert recovered is not None
+    assert second_claim is not None
+    assert second_claim["attemptId"] == first_claim["attemptId"]
+    assert second_claim["fencingToken"] == first_claim["fencingToken"] + 1
 
 
 def test_completion_rejects_required_metrics_without_enough_samples(

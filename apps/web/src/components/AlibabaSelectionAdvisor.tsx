@@ -2,6 +2,7 @@ import { useInfiniteQuery } from '@tanstack/react-query';
 import { AlertTriangle, Check, ChevronLeft, ChevronRight, Code2, Cpu, Filter, Search, Server, Sparkles } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../lib/api';
+import { InstanceTypeFacetFilter } from './InstanceTypeFacetFilter';
 import type {
   AdvisedCloudInstanceType,
   CloudInstanceType,
@@ -10,6 +11,7 @@ import type {
   CloudZone,
   SelectionAdvisorRequest,
   SelectionScenario,
+  InstanceSelectionClass,
 } from '../lib/types';
 
 const scenarios: Array<{ id: SelectionScenario; label: string; detail: string }> = [
@@ -144,6 +146,9 @@ export function CloudSelectionAdvisor({
   const [selectionNotice, setSelectionNotice] = useState('');
   const [candidateSearch, setCandidateSearch] = useState('');
   const [candidateQuery, setCandidateQuery] = useState('');
+  const [architectureClass, setArchitectureClass] = useState<InstanceSelectionClass | undefined>();
+  const [typeKind, setTypeKind] = useState<string | undefined>();
+  const [familyToken, setFamilyToken] = useState<string | undefined>();
   const gpuRelevant = answers.primaryScenario === 'ai' || answers.primaryScenario === 'video';
   const localStorageRelevant = ['database', 'search-logs', 'big-data-messaging'].some(value =>
     value === answers.primaryScenario || answers.coLocatedComponents.includes(value as SelectionScenario));
@@ -168,9 +173,12 @@ export function CloudSelectionAdvisor({
     codeAvailability: answers.codeAvailability,
     architecture: answers.architecture,
     query: candidateQuery || undefined,
+    architectureClass,
+    typeKind,
+    familyToken,
     offset: 0,
     limit: 20,
-  } : null, [answers, candidateQuery, gpuRelevant, localStorageRelevant, networkRelevant, provider, region, zone]);
+  } : null, [answers, architectureClass, candidateQuery, familyToken, gpuRelevant, localStorageRelevant, networkRelevant, provider, region, typeKind, zone]);
 
   const recommendations = useInfiniteQuery({
     queryKey: ['cloud-selection-advisor', provider, request],
@@ -183,15 +191,14 @@ export function CloudSelectionAdvisor({
   const pages = recommendations.data?.pages || [];
   const result = pages[0];
   const candidates = pages.flatMap(page => page.items);
-
-  useEffect(() => {
-    const timer = window.setTimeout(() => setCandidateQuery(candidateSearch.trim()), 300);
-    return () => window.clearTimeout(timer);
-  }, [candidateSearch]);
+  const candidateFiltersActive = Boolean(candidateQuery || architectureClass || typeKind || familyToken);
 
   useEffect(() => {
     setCandidateSearch('');
     setCandidateQuery('');
+    setArchitectureClass(undefined);
+    setTypeKind(undefined);
+    setFamilyToken(undefined);
   }, [answers, provider, region, zone]);
 
   useEffect(() => {
@@ -223,6 +230,7 @@ export function CloudSelectionAdvisor({
       ? answers.coLocatedComponents.filter(item => item !== value)
       : [...answers.coLocatedComponents, value].slice(0, 5),
   );
+  const confirmCandidateSearch = () => setCandidateQuery(candidateSearch.trim());
 
   return <section className="advisor-market-layout" aria-label={`${providerName} 选型助手`}>
     <aside className="panel selection-advisor">
@@ -292,14 +300,24 @@ export function CloudSelectionAdvisor({
       {step === 6 && recommendations.isError && <div className="panel advisor-placeholder error"><AlertTriangle size={28} /><h2>候选读取失败</h2><p>{recommendations.error instanceof Error ? recommendations.error.message : '请稍后重试'}</p><button type="button" className="button secondary" onClick={() => recommendations.refetch()}>重试</button></div>}
       {step === 6 && result && <>
         <section className="panel advisor-result-summary">
-          <div><span className="eyebrow">FILTER RESULT</span><h2>{result.total ? `${candidateQuery ? '匹配' : '剩余'} ${result.total} 个候选` : candidateQuery && result.eligibleTotal ? '全部候选中没有匹配项' : '没有满足全部硬约束的机型'}</h2><p>{result.stale ? result.warning : `目录来源：${result.source === 'live' ? '实时' : '缓存'} · 每次加载 20 个`}</p></div>
+          <div><span className="eyebrow">FILTER RESULT</span><h2>{result.total ? `${candidateFiltersActive ? '匹配' : '剩余'} ${result.total} 个候选` : candidateFiltersActive && result.eligibleTotal ? '全部候选中没有匹配项' : '没有满足全部硬约束的机型'}</h2><p>{result.stale ? result.warning : `目录来源：${result.source === 'live' ? '实时' : '缓存'} · 每次加载 20 个`}</p></div>
           <div className="advisor-elimination">{result.exclusionStages.map(stage => <span key={stage.code}><small>{stage.label}</small><strong>{stage.before} → {stage.after}</strong></span>)}</div>
-          {result.eligibleTotal > 0 && <div className="advisor-candidate-search-wrap"><label className="search-field advisor-candidate-search"><Search size={16} /><span className="sr-only">搜索候选机型</span><input aria-label="搜索候选机型" value={candidateSearch} onChange={event => setCandidateSearch(event.target.value)} placeholder="搜索全部候选的机型 ID 或规格族" /></label><small>{candidateQuery ? `从 ${result.eligibleTotal} 个候选中匹配 ${result.total} 条，已显示 ${candidates.length} 条` : `已显示 ${candidates.length} / ${result.total} 条`}</small></div>}
+          {result.eligibleTotal > 0 && <InstanceTypeFacetFilter
+            facets={result.instanceTypeFacets}
+            value={{ architectureClass, typeKind, familyToken }}
+            resetKey={`${provider}:${region}:${zone}:${JSON.stringify(answers)}`}
+            onChange={value => {
+              setArchitectureClass(value.architectureClass);
+              setTypeKind(value.typeKind);
+              setFamilyToken(value.familyToken);
+            }}
+          />}
+          {result.eligibleTotal > 0 && <div className="advisor-candidate-search-wrap"><form className="search-submit-group advisor-candidate-search-form" onSubmit={event => { event.preventDefault(); confirmCandidateSearch(); }}><label className="search-field advisor-candidate-search"><Search size={16} /><span className="sr-only">搜索候选机型</span><input aria-label="搜索候选机型" value={candidateSearch} onChange={event => setCandidateSearch(event.target.value)} placeholder="搜索机型 ID、规格族或中文类型/分组" /></label><button type="submit" className="button primary search-confirm-button" disabled={candidateSearch.trim() === candidateQuery}>确认</button></form><small>{candidateSearch.trim() !== candidateQuery ? '内容尚未确认，当前结果保持不变' : candidateQuery ? `从 ${result.eligibleTotal} 个候选中匹配 ${result.total} 条，已显示 ${candidates.length} 条` : `已显示 ${candidates.length} / ${result.total} 条`}</small></div>}
           {!result.eligibleTotal && result.mostRestrictiveStage && <div className="advisor-zero-warning"><AlertTriangle size={15} /><span>限制最大的是“{result.mostRestrictiveStage.label}”，排除了 {result.mostRestrictiveStage.removed} 个机型。系统没有自动放宽条件。</span></div>}
           {selectionNotice && <div className="advisor-zero-warning"><AlertTriangle size={15} /><span>{selectionNotice}</span></div>}
         </section>
         {candidates.length > 0 && <section className="advisor-candidate-list">{candidates.map(item => <CandidateCard key={item.id} item={item} selected={selected?.id === item.id} onSelect={() => { onSelect(item); setSelectionNotice(''); }} />)}</section>}
-        {candidateQuery && result.eligibleTotal > 0 && !result.total && <div className="panel advisor-search-empty"><Filter size={22} /><strong>全部候选中没有匹配项</strong><span>请尝试其他机型 ID 或规格族。</span></div>}
+        {candidateFiltersActive && result.eligibleTotal > 0 && !result.total && <div className="panel advisor-search-empty"><Filter size={22} /><strong>全部候选中没有匹配项</strong><span>请尝试其他分类、机型 ID 或规格族。</span></div>}
         {recommendations.hasNextPage && <button type="button" className="button secondary advisor-load-more" disabled={recommendations.isFetchingNextPage} onClick={() => recommendations.fetchNextPage()}>{recommendations.isFetchingNextPage ? '加载中…' : `加载更多（已显示 ${candidates.length} / ${result.total}）`}</button>}
       </>}
     </div>
@@ -319,7 +337,7 @@ function CandidateCard({ item, selected, onSelect }: { item: AdvisedCloudInstanc
   const pps = Math.min(item.networkPpsRx || 0, item.networkPpsTx || 0);
   return <article className={`panel advisor-candidate ${selected ? 'selected' : ''}`}>
     <div className="candidate-heading"><span className={`match-tier ${item.matchTier}`}>{item.matchTier === 'preferred' ? '优先匹配' : item.matchTier === 'suitable' ? '适合' : '其他候选'}</span><span className={`stock-label ${item.available === true ? 'available' : 'unknown'}`}>{item.available === true ? '库存可用' : '库存未知'}</span></div>
-    <h3>{item.id}</h3><p>{item.family || '未标注规格族'} · {item.architecture || '架构未知'}</p>
+    <h3>{item.id}</h3><p>{item.typeLabel || '其他类型'} · {item.familyLabel || `规格族 ${item.family || item.id}`} · {item.architecture || '架构未知'}</p>
     <div className="candidate-facts"><span><strong>{item.cpu}</strong>vCPU</span><span><strong>{formatNumber(item.memoryGib)}</strong>GiB 内存</span>{item.gpu ? <span><strong>{formatNumber(item.gpu)}</strong>GPU</span> : null}{bandwidth ? <span><strong>{formatNumber(bandwidth)}</strong>Gbit/s</span> : null}{pps ? <span><strong>{pps.toLocaleString()}</strong>PPS</span> : null}</div>
     <ul className="candidate-reasons">{item.reasons.map(reason => <li key={reason}><Check size={12} />{reason}</li>)}</ul>
     {item.warnings.length > 0 && <ul className="candidate-warnings">{item.warnings.map(warning => <li key={warning}><AlertTriangle size={12} />{warning}</li>)}</ul>}

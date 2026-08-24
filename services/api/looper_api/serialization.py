@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import Counter
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from looper_core.contracts import Direction, ExperimentSpec
@@ -10,6 +10,8 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from looper_api.analysis_service import build_analysis_snapshot
+from looper_api.benchmark_compatibility import single_node_contract
+from looper_api.benchmark_defaults import benchmark_selection_defaults
 from looper_api.benchmark_registration import selection_scenario_document
 from looper_api.benchmark_runtime import (
     deployment_capabilities,
@@ -22,14 +24,19 @@ from looper_api.models import (
     BenchmarkRecord,
     BenchmarkRegistrationRecord,
     CandidateRecord,
+    CheckRecord,
     EvaluationRecord,
     ExperimentRecord,
+    ObservationRecord,
     TargetRecord,
 )
 
 
 def _iso(value: datetime | None) -> str | None:
-    return value.isoformat() if value else None
+    if value is None:
+        return None
+    aware = value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+    return aware.astimezone(UTC).isoformat().replace("+00:00", "Z")
 
 
 _METRIC_DECLARATION_FIELDS = (
@@ -72,6 +79,47 @@ def _workload_views(workloads: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return views
 
 
+def _result_sections(manifest: dict[str, Any]) -> list[dict[str, Any]]:
+    """Expose only the bounded, declarative result-navigation contract to clients."""
+
+    spec = manifest.get("spec") or {}
+    extensions = spec.get("x-extensions") or {}
+    presentation = extensions.get("resultPresentation") or {}
+    raw_sections = presentation.get("sections") or []
+    sections: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for raw in raw_sections[:2]:
+        if not isinstance(raw, dict):
+            continue
+        section_id = str(raw.get("id") or "").strip()
+        label = str(raw.get("label") or "").strip()
+        metrics = raw.get("metrics")
+        if (
+            not section_id
+            or section_id in seen
+            or not label
+            or not isinstance(metrics, list)
+        ):
+            continue
+        declared_metrics = [
+            str(metric)
+            for metric in metrics
+            if isinstance(metric, str) and metric in spec.get("metrics", {})
+        ]
+        if not declared_metrics:
+            continue
+        seen.add(section_id)
+        sections.append(
+            {
+                "id": section_id,
+                "label": label[:40],
+                "description": str(raw.get("description") or "")[:300],
+                "metrics": declared_metrics,
+            }
+        )
+    return sections
+
+
 def benchmark_view(
     record: BenchmarkRecord,
     registration: BenchmarkRegistrationRecord | None = None,
@@ -108,17 +156,22 @@ def benchmark_view(
         # be delivered to a target and executed. Stage-0 contracts remain in
         # the catalog for research, but are never presented as runnable choices.
         "selectionReady": scenario is not None and selectable,
+        "singleNodeReady": bool(
+            scenario is not None and selectable and single_node_contract(manifest) is not None
+        ),
         "selectable": selectable,
         "executionModel": adapter.get("executionModel", "custom"),
         "inputs": adapter.get("inputs", []),
         "infrastructure": spec.get("infrastructure"),
         "auditPolicy": spec.get("audit"),
+        "selectionDefaults": benchmark_selection_defaults(manifest),
         "executionPolicy": spec.get("runtime", {}).get("executionPolicy"),
         "version": record.version,
         "license": record.license,
         "manifestDigest": record.manifest_digest,
         "metrics": list(spec["metrics"]),
         "metricDefinitions": _metric_definitions(spec.get("metrics", {})),
+        "resultSections": _result_sections(manifest),
         "workloads": _workload_views(spec.get("workloads", [])),
         "cases": len(spec["workloads"]),
         "updatedAt": _iso(record.installed_at),
@@ -171,11 +224,21 @@ def target_view(record: TargetRecord) -> dict[str, Any]:
         status = "offline"
     fingerprint = record.fingerprint_json or {}
     inventory = record.inventory_json or {}
+    display_snapshot = fingerprint.get("cloud_display")
+    display_fingerprint = fingerprint
+    display_inventory = inventory
+    if isinstance(display_snapshot, dict):
+        snapshot_fingerprint = display_snapshot.get("fingerprint")
+        snapshot_inventory = display_snapshot.get("inventory")
+        if isinstance(snapshot_fingerprint, dict):
+            display_fingerprint = snapshot_fingerprint
+        if isinstance(snapshot_inventory, dict):
+            display_inventory = snapshot_inventory
 
     # Cloud inventory records created by older syncs kept hardware fields in
     # inventory_json, while external targets keep them in fingerprint_json.
     def first_value(*keys: str) -> Any:
-        for source in (fingerprint, inventory):
+        for source in (display_fingerprint, display_inventory):
             for key in keys:
                 value = source.get(key)
                 if value is not None and value != "":
@@ -199,7 +262,7 @@ def target_view(record: TargetRecord) -> dict[str, Any]:
         # Some Linux probes report the architecture in processor while the
         # detailed model is available under cpu.model_name.
         processor = None
-        for source in (fingerprint, inventory):
+        for source in (display_fingerprint, display_inventory):
             cpu_details = source.get("cpu")
             if isinstance(cpu_details, dict):
                 processor = cpu_details.get("model_name") or cpu_details.get("model")
@@ -250,11 +313,15 @@ def target_view(record: TargetRecord) -> dict[str, Any]:
         ),
         "status": status,
         "framework": (
-            inventory.get("framework")
-            or fingerprint.get("system")
-            or (f"镜像 {inventory.get('image_id')}" if inventory.get("image_id") else None)
+            display_inventory.get("framework")
+            or display_fingerprint.get("system")
+            or (
+                f"镜像 {display_inventory.get('image_id')}"
+                if display_inventory.get("image_id")
+                else None
+            )
         ),
-        "version": fingerprint.get("release"),
+        "version": display_fingerprint.get("release"),
         "hardware": " · ".join(str(item) for item in hardware_parts if item),
         "lastSeenAt": _iso(record.last_inventory_seen_at or record.updated_at),
         "tags": record.capabilities_json,
@@ -267,6 +334,7 @@ def target_view(record: TargetRecord) -> dict[str, Any]:
         "archiveReason": record.archive_reason,
         "snapshotDigest": record.snapshot_digest,
         "fingerprint": fingerprint,
+        "sshAutomation": inventory.get("autoSsh") or {"status": "manual"},
     }
 
 
@@ -318,6 +386,28 @@ def _best_primary_score(
     if not scores:
         return None
     return max(scores) if direction == Direction.MAXIMIZE else min(scores)
+
+
+def _observation_metric_view(
+    item: ObservationRecord, declaration: dict[str, Any]
+) -> dict[str, Any] | None:
+    value: float | bool | None = (
+        item.value_boolean if item.value_boolean is not None else item.value_number
+    )
+    if value is None:
+        return None
+    direction = declaration.get("direction")
+    return {
+        "name": item.metric,
+        "value": value,
+        "unit": item.unit,
+        "baseline": None,
+        "direction": "max"
+        if direction == "maximize"
+        else "min"
+        if direction == "minimize"
+        else "none",
+    }
 
 
 def experiment_view(
@@ -425,6 +515,7 @@ def experiment_view(
         )
         if benchmark
         else {},
+        "resultSections": _result_sections(benchmark.manifest_json) if benchmark else [],
         "progress": round(
             100
             * (
@@ -508,6 +599,53 @@ def experiment_view(
             for item in objective_rows
             if item.get("raw") is not None
         ]
+        # Analysis intentionally excludes failed attempts, but the experiment
+        # page must still expose measurements that the Worker successfully
+        # uploaded. Otherwise a later validation failure makes real collection
+        # data appear to have vanished. Prefer the latest attempt's raw
+        # observations for the per-run table and Benchmark-specific sections.
+        if latest:
+            latest_observations = list(
+                session.scalars(
+                    select(ObservationRecord)
+                    .where(ObservationRecord.attempt_id == latest.id)
+                    .order_by(ObservationRecord.created_at)
+                )
+            )
+            latest_by_metric = {item.metric: item for item in latest_observations}
+            metric_specs = (
+                benchmark.manifest_json.get("spec", {}).get("metrics", {})
+                if benchmark
+                else {}
+            )
+            raw_metrics = [
+                view
+                for name, item in latest_by_metric.items()
+                if (
+                    view := _observation_metric_view(item, metric_specs.get(name, {}))
+                )
+                is not None
+            ]
+            if raw_metrics:
+                metrics = raw_metrics
+        failed_check_ids: list[str] = []
+        if latest and AttemptStatus(latest.status) == AttemptStatus.FAILED:
+            failed_check_ids = list(
+                session.scalars(
+                    select(CheckRecord.check_id)
+                    .where(CheckRecord.attempt_id == latest.id, CheckRecord.passed.is_(False))
+                    .order_by(CheckRecord.check_id)
+                )
+            )
+        phase_detail = latest.phase_detail if latest else None
+        if failed_check_ids:
+            phase_detail = f"采集数据已回传；校验未通过：{', '.join(failed_check_ids)}"
+        elif (
+            latest
+            and AttemptStatus(latest.status) == AttemptStatus.FAILED
+            and latest.error_message
+        ):
+            phase_detail = f"采集流程失败：{latest.error_message}"
         duration = None
         if latest and latest.started_at and latest.completed_at:
             duration = (latest.completed_at - latest.started_at).total_seconds()
@@ -522,7 +660,7 @@ def experiment_view(
                 "parameters": candidate.parameters_json if candidate else {},
                 "status": status_map[CandidateStatus(evaluation.status)],
                 "phase": latest.phase if latest else None,
-                "phaseDetail": latest.phase_detail if latest else None,
+                "phaseDetail": phase_detail,
                 "score": objective_rows[0].get("raw") if objective_rows else None,
                 "duration": duration,
                 "createdAt": _iso(evaluation.created_at),

@@ -23,7 +23,7 @@ class Settings(BaseSettings):
     remember_ssh_credentials: bool = True
     default_ssh_username: str = "root"
     default_ssh_port: int = Field(default=22, ge=1, le=65535)
-    default_ssh_auth_method: Literal["password", "private-key"] = "private-key"
+    default_ssh_auth_method: Literal["password", "private-key"] = "password"
     default_ssh_private_key_path: str = ""
     default_ssh_password: SecretStr | None = Field(default=None, repr=False)
     data_dir: Path = Path(".looper")
@@ -33,7 +33,16 @@ class Settings(BaseSettings):
     local_worker_token: str = "looper-local-development"
     max_artifact_bytes: int = Field(default=256 * 1024 * 1024, ge=1024)
     max_output_bytes: int = Field(default=16 * 1024 * 1024, ge=1024)
-    lease_seconds: int = Field(default=30, ge=5, le=3600)
+    # Managed benchmark preparation may download and compile multi-gigabyte dependencies.
+    lease_seconds: int = Field(
+        default=3600,
+        ge=5,
+        le=3600,
+        description=(
+            "Attempt lease in seconds; first-time provisioning may unpack "
+            "multi-gigabyte assets."
+        ),
+    )
     worker_stale_seconds: int = Field(default=90, ge=10, le=86400)
     max_local_workers: int = Field(default=4, ge=1, le=64)
     cloud_catalog_ttl_seconds: int = Field(default=300, ge=30, le=86400)

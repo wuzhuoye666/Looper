@@ -70,6 +70,10 @@ class ControlPlaneClient:
         *,
         phase: str | None = None,
         phase_detail: str | None = None,
+        log_id: str | None = None,
+        log_stage: str | None = None,
+        log_stream: str | None = None,
+        log_text: str | None = None,
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "workerId": self.worker_id,
@@ -79,6 +83,14 @@ class ControlPlaneClient:
             payload["phase"] = phase
         if phase_detail is not None:
             payload["phaseDetail"] = phase_detail
+        if log_id is not None:
+            payload["logId"] = log_id
+        if log_stage is not None:
+            payload["logStage"] = log_stage
+        if log_stream is not None:
+            payload["logStream"] = log_stream
+        if log_text is not None:
+            payload["logText"] = log_text
         response = self.client.post(
             f"/worker-attempts/{attempt_id}/heartbeat",
             json=payload,

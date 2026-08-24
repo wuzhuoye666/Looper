@@ -204,4 +204,6 @@ spec:
     environmentAxes: [machine, day, runtime]
     requiredEvidence: [system-fingerprint, raw-result, profile, log]
   x-extensions:
+    bootstrapCatalog: true
     executionStatus: executable
+    selectionDefaults: {repeats: 3, timeoutSeconds: 10800, seed: 20260302}

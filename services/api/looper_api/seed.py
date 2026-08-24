@@ -1,25 +1,17 @@
 from __future__ import annotations
 
-import os
-import platform
 from pathlib import Path
-from typing import Any
 
-from looper_core.canonical import canonical_digest, utc_now
-from looper_core.fingerprint import system_fingerprint
+from looper_core.canonical import utc_now
 from looper_core.manifest import load_and_validate_manifest
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from looper_api.models import BenchmarkRecord, ProjectRecord, TargetRecord
+from looper_api.models import BenchmarkRecord, ProjectRecord
 
 
 def repository_root() -> Path:
     return Path(__file__).resolve().parents[3]
-
-
-def local_fingerprint() -> dict[str, Any]:
-    return system_fingerprint()
 
 
 def seed_system(session: Session) -> None:
@@ -35,50 +27,6 @@ def seed_system(session: Session) -> None:
                 updated_at=now,
             )
         )
-
-    fingerprint = local_fingerprint()
-    capabilities = [
-        "python",
-        "local-process",
-        platform.system().lower(),
-        platform.machine().lower(),
-    ]
-    target = session.get(TargetRecord, "local")
-    snapshot = {
-        "provider": "local",
-        "capabilities": capabilities,
-        "fingerprint": fingerprint,
-    }
-    snapshot_digest = canonical_digest(snapshot)
-    if target is None:
-        session.add(
-            TargetRecord(
-                id="local",
-                name="Local workstation",
-                provider="local",
-                status="available",
-                capabilities_json=capabilities,
-                inventory_json={"source": "local", "pid": os.getpid()},
-                fingerprint_json=fingerprint,
-                snapshot_digest=snapshot_digest,
-                runnable=True,
-                lifecycle_status="active",
-                created_at=now,
-                updated_at=now,
-            )
-        )
-    else:
-        target.status = "available"
-        target.capabilities_json = capabilities
-        target.inventory_json = {"source": "local", "pid": os.getpid()}
-        target.fingerprint_json = fingerprint
-        target.snapshot_digest = snapshot_digest
-        target.lifecycle_status = "active"
-        target.inventory_missing_since = None
-        target.inventory_miss_count = 0
-        target.archived_at = None
-        target.archive_reason = None
-        target.updated_at = now
 
     manifest_paths = sorted((repository_root() / "benchmarks").glob("*/benchmark.yaml"))
     for manifest_path in manifest_paths:

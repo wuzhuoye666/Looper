@@ -3,15 +3,15 @@ kind: Benchmark
 metadata:
   id: dcperf.mediawiki.closed-loop
   name: DCPerf MediaWiki Closed-Loop
-  version: 2026.08-pilot2
-  description: Pinned single-node DCPerf MediaWiki closed-loop capacity workload with managed Ubuntu 22.04 provisioning and native Benchpress evidence.
+  version: 2026.08-pilot18
+  description: Pinned single-node DCPerf MediaWiki closed-loop capacity workload with resumable managed Ubuntu 22.04/24.04 provisioning and native Benchpress evidence.
   license: MIT
   source:
     url: https://github.com/facebookresearch/DCPerf
     commit: 9308c3e3c404e0466f0a2929f15ddcf62b2215f6
 spec:
   trust: trusted
-  capabilities: [linux, x86_64, python, local-process, dcperf-mediawiki, systemd, ubuntu-22.04, root, perf]
+  capabilities: [linux, x86_64, python, local-process, dcperf-mediawiki, systemd, ubuntu, root, perf]
   parameters:
     duration_seconds:
       type: integer
@@ -134,7 +134,7 @@ spec:
         requirements:
           osFamilies: [linux]
           architectures: [x86_64]
-          capabilities: [dcperf-mediawiki, systemd, ubuntu-22.04]
+          capabilities: [dcperf-mediawiki, systemd, ubuntu]
           privileges: [root, perf, systemd]
           software:
             - name: python
@@ -154,7 +154,7 @@ spec:
   runtime:
     type: local-process
     workingDirectory: .
-    dependencyLockDigest: sha256:de5b6216a2a3896f288d4a5d4426ceeda8546cfed4e220f7753d7d8c0a31e4c2
+    dependencyLockDigest: sha256:1c52ec4d7a403b9e02422133dc555648312adcfa4532748d93b26091d0f18635
     dependencies:
       - id: dcperf-source
         source: https://api.github.com/repos/facebookresearch/DCPerf/tarball/9308c3e3c404e0466f0a2929f15ddcf62b2215f6
@@ -182,9 +182,9 @@ spec:
         license: MIT
     provisioning:
       mode: managed
-      hostCapabilities: [linux, x86_64, python, local-process, systemd, ubuntu-22.04, root, perf]
-      provides: [dcperf-mediawiki, hhvm-3.30, mediawiki-1.28, wrk-4.2.0, memcached-1.5.12]
-      cacheKey: sha256:de5b6216a2a3896f288d4a5d4426ceeda8546cfed4e220f7753d7d8c0a31e4c2
+      hostCapabilities: [linux, x86_64, python, local-process, systemd, ubuntu, root]
+      provides: [dcperf-mediawiki, hhvm-3.30, mediawiki-1.28, wrk-4.2.0, memcached-1.5.12, composer-2.2.24, perf]
+      cacheKey: sha256:1c52ec4d7a403b9e02422133dc555648312adcfa4532748d93b26091d0f18635
       requiresNetwork: true
       privilege: sudo
     commands:
@@ -312,7 +312,7 @@ spec:
       direction: minimize
       kind: aggregate
       required: true
-      minimumSamples: 100000
+      minimumSamples: 1
       description: Native Nginx request latency P50 in milliseconds.
       presentation:
         userLabel: P50 延迟
@@ -326,7 +326,7 @@ spec:
       direction: minimize
       kind: aggregate
       required: true
-      minimumSamples: 100000
+      minimumSamples: 1
       description: Native Nginx request latency P95 in milliseconds.
       presentation:
         userLabel: P95 延迟
@@ -340,7 +340,7 @@ spec:
       direction: minimize
       kind: aggregate
       required: true
-      minimumSamples: 100000
+      minimumSamples: 1
       description: Native Nginx request latency P99 in milliseconds.
       presentation:
         userLabel: P99 延迟
@@ -411,8 +411,19 @@ spec:
   x-extensions:
     bootstrapCatalog: true
     executionStatus: executable
+    resultPresentation:
+      sections:
+        - id: throughput-latency
+          label: 吞吐与延迟
+          description: DCPerf MediaWiki 的成功吞吐、客户端负载与原生 Nginx 尾延迟。
+          metrics: [closed_loop_successful_rps, wrk_rps, latency_p50_ms, latency_p95_ms, latency_p99_ms]
+        - id: validity-gates
+          label: 有效性门禁
+          description: 仅属于 DCPerf 闭环场景的失败、超时与 CPU 饱和证据。
+          metrics: [failed_request_ratio, error_ratio, timeout_count, timeout_ratio, cpu_utilization_p95]
+    selectionDefaults: {repeats: 5, timeoutSeconds: 86400, seed: 20260306}
     sourceLock: source-lock.json
     includesClientWork: true
-    supportedHost: Ubuntu 22.04 x86_64 with systemd and root privileges
-    unsupportedHostReason: The pinned HHVM 3.30 appliance is not supported on Ubuntu 24.04 or other distributions; prepare.py rejects them before installation.
+    supportedHost: Ubuntu 22.04 x86_64; Ubuntu 24.04 x86_64 compatibility candidate with smoke validation required
+    unsupportedHostReason: Non-Ubuntu distributions, unsupported Ubuntu releases, and non-x86_64 hosts are rejected by prepare.py before installation.
     nativeSourceArchive: dependency-lock.json

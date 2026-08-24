@@ -44,6 +44,7 @@ class FakeProvider(CloudProvider):
 
     def __init__(self) -> None:
         self.destroy_calls: list[str] = []
+        self.vpc_cleanup_calls: list[tuple[str, str]] = []
 
     def info(self, *, live_purchase_enabled: bool) -> ProviderInfo:
         return ProviderInfo(
@@ -107,6 +108,10 @@ class FakeProvider(CloudProvider):
             ],
         )
 
+    def delete_vpc_if_empty(self, *, region: str, vpc_id: str) -> DestroyedResource:
+        self.vpc_cleanup_calls.append((region, vpc_id))
+        return DestroyedResource(kind="vpc", id=vpc_id, note="fake empty VPC deleted")
+
 
 def _spec() -> CloudPurchaseSpec:
     return CloudPurchaseSpec(
@@ -163,9 +168,10 @@ def test_destroy_preview_reports_instance_and_accompanying_resources(db_session,
     assert "确认销毁 腾讯云 CVM 实例 workflow-test（ins-fake-1）" in preview["acknowledgement"]
     kinds = {item["kind"] for item in preview["resources"]}
     expected_kinds = {
-        "instance", "system-disk", "local-disk", "public-ip", "subnet", "security-group"
+        "instance", "system-disk", "local-disk", "public-ip", "vpc", "subnet", "security-group"
     }
     assert expected_kinds <= kinds
+    assert "空闲非默认 VPC 也可能被删除" in preview["acknowledgement"]
 
 
 def test_destroy_requires_exact_acknowledgement_before_provider_call(db_session, tmp_path) -> None:
@@ -203,8 +209,10 @@ def test_destroy_terminates_instance_archives_target_and_writes_event(db_session
     db_session.commit()
 
     assert fake.destroy_calls == ["ins-fake-1"]
+    assert fake.vpc_cleanup_calls == [("ap-test", "vpc-test")]
     assert result["status"] == "destroyed"
     assert result["instanceId"] == "ins-fake-1"
+    assert any(item["kind"] == "vpc" and item["released"] for item in result["resources"])
 
     target = db_session.get(TargetRecord, target_id)
     assert target is not None

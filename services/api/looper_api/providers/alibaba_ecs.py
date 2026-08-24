@@ -6,6 +6,7 @@ from datetime import timedelta
 from typing import Any
 
 from looper_core.canonical import canonical_digest, utc_now
+from pydantic import SecretStr
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -107,9 +108,12 @@ class AlibabaEcsProvider(CloudProvider):
                 "images",
                 "stock-advisory",
                 "vpcs",
+                "managed-vpc",
+                "empty-vpc-cleanup",
                 "subnets",
                 "managed-subnet",
                 "security-groups",
+                "managed-security-group",
                 "key-pairs",
                 "hourly-quote",
                 "postpaid-purchase",
@@ -193,7 +197,7 @@ class AlibabaEcsProvider(CloudProvider):
                 f"Alibaba Cloud VPC {method} failed: {message}",
                 code=str(code),
                 retryable=str(code) in {"Throttling", "ServiceUnavailable", "InternalError"},
-                ambiguous=method == "create_vswitch"
+                ambiguous=method in {"create_vpc", "create_vswitch"}
                 and ambiguous_create_error(provider_code, error),
                 details={"requestId": request_id} if request_id else {},
             ) from error
@@ -515,8 +519,18 @@ class AlibabaEcsProvider(CloudProvider):
             )
             response = self._call("describe_vpcs", region, request)
             rows = as_list(nested(response, ("body",), ("vpcs",), ("vpc",), default=[]))
-            items.extend(
-                VpcInfo(
+            for item in rows:
+                if not attr(item, "vpc_id"):
+                    continue
+                tag_rows = as_list(nested(item, ("tags",), ("tag",), default=[]))
+                tags = {
+                    str(attr(tag, "tag_key", "key")): str(
+                        attr(tag, "tag_value", "value", default="") or ""
+                    )
+                    for tag in tag_rows
+                    if attr(tag, "tag_key", "key")
+                }
+                items.append(VpcInfo(
                     provider=self.id,
                     region=region,
                     id=str(attr(item, "vpc_id")),
@@ -525,15 +539,70 @@ class AlibabaEcsProvider(CloudProvider):
                     ),
                     cidrBlock=attr(item, "cidr_block"),
                     isDefault=bool(attr(item, "is_default", default=False)),
-                )
-                for item in rows
-                if attr(item, "vpc_id")
-            )
+                    tags=tags,
+                    managed=tags.get("managedBy", "").casefold() == "looper",
+                ))
             total = int(attr(nested(response, ("body",)), "total_count", default=0) or 0)
             if not rows or len(items) >= total:
                 break
             page_number += 1
         return items
+
+    def create_managed_vpc(
+        self,
+        *,
+        region: str,
+        cidr_block: str,
+        name: str,
+        client_token: str,
+    ) -> VpcInfo:
+        from alibabacloud_vpc20160428 import models
+
+        request = models.CreateVpcRequest(
+            region_id=region,
+            cidr_block=cidr_block,
+            vpc_name=name,
+            client_token=client_token,
+            tag=[
+                models.CreateVpcRequestTag(key="managedBy", value="looper"),
+                models.CreateVpcRequestTag(key="purpose", value="cloud-purchase"),
+            ],
+        )
+        response = self._vpc_call("create_vpc", region, request)
+        vpc_id = attr(nested(response, ("body",)), "vpc_id")
+        if not vpc_id:
+            raise CloudProviderError(
+                "Alibaba Cloud created a VPC without returning its id",
+                code="ambiguous_response",
+                ambiguous=True,
+            )
+        deadline = time.monotonic() + 45
+        while time.monotonic() < deadline:
+            describe = models.DescribeVpcAttributeRequest(region_id=region, vpc_id=str(vpc_id))
+            item = nested(self._vpc_call("describe_vpc_attribute", region, describe), ("body",))
+            status = str(attr(item, "status", default="") or "")
+            if status.casefold() == "available":
+                return VpcInfo(
+                    provider=self.id,
+                    region=region,
+                    id=str(vpc_id),
+                    name=str(attr(item, "vpc_name", default=name) or name),
+                    cidrBlock=attr(item, "cidr_block", default=cidr_block),
+                    isDefault=bool(attr(item, "is_default", default=False)),
+                    tags={"managedBy": "looper", "purpose": "cloud-purchase"},
+                    managed=True,
+                )
+            if status and status.casefold() not in {"pending", "creating"}:
+                raise CloudProviderError(
+                    f"Alibaba Cloud VPC entered unexpected state {status}",
+                    code="vpc_create_failed",
+                )
+            time.sleep(1)
+        raise CloudProviderError(
+            "Alibaba Cloud VPC creation is still pending",
+            code="ambiguous_response",
+            ambiguous=True,
+        )
 
     def list_subnets(self, region: str, zone: str, vpc_id: str) -> list[SubnetInfo]:
         return self._list_vswitches(region, vpc_id=vpc_id, zone=zone)
@@ -697,12 +766,15 @@ class AlibabaEcsProvider(CloudProvider):
                         region=region,
                         id=str(group_id),
                         name=name,
+                        vpcId=attr(item, "vpc_id"),
                         description=attr(item, "description"),
+                        isDefault=bool(attr(item, "is_default", default=False)),
                         recommended=(
                             tags.get("managedBy", "").casefold() == "looper"
                             or name.casefold().startswith("looper")
                         ),
                         tags=tags,
+                        managed=tags.get("managedBy", "").casefold() == "looper",
                     )
                 )
             total = int(attr(nested(response, ("body",)), "total_count", default=0) or 0)
@@ -710,6 +782,156 @@ class AlibabaEcsProvider(CloudProvider):
                 break
             page_number += 1
         return items
+
+    def ensure_managed_security_group(
+        self,
+        region: str,
+        *,
+        vpc_id: str | None = None,
+        client_token: str | None = None,
+    ) -> SecurityGroupInfo:
+        if not vpc_id:
+            raise CloudProviderError(
+                "Alibaba Cloud managed security groups require a VPC",
+                code="vpc_required",
+            )
+        from alibabacloud_ecs20140526 import models
+
+        token = client_token or canonical_digest(
+            {"provider": self.id.value, "region": region, "vpcId": vpc_id}
+        )
+        name = f"looper-ssh-access-{canonical_digest(vpc_id)[:8]}"
+
+        def matches(group: SecurityGroupInfo) -> bool:
+            return (
+                group.vpc_id == vpc_id
+                and group.name == name
+                and group.tags.get("managedBy", "").casefold() == "looper"
+                and group.tags.get("purpose", "").casefold() == "cloud-purchase"
+                and group.tags.get("policyVersion", "").casefold() == "ssh-v1"
+            )
+
+        existing = sorted(
+            [group for group in self.list_security_groups(region) if matches(group)],
+            key=lambda group: group.id,
+        )
+        if existing:
+            group = existing[0]
+            self._ensure_managed_security_group_rules(region, group.id, token, models)
+            return group
+
+        request = models.CreateSecurityGroupRequest(
+            region_id=region,
+            vpc_id=vpc_id,
+            security_group_name=name,
+            description="Looper managed: SSH ingress and IPv4 egress",
+            security_group_type="normal",
+            client_token=token,
+            tag=[
+                models.CreateSecurityGroupRequestTag(key="managedBy", value="looper"),
+                models.CreateSecurityGroupRequestTag(key="purpose", value="cloud-purchase"),
+                models.CreateSecurityGroupRequestTag(key="policyVersion", value="ssh-v1"),
+            ],
+        )
+        try:
+            response = self._call("create_security_group", region, request)
+            group_id = attr(nested(response, ("body",)), "security_group_id")
+            if not group_id:
+                raise CloudProviderError(
+                    "Alibaba Cloud created a security group without returning its id",
+                    code="ambiguous_response",
+                    ambiguous=True,
+                )
+        except CloudProviderError:
+            recovered = sorted(
+                [group for group in self.list_security_groups(region) if matches(group)],
+                key=lambda group: group.id,
+            )
+            if not recovered:
+                raise
+            group_id = recovered[0].id
+
+        self._ensure_managed_security_group_rules(region, str(group_id), token, models)
+        refreshed = next(
+            (
+                group
+                for group in self.list_security_groups(region)
+                if group.id == str(group_id)
+            ),
+            None,
+        )
+        return refreshed or SecurityGroupInfo(
+            provider=self.id,
+            region=region,
+            id=str(group_id),
+            name=name,
+            vpcId=vpc_id,
+            description="Looper managed: SSH ingress and IPv4 egress",
+            recommended=True,
+            tags={
+                "managedBy": "looper",
+                "purpose": "cloud-purchase",
+                "policyVersion": "ssh-v1",
+            },
+            managed=True,
+        )
+
+    def _ensure_managed_security_group_rules(
+        self, region: str, group_id: str, client_token: str, models: Any
+    ) -> None:
+        def permissions(direction: str) -> list[Any]:
+            request = models.DescribeSecurityGroupAttributeRequest(
+                region_id=region,
+                security_group_id=group_id,
+                direction=direction,
+            )
+            response = self._call("describe_security_group_attribute", region, request)
+            return as_list(
+                nested(response, ("body",), ("permissions",), ("permission",), default=[])
+            )
+
+        ingress_rules = permissions("ingress")
+        has_ingress = any(
+            str(attr(rule, "ip_protocol", default="")).casefold() == "tcp"
+            and str(attr(rule, "port_range", default="")) in {"22", "22/22"}
+            and str(attr(rule, "source_cidr_ip", default="")) == "0.0.0.0/0"
+            and str(attr(rule, "policy", default="accept")).casefold() == "accept"
+            for rule in ingress_rules
+        )
+        if not has_ingress:
+            ingress = models.AuthorizeSecurityGroupRequest(
+                region_id=region,
+                security_group_id=group_id,
+                ip_protocol="TCP",
+                port_range="22/22",
+                source_cidr_ip="0.0.0.0/0",
+                policy="accept",
+                priority="1",
+                description="Looper managed public SSH",
+                client_token=f"{client_token[:56]}-in",
+            )
+            self._call("authorize_security_group", region, ingress)
+
+        egress_rules = permissions("egress")
+        has_egress = any(
+            str(attr(rule, "ip_protocol", default="")).casefold() == "all"
+            and str(attr(rule, "dest_cidr_ip", default="")) == "0.0.0.0/0"
+            and str(attr(rule, "policy", default="accept")).casefold() == "accept"
+            for rule in egress_rules
+        )
+        if not has_egress:
+            egress = models.AuthorizeSecurityGroupEgressRequest(
+                region_id=region,
+                security_group_id=group_id,
+                ip_protocol="all",
+                port_range="-1/-1",
+                dest_cidr_ip="0.0.0.0/0",
+                policy="accept",
+                priority="1",
+                description="Looper managed IPv4 egress",
+                client_token=f"{client_token[:55]}-out",
+            )
+            self._call("authorize_security_group_egress", region, egress)
 
     def list_key_pairs(self, region: str) -> list[KeyPairInfo]:
         from alibabacloud_ecs20140526 import models
@@ -867,7 +1089,13 @@ class AlibabaEcsProvider(CloudProvider):
             "no usable system disk category", code="system_disk_category_unresolved"
         )
 
-    def purchase(self, spec: CloudPurchaseSpec, *, client_token: str) -> ProviderPurchaseResult:
+    def purchase(
+        self,
+        spec: CloudPurchaseSpec,
+        *,
+        client_token: str,
+        launch_password: SecretStr | None = None,
+    ) -> ProviderPurchaseResult:
         if not _supports_vpc_launch(spec.instance_type):
             raise CloudProviderError(
                 "所选阿里云旧规格不支持 VPC 弹性网卡，请选择较新的 ECS 规格",
@@ -876,6 +1104,11 @@ class AlibabaEcsProvider(CloudProvider):
         if not spec.security_group_ids:
             raise CloudProviderError(
                 "at least one security group is required for Alibaba Cloud",
+                code="invalid_request",
+            )
+        if launch_password is not None and spec.key_pair_id:
+            raise CloudProviderError(
+                "launch password and key pair cannot be used together",
                 code="invalid_request",
             )
         from alibabacloud_ecs20140526 import models
@@ -897,6 +1130,9 @@ class AlibabaEcsProvider(CloudProvider):
                 amount=spec.count,
                 spot_strategy="NoSpot",
                 key_pair_name=spec.key_pair_id,
+                password=(
+                    launch_password.get_secret_value() if launch_password is not None else None
+                ),
                 client_token=client_token,
                 dry_run=False,
                 system_disk=self._system_disk(models, spec, quote=False, category=category),
@@ -1063,9 +1299,15 @@ class AlibabaEcsProvider(CloudProvider):
         subnet_id: str | None,
         security_group_ids: list[str],
     ) -> list[DestroyedResource]:
-        del vpc_id, security_group_ids
+        del vpc_id
+        released: list[DestroyedResource] = []
+        for security_group_id in security_group_ids:
+            if security_group_id:
+                released.append(
+                    self._delete_managed_security_group(region, str(security_group_id))
+                )
         if not subnet_id:
-            return []
+            return released
         from alibabacloud_vpc20160428 import models
 
         try:
@@ -1084,31 +1326,130 @@ class AlibabaEcsProvider(CloudProvider):
                 if attr(tag, "key", "tag_key")
             }
             if tags.get("managedBy", "").casefold() != "looper":
-                return [
+                released.append(
                     DestroyedResource(
                         kind="subnet",
                         id=subnet_id,
                         released=False,
                         note="非 Looper 纳管 vSwitch，保留不动",
                     )
-                ]
+                )
+                return released
             delete_request = models.DeleteVSwitchRequest(
                 region_id=region,
                 v_switch_id=subnet_id,
             )
             self._vpc_call("delete_vswitch", region, delete_request)
-            return [
+            released.append(
                 DestroyedResource(kind="subnet", id=subnet_id, note="Looper 纳管 vSwitch 已删除")
-            ]
+            )
+            return released
         except CloudProviderError as error:
-            return [
+            released.append(
                 DestroyedResource(
                     kind="subnet",
                     id=subnet_id,
                     released=False,
                     note=f"vSwitch 清理暂缓：{error}",
                 )
-            ]
+            )
+            return released
+
+    def _delete_managed_security_group(
+        self, region: str, security_group_id: str
+    ) -> DestroyedResource:
+        from alibabacloud_ecs20140526 import models
+
+        try:
+            group = next(
+                (
+                    item
+                    for item in self.list_security_groups(region)
+                    if item.id == security_group_id
+                ),
+                None,
+            )
+            if group is None:
+                return DestroyedResource(
+                    kind="security-group", id=security_group_id, note="安全组已不存在"
+                )
+            managed = (
+                not group.is_default
+                and group.tags.get("managedBy", "").casefold() == "looper"
+                and group.tags.get("purpose", "").casefold() == "cloud-purchase"
+                and group.tags.get("policyVersion", "").casefold() == "ssh-v1"
+            )
+            if not managed:
+                return DestroyedResource(
+                    kind="security-group",
+                    id=security_group_id,
+                    released=False,
+                    note="非 Looper 纳管安全组，保留不动",
+                )
+            request = models.DescribeInstancesRequest(
+                region_id=region,
+                security_group_id=security_group_id,
+                page_number=1,
+                page_size=1,
+            )
+            response = self._call("describe_instances", region, request)
+            total = int(attr(nested(response, ("body",)), "total_count", default=0) or 0)
+            if total:
+                return DestroyedResource(
+                    kind="security-group",
+                    id=security_group_id,
+                    released=False,
+                    note=f"安全组仍关联 {total} 台实例，保留不动",
+                )
+            delete_request = models.DeleteSecurityGroupRequest(
+                region_id=region,
+                security_group_id=security_group_id,
+            )
+            self._call("delete_security_group", region, delete_request)
+            return DestroyedResource(
+                kind="security-group", id=security_group_id, note="Looper 纳管安全组已删除"
+            )
+        except CloudProviderError as error:
+            return DestroyedResource(
+                kind="security-group",
+                id=security_group_id,
+                released=False,
+                note=f"安全组清理暂缓：{error}",
+            )
+
+    def delete_vpc_if_empty(self, *, region: str, vpc_id: str) -> DestroyedResource:
+        from alibabacloud_vpc20160428 import models
+
+        try:
+            vpc = next((item for item in self.list_vpcs(region) if item.id == vpc_id), None)
+            if vpc is None:
+                return DestroyedResource(kind="vpc", id=vpc_id, note="VPC 已不存在")
+            if vpc.is_default:
+                return DestroyedResource(
+                    kind="vpc", id=vpc_id, released=False, note="默认 VPC 按安全策略保留"
+                )
+            subnets = self.list_vpc_subnets(region, vpc_id)
+            if subnets:
+                return DestroyedResource(
+                    kind="vpc",
+                    id=vpc_id,
+                    released=False,
+                    note=f"VPC 仍包含 {len(subnets)} 个 vSwitch，保留不动",
+                )
+            request = models.DeleteVpcRequest(
+                region_id=region,
+                vpc_id=vpc_id,
+                force_delete=False,
+            )
+            self._vpc_call("delete_vpc", region, request)
+            return DestroyedResource(kind="vpc", id=vpc_id, note="空闲非默认 VPC 已删除")
+        except CloudProviderError as error:
+            return DestroyedResource(
+                kind="vpc",
+                id=vpc_id,
+                released=False,
+                note=f"VPC 清理暂缓：{error}",
+            )
 
 
 _ARCHIVE_AFTER_AUTHORITATIVE_MISSES = 3
@@ -1247,7 +1588,10 @@ def _upsert_instance(session: Session, region: str, instance: Any) -> TargetReco
         "image_id": attr(instance, "image_id"),
         "os_name": attr(instance, "os_name"),
     }
-    capabilities = ["alibaba-ecs", "inventory"]
+    capabilities = sorted(
+        (set(record.capabilities_json) if record is not None else set())
+        | {"alibaba-ecs", 'inventory'}
+    )
     snapshot = {
         "provider": "alibaba",
         "capabilities": capabilities,

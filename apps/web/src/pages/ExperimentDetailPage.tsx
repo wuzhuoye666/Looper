@@ -6,14 +6,11 @@ import { ExperimentActions, type ExperimentAction } from '../components/ActionBu
 import { BackLink } from '../components/Layout';
 import { StatusBadge } from '../components/StatusBadge';
 import { EmptyState, ErrorState, LoadingState } from '../components/States';
-import { VariabilityPanel } from '../components/VariabilityPanel';
-import { BenchTrustPanel } from '../components/BenchTrustPanel';
+import { ExperimentTerminal } from '../components/ExperimentTerminal';
 import { API_BASE, api, resolveApiUrl } from '../lib/api';
 import { formatDate, formatNumber, scoreDelta } from '../lib/format';
-import type { AnalysisData, Evaluation, Experiment, MetricDefinition, PostOptimizationStatus, SelectionComparison, SelectionTargetResult } from '../lib/types';
+import type { AnalysisData, BenchmarkResultSection, Evaluation, Experiment, MetricDefinition, PostOptimizationStatus, SelectionComparison, SelectionTargetResult } from '../lib/types';
 
-const selectionTabs = [['overview', '概览'], ['targets', '目标结果'], ['comparison', '对比结论'], ['benchtrust', '可信度'], ['variability', '波动分析'], ['evidence', '证据'], ['config', '配置']];
-const optimizationTabs = [['overview', '概览'], ['evaluations', '评估记录'], ['pareto', 'Pareto 前沿'], ['benchtrust', '可信度'], ['variability', '波动分析'], ['evidence', '证据'], ['config', '配置']];
 const executionPhases = [
   ['deploying-package', '下发脚本'],
   ['checking-environment', '检查环境'],
@@ -41,12 +38,7 @@ export function ExperimentDetailPage() {
   const analysis = useQuery({
     queryKey: ['analysis', id],
     queryFn: () => api.analysis(id),
-    enabled: Boolean(id) && ['targets', 'comparison', 'pareto', 'benchtrust', 'evidence'].includes(tab),
-  });
-  const variability = useQuery({
-    queryKey: ['variability', id],
-    queryFn: () => api.variability(id),
-    enabled: Boolean(id) && tab === 'variability',
+    enabled: Boolean(id) && ['results', 'evidence'].includes(tab),
   });
   const postOptimization = useQuery({
     queryKey: ['post-optimization', id],
@@ -70,7 +62,7 @@ export function ExperimentDetailPage() {
   if (query.isError || !query.data) return <div className="page"><BackLink to="/experiments">返回选型研究</BackLink><ErrorState error={query.error} onRetry={() => query.refetch()} /></div>;
 
   const experiment = query.data;
-  const tabs = selectionMode ? selectionTabs : optimizationTabs;
+  const tabs = experimentTabs(experiment);
   const delta = scoreDelta(experiment.bestScore, experiment.baselineScore);
   return <div className="page">
     <BackLink to="/experiments">返回选型研究</BackLink>
@@ -81,7 +73,7 @@ export function ExperimentDetailPage() {
     </div><ExperimentActions status={experiment.status} busy={action.isPending} onAction={value => action.mutate(value)} /></header>
     {action.isError && <div className="inline-alert"><AlertTriangle size={16} />{action.error.message}</div>}
     {experiment.activePhase && ['queued', 'running'].includes(experiment.status) && <section className="panel execution-progress" aria-label="自动部署与测试进度"><div className="execution-progress-heading"><LoaderCircle size={19}/><div><small>Looper 自动执行中</small><strong>{experiment.activePhaseDetail || experiment.activePhase}</strong></div></div><ol>{executionPhases.map(([key,label],index)=>{const activeIndex=executionPhases.findIndex(([phase])=>phase===experiment.activePhase);return <li className={key===experiment.activePhase?'active':index<activeIndex?'done':''} key={key}><span>{index+1}</span><small>{label}</small></li>;})}</ol></section>}
-    {experiment.status === 'completed' && !selectionMode && <PostOptimizationPanel
+     {experiment.status === 'completed' && !selectionMode && <PostOptimizationPanel
       data={postOptimization.data}
       loading={postOptimization.isLoading}
       error={postOptimization.isError ? postOptimization.error : optimize.isError ? optimize.error : null}
@@ -90,14 +82,17 @@ export function ExperimentDetailPage() {
     />}
     <nav className="tabs" aria-label="研究详情">{tabs.map(([key, label]) => <button key={key} className={tab === key ? 'active' : ''} onClick={() => setTab(key)}>{label}</button>)}</nav>
     {tab === 'overview' && <Overview experiment={experiment} evaluations={experiment.evaluations || []} delta={delta} />}
-    {tab === 'evaluations' && <Evaluations items={experiment.evaluations || []} retrying={retry.isPending} onRetry={attemptId => retry.mutate(attemptId)} />}
-    {tab === 'targets' && <AsyncPanel query={analysis}><TargetResults items={analysis.data?.targets || []} /></AsyncPanel>}
-    {tab === 'comparison' && <AsyncPanel query={analysis}><Comparisons items={analysis.data?.comparisons || []} /></AsyncPanel>}
-    {tab === 'pareto' && <AsyncPanel query={analysis}><Pareto data={analysis.data?.pareto || []} /></AsyncPanel>}
-    {tab === 'benchtrust' && <AsyncPanel query={analysis}>{analysis.data?.benchtrust ? <BenchTrustPanel data={analysis.data.benchtrust} /> : <EmptyState title="暂无可信度分析" description="完成实验并生成分析快照后，在这里展示四项可信度元指标。" />}</AsyncPanel>}
-    {tab === 'variability' && <AsyncPanel query={variability}>{variability.data ? <VariabilityPanel data={variability.data} /> : null}</AsyncPanel>}
+    {tab === 'results' && (selectionMode
+      ? <AsyncPanel query={analysis}><TargetResults items={analysis.data?.targets || []} /></AsyncPanel>
+      : <Evaluations items={experiment.evaluations || []} retrying={retry.isPending} onRetry={attemptId => retry.mutate(attemptId)} />)}
+    {tab.startsWith('benchmark:') && <BenchmarkMetricSection
+      section={(experiment.resultSections || []).find(item => `benchmark:${item.id}` === tab)}
+      definitions={experiment.metricDefinitions}
+      evaluations={experiment.evaluations || []}
+    />}
     {tab === 'evidence' && <AsyncPanel query={analysis}><Evidence items={analysis.data?.evidence || []} /></AsyncPanel>}
     {tab === 'config' && <Config value={experiment.config || {}} />}
+     {tab === 'terminal' && <ExperimentTerminal experimentId={experiment.id} />}
   </div>;
 }
 
@@ -161,7 +156,6 @@ function Overview({ experiment, evaluations, delta }: { experiment: Experiment; 
     ];
     return <>
       <section className="stat-grid detail-stats">{stats.map(item => <div className="stat-block" key={item.label}><div className="stat-label"><span>{item.label}</span></div><strong>{item.value}</strong><small>{item.note}</small></div>)}</section>
-      <MetricDefinitions definitions={experiment.metricDefinitions} />
       <section className="content-grid overview-grid">
         <div className="panel"><div className="panel-heading"><div><h2>采购问题</h2><p>{experiment.scenario?.workload_class || 'scenario'}</p></div></div><div className="decision-copy">{experiment.decisionQuestion || experiment.scenario?.decision_question || experiment.description}</div></div>
         <div className="panel"><div className="panel-heading"><div><h2>场景边界</h2></div></div><dl className="info-list"><div><dt>拓扑</dt><dd>{experiment.scenario?.topology || '—'}</dd></div><div><dt>主指标</dt><dd>{experiment.scenario?.primary_metric || experiment.objective || '—'}</dd></div><div><dt>重复</dt><dd>{evaluations.length ? `${evaluations.length} evaluations` : '待执行'}</dd></div></dl></div>
@@ -175,6 +169,43 @@ function Overview({ experiment, evaluations, delta }: { experiment: Experiment; 
     { label: '状态', value: experiment.status, note: formatDate(experiment.updatedAt) },
   ];
   return <section className="stat-grid detail-stats">{stats.map(item => <div className="stat-block" key={item.label}><div className="stat-label"><span>{item.label}</span></div><strong>{item.value}</strong><small>{item.note}</small></div>)}</section>;
+}
+
+export function experimentTabs(experiment: Experiment): string[][] {
+  const benchmarkTabs = (experiment.resultSections || []).slice(0, 2).map(
+    section => [`benchmark:${section.id}`, section.label],
+  );
+  return [
+    ['overview', '概览'],
+    ['results', experiment.mode === 'selection' ? '目标结果' : '运行结果'],
+    ...benchmarkTabs,
+    ['evidence', '证据'],
+    ['config', '配置'],
+    ['terminal', '原始终端'],
+  ];
+}
+
+function BenchmarkMetricSection({ section, definitions, evaluations }: {
+  section?: BenchmarkResultSection;
+  definitions?: Record<string, MetricDefinition>;
+  evaluations: Evaluation[];
+}) {
+  if (!section) return <EmptyState title="该 Benchmark 未声明此结果栏目" />;
+  return <section className="panel metric-definitions">
+    <div className="panel-heading"><div><h2>{section.label}</h2><p>{section.description || '由 Benchmark manifest 声明的专属结果。'}</p></div></div>
+    <div className="metric-definition-grid">{section.metrics.map(name => {
+      const definition = definitions?.[name];
+      const presentation = definition?.presentation;
+      const samples = evaluations.flatMap(item => item.metrics || []).filter(metric => metric.name === name);
+      const latest = samples[0];
+      return <article key={name}>
+        <div className="metric-definition-title"><strong>{presentation?.userLabel || name}</strong><span className="tag">{name}</span></div>
+        <strong className="metric-cell">{latest ? `${formatNumber(latest.value)} ${latest.unit || definition?.unit || ''}`.trim() : '待测试'}</strong>
+        <p>{presentation?.userDescription || definition?.description || '暂无指标说明。'}</p>
+        <span className="cell-meta">{samples.length ? `${samples.length} 个已采集样本` : '尚未采集该指标'}</span>
+      </article>;
+    })}</div>
+  </section>;
 }
 
 function MetricDefinitions({ definitions }: { definitions?: Record<string, MetricDefinition> }) {
