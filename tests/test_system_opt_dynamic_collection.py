@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 
 import pytest
 from looper_core.canonical import canonical_digest
 from looper_core.system_opt.collector import (
     CollectedMetric,
+    CollectionOverheadABEvidence,
     ComponentCollectionPlan,
     ComponentCollectionRequest,
     ComponentCollectionRun,
@@ -15,12 +17,14 @@ from looper_core.system_opt.collector import (
     begin_component_collection,
 )
 from looper_core.system_opt.dynamic_collection import (
+    DynamicCollectionEvidenceIndex,
     DynamicCollectionUnavailable,
     O1LiveSource,
     O2ComponentProbe,
     O2ComponentProbeEvidence,
     o1_live_source,
     o2_component_probe,
+    persist_dynamic_collection_evidence,
 )
 from looper_core.system_opt.hypothesis import ComponentHypothesis
 from looper_core.system_opt.observation import O0Observation, ObservationWindow
@@ -152,9 +156,10 @@ def _observation_window() -> ObservationWindow:
     )
 
 
-def test_o1_opens_every_component_before_one_explicit_window_then_finishes() -> None:
+def test_o1_pairs_only_the_first_window_and_binds_all_later_windows() -> None:
     events: list[str] = []
     plans = [_plan("cpu"), _plan("memory")]
+    monotonic_values = iter([1.0, 1.5, 2.0, 2.75, 3.0, 3.6])
     source = o1_live_source(
         plans=plans,
         collectors={
@@ -164,23 +169,43 @@ def test_o1_opens_every_component_before_one_explicit_window_then_finishes() -> 
         window_seconds=2.5,
         sleep_fn=lambda seconds: events.append(f"sleep:{seconds}"),
         wall_clock=lambda: AT,
+        monotonic=monotonic_values.__next__,
     )
 
     assert isinstance(source, O1LiveSource)
-    snapshots = source("window-1")
+    first_snapshots = source("window-1")
+    second_snapshots = source("window-2")
 
     assert events == [
+        "sleep:2.5",  # first-window disabled arm enters no collector code
         "begin:cpu",
         "begin:memory",
         "sleep:2.5",
         "finish:cpu",
         "finish:memory",
+        "begin:cpu",
+        "begin:memory",
+        "sleep:2.5",  # later windows run enabled only
+        "finish:cpu",
+        "finish:memory",
     ]
-    assert [snapshot.component for snapshot in snapshots] == ["cpu", "memory"]
+    assert [snapshot.component for snapshot in first_snapshots] == ["cpu", "memory"]
+    assert [snapshot.component for snapshot in second_snapshots] == ["cpu", "memory"]
     assert source.runs_by_window["window-1"][0].request.measurement_identity == {
         "window_id": "window-1",
         "observation_layer": "O1",
     }
+    first_bindings = source.overhead_digests_by_window["window-1"]
+    assert source.overhead_digests_by_window["window-2"] == first_bindings
+    assert set(first_bindings) == {"cpu", "memory"}
+    assert len(source.overhead_evidence_by_digest) == 2
+    for component, digest in first_bindings.items():
+        overhead = source.overhead_evidence_by_digest[digest]
+        assert overhead.collector_id == f"fixture.{component}"
+        assert overhead.collection_disabled_seconds == [0.5]
+        assert overhead.collection_enabled_seconds == [0.75]
+        assert "threshold" not in type(overhead).model_fields
+        assert "accepted" not in type(overhead).model_fields
 
 
 def test_o1_returns_none_without_starting_when_any_declared_collector_is_unavailable() -> None:
@@ -215,6 +240,7 @@ def test_o1_runtime_failure_cancels_other_open_component_sessions() -> None:
         source("window-1")
 
     assert events == [
+        "sleep",
         "begin:cpu",
         "begin:memory",
         "sleep",
@@ -222,6 +248,8 @@ def test_o1_runtime_failure_cancels_other_open_component_sessions() -> None:
         "cancel:memory",
     ]
     assert source.runs_by_window == {}
+    assert source.overhead_digests_by_window == {}
+    assert source.overhead_evidence_by_digest == {}
 
 
 def test_o2_collects_only_the_routed_component_and_returns_bound_evidence_digest() -> None:
@@ -326,6 +354,96 @@ def test_o2_failure_does_not_publish_partial_overhead_or_probe_evidence() -> Non
     ]
     assert probe.evidence_by_digest == {}
     assert probe.overhead_evidence_by_digest == {}
+
+
+def test_persist_dynamic_collection_evidence_writes_replayable_control_json(tmp_path) -> None:
+    o1_events: list[str] = []
+    o1 = o1_live_source(
+        plans=[_plan("cpu")],
+        collectors={"cpu": _Collector("cpu", o1_events)},
+        window_seconds=0.5,
+        sleep_fn=lambda _: None,
+        wall_clock=lambda: AT,
+        monotonic=iter([1.0, 1.5, 2.0, 2.75]).__next__,
+    )
+    o2_events: list[str] = []
+    o2 = o2_component_probe(
+        plans=[_plan("memory")],
+        collectors={"memory": _Collector("memory", o2_events)},
+        window_seconds=0.25,
+        sleep_fn=lambda _: None,
+        wall_clock=lambda: AT,
+        monotonic=iter([3.0, 3.25, 4.0, 4.5]).__next__,
+    )
+    assert o1 is not None and o2 is not None
+    o1("window-1")
+    hypothesis = ComponentHypothesis(
+        hypothesis_id="hyp-memory",
+        symptom_id="symptom-1",
+        component="memory",
+        rank=1,
+    )
+    o2(hypothesis, _observation_window())
+    control = tmp_path / "control"
+
+    index = persist_dynamic_collection_evidence(control, o1_source=o1, o2_probe=o2)
+
+    loaded_index = DynamicCollectionEvidenceIndex.model_validate_json(
+        (control / "dynamic-collection-evidence-index.json").read_text(encoding="utf-8")
+    )
+    assert loaded_index == index
+    o1_run_digest = index.o1_runs_by_window["window-1"][0]
+    o1_run_path = control / f"o1-collection-run-{o1_run_digest.removeprefix('sha256:')}.json"
+    loaded_run = ComponentCollectionRun.model_validate_json(o1_run_path.read_text(encoding="utf-8"))
+    assert loaded_run.digest == o1_run_digest
+
+    for digest in {
+        *index.o1_overhead_digests_by_window["window-1"].values(),
+        *index.o2_overhead_evidence_digests,
+    }:
+        prefix = "o1" if digest in o1.overhead_evidence_by_digest else "o2"
+        path = control / f"{prefix}-overhead-evidence-{digest.removeprefix('sha256:')}.json"
+        loaded = CollectionOverheadABEvidence.model_validate_json(path.read_text(encoding="utf-8"))
+        assert loaded.digest == digest
+
+    o2_digest = index.o2_probe_evidence_digests[0]
+    o2_path = control / f"o2-probe-evidence-{o2_digest.removeprefix('sha256:')}.json"
+    loaded_o2 = O2ComponentProbeEvidence.model_validate_json(o2_path.read_text(encoding="utf-8"))
+    assert loaded_o2.digest == o2_digest
+    assert not list(control.glob("*.tmp"))
+    assert json.loads((control / "dynamic-collection-evidence-index.json").read_text())[
+        "schema_version"
+    ] == "looper.dynamic-collection-evidence-index/v1alpha1"
+
+
+def test_persist_dynamic_collection_evidence_rejects_non_control_directory(tmp_path) -> None:
+    with pytest.raises(ValueError, match="under control"):
+        persist_dynamic_collection_evidence(tmp_path / "artifacts")
+
+
+def test_persist_dynamic_collection_evidence_rejects_partial_o1_binding_before_writes(
+    tmp_path,
+) -> None:
+    source = o1_live_source(
+        plans=[_plan("cpu"), _plan("memory")],
+        collectors={
+            "cpu": _Collector("cpu", []),
+            "memory": _Collector("memory", []),
+        },
+        window_seconds=0.5,
+        sleep_fn=lambda _: None,
+        wall_clock=lambda: AT,
+        monotonic=iter([1.0, 1.5, 2.0, 2.75]).__next__,
+    )
+    assert source is not None
+    source("window-1")
+    source.overhead_digests_by_window["window-1"].pop("memory")
+    control = tmp_path / "control"
+
+    with pytest.raises(ValueError, match="components are not exactly bound"):
+        persist_dynamic_collection_evidence(control, o1_source=source)
+
+    assert not control.exists()
 
 
 def test_o2_returns_none_when_declared_probe_capability_is_unavailable() -> None:
