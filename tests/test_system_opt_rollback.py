@@ -1,17 +1,20 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 
 import pytest
 from looper_core.system_opt.executor import ConfigSnapshot, OperationStatus, SnapshotEntry
 from looper_core.system_opt.rollback import (
+    LEGACY_ROLLBACK_SCHEMA,
     REGRESSION_DEPENDENCY,
+    LegacyRollbackRecord,
     PhaseRestoration,
     RestorationStatus,
     RollbackLevel,
     RollbackRecord,
     RollbackStatus,
-    require_regression_support,
+    load_rollback_record,
     verify_phase_restoration,
 )
 
@@ -59,15 +62,48 @@ class TestRollbackRecordContract:
         record = _record(status=RollbackStatus.FAILED, verified=False)
         assert record.status is RollbackStatus.FAILED
 
-    def test_regression_level_is_pinned_to_s8_dependency(self):
-        with pytest.raises(ValueError, match="S8 result vector"):
-            _record(level=RollbackLevel.REGRESSION, note=None)
-        record = _record(level=RollbackLevel.REGRESSION, note=REGRESSION_DEPENDENCY)
+    def test_regression_level_requires_executable_s8_bindings(self):
+        with pytest.raises(ValueError, match="checkpoint, result-vector, and threshold"):
+            _record(level=RollbackLevel.REGRESSION)
+        record = _record(
+            level=RollbackLevel.REGRESSION,
+            checkpoint_digest="sha256:" + "c" * 64,
+            regression_vector_digest="sha256:" + "d" * 64,
+            regression_threshold=0.25,
+            baseline_snapshot_digest="sha256:" + "e" * 64,
+            final_snapshot_digest="sha256:" + "e" * 64,
+        )
         assert record.level is RollbackLevel.REGRESSION
 
-    def test_require_regression_support_fails_closed(self):
-        with pytest.raises(NotImplementedError, match="S8"):
-            require_regression_support()
+    def test_v1alpha1_regression_placeholder_still_loads_without_rewrite(self):
+        payload = _record().model_dump(mode="json")
+        payload.update(
+            {
+                "schema_version": LEGACY_ROLLBACK_SCHEMA,
+                "level": RollbackLevel.REGRESSION,
+                "note": REGRESSION_DEPENDENCY,
+            }
+        )
+        for field in (
+            "checkpoint_digest",
+            "regression_vector_digest",
+            "regression_threshold",
+        ):
+            payload.pop(field, None)
+
+        loaded = load_rollback_record(json.dumps(payload))
+
+        assert isinstance(loaded, LegacyRollbackRecord)
+        assert loaded.schema_version == LEGACY_ROLLBACK_SCHEMA
+        assert loaded.note == REGRESSION_DEPENDENCY
+
+    def test_current_schema_dispatches_to_current_model(self):
+        record = _record()
+
+        loaded = load_rollback_record(record.model_dump_json())
+
+        assert isinstance(loaded, RollbackRecord)
+        assert loaded == record
 
     def test_evidence_digests_must_be_present_and_unique(self):
         with pytest.raises(ValueError):
