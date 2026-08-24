@@ -176,3 +176,45 @@ class TestRetestRequests:
 
         with pytest.raises(ValueError, match="no window_ids"):
             module.discover_retest_requests(layout)
+
+    def test_serves_sequential_request_batches_until_idle(self, tmp_path):
+        # ZCode amendment regression: one dynamic phase issues several request
+        # batches over time (intervention retest group, then verification
+        # groups). The runner must keep serving instead of exiting after the
+        # first batch; the injected run callback materializes a second request
+        # the way the engine would while the first batch is being produced.
+        module = _load_module()
+        layout = _layout(tmp_path)
+        control = layout.control
+        control.mkdir(parents=True, exist_ok=True)
+        (control / "retest-request-hyp-thp.json").write_text(
+            json.dumps({"window_ids": ["retest-hyp-thp-run1"]}),
+            encoding="utf-8",
+        )
+        calls = {"count": 0}
+
+        def fake_run(argv):
+            calls["count"] += 1
+            if calls["count"] == 1:
+                (control / "retest-request-verify-window-3-1.json").write_text(
+                    json.dumps({"window_ids": ["verify-window-3-1-run1"]}),
+                    encoding="utf-8",
+                )
+            return RAW_OUTPUT
+
+        produced = module.serve_retest_requests(
+            layout=layout,
+            argv=ARGV,
+            run=fake_run,
+            poll_seconds=0.01,
+            timeout_seconds=5.0,
+            idle_seconds=0.2,
+        )
+
+        assert (
+            "retest-request-hyp-thp.json:retest-hyp-thp-run1" in produced
+        )
+        assert (
+            "retest-request-verify-window-3-1.json:verify-window-3-1-run1" in produced
+        )
+        assert (layout.window("verify-window-3-1-run1") / "o0.txt").is_file()

@@ -126,10 +126,15 @@ def serve_retest_requests(
     run: RunCommand,
     poll_seconds: float,
     timeout_seconds: float,
+    idle_seconds: float = 30.0,
 ) -> list[str]:
     """Poll control/ for retest requests and supply the requested windows.
 
     只补尚未落盘的窗口；窗口身份由合同 + 实际 argv 计算，供引擎逐窗核对。
+    一个动态相位会陆续产生多批请求（干预复测组 + 各复验组），因此本函数
+    **持续服务**：每服务一批就重置空闲计时，直到总超时或连续
+    ``idle_seconds`` 无新请求才返回（不能产出第一批就退出——后续复验
+    请求会因无人供数而让引擎超时停相位）。
     """
 
     contract = parse_workload_contract_yaml(
@@ -137,8 +142,10 @@ def serve_retest_requests(
     )
     identity = compute_identity(contract, argv)
     deadline = time.monotonic() + timeout_seconds
+    idle_deadline = time.monotonic() + idle_seconds
     produced: list[str] = []
     while True:
+        served_this_round = 0
         requests = discover_retest_requests(layout)
         for request_name, window_ids in requests.items():
             for window_id in window_ids:
@@ -146,7 +153,11 @@ def serve_retest_requests(
                     continue
                 write_window(layout, window_id, identity, run(argv))
                 produced.append(f"{request_name}:{window_id}")
-        if produced:
+                served_this_round += 1
+        if served_this_round:
+            idle_deadline = time.monotonic() + idle_seconds
+            continue
+        if time.monotonic() >= idle_deadline:
             return produced
         if time.monotonic() >= deadline:
             return produced
@@ -162,6 +173,7 @@ def main() -> None:
     parser.add_argument("--timeout-seconds", type=float, default=600.0)
     parser.add_argument("--retest-poll-seconds", type=float, default=1.0)
     parser.add_argument("--retest-wait-seconds", type=float, default=0.0)
+    parser.add_argument("--retest-idle-seconds", type=float, default=60.0)
     parser.add_argument(
         "load_argv",
         nargs=argparse.REMAINDER,
@@ -198,6 +210,7 @@ def main() -> None:
             run=run,
             poll_seconds=args.retest_poll_seconds,
             timeout_seconds=args.retest_wait_seconds,
+            idle_seconds=args.retest_idle_seconds,
         )
         for item in retests:
             print(f"retest window written: {item}")
