@@ -11,6 +11,7 @@ never claim the other platform passed.
 from __future__ import annotations
 
 import multiprocessing
+import os
 import threading
 import time
 from pathlib import Path
@@ -89,6 +90,35 @@ def _worker_hold_lock_forever(root, plan, execution_id, operation, entered):
         entered.set()
         while True:
             time.sleep(0.05)
+
+
+def _assert_scope_can_enter_while_other_is_held(
+    store: DurableReceiptStore,
+    plan: InterventionPlan,
+    *,
+    held_execution_id: str,
+    held_operation: ReceiptOperation,
+    other_execution_id: str,
+    other_operation: ReceiptOperation,
+) -> None:
+    entered = threading.Event()
+    release = threading.Event()
+
+    def holder() -> None:
+        with store._mutex(plan.digest, held_execution_id, held_operation):
+            entered.set()
+            release.wait(timeout=_EVENT_WAIT_TIMEOUT)
+
+    thread = threading.Thread(target=holder)
+    thread.start()
+    try:
+        assert entered.wait(timeout=_EVENT_WAIT_TIMEOUT)
+        with store._mutex(plan.digest, other_execution_id, other_operation):
+            assert thread.is_alive()
+    finally:
+        release.set()
+        thread.join(timeout=_THREAD_JOIN_TIMEOUT)
+        assert not thread.is_alive()
 
 
 def test_same_scope_two_threads_contend(tmp_path: Path) -> None:
@@ -183,31 +213,27 @@ def test_lock_holder_terminate_releases_lock(tmp_path: Path) -> None:
 def test_different_executions_do_not_block(tmp_path: Path) -> None:
     store = DurableReceiptStore(tmp_path / "receipts")
     plan = _plan()
-    first = store.start(plan=plan, execution_id="window-1", operation=ReceiptOperation.CANDIDATE)
-    second = store.start(plan=plan, execution_id="window-2", operation=ReceiptOperation.CANDIDATE)
-    assert first.execution_digest != second.execution_digest
+    _assert_scope_can_enter_while_other_is_held(
+        store,
+        plan,
+        held_execution_id="window-1",
+        held_operation=ReceiptOperation.CANDIDATE,
+        other_execution_id="window-2",
+        other_operation=ReceiptOperation.CANDIDATE,
+    )
 
 
 def test_candidate_and_recovery_do_not_block(tmp_path: Path) -> None:
     store = DurableReceiptStore(tmp_path / "receipts")
     plan = _plan()
-    candidate = store.start(
-        plan=plan, execution_id="window-1", operation=ReceiptOperation.CANDIDATE
+    _assert_scope_can_enter_while_other_is_held(
+        store,
+        plan,
+        held_execution_id="window-1",
+        held_operation=ReceiptOperation.CANDIDATE,
+        other_execution_id="window-1",
+        other_operation=ReceiptOperation.RECOVERY,
     )
-    candidate = store.advance(
-        candidate,
-        ReceiptStageV2.SAFETY_TERMINAL,
-        safety_state=SafetyState.KEPT,
-        evidence_digest="sha256:" + "a" * 64,
-    )
-    recovery = store.start(
-        plan=plan,
-        execution_id="window-1",
-        operation=ReceiptOperation.RECOVERY,
-        parent_receipt_digest=candidate.digest,
-    )
-    assert candidate.operation is ReceiptOperation.CANDIDATE
-    assert recovery.operation is ReceiptOperation.RECOVERY
 
 
 def test_concurrent_advance_same_current_is_single_head(tmp_path: Path) -> None:
@@ -317,15 +343,63 @@ def test_legacy_guard_fails_closed_and_is_preserved(tmp_path: Path) -> None:
     assert not list((tmp_path / "receipts").glob("*.json"))
 
 
+def test_legacy_guard_directory_also_fails_closed(tmp_path: Path) -> None:
+    plan = _plan()
+    store = DurableReceiptStore(tmp_path / "receipts")
+    identity = store._execution_digest(plan.digest, "window-1").removeprefix("sha256:")
+    legacy_guard = tmp_path / "receipts" / f".{identity}.candidate.guard"
+    legacy_guard.mkdir(parents=True)
+
+    with pytest.raises(ReceiptStoreError, match="legacy receipt guard"):
+        store.start(plan=plan, execution_id="window-1", operation=ReceiptOperation.CANDIDATE)
+
+    assert legacy_guard.is_dir()
+
+
+@pytest.mark.parametrize("fstype", [None, "nfs", "unclassified-local-fs"])
+def test_linux_unknown_or_unsupported_filesystem_fails_closed(
+    fstype: str | None,
+) -> None:
+    with pytest.raises(ReceiptStoreUnavailable):
+        DurableReceiptStore._assert_supported_linux_filesystem(fstype)
+
+
+def test_lock_unavailable_is_a_receipt_store_error() -> None:
+    assert issubclass(ReceiptStoreUnavailable, ReceiptStoreError)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows drive classification")
+def test_windows_mapped_drive_fails_before_creating_store(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = DurableReceiptStore(tmp_path / "receipts")
+    monkeypatch.setattr(store, "_windows_drive_type", lambda _root: 4)
+
+    with (
+        pytest.raises(ReceiptStoreUnavailable, match="remote"),
+        store._mutex(_plan().digest, "window-1", ReceiptOperation.CANDIDATE),
+    ):
+        pass
+
+    assert not store.root.exists()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows extended-path semantics")
 def test_windows_long_path_lock(tmp_path: Path) -> None:
     plan = _plan()
     # Keep the store root below MAX_PATH (so mkdir/glob work) but push each
     # content/lock file path beyond it, forcing the Windows extended-path
     # (``\\?\``) branch inside ``_native_path``.
-    long_segment = "segment-" * 15
+    target_root_length = 230
+    padding = target_root_length - len(str(tmp_path.absolute())) - 1
+    assert 1 <= padding < 255
+    long_segment = "x" * padding
     store_root = tmp_path / long_segment
     store_root.mkdir(parents=True, exist_ok=True)
+    assert len(str(store_root.absolute())) == target_root_length
     store = DurableReceiptStore(store_root)
+    lock_path = _lock_file(store, plan, "window-long", ReceiptOperation.CANDIDATE)
+    assert len(str(lock_path)) > 260
     receipt = store.start(
         plan=plan, execution_id="window-long", operation=ReceiptOperation.CANDIDATE
     )

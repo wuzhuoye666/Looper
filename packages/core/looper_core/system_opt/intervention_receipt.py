@@ -15,6 +15,7 @@ reconciliation.
 
 from __future__ import annotations
 
+import ctypes
 import errno
 import json
 import os
@@ -71,6 +72,9 @@ _NETWORK_FS_TYPES = frozenset(
         "sshfs",
     }
 )
+_SUPPORTED_LOCAL_LINUX_FS_TYPES = frozenset({"btrfs", "ext2", "ext3", "ext4", "xfs"})
+_WINDOWS_DRIVE_FIXED = 3
+_WINDOWS_DRIVE_REMOTE = 4
 _ALLOWED_SUCCESSORS = {
     ReceiptStageV2.PLANNED: {
         ReceiptStageV2.PREFLIGHT_COMPLETED,
@@ -142,7 +146,7 @@ class ReceiptStoreError(RuntimeError):
     """Raised when a durable receipt chain cannot be trusted."""
 
 
-class ReceiptStoreUnavailable(RuntimeError):
+class ReceiptStoreUnavailable(ReceiptStoreError):
     """The store's filesystem cannot provably support process advisory locking.
 
     Distinct from ``ReceiptStoreError("receipt chain is busy")``: this signals a
@@ -203,33 +207,59 @@ class DurableReceiptStore:
         if not os.path.isdir(native_root):
             return
         for entry in os.scandir(native_root):
-            if entry.is_file(follow_symlinks=False) and _LEGACY_GUARD_NAME.fullmatch(
-                entry.name
-            ):
+            if _LEGACY_GUARD_NAME.fullmatch(entry.name):
                 raise ReceiptStoreError(
                     "legacy receipt guard requires explicit reconciliation"
                 )
 
-    def _assert_local_filesystem(self) -> None:
-        """Reject provably non-local filesystems before taking any lock.
-
-        Windows: reject explicit UNC/remote roots.  Linux: reject mount types
-        known to be network filesystems.  Anything the standard library cannot
-        reliably classify is left to the exclusion self-test, which is the final
-        authority on provable mutual exclusion.
-        """
-        if os.name == "nt":
-            drive = os.path.splitdrive(str(self.root.absolute()))[0]
-            if drive.startswith("\\\\"):
-                raise ReceiptStoreUnavailable(
-                    "receipt store on a UNC/remote volume is not supported"
-                )
-            return
-        fstype = self._linux_mount_fstype()
+    @staticmethod
+    def _assert_supported_linux_filesystem(fstype: str | None) -> None:
+        if fstype is None:
+            raise ReceiptStoreUnavailable(
+                "receipt store filesystem type cannot be determined"
+            )
         if fstype in _NETWORK_FS_TYPES:
             raise ReceiptStoreUnavailable(
                 f"receipt store on a network filesystem is not supported: {fstype}"
             )
+        if fstype not in _SUPPORTED_LOCAL_LINUX_FS_TYPES:
+            raise ReceiptStoreUnavailable(
+                f"receipt store filesystem type is not in the local allowlist: {fstype}"
+            )
+
+    @staticmethod
+    def _windows_drive_type(root: Path) -> int:
+        drive = os.path.splitdrive(str(root.absolute()))[0]
+        if drive.startswith("\\\\"):
+            return _WINDOWS_DRIVE_REMOTE
+        if not drive:
+            return 0
+        get_drive_type = ctypes.windll.kernel32.GetDriveTypeW  # type: ignore[attr-defined]
+        get_drive_type.argtypes = [ctypes.c_wchar_p]
+        get_drive_type.restype = ctypes.c_uint
+        return int(get_drive_type(f"{drive}\\"))
+
+    def _assert_local_filesystem(self) -> None:
+        """Reject provably non-local filesystems before taking any lock.
+
+        Windows accepts only a fixed local drive, using ``GetDriveTypeW`` so a
+        mapped drive is not mistaken for a local drive letter. Linux accepts an
+        explicit local-filesystem allowlist. Unknown or remote storage fails
+        closed before the receipt root or lock anchor is created; the exclusion
+        self-test is an additional capability check, not a filesystem classifier.
+        """
+        if os.name == "nt":
+            drive_type = self._windows_drive_type(self.root)
+            if drive_type == _WINDOWS_DRIVE_REMOTE:
+                raise ReceiptStoreUnavailable(
+                    "receipt store on a UNC/remote volume is not supported"
+                )
+            if drive_type != _WINDOWS_DRIVE_FIXED:
+                raise ReceiptStoreUnavailable(
+                    f"receipt store is not on a fixed local drive: type={drive_type}"
+                )
+            return
+        self._assert_supported_linux_filesystem(self._linux_mount_fstype())
 
     def _linux_mount_fstype(self) -> str | None:
         try:
@@ -312,10 +342,10 @@ class DurableReceiptStore:
     def _mutex(
         self, plan_digest: str, execution_id: str, operation: ReceiptOperation
     ) -> Iterator[None]:
-        self.root.mkdir(parents=True, exist_ok=True)
-        self._assert_no_legacy_guard()
         if not self._lock_support_verified:
             self._assert_local_filesystem()
+        self.root.mkdir(parents=True, exist_ok=True)
+        self._assert_no_legacy_guard()
         lock_path = self._lock_path(plan_digest, execution_id, operation)
         fd = self._acquire_lock(lock_path)
         try:
@@ -660,4 +690,5 @@ __all__ = [
     "InterventionReceiptPointer",
     "RECEIPT_POINTER_SCHEMA",
     "ReceiptStoreError",
+    "ReceiptStoreUnavailable",
 ]
