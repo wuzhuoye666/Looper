@@ -1,4 +1,4 @@
-# 实现地图：架构概念 → 代码对照（2026-08-23 深夜版）
+# 实现地图：架构概念 → 代码对照（2026-08-24 版）
 
 > 用途：架构提出者对照代码快速建立完整实现理解；答辩前自查。
 > 所有路径相对 `packages/core/looper_core/system_opt/`（另有标注者除外）。
@@ -60,13 +60,13 @@
 | 构件 | 文件 | 核心约束 |
 |---|---|---|
 | workload 合同 | `workload.py` | load_provider=external-test 唯一枚举；argv 只存 digest（SO-D020：引擎永不造负载） |
-| 观察窗口 | `observation.py` | O0 解析器注册表（stress-ng YAML/fio/iperf3 JSON，真实夹具钉数值）；身份漂移即 WorkloadIdentityDrift |
+| 观察窗口 | `observation.py` `dynamic_collection.py` | O0 解析器注册表（stress-ng YAML / fio JSON / iperf3 JSON / sysbench 文本，真实夹具钉数值）；身份漂移即 WorkloadIdentityDrift；活体 O1/O2 回调（o1_live_source / o2_component_probe） |
 | 假设路由 | `hypothesis.py` | D2 三硬规则；confirmed 唯一走 accepted 业务复测；L7 桥接待提案 |
 | 结束门禁 | `phase_gate.py` | 判定顺序：安全→身份→预算→目标→收敛；决策必须引用触发字段 |
 | 复验窗口 | `verification.py` | RetestOutcome = 改善 + 原始批次 digest |
 | 重激活 | `reactivation.py` | A+B 案；资格≠自动重启 |
 | **编排器** | `dynamic_loop.py` | run_dynamic_phase：每窗 组装→SLO/症状→账本→干预(注入)→复验→门禁判定→显式停止；负载/施加/测量全注入回调 |
-| **真实接线** | `dynamic_adapters.py` + `dynamic_demo.py` + CLI `system-opt dynamic-run` | 会话文件是引擎↔外部负载唯一界面（只读 windows/ 只写 control/）；干预 = L1 keep 施加 + 业务复测 S6/S7 + 拒绝即恢复；相位收尾无条件恢复到相位起点（晋升≠持久变更）；收敛计数器接真实干预轮 LCB |
+| **真实接线** | `dynamic_adapters.py` + `dynamic_demo.py` + CLI `system-opt dynamic-run` + `dynamic_collection.py` + `examples/system-optimizer/external_load_session.py` | 会话文件是引擎↔外部负载唯一界面（只读 windows/ 只写 control/）；干预 = L1 keep 施加 + 业务复测 S6/S7 + 拒绝即恢复；相位收尾无条件恢复到相位起点（晋升≠持久变更）；收敛计数器接真实干预轮 LCB；活体 O1/O2 经 `dynamic_collection.py` 注入；外部会话 runner（测试侧）产观察窗 + 按 control/retest-request 补复测/复验窗 |
 
 ## 五、证据与纪律机制（答辩硬货）
 
@@ -83,3 +83,9 @@
 | `tests/test_system_opt_dynamic_loop.py` | 动态相位 7 场景端到端（含晋升 fail-closed、漂移停相） |
 | `tests/test_system_opt_policy_scoring.py` | fail-closed 族 + F-PROJECT-002 变换族 + 恒等式属性测试 |
 | `tests/test_system_opt_engine_composition.py` | GPT 候选身份：选中=执行，越域留痕不执行，非恢复相位不得 completed |
+| `tests/test_system_opt_observation.py` | O0 解析器真实夹具钉数值（stress-ng/fio/iperf3/sysbench）+ 身份漂移 fail-closed + 窗口组装与 digest 确定性 |
+| `tests/test_system_opt_external_session.py` | 外部会话 runner：身份计算、窗口落盘往返、复测请求发现与持续服务多批 |
+| `tests/test_system_opt_dynamic_cli.py` | dynamic-run CLI 端到端（simulated）+ 收敛/退化接线 + O1/O2 参数 fail-closed |
+| `tests/test_system_opt_dynamic_collection.py` | 活体 O1/O2 采集（o1_live_source/o2_component_probe）+ O2 探测证据 |
+| `tests/test_system_opt_dynamic_reactivate.py` | D5 重激活 A+B 资格判定 |
+| `tests/test_system_opt_dynamic_e2e.py` | 两侧合龙握手：runner 产窗 ↔ 引擎 FileO0Source/FileLoadIdentity/BusinessRetestPlanner，症状→干预→复验→晋升 |
