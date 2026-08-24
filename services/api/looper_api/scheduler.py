@@ -285,6 +285,26 @@ def _manifest_workloads(benchmark: BenchmarkRecord) -> dict[str, dict[str, Any]]
     return {item["id"]: item for item in benchmark.manifest_json["spec"]["workloads"]}
 
 
+def _selection_parameters(benchmark: BenchmarkRecord) -> dict[str, Any]:
+    """Resolve the benchmark-owned defaults used by target comparison runs.
+
+    Selection studies intentionally do not expose an optimization baseline in
+    their public experiment contract. The runtime envelope still needs the
+    benchmark's declared parameters, so resolve them at candidate creation.
+    """
+    declarations = benchmark.manifest_json["spec"].get("parameters") or {}
+    missing = sorted(
+        name for name, declaration in declarations.items()
+        if not isinstance(declaration, dict) or "default" not in declaration
+    )
+    if missing:
+        raise SchedulerError(
+            "selection benchmark parameters require defaults: "
+            f"{missing}"
+        )
+    return {name: declaration["default"] for name, declaration in declarations.items()}
+
+
 def _attempt_count(session: Session, experiment_id: str) -> int:
     return int(
         session.scalar(
@@ -333,6 +353,8 @@ def _create_candidate(
     benchmark = get_benchmark(session, spec.benchmark_id, spec.benchmark_version)
     if benchmark is None:
         raise SchedulerError("benchmark disappeared while scheduling")
+    if spec.mode == ExperimentMode.SELECTION:
+        parameters = _selection_parameters(benchmark)
     config_payload = {
         "benchmark": benchmark.manifest_digest,
         "parameters": parameters,

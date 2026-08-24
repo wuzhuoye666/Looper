@@ -9,6 +9,7 @@ from looper_api.app import _normalize_create_request, list_benchmarks
 from looper_api.models import (
     AttemptRecord,
     BenchmarkRecord,
+    CandidateRecord,
     CheckRecord,
     EvaluationRecord,
     ObservationRecord,
@@ -77,6 +78,14 @@ def test_selection_defaults_are_benchmark_specific_and_used_by_create_request(
     assert request.spec.design.min_repeats == 5
     assert request.spec.budget.wall_time_seconds == 3600
     assert request.spec.design.random_seed == 20260301
+
+    experiment = create_experiment(session, request)
+    start_experiment(session, experiment)
+    candidate = session.scalar(
+        select(CandidateRecord).where(CandidateRecord.experiment_id == experiment.id)
+    )
+    assert candidate is not None
+    assert candidate.parameters_json == {"threads": 4, "time": 10}
 
 
 def test_selection_analysis_accepts_boolean_scenario_flags(db_session: object) -> None:

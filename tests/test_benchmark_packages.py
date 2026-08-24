@@ -24,6 +24,7 @@ from looper_api.serialization import benchmark_view
 from looper_worker.package_cache import PackageCacheError, materialize_package
 
 PACKAGE_ROOT = Path("benchmarks/phoronix-phpbench").resolve()
+SYSBENCH_PACKAGE_ROOT = Path("benchmarks/sysbench").resolve()
 
 
 def _zip(files: dict[str, bytes]) -> bytes:
@@ -53,6 +54,41 @@ def test_package_is_canonicalized_installed_and_materialized(tmp_path: Path) -> 
     )
     assert (worker_root / "benchmark.yaml").is_file()
     assert (worker_root / "producer.py").is_file()
+
+
+@pytest.mark.parametrize(
+    ("package_root", "expected_files"),
+    [
+        (
+            SYSBENCH_PACKAGE_ROOT,
+            {
+                "benchmark.yaml",
+                "dependency-lock.json",
+                "normalizer.py",
+                "prepare.py",
+                "producer.py",
+            },
+        ),
+        (
+            PACKAGE_ROOT,
+            {
+                "benchmark.yaml",
+                "dependency-lock.json",
+                "normalizer.py",
+                "prepare.py",
+                "producer.py",
+                "README.md",
+                "fixtures/pts-result.json",
+            },
+        ),
+    ],
+)
+def test_benchmark_archive_contains_complete_source_contract(
+    package_root: Path, expected_files: set[str]
+) -> None:
+    archive, _digest = build_directory_package(package_root)
+    with zipfile.ZipFile(io.BytesIO(archive)) as package:
+        assert set(package.namelist()) == expected_files
 
 
 def test_package_rejects_path_traversal_and_digest_tampering(tmp_path: Path) -> None:
@@ -103,7 +139,7 @@ def test_executable_zip_registration_grants_explicit_local_package_trust(
     )
     benchmark = db_session.get(
         BenchmarkRecord,
-        "looper.phoronix-phpbench@10.8.6-phpbench1.1.6-looper5",
+        "looper.phoronix-phpbench@10.8.6-phpbench1.1.6-looper6",
     )
     assert benchmark is not None
     assert benchmark.trusted is True
