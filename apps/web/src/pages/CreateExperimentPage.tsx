@@ -7,12 +7,16 @@ import { BackLink } from '../components/Layout';
 import { ErrorState } from '../components/States';
 import { TargetSshButton } from '../components/TargetSshButton';
 import { api } from '../lib/api';
+import {
+  benchmarkDecisionQuestion, benchmarkDescription, benchmarkMetricLabel, benchmarkName, benchmarkScenario,
+  capabilityLabel, inputKindLabel, topologyLabel,
+} from '../lib/benchmarkPresentation';
 import type { Benchmark, BenchmarkTargetRequirementSummary, CloudInstanceType, CloudProviderId } from '../lib/types';
 
 const steps = [
-  { label: '采购问题', icon: ClipboardCheck },
-  { label: '场景与资源', icon: Boxes },
-  { label: '证据协议', icon: Server },
+  { label: '选型需求', icon: ClipboardCheck },
+  { label: '测试场景与资源', icon: Boxes },
+  { label: '测试参数', icon: Server },
 ];
 
 const FALLBACK_SELECTION_DEFAULTS = { repeats: 5, timeout: 86400, seed: 20260301 };
@@ -36,7 +40,7 @@ function requirementLabels(summary?: BenchmarkTargetRequirementSummary): string[
   if (summary.architectures.length) labels.push(`架构：${summary.architectures.map(value => ARCH_LABELS[value] || value).join(' / ')}`);
   if (summary.minimumLogicalCpus != null) labels.push(`CPU：至少 ${summary.minimumLogicalCpus} 个逻辑核`);
   if (summary.minimumMemoryGiB != null) labels.push(`内存：至少 ${summary.minimumMemoryGiB} GiB`);
-  if (summary.capabilities.length) labels.push(`基础能力：${summary.capabilities.join('、')}`);
+  if (summary.capabilities.length) labels.push(`基础能力：${summary.capabilities.map(capabilityLabel).join('、')}`);
   return labels;
 }
 
@@ -205,7 +209,7 @@ export function CreateExperimentPage() {
   return <div className="page narrow-page">
     <BackLink to="/experiments">返回选型研究</BackLink>
     <header className="workspace-heading">
-      <div><h1>新建选型研究</h1><p>绑定采购问题、真实 workload 和候选服务器。</p></div>
+      <div><h1>新建选型研究</h1><p>填写选型需求，选择真实测试负载和候选服务器。</p></div>
       <button type="button" className={`button advisor-entry-button ${advisorOpen ? 'secondary open' : 'primary'}`} aria-expanded={advisorOpen} aria-controls="research-selection-advisor" onClick={() => setAdvisorOpen(current => !current)}><Sparkles size={15} />{advisorOpen ? '收起选型助手' : '打开选型助手'}</button>
     </header>
     {advisorOpen && <section id="research-selection-advisor" className="research-advisor-section" aria-label="云服务器选型助手">
@@ -242,16 +246,16 @@ export function CreateExperimentPage() {
     </ol>
     <form className="panel form-panel" onSubmit={next}>
       {step === 0 && <fieldset>
-        <legend>采购问题</legend>
+        <legend>选型需求</legend>
         <div className="form-grid form-section-gap">
           <label className="full"><span>研究名称 *</span><input required autoFocus value={form.name} onChange={event => update('name', event.target.value)} placeholder="例如：广州 8 vCPU 数据库实例选型" /></label>
-          <label className="full"><span>决策背景</span><textarea rows={4} value={form.description} onChange={event => update('description', event.target.value)} placeholder="记录业务 SLO、预算和适用范围" /></label>
+          <label className="full"><span>选型背景</span><textarea rows={4} value={form.description} onChange={event => update('description', event.target.value)} placeholder="记录业务服务目标、预算和适用范围" /></label>
         </div>
       </fieldset>}
       {step === 1 && <fieldset>
-        <legend>场景与候选资源</legend>
+        <legend>测试场景与候选资源</legend>
         <div className="form-grid form-section-gap">
-          <label className="full"><span>Benchmark 场景 *</span>
+          <label className="full"><span>套件名字 *</span>
             <select required value={form.benchmarkKey} onChange={event => {
               const benchmarkKey = event.currentTarget.value;
               const benchmark = selectableBenchmarks.find(item => (item.key || item.id) === benchmarkKey);
@@ -265,22 +269,23 @@ export function CreateExperimentPage() {
                 inputBindings: {},
               }));
             }}>
-              {!selectableBenchmarks.length && <option value="">暂无可直接测试的 Benchmark</option>}
-              {selectableBenchmarks.map(item => <option key={item.key || `${item.id}-${item.version}`} value={item.key || item.id}>{item.name}{item.version ? ` · ${item.version}` : ''}</option>)}
+              {!selectableBenchmarks.length && <option value="">暂无可直接运行的测试套件</option>}
+              {selectableBenchmarks.map(item => <option key={item.key || `${item.id}-${item.version}`} value={item.key || item.id}>{benchmarkName(item)}{item.version ? ` · ${item.version}` : ''}</option>)}
             </select>
           </label>
           {selectedBenchmark?.scenario && <div className="scenario-facts full">
-            <div><span>决策问题</span><strong>{selectedBenchmark.scenario.decision_question}</strong></div>
-            <div><span>主指标</span><strong>{selectedBenchmark.primaryMetric}</strong></div>
-            <div><span>拓扑</span><strong>{selectedBenchmark.scenario.topology}</strong></div>
-            <div><span>机器数量</span><strong>{targetOptions.data?.machineCount ?? 1}</strong></div>
+            <div><span>测试场景</span><strong>{benchmarkScenario(selectedBenchmark).label} · {benchmarkScenario(selectedBenchmark).detail}</strong></div>
+            <div><span>选型目标</span><strong>{benchmarkDecisionQuestion(selectedBenchmark)}</strong></div>
+            <div><span>主要参数</span><strong>{benchmarkMetricLabel(selectedBenchmark, selectedBenchmark.primaryMetric)}</strong></div>
+            <div><span>部署方式</span><strong>{topologyLabel(selectedBenchmark.scenario.topology)} · {targetOptions.data?.machineCount ?? 1} 台机器</strong></div>
           </div>}
-          {requirements.length > 0 && <div className="benchmark-requirements full"><strong>机器合同要求</strong><div className="tags">{requirements.map(label => <span key={label}>{label}</span>)}</div></div>}
+          {selectedBenchmark && <div className="benchmark-suite-content full"><strong>套件内容</strong><p>{benchmarkDescription(selectedBenchmark)}</p></div>}
+          {requirements.length > 0 && <div className="benchmark-requirements full"><strong>测试机器要求</strong><div className="tags">{requirements.map(label => <span key={label}>{label}</span>)}</div></div>}
           <div className="full">
             <div className="candidate-toolbar">
               <div>
                 <span className="field-label">候选资源 *</span>
-                <small className="candidate-selection-count">单机 Benchmark 只能选择 1 台机器</small>
+                <small className="candidate-selection-count">单机测试套件只能选择 1 台机器</small>
               </div>
               <label className="candidate-environment-filter">
                 <span>测试环境</span>
@@ -295,15 +300,15 @@ export function CreateExperimentPage() {
               </label>
             </div>
             <div className="target-choice-list">
-              {targetOptions.isLoading && <div className="target-choice-empty">正在按 Benchmark 合同检查资源…</div>}
+              {targetOptions.isLoading && <div className="target-choice-empty">正在按测试套件要求检查资源…</div>}
               {targetOptions.isError && <ErrorState error={targetOptions.error} onRetry={() => targetOptions.refetch()}/>}
-              {!targetOptions.isLoading && !targetOptions.isError && environments.length === 0 && <div className="target-choice-empty"><strong>没有满足合同的测试资源</strong>{targetOptions.data?.rejectedSummary.slice(0, 3).map(item => <small key={item.code}>{item.message}（{item.count} 台）</small>)}</div>}
+              {!targetOptions.isLoading && !targetOptions.isError && environments.length === 0 && <div className="target-choice-empty"><strong>没有满足要求的测试资源</strong>{targetOptions.data?.rejectedSummary.slice(0, 3).map(item => <small key={item.code}>{item.message}（{item.count} 台）</small>)}</div>}
               {!targetOptions.isLoading && !targetOptions.isError && environments.length > 0 && !environmentFilter && <div className="target-choice-empty">请先选择测试环境</div>}
               {visibleTargets.map(target => <div key={target.id} className={`target-choice-row ${form.targetIds.includes(target.id) ? 'selected' : ''}`}>
                 <label>
                   <input type="radio" name="benchmark-target" checked={form.targetIds.includes(target.id)} onChange={() => selectTarget(target.id, target.name)} />
                   <span><strong>{target.name}</strong><small><b>{selectedEnvironment?.label}</b> · {target.hardware || target.id}</small></span>
-                  <em>符合合同 · 可执行</em>
+                  <em>符合要求 · 可测试</em>
                 </label>
                 <TargetSshButton target={target} compact/>
               </div>)}
@@ -312,20 +317,20 @@ export function CreateExperimentPage() {
         </div>
       </fieldset>}
       {step === 2 && <fieldset>
-        <legend>证据协议</legend>
+        <legend>测试参数</legend>
         <div className="form-grid form-section-gap">
           {(selectedBenchmark?.inputs || []).map(input => <div className="full input-binding-field" key={input.id}>
-            <label><span>{input.id} · {input.kind}{input.required ? ' *' : ''}</span><input required={input.required} type={input.kind === 'secret' ? 'password' : 'text'} value={form.inputBindings[input.id]?.reference || ''} onChange={event => updateInputBinding(input.id, 'reference', event.target.value)} placeholder={input.kind === 'secret' ? 'secret://受管密钥名称' : '资源引用 URI / 目标设备引用'} /><small>{input.description || '运行前由调度器校验绑定类型；只传引用，不在合同中保存内容。'}</small></label>
-            {input.digestRequired && <label><span>SHA-256 digest *</span><input required value={form.inputBindings[input.id]?.digest || ''} onChange={event => updateInputBinding(input.id, 'digest', event.target.value)} placeholder="sha256:…" pattern="sha256:[0-9a-f]{64}" /></label>}
+            <label><span>{input.id} · {inputKindLabel(input.kind)}{input.required ? ' *' : ''}</span><input required={input.required} type={input.kind === 'secret' ? 'password' : 'text'} value={form.inputBindings[input.id]?.reference || ''} onChange={event => updateInputBinding(input.id, 'reference', event.target.value)} placeholder={input.kind === 'secret' ? '受管密钥引用' : '资源地址或目标设备引用'} /><small>{input.description || '运行前由调度器校验绑定类型；只传递引用，不在测试合同中保存内容。'}</small></label>
+            {input.digestRequired && <label><span>SHA-256 摘要 *</span><input required value={form.inputBindings[input.id]?.digest || ''} onChange={event => updateInputBinding(input.id, 'digest', event.target.value)} placeholder="sha256:…" pattern="sha256:[0-9a-f]{64}" /></label>}
           </div>)}
           <label><span>每个目标重复数</span><input type="number" min="3" max="50" value={form.repeats} onChange={event => update('repeats', Number(event.target.value))} /></label>
-          <label><span>研究硬超时（秒）</span><input type="number" min="300" max="31536000" value={form.timeout} onChange={event => update('timeout', Number(event.target.value))} /></label>
-          <label><span>随机顺序种子</span><input type="number" min="0" value={form.seed} onChange={event => update('seed', Number(event.target.value))} /></label>
-          <label><span>推断单位</span><input value="time_block · placement_pair" readOnly /></label>
+          <label><span>最长测试时间（秒）</span><input type="number" min="300" max="31536000" value={form.timeout} onChange={event => update('timeout', Number(event.target.value))} /></label>
+          <label><span>测试顺序随机种子</span><input type="number" min="0" value={form.seed} onChange={event => update('seed', Number(event.target.value))} /></label>
+          <label><span>对比单位</span><input value="时间分块 · 配对对照" readOnly /></label>
         </div>
         <div className="review-strip">
-          <div><span>场景</span><strong>{selectedBenchmark?.name || '未选择'}</strong></div>
-          <div><span>候选资源</span><strong>{form.targetIds.length} 个 · {new Set(form.targetIds.map(id => form.targetBindings[id]?.placementPairId)).size} 个 placement</strong></div>
+          <div><span>测试套件</span><strong>{selectedBenchmark ? benchmarkName(selectedBenchmark) : '未选择'}</strong></div>
+          <div><span>候选资源</span><strong>{form.targetIds.length} 个 · {new Set(form.targetIds.map(id => form.targetBindings[id]?.placementPairId)).size} 个对照组</strong></div>
           <div><span>状态</span><strong>{selectedBenchmark?.runnable ? '可进入执行队列' : '保存为待执行草稿'}</strong></div>
         </div>
       </fieldset>}

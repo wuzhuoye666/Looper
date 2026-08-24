@@ -76,7 +76,7 @@ describe('选型研究 Benchmark 目录', () => {
     fireEvent.change(screen.getByLabelText('研究名称 *'), { target: { value: '默认值切换' } });
     fireEvent.click(screen.getByRole('button', { name: /下一步/ }));
 
-    const scenario = await screen.findByLabelText('Benchmark 场景 *');
+    const scenario = await screen.findByLabelText('套件名字 *');
     await waitFor(() => expect(scenario).toHaveValue('registered.adapter@1.0.0'));
     fireEvent.change(scenario, { target: { value: 'alternate.adapter@2.0.0' } });
     await waitFor(() => expect(scenario).toHaveValue('alternate.adapter@2.0.0'));
@@ -88,7 +88,7 @@ describe('选型研究 Benchmark 目录', () => {
     fireEvent.click(next);
 
     expect(await screen.findByLabelText('每个目标重复数')).toHaveValue(7);
-    expect(screen.getByLabelText('研究硬超时（秒）')).toHaveValue(2400);
-    expect(screen.getByLabelText('随机顺序种子')).toHaveValue(202);
+    expect(screen.getByLabelText('最长测试时间（秒）')).toHaveValue(2400);
+    expect(screen.getByLabelText('测试顺序随机种子')).toHaveValue(202);
   });
 });

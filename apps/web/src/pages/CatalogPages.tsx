@@ -8,13 +8,48 @@ import { EmptyState, ErrorState, LoadingState } from '../components/States';
 import { TargetStatus } from '../components/StatusBadge';
 import { TargetSshButton } from '../components/TargetSshButton';
 import { api } from '../lib/api';
+import {
+  benchmarkDescription, benchmarkMetricLabel, benchmarkMetricLabels, benchmarkName, benchmarkScenario,
+  executionBlockerLabel, executionModelLabel,
+} from '../lib/benchmarkPresentation';
 import { formatDate } from '../lib/format';
-import type { Target, TargetDestroyPreview } from '../lib/types';
+import type { Benchmark, Target, TargetDestroyPreview } from '../lib/types';
 
 export function BenchmarksPage() {
-  const [search,setSearch]=useState(''); const query=useQuery({queryKey:['benchmarks'],queryFn:api.benchmarks});
-  const items=useMemo(()=>query.data?.items.filter(x=>!search||`${x.name} ${x.description||''} ${x.category||''} ${(x.tags||[]).join(' ')}`.toLowerCase().includes(search.toLowerCase()))||[],[query.data,search]);
-  return <div className="page"><PageHeader title="场景目录" description="注册 Benchmark，查看采购问题、workload 拓扑和证据状态。" actions={<Link className="button primary" to="/benchmarks/register"><Plus size={16}/>注册 Benchmark</Link>}/><div className="notice warning catalog-compatibility-note"><AlertTriangle size={18}/><div><strong>兼容阶段：注册不等于准入</strong><p>服务端注册记录显示“已登记未准入”；历史合同缺少注册证据时显示“历史未审计”。两者都不会被推断为已通过正式选型审计。</p></div></div><div className="toolbar"><label className="search-field"><Search size={16}/><span className="sr-only">搜索场景</span><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="搜索名称、分类或标签"/></label><span className="result-count">{items.length} 个场景</span></div>{query.isLoading?<LoadingState/>:query.isError?<ErrorState error={query.error} onRetry={()=>query.refetch()}/>:items.length?<div className="catalog-grid">{items.map(x=><article className="catalog-item" key={x.id}><div className="catalog-icon"><Boxes size={20}/></div><div className="catalog-main"><div className="catalog-title"><h2>{x.name}</h2>{x.version&&<span className="tag">{x.version}</span>}<span className="benchmark-audit-state">{x.auditStatus==='registered-not-admitted'?'已登记未准入':'历史未审计'}</span></div><p>{x.decisionQuestion||x.description||'暂无场景说明。'}</p><div className="catalog-meta"><span>{x.category==='scenario'?'选型场景':x.category==='unclassified'?'未分类':x.category||'未分类'}</span><span>执行模型：{x.executionModel||'custom'}</span><span>{x.selectable === false ? '不可选择' : x.runnable ? '可执行' : '不可执行合同'}</span><span>{x.cases==null?'workload 未知':`${x.cases} 个 workload`}</span><span>更新 {formatDate(x.updatedAt)}</span></div>{x.executionBlockerReason&&<div className="catalog-blocker"><TriangleAlert size={14}/><span>{x.executionBlockerReason}</span></div>}{x.metrics?.length&&<div className="tags">{x.metrics.map(v=><span key={v}>{v}</span>)}</div>}</div></article>)}</div>:<EmptyState title="没有匹配的场景"/>}</div>;
+  const [search, setSearch] = useState('');
+  const query = useQuery({ queryKey: ['benchmarks'], queryFn: api.benchmarks });
+  const items = useMemo(() => query.data?.items.filter(item => {
+    if (!search) return true;
+    const scenario = benchmarkScenario(item);
+    const searchable = [
+      item.name, benchmarkName(item), item.description, benchmarkDescription(item), scenario.label, scenario.detail,
+      item.category, ...(item.tags || []), ...benchmarkMetricLabels(item), ...(item.metrics || []),
+    ].filter(Boolean).join(' ').toLowerCase();
+    return searchable.includes(search.toLowerCase());
+  }) || [], [query.data, search]);
+  return <div className="page">
+    <PageHeader title="测试场景目录" description="查看测试场景、套件名字、套件内容和相关参数。" actions={<Link className="button primary" to="/benchmarks/register"><Plus size={16}/>注册测试套件</Link>}/>
+    <div className="notice warning catalog-compatibility-note"><AlertTriangle size={18}/><div><strong>兼容阶段：注册不等于准入</strong><p>服务端注册记录显示“已登记未准入”；历史合同缺少注册证据时显示“历史未审计”。两者都不会被推断为已通过正式选型审计。</p></div></div>
+    <div className="toolbar"><label className="search-field"><Search size={16}/><span className="sr-only">搜索测试套件</span><input value={search} onChange={event => setSearch(event.target.value)} placeholder="搜索测试场景、套件名字或内容"/></label><span className="result-count">{items.length} 个测试套件</span></div>
+    {query.isLoading ? <LoadingState/> : query.isError ? <ErrorState error={query.error} onRetry={() => query.refetch()}/> : items.length ? <div className="catalog-grid">{items.map(item => <BenchmarkCatalogCard benchmark={item} key={item.id}/>)}</div> : <EmptyState title="没有匹配的测试套件"/>}
+  </div>;
+}
+
+function BenchmarkCatalogCard({ benchmark }: { benchmark: Benchmark }) {
+  const scenario = benchmarkScenario(benchmark);
+  const metrics = benchmarkMetricLabels(benchmark);
+  const blocker = executionBlockerLabel(benchmark);
+  return <article className="catalog-item">
+    <div className="catalog-icon"><Boxes size={20}/></div>
+    <div className="catalog-main">
+      <section className="catalog-field catalog-scenario"><span className="catalog-field-label">测试场景</span><div><strong>{scenario.label}</strong><small>{scenario.detail}</small></div></section>
+      <section className="catalog-field"><span className="catalog-field-label">套件名字</span><div className="catalog-title"><h2>{benchmarkName(benchmark)}</h2>{benchmark.version && <span className="tag">{benchmark.version}</span>}<span className="benchmark-audit-state">{benchmark.auditStatus === 'registered-not-admitted' ? '已登记未准入' : '历史未审计'}</span></div></section>
+      <section className="catalog-field catalog-content"><span className="catalog-field-label">套件内容</span><p>{benchmarkDescription(benchmark)}</p></section>
+      <section className="catalog-field"><span className="catalog-field-label">相关参数</span><div className="tags">{metrics.length ? metrics.map((label, index) => <span key={`${benchmark.metrics?.[index]}-${label}`}>{label}</span>) : <span>{benchmarkMetricLabel(benchmark, benchmark.primaryMetric)}</span>}</div></section>
+      <div className="catalog-meta"><span>执行方式：{executionModelLabel(benchmark.executionModel)}</span><span>{benchmark.selectable === false ? '暂不可选择' : benchmark.runnable ? '可直接测试' : '暂不可执行'}</span><span>{benchmark.cases == null ? '测试项未知' : `${benchmark.cases} 个测试项`}</span><span>更新于 {formatDate(benchmark.updatedAt)}</span></div>
+      {blocker && <div className="catalog-blocker"><TriangleAlert size={14}/><span>{blocker}</span></div>}
+    </div>
+  </article>;
 }
 
 const CLOUD_PROVIDERS = new Set(['tencent', 'alibaba', 'volcengine', 'baidu']);
