@@ -87,6 +87,7 @@ from looper_api.cloud_service import (
     catalog_inventory,
     catalog_search,
     create_quote,
+    delete_order,
     destroy_target,
     destroy_target_preview,
     ensure_managed_security_group,
@@ -105,6 +106,7 @@ from looper_api.cloud_service import (
     recover_interrupted_orders,
     resolve_instance_network,
     resolve_unknown_order,
+    retry_pending_cloud_ssh,
 )
 from looper_api.config import Settings, get_settings
 from looper_api.database import SessionLocal, get_session, init_database
@@ -276,6 +278,47 @@ async def _lease_sweeper() -> None:
                 session.rollback()
 
 
+def _sync_pending_cloud_targets(settings: Settings) -> None:
+    """Refresh cloud inventory and bind any encrypted purchase key that is ready."""
+    with SessionLocal() as session:
+        records = list(session.scalars(select(TargetRecord).where(
+            TargetRecord.provider.in_(["tencent", "alibaba"]),
+            TargetRecord.lifecycle_status == "active",
+        )))
+        regions = {
+            (record.provider, str((record.inventory_json or {}).get("region") or ""))
+            for record in records
+            if (record.inventory_json or {}).get("order_id")
+            and ((record.inventory_json or {}).get("region"))
+            and ((record.inventory_json or {}).get("autoSsh") or {}).get("status") != "connected"
+        }
+        for provider, region in sorted(regions):
+            try:
+                if provider == "tencent":
+                    refreshed = sync_cvm_inventory(
+                        session, region, credential_store=EncryptedSshCredentialStore(settings)
+                    )
+                else:
+                    refreshed = sync_ecs_inventory(
+                        session, region, credential_store=EncryptedSshCredentialStore(settings)
+                    )
+                retry_pending_cloud_ssh(session, settings, refreshed)
+            except Exception:
+                logger.exception(
+                    "Automatic cloud Worker bootstrap failed for %s/%s", provider, region
+                )
+        session.commit()
+
+
+async def _cloud_inventory_recovery() -> None:
+    while True:
+        await asyncio.sleep(30)
+        try:
+            await asyncio.to_thread(_sync_pending_cloud_targets, get_settings())
+        except Exception:
+            logger.exception("Automatic cloud inventory refresh failed")
+
+
 async def _remote_worker_recovery() -> None:
     settings = get_settings()
     try:
@@ -308,15 +351,19 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         session.commit()
     sweeper = asyncio.create_task(_lease_sweeper())
     remote_recovery = asyncio.create_task(_remote_worker_recovery())
+    cloud_inventory_recovery = asyncio.create_task(_cloud_inventory_recovery())
     try:
         yield
     finally:
         sweeper.cancel()
         remote_recovery.cancel()
+        cloud_inventory_recovery.cancel()
         with suppress(asyncio.CancelledError):
             await sweeper
         with suppress(asyncio.CancelledError):
             await remote_recovery
+        with suppress(asyncio.CancelledError):
+            await cloud_inventory_recovery
 
 
 app = FastAPI(
@@ -850,6 +897,15 @@ def cloud_order_get(
     return get_order(session, app_settings, order_id)
 
 
+@app.delete("/api/v1/cloud/orders/{order_id}", status_code=204)
+def cloud_order_delete(
+    order_id: str,
+    session: SessionDependency,
+    _operator: OperatorDependency,
+) -> None:
+    delete_order(session, order_id)
+
+
 @app.get("/api/v1/cloud/orders/{order_id}/events")
 def cloud_order_events(
     order_id: str,
@@ -1109,6 +1165,7 @@ def sync_tencent_targets(
         instance_ids=instance_id,
         credential_store=EncryptedSshCredentialStore(app_settings),
     )
+    retry_pending_cloud_ssh(session, app_settings, records)
     session.commit()
     return {"items": [target_view(item) for item in records], "total": len(records)}
 
@@ -1127,6 +1184,7 @@ def sync_alibaba_targets(
         instance_ids=instance_id,
         credential_store=EncryptedSshCredentialStore(app_settings),
     )
+    retry_pending_cloud_ssh(session, app_settings, records)
     session.commit()
     return {"items": [target_view(item) for item in records], "total": len(records)}
 

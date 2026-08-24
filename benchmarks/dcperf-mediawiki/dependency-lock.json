@@ -4,6 +4,7 @@
   "platform": {
     "distribution": "ubuntu",
     "release": "22.04",
+    "compatibleReleases": ["22.04", "24.04"],
     "architecture": "x86_64",
     "codename": "jammy"
   },
@@ -60,6 +61,10 @@
     {
       "id": "hhvm-3.30",
       "url": "https://github.com/facebookresearch/DCPerf/releases/download/hhvm/hhvm-3.30-multplatform-binary-ubuntu.tar.xz",
+      "mirrors": [
+        "https://ghfast.top/https://github.com/facebookresearch/DCPerf/releases/download/hhvm/hhvm-3.30-multplatform-binary-ubuntu.tar.xz",
+        "https://gh-proxy.com/https://github.com/facebookresearch/DCPerf/releases/download/hhvm/hhvm-3.30-multplatform-binary-ubuntu.tar.xz"
+      ],
       "sha256": "sha256:2159af71df4ffaf96b5d9f63d30fd6936685558ca9546c936ccb17ad86b9e0cb",
       "bytes": 2081192140,
       "license": "PHP-3.01"

@@ -28,6 +28,7 @@ from looper_api.cloud_service import (
     catalog_search,
     confirm_order,
     create_quote,
+    delete_order,
     get_order_evidence,
     get_order_reconciliation_context,
     global_search,
@@ -43,6 +44,7 @@ from looper_api.models import (
     CloudCatalogCacheRecord,
     CloudOrderRecord,
     CloudQuoteRecord,
+    EventRecord,
     TargetRecord,
 )
 from looper_api.providers.base import CloudProvider, CloudProviderError
@@ -647,6 +649,44 @@ def test_confirm_purchase_is_idempotent_and_naturalizes_target(db_session, tmp_p
     assert "2 vCPU" in view["hardware"]
     assert "2 GiB" in view["hardware"]
     assert view["framework"] == "镜像 img-test"
+
+
+def test_delete_order_removes_unsubmitted_order_events_and_rejects_submitted_order(
+    db_session, tmp_path
+) -> None:
+    fake = FakeProvider()
+    reg = registry(fake)
+    app_settings = settings(tmp_path, live=True)
+    quote = create_quote(db_session, app_settings, reg, spec(), "quote-key-delete")
+    prepared = prepare_order(db_session, app_settings, quote["id"], "order-key-delete")
+
+    delete_order(db_session, prepared["id"])
+
+    assert db_session.get(CloudOrderRecord, prepared["id"]) is None
+    assert db_session.get(CloudQuoteRecord, quote["id"]) is not None
+    assert not list(
+        db_session.scalars(
+            select(EventRecord).where(
+                EventRecord.entity_type == "cloud_order",
+                EventRecord.entity_id == prepared["id"],
+            )
+        )
+    )
+
+    submitted_quote = create_quote(
+        db_session, app_settings, reg, spec(), "quote-key-delete-submitted"
+    )
+    submitted = purchase_quote(
+        db_session,
+        app_settings,
+        reg,
+        submitted_quote["id"],
+        "order-key-delete-submitted",
+    )
+    with pytest.raises(CloudWorkflowError) as exc_info:
+        delete_order(db_session, submitted["id"])
+    assert exc_info.value.status_code == 409
+    assert db_session.get(CloudOrderRecord, submitted["id"]) is not None
 
 
 def test_purchase_quote_completes_order_without_browser_confirmation(db_session, tmp_path) -> None:

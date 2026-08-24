@@ -267,6 +267,7 @@ def target_view(record: TargetRecord) -> dict[str, Any]:
         "archiveReason": record.archive_reason,
         "snapshotDigest": record.snapshot_digest,
         "fingerprint": fingerprint,
+        "sshAutomation": inventory.get("autoSsh") or {"status": "manual"},
     }
 
 

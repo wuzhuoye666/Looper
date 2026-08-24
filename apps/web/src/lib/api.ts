@@ -197,6 +197,7 @@ export const api = {
   }),
   orders: async (status = '') => list(await request<CloudOrder[] | ListResponse<CloudOrder>>(`/cloud/orders${status ? `?status=${encodeURIComponent(status)}` : ''}`)),
   order: (id: string) => request<CloudOrder>(`/cloud/orders/${encodeURIComponent(id)}`),
+  deleteOrder: (id: string) => request<void>(`/cloud/orders/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   orderEvents: async (id: string) => list(await request<CloudOrderEvent[] | ListResponse<CloudOrderEvent>>(`/cloud/orders/${encodeURIComponent(id)}/events`)),
   orderReconciliationContext: (id: string) => request<CloudReconciliationContext>(`/cloud/orders/${encodeURIComponent(id)}/reconciliation-context`),
   orderEvidence: (id: string) => request<CloudOrderEvidence>(`/cloud/orders/${encodeURIComponent(id)}/evidence`),

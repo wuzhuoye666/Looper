@@ -6,6 +6,7 @@ import { BackLink } from '../components/Layout';
 import { ErrorState } from '../components/States';
 import { TargetSshButton } from '../components/TargetSshButton';
 import { api } from '../lib/api';
+import type { Target } from '../lib/types';
 
 const steps = [
   { label: '采购问题', icon: ClipboardCheck },
@@ -13,9 +14,18 @@ const steps = [
   { label: '证据协议', icon: Server },
 ];
 
+function targetEnvironment(target: Pick<Target, 'type' | 'provider' | 'id'>): string {
+  if (target.type === 'local') return '本地工作站';
+  if (target.provider === 'alibaba-ecs' || target.id.startsWith('cloud:alibaba:')) return '阿里云 ECS';
+  if (target.provider === 'tencent-cvm' || target.id.startsWith('cloud:tencent:')) return '腾讯云 CVM';
+  if (target.type === 'external') return '外部 SSH';
+  return target.provider || target.type || '其他';
+}
+
 export function CreateExperimentPage() {
   const navigate = useNavigate();
   const [step, setStep] = useState(0);
+  const [environmentFilter, setEnvironmentFilter] = useState('all');
   const [form, setForm] = useState({
     name: '',
     description: '',
@@ -50,6 +60,19 @@ export function CreateExperimentPage() {
         });
   }, [selectableBenchmarks]);
   const selectedBenchmark = selectableBenchmarks.find(item => (item.key || item.id) === form.benchmarkKey);
+  const targetItems = targets.data?.items || [];
+  const environmentOptions = useMemo(
+    () => Array.from(new Set(targetItems.map(targetEnvironment))).sort((left, right) => left.localeCompare(right, 'zh-CN')),
+    [targetItems],
+  );
+  const visibleTargets = useMemo(
+    () => environmentFilter === 'all' ? targetItems : targetItems.filter(target => targetEnvironment(target) === environmentFilter),
+    [environmentFilter, targetItems],
+  );
+  const selectedEnvironmentCount = new Set(form.targetIds.map(targetId => {
+    const target = targetItems.find(item => item.id === targetId);
+    return target ? targetEnvironment(target) : '';
+  }).filter(Boolean)).size;
   const requiredCapabilities = new Set(selectedBenchmark?.deploymentRequirements || selectedBenchmark?.tags || []);
   const targetReady = (target: { runnable?: boolean; tags?: string[] }) => target.runnable && [...requiredCapabilities].every(capability => target.tags?.includes(capability));
   const targetState = (target: { runnable?: boolean; tags?: string[] }) => {
@@ -166,16 +189,30 @@ export function CreateExperimentPage() {
             <div><span>拓扑</span><strong>{selectedBenchmark.scenario.topology}</strong></div>
             <div><span>执行状态</span><strong>可自动部署并测试</strong></div>
           </div>}
-          <div className="full"><span className="field-label">候选资源 *</span>
+          <div className="full">
+            <div className="candidate-toolbar">
+              <div>
+                <span className="field-label">候选资源 *</span>
+                <small className="candidate-selection-count">已选 {form.targetIds.length} 个 · {selectedEnvironmentCount} 个测试环境</small>
+              </div>
+              <label className="candidate-environment-filter">
+                <span>测试环境</span>
+                <select value={environmentFilter} onChange={event => setEnvironmentFilter(event.target.value)}>
+                  <option value="all">全部环境</option>
+                  {environmentOptions.map(environment => <option key={environment} value={environment}>{environment}</option>)}
+                </select>
+              </label>
+            </div>
             <div className="target-choice-list">
-              {(targets.data?.items || []).map(target => <div key={target.id} className={`target-choice-row ${form.targetIds.includes(target.id) ? 'selected' : targetReady(target) ? '' : 'disabled'}`}>
+              {visibleTargets.map(target => <div key={target.id} className={`target-choice-row ${form.targetIds.includes(target.id) ? 'selected' : targetReady(target) ? '' : 'disabled'}`}>
                 <label>
                   <input type="checkbox" disabled={!targetReady(target)} checked={form.targetIds.includes(target.id)} onChange={() => toggleTarget(target.id, target.name)} />
-                  <span><strong>{target.name}</strong><small>{target.hardware || target.id}</small></span>
+                  <span><strong>{target.name}</strong><small><b>{targetEnvironment(target)}</b> · {target.hardware || target.id}</small></span>
                   <em>{targetState(target)}</em>
                 </label>
                 <TargetSshButton target={target} compact/>
               </div>)}
+              {!visibleTargets.length && <div className="target-choice-empty">当前环境没有候选资源</div>}
             </div>
             {selectedBenchmark?.provisionedCapabilities?.length ? <div className="notice info benchmark-auto-deploy-note"><Server size={18}/><div><strong>选择后由 Looper 自动准备目标机器</strong><p>启动实验时自动下发 Adapter 脚本，并安装或复用：{selectedBenchmark.provisionedCapabilities.join('、')}。用户无需预装测试套件。</p></div></div> : null}
             {form.targetIds.length > 0 && <div className="target-binding-editor">

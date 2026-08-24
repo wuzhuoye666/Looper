@@ -124,6 +124,7 @@ export interface Target {
   inventoryMissCount?: number; archivedAt?: string; archiveReason?: string;
   tags?: string[]; runnable?: boolean;
   credentialsRemembered?: boolean;
+  sshAutomation?: { status: 'manual' | 'waiting_endpoint' | 'connected' | 'failed'; deployment?: string; message?: string };
   deployment?: { active?: boolean; status?: string; workerId?: string; remotePid?: number; remotePort?: number; transport?: string; restartSafe?: boolean; deployedAt?: string };
   connectionTest?: { status: 'connected'; testedAt: string; hostKeySha256?: string };
   fingerprint?: {

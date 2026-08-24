@@ -3,15 +3,15 @@ kind: Benchmark
 metadata:
   id: dcperf.mediawiki.closed-loop
   name: DCPerf MediaWiki Closed-Loop
-  version: 2026.08-pilot2
-  description: Pinned single-node DCPerf MediaWiki closed-loop capacity workload with managed Ubuntu 22.04 provisioning and native Benchpress evidence.
+  version: 2026.08-pilot6
+  description: Pinned single-node DCPerf MediaWiki closed-loop capacity workload with resumable managed Ubuntu 22.04/24.04 provisioning and native Benchpress evidence.
   license: MIT
   source:
     url: https://github.com/facebookresearch/DCPerf
     commit: 9308c3e3c404e0466f0a2929f15ddcf62b2215f6
 spec:
   trust: trusted
-  capabilities: [linux, x86_64, python, local-process, dcperf-mediawiki, systemd, ubuntu-22.04, root, perf]
+  capabilities: [linux, x86_64, python, local-process, dcperf-mediawiki, systemd, ubuntu, root, perf]
   parameters:
     duration_seconds:
       type: integer
@@ -134,7 +134,7 @@ spec:
         requirements:
           osFamilies: [linux]
           architectures: [x86_64]
-          capabilities: [dcperf-mediawiki, systemd, ubuntu-22.04]
+          capabilities: [dcperf-mediawiki, systemd, ubuntu]
           privileges: [root, perf, systemd]
           software:
             - name: python
@@ -154,7 +154,7 @@ spec:
   runtime:
     type: local-process
     workingDirectory: .
-    dependencyLockDigest: sha256:de5b6216a2a3896f288d4a5d4426ceeda8546cfed4e220f7753d7d8c0a31e4c2
+    dependencyLockDigest: sha256:c770e48ac18ab889affa309833e36aec761b55ec52f302c1f9d34210c91a7c3b
     dependencies:
       - id: dcperf-source
         source: https://api.github.com/repos/facebookresearch/DCPerf/tarball/9308c3e3c404e0466f0a2929f15ddcf62b2215f6
@@ -182,9 +182,9 @@ spec:
         license: MIT
     provisioning:
       mode: managed
-      hostCapabilities: [linux, x86_64, python, local-process, systemd, ubuntu-22.04, root, perf]
-      provides: [dcperf-mediawiki, hhvm-3.30, mediawiki-1.28, wrk-4.2.0, memcached-1.5.12]
-      cacheKey: sha256:de5b6216a2a3896f288d4a5d4426ceeda8546cfed4e220f7753d7d8c0a31e4c2
+      hostCapabilities: [linux, x86_64, python, local-process, systemd, ubuntu, root]
+      provides: [dcperf-mediawiki, hhvm-3.30, mediawiki-1.28, wrk-4.2.0, memcached-1.5.12, composer-2.2.24, perf]
+      cacheKey: sha256:c770e48ac18ab889affa309833e36aec761b55ec52f302c1f9d34210c91a7c3b
       requiresNetwork: true
       privilege: sudo
     commands:
@@ -413,6 +413,6 @@ spec:
     executionStatus: executable
     sourceLock: source-lock.json
     includesClientWork: true
-    supportedHost: Ubuntu 22.04 x86_64 with systemd and root privileges
-    unsupportedHostReason: The pinned HHVM 3.30 appliance is not supported on Ubuntu 24.04 or other distributions; prepare.py rejects them before installation.
+    supportedHost: Ubuntu 22.04 x86_64; Ubuntu 24.04 x86_64 compatibility candidate with smoke validation required
+    unsupportedHostReason: Non-Ubuntu distributions, unsupported Ubuntu releases, and non-x86_64 hosts are rejected by prepare.py before installation.
     nativeSourceArchive: dependency-lock.json

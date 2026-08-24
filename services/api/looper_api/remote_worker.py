@@ -180,6 +180,26 @@ def deploy_remote_worker(
         return _deploy_remote_worker_impl(request, target, settings)
 
 
+def _remote_login_identity(client: Any) -> tuple[bool, str, str]:
+    """Return (elevate, uid, gid) for the SSH login account.
+
+    A non-root account with working passwordless "sudo -n" elevates the
+    deployed Worker, so root-required benchmarks (e.g. the DCPerf managed
+    provisioner) run without a root SSH login.
+    """
+    uid = _run(client, "id -u", timeout=30).strip()
+    gid = _run(client, "id -g", timeout=30).strip()
+    if uid == "0":
+        return False, uid, gid
+    answer = _run(
+        client,
+        "if command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; "
+        "then printf '1\n'; else printf '0\n'; fi",
+        timeout=30,
+    ).strip()
+    return answer == "1", uid, gid
+
+
 def _deploy_remote_worker_impl(
     request: ConnectExternalTargetRequest,
     target: TargetRecord,
@@ -199,6 +219,9 @@ def _deploy_remote_worker_impl(
         connected_fingerprint = f"SHA256:{remote_digest.rstrip('=')}"
         if observed and connected_fingerprint != observed:
             raise ExternalTargetError("SSH host key changed after inventory discovery")
+
+        elevate, login_uid, login_gid = _remote_login_identity(client)
+        privilege_prefix = "sudo -n " if elevate else ""
 
         worker_api_url, remote_port, transport_mode = _worker_api_endpoint(settings, transport)
         worker_id = f"remote-{canonical_digest({'target': target.id})[-16:]}"
@@ -238,29 +261,29 @@ def _deploy_remote_worker_impl(
         bootstrap = " && ".join(
             (
                 (
-                    f"python3 -m venv {remote_root}/venv || "
+                    f"{privilege_prefix}python3 -m venv {remote_root}/venv || "
                     "(command -v apt-get >/dev/null && "
                     "if test \"$(id -u)\" = 0; then "
                     "apt-get update -qq && env DEBIAN_FRONTEND=noninteractive "
                     "apt-get install -y -qq python3-venv; else "
                     "sudo -n apt-get update -qq && sudo -n env "
                     "DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3-venv; fi && "
-                    f"python3 -m venv {remote_root}/venv)"
+                    f"{privilege_prefix}python3 -m venv {remote_root}/venv)"
                 ),
                 (
-                    f"{remote_root}/venv/bin/python -m pip install "
+                    f"{privilege_prefix}{remote_root}/venv/bin/python -m pip install "
                     "--disable-pip-version-check -q 'httpx>=0.28,<1' 'psutil>=7,<8' "
                     "'pydantic>=2.11,<3' 'PyYAML>=6,<7' 'jsonschema>=4.24,<5' "
                     "'python-dotenv>=1.0,<2'"
                 ),
-                f"rm -rf {remote_root}/source",
-                f"mkdir -p {remote_root}/source",
+                f"{privilege_prefix}rm -rf {remote_root}/source",
+                f"{privilege_prefix}mkdir -p {remote_root}/source",
                 (
-                    f"{remote_root}/venv/bin/python -m zipfile -e "
+                    f"{privilege_prefix}{remote_root}/venv/bin/python -m zipfile -e "
                     f"{remote_root}/source.zip {remote_root}/source"
                 ),
                 (
-                    "for pid in $(pgrep -f "
+                    f"{privilege_prefix}for pid in $(pgrep -f "
                     f"{shlex.quote('[l]ooper_worker.main.*--worker-id ' + worker_id)} "
                     "2>/dev/null || true); do kill \"$pid\" 2>/dev/null || true; done; "
                     f"if test -f {remote_root}/worker.pid; then "
@@ -268,6 +291,13 @@ def _deploy_remote_worker_impl(
                 ),
             )
         )
+        if elevate:
+            # Root-owned artifacts from this bootstrap must stay reusable by the
+            # login user on the next deploy (SFTP upload happens before bootstrap).
+            bootstrap = (
+                f"{privilege_prefix}mkdir -p {remote_root} && {bootstrap} && "
+                f"{privilege_prefix}chown -R {login_uid}:{login_gid} {remote_root}"
+            )
         _run(client, bootstrap, timeout=600)
 
         python_path = ":".join(
@@ -287,10 +317,12 @@ def _deploy_remote_worker_impl(
         detached = (
             f"cd {remote_root}/source && nohup {worker_command} "
             f">{remote_root}/worker.log 2>&1 </dev/null & "
-            f"pid=$!; printf '%s\\n' \"$pid\" >{remote_root}/worker.pid; "
-            "printf '%s\\n' \"$pid\""
+            f"pid=$!; printf '%s\n' \"$pid\" >{remote_root}/worker.pid; "
+            "printf '%s\n' \"$pid\""
         )
         launch = f"sh -c {shlex.quote(detached)}"
+        if elevate:
+            launch = f"sudo -n {launch}"
         remote_pid = _launch_background(client, launch)
 
         if transport_mode == "direct":
@@ -309,6 +341,14 @@ def _deploy_remote_worker_impl(
             "remotePid": remote_pid,
             "transport": transport_mode,
             "restartSafe": transport_mode == "direct",
+            "privilege": (
+                "root"
+                if not elevate and login_uid == "0"
+                else "sudo"
+                if elevate
+                else "user"
+            ),
+            "elevatedViaSudo": elevate,
             "deployedAt": utc_now().isoformat(),
         }
     except Exception:

@@ -99,3 +99,52 @@ def test_worker_reregisters_after_control_plane_connection_loss(tmp_path, monkey
         )
 
     assert client.registrations == 2
+
+
+def test_remote_login_identity_elevates_with_passwordless_sudo(monkeypatch) -> None:
+    from looper_api import remote_worker
+
+    def fake_run(client, command, *, timeout=300):
+        if "id -u" in command:
+            return "1000" + chr(10)
+        if "id -g" in command:
+            return "1000" + chr(10)
+        return "1" + chr(10)
+
+    monkeypatch.setattr(remote_worker, "_run", fake_run)
+    elevate, uid, gid = remote_worker._remote_login_identity(Mock())
+    assert elevate is True
+    assert uid == "1000"
+    assert gid == "1000"
+
+
+def test_remote_login_identity_root_account_stays_root(monkeypatch) -> None:
+    from looper_api import remote_worker
+
+    def fake_run(client, command, *, timeout=300):
+        if "id -u" in command:
+            return "0" + chr(10)
+        if "id -g" in command:
+            return "0" + chr(10)
+        raise AssertionError(f"sudo probe must not run for root: {command}")
+
+    monkeypatch.setattr(remote_worker, "_run", fake_run)
+    elevate, uid, gid = remote_worker._remote_login_identity(Mock())
+    assert elevate is False
+    assert uid == "0"
+
+
+def test_remote_login_identity_without_sudo_stays_unprivileged(monkeypatch) -> None:
+    from looper_api import remote_worker
+
+    def fake_run(client, command, *, timeout=300):
+        if "id -u" in command:
+            return "1000" + chr(10)
+        if "id -g" in command:
+            return "1000" + chr(10)
+        return "0" + chr(10)
+
+    monkeypatch.setattr(remote_worker, "_run", fake_run)
+    elevate, uid, gid = remote_worker._remote_login_identity(Mock())
+    assert elevate is False
+    assert uid == "1000"

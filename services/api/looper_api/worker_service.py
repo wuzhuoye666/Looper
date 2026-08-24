@@ -474,6 +474,26 @@ def heartbeat_attempt(
             ),
             payload={"phase": request.phase, "detail": request.phase_detail},
         )
+    if (
+        request.log_id
+        and request.log_stage
+        and request.log_stream
+        and request.log_text is not None
+    ):
+        append_event(
+            session,
+            experiment_id=attempt.experiment_id,
+            event_type="attempt.log",
+            entity_type="attempt",
+            entity_id=attempt.id,
+            idempotency_key=f"attempt.log:{attempt.id}:{attempt.fencing_token}:{request.log_id}",
+            payload={
+                "attemptId": attempt.id,
+                "stage": request.log_stage,
+                "stream": request.log_stream,
+                "text": request.log_text,
+            },
+        )
     experiment = session.get(ExperimentRecord, attempt.experiment_id)
     return {
         "leaseExpiresAt": attempt.lease_expires_at.isoformat(),

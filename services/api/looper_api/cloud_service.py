@@ -59,7 +59,7 @@ from looper_api.providers.utils import (
     legacy_cloud_target_ids,
     to_plain,
 )
-from looper_api.remote_credentials import EncryptedSshCredentialStore
+from looper_api.remote_credentials import EncryptedSshCredentialStore, RemoteCredentialError
 from looper_api.remote_worker import deploy_remote_worker
 
 CatalogKind = Literal[
@@ -1271,6 +1271,20 @@ def _auto_connect_provisioned_target(
     credentials: CloudSshCredentials,
 ) -> None:
     endpoint = instance.public_ip or instance.private_ip
+    credential_store = EncryptedSshCredentialStore(settings)
+    if credentials.remember_credentials:
+        # Keep the selected key encrypted by order until the provider exposes an IP.
+        credential_store.save_pending(order.id, ConnectExternalTargetRequest(
+            endpoint=endpoint or "pending",
+            port=credentials.port,
+            username=credentials.username,
+            auth_method=credentials.auth_method,
+            password=credentials.password,
+            private_key=credentials.private_key,
+            passphrase=credentials.passphrase,
+            deploy_worker=True,
+            remember_credentials=True,
+        ))
     if not endpoint:
         target.inventory_json = {**target.inventory_json, "autoSsh": {"status": "waiting_endpoint"}}
         return
@@ -1290,7 +1304,8 @@ def _auto_connect_provisioned_target(
         host_key = str(refreshed.fingerprint_json.get("host_key_sha256") or "")
         remembered = False
         if credentials.remember_credentials:
-            remembered = EncryptedSshCredentialStore(settings).save(refreshed.id, request, host_key)
+            remembered = credential_store.save(refreshed.id, request, host_key)
+            credential_store.delete_pending(order.id)
         refreshed.status = "available"
         refreshed.runnable = True
         refreshed.inventory_json = {
@@ -1402,6 +1417,57 @@ def _upsert_provisioned_target(
     record = session.get(TargetRecord, target_id)
     if record is not None and settings is not None and credentials is not None:
         _auto_connect_provisioned_target(session, settings, order, instance, record, credentials)
+
+
+def retry_pending_cloud_ssh(
+    session: Session, settings: Settings, targets: list[TargetRecord]
+) -> int:
+    """Bind encrypted purchase keys as soon as provider inventory has an endpoint."""
+    store = EncryptedSshCredentialStore(settings)
+    connected = 0
+    for target in targets:
+        inventory = target.inventory_json or {}
+        auto_ssh = inventory.get("autoSsh") or {}
+        endpoint = (
+            inventory.get("endpoint")
+            or inventory.get("public_ip")
+            or inventory.get("private_ip")
+        )
+        order_id = inventory.get("order_id")
+        if not endpoint or auto_ssh.get("status") == "connected" or not order_id:
+            continue
+        order = session.get(CloudOrderRecord, str(order_id))
+        if order is None:
+            continue
+        try:
+            request = store.load_pending(str(order_id))
+        except RemoteCredentialError:
+            continue
+        credentials = CloudSshCredentials(
+            username=request.username,
+            port=request.port,
+            auth_method=(
+                request.auth_method if request.auth_method != "ssh-agent" else "private-key"
+            ),
+            password=request.password,
+            private_key=request.private_key,
+            passphrase=request.passphrase,
+            remember_credentials=True,
+        )
+        instance = ProvisionedInstance(
+            id=str(inventory.get("instance_id") or target.id),
+            name=target.name,
+            region=str(inventory.get("region") or order.spec_json.get("region") or ""),
+            zone=inventory.get("zone"),
+            status=str(inventory.get("instance_state") or inventory.get("status") or "RUNNING"),
+            private_ip=inventory.get("private_ip"),
+            public_ip=inventory.get("public_ip"),
+            public_ip_present=bool(inventory.get("public_ip_present")),
+        )
+        _auto_connect_provisioned_target(session, settings, order, instance, target, credentials)
+        if (target.inventory_json or {}).get("autoSsh", {}).get("status") == "connected":
+            connected += 1
+    return connected
 
 
 def confirm_order(
@@ -2072,6 +2138,25 @@ def list_orders(
     if status:
         statement = statement.where(CloudOrderRecord.status == status)
     return [_order_view(item) for item in session.scalars(statement)]
+
+
+def delete_order(session: Session, order_id: str) -> None:
+    order = session.get(CloudOrderRecord, order_id)
+    if order is None:
+        raise CloudWorkflowError("order not found", status_code=404, code="order_not_found")
+    if order.status not in {"awaiting_confirmation", "failed", "expired"}:
+        raise CloudWorkflowError(
+            "only unsubmitted or failed orders can be deleted",
+            status_code=409,
+            code="order_not_deletable",
+        )
+    session.execute(
+        delete(EventRecord).where(
+            EventRecord.entity_type == "cloud_order", EventRecord.entity_id == order.id
+        )
+    )
+    session.delete(order)
+    session.commit()
 
 
 def _event_view(record: EventRecord, *, include_idempotency_key: bool = False) -> dict[str, Any]:

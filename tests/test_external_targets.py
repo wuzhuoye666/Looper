@@ -11,6 +11,7 @@ from looper_api.external_targets import (
     DiscoveredExternalTarget,
     ExternalTargetError,
     ImportExternalTargetRequest,
+    connect_existing_target,
     connect_external_target,
     external_targets,
     import_external_target,
@@ -279,19 +280,18 @@ def test_discovery_command_has_cpuinfo_fallbacks() -> None:
     assert "if [ -n \"$value\" ]" in _LINUX_DISCOVERY_COMMAND
     assert "else uname -s" in _LINUX_DISCOVERY_COMMAND
 
-
 def test_parse_linux_inventory_accepts_arm64_output() -> None:
     from looper_api.external_targets import _parse_linux_inventory
 
-    output = (
-        "hostname=iZ7xv7pbi8h3rgoed1ume3Z\n"
-        "operating_system=Ubuntu 26.04 LTS\n"
-        "kernel=Linux 7.0.0-28-generic\n"
-        "architecture=aarch64\n"
-        "processor=aarch64\n"
-        "logical_cpu_count=1\n"
-        "memory_kib=1665396\n"
-    )
+    output = chr(10).join([
+        "hostname=iZ7xv7pbi8h3rgoed1ume3Z",
+        "operating_system=Ubuntu 26.04 LTS",
+        "kernel=Linux 7.0.0-28-generic",
+        "architecture=aarch64",
+        "processor=aarch64",
+        "logical_cpu_count=1",
+        "memory_kib=1665396",
+    ])
 
     class FakeHostKey:
         def asbytes(self) -> bytes:
@@ -305,3 +305,122 @@ def test_parse_linux_inventory_accepts_arm64_output() -> None:
     assert parsed.processor == "aarch64"
     assert parsed.logical_cpu_count == 1
     assert parsed.operating_system == "Ubuntu 26.04 LTS"
+
+
+def test_discovery_command_reports_host_capability_facts() -> None:
+    from looper_api.external_targets import _LINUX_DISCOVERY_COMMAND
+
+    for marker in (
+        "os_id=",
+        "os_version_id=",
+        "cap_uid=",
+        "cap_sudo=",
+        "cap_systemd=",
+        "cap_perf=",
+        "cap_perl=",
+        "cap_python=",
+    ):
+        assert marker in _LINUX_DISCOVERY_COMMAND
+
+
+def test_parse_linux_inventory_captures_host_capabilities() -> None:
+    from looper_api.external_targets import _parse_linux_inventory
+
+    output = chr(10).join([
+        "hostname=compute-01",
+        "operating_system=Ubuntu 22.04.3 LTS",
+        "kernel=Linux 5.15.0-91-generic",
+        "architecture=x86_64",
+        "processor=AMD EPYC 7B13",
+        "logical_cpu_count=8",
+        "memory_kib=15728640",
+        "os_id=ubuntu",
+        "os_version_id=22.04",
+        "cap_uid=1000",
+        "cap_sudo=1",
+        "cap_systemd=1",
+        "cap_perf=1",
+        "cap_perl=0",
+        "cap_python=1",
+    ])
+
+    class FakeHostKey:
+        def asbytes(self) -> bytes:
+            return b"k" * 32
+
+        def get_name(self) -> str:
+            return "ssh-ed25519"
+
+    parsed = _parse_linux_inventory(output, FakeHostKey())
+    assert {
+        "linux",
+        "ubuntu",
+        "ubuntu-22.04",
+        "local-process",
+        "systemd",
+        "sudo",
+        "root",
+        "perf",
+        "python",
+    } <= set(parsed.capabilities)
+    assert "perl" not in parsed.capabilities
+
+
+def test_connect_stores_probed_capabilities(external_db_session) -> None:
+    discovered = DiscoveredExternalTarget(
+        hostname="compute-01",
+        operating_system="Ubuntu 22.04.3 LTS",
+        kernel="Linux 5.15.0-91-generic",
+        architecture="x86_64",
+        processor="AMD EPYC 7B13",
+        logical_cpu_count=8,
+        memory_gib=15.0,
+        host_key_sha256="SHA256:" + "A" * 43,
+        host_key_type="ssh-ed25519",
+        capabilities=["linux", "ubuntu-22.04", "systemd", "root", "local-process"],
+    )
+
+    record = connect_external_target(
+        external_db_session, _connection(), probe=lambda _request: discovered
+    )
+    external_db_session.flush()
+    assert {
+        "external",
+        "ssh",
+        "x86_64",
+        "linux",
+        "ubuntu-22.04",
+        "systemd",
+        "root",
+        "local-process",
+    } <= set(record.capabilities_json)
+
+
+def test_connect_existing_target_merges_probed_capabilities(external_db_session) -> None:
+    record = import_external_target(
+        external_db_session,
+        _request(runnable=True, capabilities=["custom-role"]),
+    )
+    external_db_session.flush()
+    discovered = DiscoveredExternalTarget(
+        hostname="compute-01",
+        operating_system="Ubuntu 22.04.3 LTS",
+        kernel="Linux 5.15.0-91-generic",
+        architecture="x86_64",
+        processor="AMD EPYC 7B13",
+        logical_cpu_count=8,
+        memory_gib=15.0,
+        host_key_sha256="SHA256:" + "A" * 43,
+        host_key_type="ssh-ed25519",
+        capabilities=["linux", "ubuntu-22.04", "systemd"],
+    )
+
+    refreshed = connect_existing_target(
+        external_db_session,
+        record,
+        _connection(endpoint="10.0.0.9"),
+        probe=lambda _request: discovered,
+    )
+    external_db_session.flush()
+    merged = set(refreshed.capabilities_json)
+    assert {"custom-role", "linux", "ubuntu-22.04", "systemd", "ssh", "x86_64"} <= merged

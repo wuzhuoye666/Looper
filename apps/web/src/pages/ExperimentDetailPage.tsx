@@ -8,12 +8,13 @@ import { StatusBadge } from '../components/StatusBadge';
 import { EmptyState, ErrorState, LoadingState } from '../components/States';
 import { VariabilityPanel } from '../components/VariabilityPanel';
 import { BenchTrustPanel } from '../components/BenchTrustPanel';
+import { ExperimentTerminal } from '../components/ExperimentTerminal';
 import { API_BASE, api, resolveApiUrl } from '../lib/api';
 import { formatDate, formatNumber, scoreDelta } from '../lib/format';
 import type { AnalysisData, Evaluation, Experiment, MetricDefinition, PostOptimizationStatus, SelectionComparison, SelectionTargetResult } from '../lib/types';
 
-const selectionTabs = [['overview', '概览'], ['targets', '目标结果'], ['comparison', '对比结论'], ['benchtrust', '可信度'], ['variability', '波动分析'], ['evidence', '证据'], ['config', '配置']];
-const optimizationTabs = [['overview', '概览'], ['evaluations', '评估记录'], ['pareto', 'Pareto 前沿'], ['benchtrust', '可信度'], ['variability', '波动分析'], ['evidence', '证据'], ['config', '配置']];
+const selectionTabs = [['overview', '概览'], ['targets', '目标结果'], ['comparison', '对比结论'], ['benchtrust', '可信度'], ['variability', '波动分析'], ['evidence', '证据'], ['config', '配置'], ['terminal', '终端输出']];
+const optimizationTabs = [['overview', '概览'], ['evaluations', '评估记录'], ['pareto', 'Pareto 前沿'], ['benchtrust', '可信度'], ['variability', '波动分析'], ['evidence', '证据'], ['config', '配置'], ['terminal', '终端输出']];
 const executionPhases = [
   ['deploying-package', '下发脚本'],
   ['checking-environment', '检查环境'],
@@ -81,7 +82,7 @@ export function ExperimentDetailPage() {
     </div><ExperimentActions status={experiment.status} busy={action.isPending} onAction={value => action.mutate(value)} /></header>
     {action.isError && <div className="inline-alert"><AlertTriangle size={16} />{action.error.message}</div>}
     {experiment.activePhase && ['queued', 'running'].includes(experiment.status) && <section className="panel execution-progress" aria-label="自动部署与测试进度"><div className="execution-progress-heading"><LoaderCircle size={19}/><div><small>Looper 自动执行中</small><strong>{experiment.activePhaseDetail || experiment.activePhase}</strong></div></div><ol>{executionPhases.map(([key,label],index)=>{const activeIndex=executionPhases.findIndex(([phase])=>phase===experiment.activePhase);return <li className={key===experiment.activePhase?'active':index<activeIndex?'done':''} key={key}><span>{index+1}</span><small>{label}</small></li>;})}</ol></section>}
-    {experiment.status === 'completed' && !selectionMode && <PostOptimizationPanel
+     {experiment.status === 'completed' && !selectionMode && <PostOptimizationPanel
       data={postOptimization.data}
       loading={postOptimization.isLoading}
       error={postOptimization.isError ? postOptimization.error : optimize.isError ? optimize.error : null}
@@ -98,6 +99,7 @@ export function ExperimentDetailPage() {
     {tab === 'variability' && <AsyncPanel query={variability}>{variability.data ? <VariabilityPanel data={variability.data} /> : null}</AsyncPanel>}
     {tab === 'evidence' && <AsyncPanel query={analysis}><Evidence items={analysis.data?.evidence || []} /></AsyncPanel>}
     {tab === 'config' && <Config value={experiment.config || {}} />}
+     {tab === 'terminal' && <ExperimentTerminal experimentId={experiment.id} />}
   </div>;
 }
 

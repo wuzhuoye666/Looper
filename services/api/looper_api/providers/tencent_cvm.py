@@ -1038,7 +1038,10 @@ def _upsert_instance(session: Session, region: str, instance: Any) -> TargetReco
         "image_id": instance.ImageId,
         "os_name": instance.OsName,
     }
-    capabilities = ["tencent-cvm", "inventory"]
+    capabilities = sorted(
+        (set(record.capabilities_json) if record is not None else set())
+        | {"tencent-cvm", 'inventory'}
+    )
     snapshot = {
         "provider": "tencent",
         "capabilities": capabilities,

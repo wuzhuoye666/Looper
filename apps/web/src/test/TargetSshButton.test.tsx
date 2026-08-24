@@ -16,14 +16,15 @@ it('复用服务端保存的 SSH 凭据并恢复 Worker', async () => {
   vi.stubGlobal('fetch', fetchMock);
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(<QueryClientProvider client={client}><TargetSshButton target={{
-    id: 'external:10.0.0.8', name: 'compute-01', runnable: false,
+    id: 'external:10.0.0.8', name: 'compute-01', runnable: true,
     lifecycleStatus: 'active', credentialsRemembered: true,
   }}/></QueryClientProvider>);
 
-  fireEvent.click(screen.getByRole('button', { name: 'compute-01 · 测试并恢复' }));
+  fireEvent.click(screen.getByRole('button', { name: 'compute-01 · 测试 SSH' }));
 
   expect(await screen.findByRole('button', { name: 'compute-01 · SSH 已连通' })).toBeInTheDocument();
   expect(screen.getByText('凭据已复用，Worker 正在自动上线')).toBeInTheDocument();
+  expect(screen.queryByRole('link', { name: '最终测试' })).not.toBeInTheDocument();
   const [url, init] = fetchMock.mock.calls[0];
   expect(String(url)).toContain('/targets/external%3A10.0.0.8/ssh-test');
   expect(init?.method).toBe('POST');

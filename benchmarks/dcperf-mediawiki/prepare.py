@@ -24,7 +24,8 @@ from pathlib import Path
 from typing import Any
 
 SOURCE_REVISION = "9308c3e3c404e0466f0a2929f15ddcf62b2215f6"
-EXPECTED_PLATFORM = {"ID": "ubuntu", "VERSION_ID": "22.04", "ARCH": "x86_64"}
+EXPECTED_PLATFORM = {"ID": "ubuntu", "ARCH": "x86_64"}
+SUPPORTED_UBUNTU_RELEASES = {"22.04", "24.04"}
 HHVM_BIN = Path("/usr/local/hphpi/legacy/bin/hhvm")
 HHVM_LIB = Path("/opt/local/hhvm-3.30/lib")
 MARKER_NAME = "dcperf-mediawiki-ready.json"
@@ -92,11 +93,12 @@ def check_host() -> None:
         )
     release = read_os_release()
     if release.get("ID") != EXPECTED_PLATFORM["ID"]:
-        fail(f"unsupported distribution: expected Ubuntu 22.04, got {release.get('ID', 'unknown')}")
-    if release.get("VERSION_ID") != EXPECTED_PLATFORM["VERSION_ID"]:
+        fail(f"unsupported distribution: expected Ubuntu, got {release.get('ID', 'unknown')}")
+    release_id = release.get("VERSION_ID", "")
+    if release_id not in SUPPORTED_UBUNTU_RELEASES:
         fail(
-            "unsupported Ubuntu release: expected 22.04, got "
-            f"{release.get('VERSION_ID', 'unknown')}"
+            "unsupported Ubuntu release: expected one of "
+            f"{sorted(SUPPORTED_UBUNTU_RELEASES)}, got {release_id or 'unknown'}"
         )
     architecture = os.uname().machine if hasattr(os, "uname") else "unknown"
     if architecture not in {"x86_64", "amd64"}:
@@ -116,8 +118,12 @@ def load_lock(root: Path) -> dict[str, Any]:
         fail(f"cannot read dependency lock: {error}")
     if lock.get("schemaVersion") != "looper.dependency-lock/v1":
         fail("unsupported dependency lock schema")
-    if lock.get("platform", {}).get("release") != "22.04":
-        fail("dependency lock is not pinned to Ubuntu 22.04")
+    platform = lock.get("platform", {})
+    supported_releases = set(platform.get("compatibleReleases", []))
+    if not supported_releases:
+        supported_releases = {str(platform.get("release", ""))}
+    if not supported_releases >= SUPPORTED_UBUNTU_RELEASES:
+        fail("dependency lock does not cover all supported Ubuntu releases")
     assets = lock.get("assets")
     if not isinstance(assets, list) or not assets:
         fail("dependency lock does not declare assets")
@@ -143,45 +149,93 @@ def fetch(asset_spec: dict[str, Any], directory: Path) -> Path:
     directory.mkdir(parents=True, exist_ok=True)
     safe_id = str(asset_spec["id"]).replace("/", "_")
     destination = directory / (safe_id + ".download")
+    temporary = destination.with_suffix(".part")
     expected = str(asset_spec["sha256"]).removeprefix("sha256:")
+    declared = asset_spec.get("bytes")
+    expected_bytes = int(declared) if declared is not None else None
     if destination.is_file() and sha256_file(destination) == expected:
         log(f"reusing verified asset {asset_spec['id']}")
         return destination
     if destination.exists():
         destination.unlink()
-    temporary = destination.with_suffix(".part")
-    temporary.unlink(missing_ok=True)
-    request = urllib.request.Request(
+
+    offset = temporary.stat().st_size if temporary.is_file() else 0
+    headers = {"User-Agent": "Looper-DCPerf-provisioner/2"}
+    if offset:
+        headers["Range"] = f"bytes={offset}-"
+        log(f"resuming {asset_spec['id']} from {offset / (1024 * 1024):.1f} MiB")
+    else:
+        log(f"downloading {asset_spec['id']}")
+    source_urls = [
+        *(str(item) for item in asset_spec.get("mirrors", [])),
         str(asset_spec["url"]),
-        headers={"User-Agent": "Looper-DCPerf-provisioner/1"},
-    )
-    log(f"downloading {asset_spec['id']}")
+    ]
+    response = None
+    route_errors: list[str] = []
+    for route_number, source_url in enumerate(source_urls, start=1):
+        request = urllib.request.Request(source_url, headers=headers)
+        try:
+            response = urllib.request.urlopen(request, timeout=180)
+            log(f"using download route {route_number}/{len(source_urls)}")
+            break
+        except Exception as error:
+            route_errors.append(str(error))
+            log(f"download route {route_number}/{len(source_urls)} unavailable: {error}")
+    if response is None:
+        fail(f"all download routes failed for {asset_spec['id']}: {'; '.join(route_errors)}")
     try:
-        with (
-            urllib.request.urlopen(request, timeout=180) as response,
-            temporary.open("wb") as stream,
-        ):
-            digest = hashlib.sha256()
-            total = 0
-            while True:
-                block = response.read(1024 * 1024)
-                if not block:
-                    break
-                stream.write(block)
-                digest.update(block)
-                total += len(block)
+        with response:
+            resumed = offset > 0 and getattr(response, "status", 200) == 206
+            if offset and not resumed:
+                log("upstream does not support range requests; restarting this asset")
+                offset = 0
+            total = offset
+            started = time.monotonic()
+            last_report = started
+            mode = "ab" if resumed else "wb"
+            with temporary.open(mode) as stream:
+                while True:
+                    block = response.read(1024 * 1024)
+                    if not block:
+                        break
+                    stream.write(block)
+                    total += len(block)
+                    now = time.monotonic()
+                    if now - last_report >= 5:
+                        downloaded = total / (1024 * 1024)
+                        speed = (total - offset) / max(now - started, 0.001) / (1024 * 1024)
+                        if expected_bytes:
+                            percent = min(100.0, total * 100 / expected_bytes)
+                            log(
+                                f"downloading {asset_spec['id']}: {downloaded:.1f} MiB / "
+                                f"{expected_bytes / (1024 * 1024):.1f} MiB "
+                                f"({percent:.1f}%) at {speed:.2f} MiB/s"
+                            )
+                        else:
+                            log(
+                                f"downloading {asset_spec['id']}: {downloaded:.1f} MiB "
+                                f"at {speed:.2f} MiB/s"
+                            )
+                        last_report = now
     except Exception as error:
-        temporary.unlink(missing_ok=True)
-        fail(f"download failed for {asset_spec['id']}: {error}")
-    actual = digest.hexdigest()
+        saved = temporary.stat().st_size if temporary.exists() else 0
+        fail(
+            f"download interrupted for {asset_spec['id']} after "
+            f"{saved / (1024 * 1024):.1f} MiB; next run will resume: {error}"
+        )
+    if expected_bytes is not None and total != expected_bytes:
+        if total > expected_bytes:
+            temporary.unlink(missing_ok=True)
+        fail(
+            f"incomplete download for {asset_spec['id']}: expected {expected_bytes}, "
+            f"got {total}; next run will resume"
+        )
+    actual = sha256_file(temporary)
     if actual != expected:
         temporary.unlink(missing_ok=True)
         fail(f"checksum mismatch for {asset_spec['id']}: expected {expected}, got {actual}")
-    declared_bytes = asset_spec.get("bytes")
-    if declared_bytes is not None and int(declared_bytes) != total:
-        temporary.unlink(missing_ok=True)
-        fail(f"size mismatch for {asset_spec['id']}: expected {declared_bytes}, got {total}")
     temporary.replace(destination)
+    log(f"verified download {asset_spec['id']} ({total / (1024 * 1024):.1f} MiB)")
     return destination
 
 

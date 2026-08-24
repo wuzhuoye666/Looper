@@ -29,6 +29,12 @@ class AttemptHeartbeat(ProtocolModel):
     fencing_token: int = Field(alias="fencingToken", ge=1)
     phase: str | None = Field(default=None, min_length=1, max_length=40)
     phase_detail: str | None = Field(default=None, alias="phaseDetail", max_length=500)
+    log_id: str | None = Field(default=None, alias="logId", min_length=1, max_length=160)
+    log_stage: str | None = Field(default=None, alias="logStage", min_length=1, max_length=40)
+    log_stream: Literal["command", "stdout", "stderr", "system"] | None = Field(
+        default=None, alias="logStream"
+    )
+    log_text: str | None = Field(default=None, alias="logText", max_length=8000)
 
 
 class AttemptStart(AttemptHeartbeat):

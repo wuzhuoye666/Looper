@@ -52,6 +52,28 @@ def test_ssh_credentials_round_trip_without_plaintext_at_rest(tmp_path) -> None:
     assert recovered.deploy_worker is True
 
 
+def test_pending_ssh_credentials_round_trip_before_host_key(tmp_path) -> None:
+    settings = Settings(_env_file=None, data_dir=tmp_path)
+    store = EncryptedSshCredentialStore(settings)
+
+    assert store.save_pending("order-1", _request()) is True
+    combined = (
+        settings.remote_credential_store_path.read_bytes()
+        + settings.remote_credential_key_path.read_bytes()
+    )
+    assert b"one-time-secret" not in combined
+
+    recovered = store.load_pending("order-1")
+    assert recovered.endpoint == "10.0.0.8"
+    assert recovered.password is not None
+    assert recovered.password.get_secret_value() == "one-time-secret"
+    assert recovered.expected_host_key_sha256 is None
+
+    store.delete_pending("order-1")
+    with pytest.raises(RemoteCredentialError, match="were not found"):
+        store.load_pending("order-1")
+
+
 def test_tampered_ciphertext_fails_closed(tmp_path) -> None:
     settings = Settings(_env_file=None, data_dir=tmp_path)
     store = EncryptedSshCredentialStore(settings)

@@ -220,6 +220,47 @@ class EncryptedSshCredentialStore:
             self._write_document(document)
         return True
 
+    def save_pending(self, scope_id: str, request: ConnectExternalTargetRequest) -> bool:
+        """Encrypt credentials before an instance has a verifiable host key."""
+        if not self.enabled:
+            return False
+        plaintext = json.dumps(
+            self._payload(request, ""), sort_keys=True, separators=(",", ":")
+        ).encode("utf-8")
+        with self._lock:
+            ciphertext = Fernet(self._key(create=True)).encrypt(plaintext).decode("ascii")
+            document = self._document()
+            pending = document.setdefault("pending", {})
+            pending[scope_id] = ciphertext
+            self._write_document(document)
+        return True
+
+    def load_pending(self, scope_id: str) -> ConnectExternalTargetRequest:
+        if not self.enabled:
+            raise RemoteCredentialError("SSH credential persistence is disabled")
+        with self._lock:
+            ciphertext = self._document().get("pending", {}).get(scope_id)
+            if not isinstance(ciphertext, str):
+                raise RemoteCredentialError("pending SSH credentials were not found")
+            try:
+                plaintext = Fernet(self._key(create=False)).decrypt(ciphertext.encode("ascii"))
+                payload = json.loads(plaintext)
+                return ConnectExternalTargetRequest.model_validate(payload)
+            except (InvalidToken, UnicodeError, json.JSONDecodeError, ValueError) as error:
+                raise RemoteCredentialError(
+                    "pending SSH credentials could not be decrypted or validated"
+                ) from error
+
+    def delete_pending(self, scope_id: str) -> None:
+        if not self.enabled or not self.store_path.exists():
+            return
+        with self._lock:
+            document = self._document()
+            pending = document.get("pending", {})
+            if scope_id in pending:
+                del pending[scope_id]
+                self._write_document(document)
+
     def target_ids(self) -> list[str]:
         if not self.enabled or not self.store_path.exists():
             return []
