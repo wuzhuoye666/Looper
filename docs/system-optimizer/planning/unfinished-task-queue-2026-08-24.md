@@ -92,7 +92,7 @@ O3 时间盒 trace；通用采集缓存；中间测量/结果复用；增量下�
 | RCP-01 | 决策/设计 | 冻结 receipt mutex 崩溃恢复合同；**不设置隐式 stale timeout** | D5-I2-A/B/C 已完成 | `accepted-design`：R2 单一 advisory lock、未知文件系统拒绝、新旧 writer 禁止混跑；legacy 恢复拆到 02B | `f54abd6` + `6296d11`；仅 RCP-02A 已获实施授权 |
 | RCP-02A | 实现/测试 | advisory lock；同 scope 线程/独立进程竞争、持锁进程退出、不同 scope 并行、pointer 完全缺失重建；legacy guard 全 store fail-closed | RCP-01 | `accepted-a`：`2d479b8` + `990d087`；独占 `intervention_receipt.py` 与新增 concurrency tests | Windows 聚焦 48、System Optimizer 639、全仓 972；WSL2 `flock` 独立 open/fork/terminate 原语实测；完整 Linux pytest 待 CI/真实 Linux 环境补跑，不阻塞 RCP-02A 代码接收 |
 | RCP-02B | 实现/测试 | legacy guard 发现、target attention、内容寻址 reconciliation evidence、显式 operator 恢复 | RCP-02A；schema 逐字段复审 | 独占 receipt store + CLI + 专属 tests | 证据先于删除；所有崩溃缝可幂等重试；完整恢复后才清 attention |
-| DOC-01 | 文档 | 同步 `implementation-map.md`、`overall.md`、`workload-tuning.md` 和 2026-08-24 rebaseline：D5-I2 已接线、risk quota 已生产消费、L5 已降级、M3 真实剩余边界 | 无 | 可与所有代码 lane 并行；仅架构/规划文档 | 不改公式和阈值；所有状态可回指 commit/test；历史文档不倒改 |
+| DOC-01 | 文档 | 同步 `implementation-map.md`、`overall.md`、`workload-tuning.md` 和 2026-08-24 rebaseline：D5-I2 已接线、risk quota 已生产消费、L5 已降级、M3 真实剩余边界 | 无 | `accepted-docs`：`e0552f4` + `3c443ff`；仅架构/规划文档 | 已保留历史快照并以 addendum 更新；未改公式/阈值；在线路由缺口已准确收敛为 O1 evidence→S4 vector→ranked proposals 生产者 |
 
 ### P1：关闭 M3 剩余功能与高优先级真实验收
 
