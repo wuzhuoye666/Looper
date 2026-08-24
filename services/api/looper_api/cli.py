@@ -13,6 +13,7 @@ import typer
 from looper_core.action_loop import VerificationPolicy
 from looper_core.adapters import load_and_apply_adapter
 from looper_core.canonical import canonical_digest
+from looper_core.contracts import StrictModel
 from looper_core.manifest import load_and_validate_manifest
 from looper_core.system_opt.collector import BuiltinLinuxGuestCollector
 from looper_core.system_opt.component import ComponentOptimizer
@@ -89,6 +90,12 @@ from looper_core.system_opt.pressure import (
     validate_pressure_policy,
 )
 from looper_core.system_opt.result_vector import PromotionContract
+from looper_core.system_opt.rollback.regression import (
+    RegressionRecoveryOutcome,
+    RegressionRecoveryRequest,
+    RegressionRecoveryStatus,
+    execute_regression_recovery,
+)
 from looper_core.system_opt.safety import SafetyController, SafetyPolicy, SafetyState
 from looper_core.system_opt.scoring import MeasurementBatch
 from looper_core.system_opt.state_evidence import (
@@ -148,6 +155,58 @@ def _write_json(path: Path, value: object) -> None:
         json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2),
         encoding="utf-8",
     )
+
+
+def _write_json_atomic(path: Path, value: object) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if hasattr(value, "model_dump"):
+        value = value.model_dump(mode="json", exclude_none=False)
+    payload = (
+        json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
+    ).encode("utf-8")
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    try:
+        with temporary.open("wb") as stream:
+            stream.write(payload)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _normalized_path(path: Path) -> Path:
+    return path.expanduser().resolve(strict=False)
+
+
+def _ensure_distinct_paths(named_paths: dict[str, Path]) -> dict[str, Path]:
+    normalized = {name: _normalized_path(path) for name, path in named_paths.items()}
+    seen: dict[Path, str] = {}
+    for name, path in normalized.items():
+        if path in seen:
+            raise typer.BadParameter(f"path collision between {seen[path]} and {name}: {path}")
+        seen[path] = name
+    evidence_root = normalized.get("evidence-root")
+    if evidence_root is not None:
+        for name in ("request", "manifest", "state-evidence", "initial-state", "output"):
+            path = normalized.get(name)
+            if path is not None and evidence_root in path.parents:
+                raise typer.BadParameter(f"input path {name} is inside evidence root: {path}")
+    return normalized
+
+
+class RegressionRecoveryEvidenceIndex(StrictModel):
+    schema_version: str = "looper.regression-recovery-evidence-index/v1alpha1"
+    request_digest: str
+    outcome_digest: str
+    rollback_record_digest: str | None = None
+    request_path: str
+    outcome_path: str
+    rollback_record_path: str | None = None
+
+    @property
+    def digest(self) -> str:
+        return canonical_digest(self.model_dump(mode="json"))
 
 
 def _load_state_evidence(path: Path) -> ConfigurationStateEvidence:
@@ -1397,6 +1456,214 @@ def run_dynamic_phase_session(
                 "o1_live_collection": live_o1 is not None,
                 "o2_probe_source": "live" if live_o2 is not None else o2_source,
                 "output": str(output.resolve()),
+            }
+        )
+    )
+
+
+@system_opt_app.command("regression-recovery")
+def run_regression_recovery(
+    request_path: Path = typer.Option(..., "--request", exists=True, dir_okay=False),
+    manifest_path: Path = typer.Option(..., "--manifest", exists=True, dir_okay=False),
+    state_evidence_path: Path = typer.Option(..., "--state-evidence", exists=True, dir_okay=False),
+    backend_kind: str = typer.Option(..., "--backend"),
+    initial_state: Path | None = typer.Option(None, "--initial-state", exists=True, dir_okay=False),
+    target_id: str = typer.Option(..., "--target-id"),
+    owner_id: str = typer.Option(..., "--owner-id"),
+    lease_root: Path = typer.Option(..., "--lease-root", file_okay=False),
+    lease_ttl_seconds: float = typer.Option(..., "--lease-ttl-seconds", min=1),
+    allow_executable: list[str] | None = typer.Option(None, "--allow-executable"),
+    writable_root: list[Path] = typer.Option([], "--writable-root", file_okay=False),
+    enable_real: bool = typer.Option(False, "--enable-real"),
+    confirmation: str = typer.Option("", "--confirmation"),
+    evidence_dir: Path = typer.Option(..., "--evidence-dir", file_okay=False),
+    output: Path = typer.Option(..., "--output", dir_okay=False),
+) -> None:
+    """Run explicit L6c regression recovery from a versioned request."""
+    request = RegressionRecoveryRequest.model_validate(_read_json(request_path))
+    if request.checkpoint.target_id != target_id:
+        raise typer.BadParameter("request checkpoint target does not match --target-id")
+    if backend_kind == "local-linux":
+        _require_linux_confirmation(enable_real, confirmation)
+    elif backend_kind != "simulated":
+        raise typer.BadParameter("backend must be simulated or local-linux")
+    if backend_kind == "simulated" and initial_state is None:
+        raise typer.BadParameter("simulated backend requires --initial-state")
+    _ensure_distinct_paths(
+        {
+            "request": request_path,
+            "manifest": manifest_path,
+            "state-evidence": state_evidence_path,
+            **({"initial-state": initial_state} if initial_state else {}),
+            "output": output,
+            "evidence-root": evidence_dir,
+            "index": evidence_dir / "regression-recovery-evidence-index.json",
+        }
+    )
+    initial_payload: dict[str, Any] | None = None
+    if initial_state is not None:
+        payload = _read_json(initial_state)
+        if not isinstance(payload, dict):
+            raise typer.BadParameter("initial state must be a JSON object")
+        initial_payload = payload
+    manifest = parse_config_manifest_yaml(manifest_path.read_text(encoding="utf-8"))
+    state_evidence = _load_state_evidence(state_evidence_path)
+    pinned_items, ownership_unknown_items = state_evidence.safety_constraints(
+        manifest,
+        target_id=target_id,
+        actor_id=owner_id,
+        environment_digest=_current_environment_digest(),
+    )
+    backend = (
+        SimulatedBackend(initial_payload, target_id=target_id)
+        if backend_kind == "simulated"
+        else _local_backend(
+            manifest,
+            target_id=target_id,
+            allowed_executables=allow_executable or [],
+            writable_roots=list(writable_root),
+        )
+    )
+    controller = SafetyController(
+        SafetyPolicy(
+            allow_keep=True,
+            pinned_items=sorted(pinned_items),
+            ownership_unknown_items=sorted(ownership_unknown_items),
+        )
+    )
+    guard = FileTargetGuard(lease_root)
+    lease = guard.acquire(
+        target_id,
+        owner_id,
+        ttl_seconds=lease_ttl_seconds,
+        now=datetime.now(UTC),
+        reconciliation=None,
+    )
+    outcome: RegressionRecoveryOutcome | None = None
+    try:
+        try:
+            outcome = execute_regression_recovery(
+                request,
+                manifest=manifest,
+                controller=controller,
+                backend=backend,
+                fencing_token=lease.fencing_token,
+                recorded_at=datetime.now(UTC),
+            )
+        except Exception as error:
+            try:
+                guard.mark_needs_attention(
+                    target_id,
+                    reason=(
+                        f"L6c recovery execution failed for request {request.digest}: "
+                        f"{type(error).__name__}: {error}"
+                    ),
+                    evidence_digest=request.digest,
+                    now=datetime.now(UTC),
+                )
+            except Exception as attention_error:
+                raise RuntimeError(
+                    f"L6c recovery failed: {error}; "
+                    f"attention write failed: {attention_error}"
+                ) from error
+            raise RuntimeError(
+                f"L6c recovery execution failed for request {request.digest}: "
+                f"{type(error).__name__}: {error}"
+            ) from error
+        rollback = outcome.rollback_record
+        rollback_digest = rollback.digest if rollback else None
+        request_path_name = f"request-{request.digest.removeprefix('sha256:')}.json"
+        outcome_path_name = f"outcome-{outcome.digest.removeprefix('sha256:')}.json"
+        rollback_path_name = (
+            f"rollback-{rollback_digest.removeprefix('sha256:')}.json" if rollback_digest else None
+        )
+        if outcome.request_digest != request.digest:
+            raise RuntimeError("outcome request digest does not match request")
+        index = RegressionRecoveryEvidenceIndex(
+            request_digest=request.digest,
+            outcome_digest=outcome.digest,
+            rollback_record_digest=rollback_digest,
+            request_path=request_path_name,
+            outcome_path=outcome_path_name,
+            rollback_record_path=rollback_path_name,
+        )
+        publish_error: Exception | None = None
+        try:
+            _write_json_atomic(evidence_dir / request_path_name, request)
+            _write_json_atomic(evidence_dir / outcome_path_name, outcome)
+            if rollback is not None:
+                _write_json_atomic(evidence_dir / rollback_path_name, rollback)
+            _write_json_atomic(
+                evidence_dir / "regression-recovery-evidence-index.json", index
+            )
+        except Exception as error:
+            publish_error = error
+        if publish_error is not None:
+            try:
+                guard.mark_needs_attention(
+                    target_id,
+                    reason=(
+                        f"L6c evidence publication failed for request {request.digest}; "
+                        f"recovery={outcome.status.value}: {outcome.reason}; "
+                        f"evidence={type(publish_error).__name__}: {publish_error}"
+                    ),
+                    evidence_digest=request.digest,
+                    now=datetime.now(UTC),
+                )
+            except Exception as attention_error:
+                raise RuntimeError(
+                    f"L6c evidence publication failed: {publish_error}; "
+                    f"recovery={outcome.reason}; "
+                    f"attention write failed: {attention_error}"
+                ) from publish_error
+            raise RuntimeError(
+                f"L6c evidence publication failed for request {request.digest}: "
+                f"{type(publish_error).__name__}: {publish_error}"
+            ) from publish_error
+        try:
+            _write_json_atomic(output, outcome)
+        except Exception as error:
+            raise RuntimeError(
+                f"L6c output convenience copy failed after evidence publication: {error}"
+            ) from error
+        if outcome.status is RegressionRecoveryStatus.NEEDS_ATTENTION:
+            try:
+                guard.mark_needs_attention(
+                    target_id,
+                    reason=(
+                        f"L6c recovery needs attention for request {request.digest}: "
+                        f"{outcome.reason}"
+                    ),
+                    evidence_digest=outcome.digest,
+                    now=datetime.now(UTC),
+                )
+            except Exception as attention_error:
+                raise RuntimeError(
+                    f"L6c recovery needs attention: {outcome.reason}; "
+                    f"attention write failed: {attention_error}"
+                ) from attention_error
+            raise typer.BadParameter(outcome.reason)
+    except Exception as error:
+        if outcome is not None and outcome.status is RegressionRecoveryStatus.RESTORED:
+            try:
+                guard.mark_needs_attention(
+                    target_id,
+                    reason=f"L6c evidence publication failed for request {request.digest}: {error}",
+                    evidence_digest=outcome.digest,
+                    now=datetime.now(UTC),
+                )
+            except Exception as attention_error:
+                raise RuntimeError(
+                    f"L6c evidence failure: {error}; attention failure: {attention_error}"
+                ) from error
+        raise
+    finally:
+        guard.release(lease)
+    console.print_json(
+        json.dumps(
+            {
+                "status": outcome.status.value,
+                "stop_required": outcome.stop_required,
             }
         )
     )
