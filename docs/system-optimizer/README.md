@@ -53,6 +53,7 @@ System Optimizer 是一个操作系统配置采集、人工管理和有限闭环
 - planning/roadmap.md：重新基线后的阶段计划、依赖和交付物。
 - planning/acceptance-criteria.md：功能、证据、安全、指标和文档验收。
 - planning/implementation-rebaseline-2026-08-23.md：当前实际能力与原 M1–M5 对照。
+- planning/implementation-rebaseline-2026-08-24.md：动态接线、O1/O2 证据、L6c 与当前并行缺口的最新实现基线。
 - planning/m1-state-ownership-recovery-contract-2026-08-23.md：M1 状态来源、逐项所有权授权、完整快照崩溃对账与未完成边界。
 - planning/m2-component-pressure-contract-2026-08-23.md：五组件口径、标准阶段合同、校准与正式门禁的边界。
 - planning/agent-work-ledger-2026-08-24.md：当前多 Agent 任务、依赖、交付、验收、合入和远端状态的唯一登记本。
@@ -73,7 +74,7 @@ System Optimizer 是一个操作系统配置采集、人工管理和有限闭环
 | 新架构与规范 | draft | 已确认核心方向，仍有明确 open decisions |
 | 配置模型、inventory、Profile、安全执行 | Alibaba ECS KVM accepted | 腾讯云 CVM 仍须独立复验 |
 | 通用标准压力闭环 | Alibaba ECS calibration in progress | 存储真实多轮；CPU/Memory/Network-loopback 首次出数；NUMA 单节点 unavailable；候选收益与组合复验未完成 |
-| workload 动态下钻闭环 | simulated vertical slice | 真实低开销采集、下钻和业务复验未验证 |
+| workload 动态下钻闭环 | simulated vertical slice wired | O0/O1/O2、假设、干预、业务复测/复验、门禁与恢复已接线；真实业务/CVM 未验证 |
 | 真实 local Linux | Alibaba ECS partially verified | 不能外推腾讯云 CVM；仅按各实录声明的作用域使用 |
 | 缓存与中间结果复用 | deferred | 功能闭环通过后进入过程优化阶段 |
 

@@ -144,7 +144,7 @@ loop:
 
 | 层 | 职责 | 不负责 | 现状 |
 |---|---|---|---|
-| L8 引擎 | 调度（S3）、判断（S0/S2/S7）、打分（S4/S6）、排名晋升（S8/S9）、停止（S10） | 测量、写配置、私藏门禁 | 新建；`diagnostic_priorities`/`routed_components`/`StopReason` 是三个雏形 |
+| L8 引擎 | 调度（S3）、判断（S0/S2/S7）、打分（S4/S6）、排名晋升（S8/S9）、停止（S10） | 测量、写配置、私藏门禁 | 已实现 scorer/judge/scheduler/incumbent/loop；动态循环另在 `dynamic_loop.py`，真实 CVM 未验收 |
 | L7 缓存 | 负结果登记、查询、身份失效 | 替代当前测量（红线：同身份才跳过） | 新建；提前路线图 M6 的负结果部分（决策见治理日志） |
 | L6 回退 | 四级回退（候选/相位/退化/崩溃）+ 回退验证 | 评价收益 | a/d 已有真机验证；b 显式化；c 已实现 S8 显式阈值→S9 last-good 精确恢复，CLI 生命周期接线待 G5 |
 | L5 组件优化器 | 公式映射出配置建议+优先级、S5 搜索兜底、组件内打分 | 终裁、跨组件判断 | 改造：现 `SystemOptimizationEngine`+每组件 manifest/policy/protocol 即雏形，需把"组件内终裁"降格为"上报引擎" |
@@ -168,7 +168,7 @@ loop:
 | S7 | 稳健接受条件 | L8 判断器 | ✅ LCB>MDE 真机用过 |
 | S8 | 结果向量（含 U_regression） | L8 | ✅ `result_vector.py` 六维向量/Pareto；L6c 只消费已归一向量和任务显式阈值 |
 | S9 | 晋升与组合复验 | L8 | ✅ `evaluate_promotion` + `verification.py` 复验生产者；无合格观测 fail-closed |
-| S10 | 显式停止状态（结束门禁） | L8 | 🟡 `StopReason` 有；相位级结束门禁合同未定义 |
+| S10 | 显式停止状态（结束门禁） | L8 | ✅ 静态 `StopReason`；动态 `DynamicPhaseGateContract` 五类停止与防振荡字段已接循环；risk quota 执行前信号仍缺 |
 | F-MENTOR-001/002/003 | 导师三层 | L8 | 001 已并入 S2；002/003 待校准（登记表已列前置条件） |
 
 ## 7. 与现有代码的差距与建议实现顺序
