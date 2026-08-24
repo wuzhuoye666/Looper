@@ -36,13 +36,17 @@ from looper_core.system_opt.domain import (
 from looper_core.system_opt.dynamic_adapters import (
     BusinessRetestPlanner,
     FileHypothesisProposals,
+    FileHypothesisProposalsV2,
     FileLoadIdentity,
     FileO0Source,
     FileRetestSource,
+    HypothesisProposalsFile,
+    HypothesisProposalsFileV2,
     SafetyBackedIntervention,
     SessionLayout,
+    TwoStageSafetyBackedIntervention,
     load_business_policy,
-    load_hypothesis_proposals,
+    load_hypothesis_proposals_versioned,
     load_o1_collection_plans,
     load_workload_contract,
 )
@@ -51,12 +55,17 @@ from looper_core.system_opt.dynamic_collection import (
     o2_component_probe,
     persist_dynamic_collection_evidence,
 )
-from looper_core.system_opt.dynamic_loop import run_dynamic_phase
+from looper_core.system_opt.dynamic_loop import run_dynamic_phase, run_dynamic_phase_v2
 from looper_core.system_opt.engine import EngineLoopConfig, run_engine_loop
 from looper_core.system_opt.executor import ConfigSnapshot
 from looper_core.system_opt.executor.local_linux import LocalLinuxBackend
 from looper_core.system_opt.executor.runner import SubprocessCommandRunner
 from looper_core.system_opt.executor.simulated import SimulatedBackend
+from looper_core.system_opt.intervention import ReceiptStageV2
+from looper_core.system_opt.intervention_receipt import (
+    DurableReceiptStore,
+    ReceiptStoreError,
+)
 from looper_core.system_opt.inventory import (
     LinuxDiscoveryPolicy,
     LinuxRawCollector,
@@ -76,7 +85,11 @@ from looper_core.system_opt.measurement import (
     MeasurementCommandSpec,
 )
 from looper_core.system_opt.negative_cache import NegativeCache
-from looper_core.system_opt.phase_gate import DynamicPhaseGateContract
+from looper_core.system_opt.phase_gate import (
+    DynamicPhaseGateContract,
+    DynamicPhaseGateContractV2,
+    load_dynamic_phase_gate,
+)
 from looper_core.system_opt.policy import (
     OptimizationMode,
     parse_optimization_policy_yaml,
@@ -1191,9 +1204,13 @@ def run_dynamic_phase_session(
 
     layout = SessionLayout(session_dir)
     contract = load_workload_contract(layout)
-    gate_contract = DynamicPhaseGateContract.model_validate_json(
-        layout.gate_contract.read_text(encoding="utf-8")
-    )
+    gate_payload = _read_json(layout.gate_contract)
+    if not isinstance(gate_payload, dict):
+        raise typer.BadParameter("dynamic phase gate file must be a JSON object")
+    try:
+        gate_contract = load_dynamic_phase_gate(gate_payload)
+    except ValueError as error:
+        raise typer.BadParameter(str(error)) from error
     promotion_contract = PromotionContract.model_validate_json(
         layout.promotion_contract.read_text(encoding="utf-8")
     )
@@ -1201,7 +1218,20 @@ def run_dynamic_phase_session(
     baseline_batch = MeasurementBatch.model_validate_json(
         layout.baseline_batch.read_text(encoding="utf-8")
     )
-    proposals = load_hypothesis_proposals(layout.hypothesis_proposals)
+    try:
+        proposals = load_hypothesis_proposals_versioned(layout.hypothesis_proposals)
+    except ValueError as error:
+        raise typer.BadParameter(str(error)) from error
+    legacy_session = isinstance(gate_contract, DynamicPhaseGateContract) and isinstance(
+        proposals, HypothesisProposalsFile
+    )
+    durable_session = isinstance(
+        gate_contract, DynamicPhaseGateContractV2
+    ) and isinstance(proposals, HypothesisProposalsFileV2)
+    if not legacy_session and not durable_session:
+        raise typer.BadParameter(
+            "gate contract and hypothesis proposals must use the same schema generation"
+        )
     if lease_ttl_seconds <= gate_contract.budget.wall_clock_seconds:
         raise typer.BadParameter(
             "lease TTL must exceed the gate contract wall-clock budget"
@@ -1254,6 +1284,46 @@ def run_dynamic_phase_session(
     controller = SafetyController(safety_policy)
 
     guard = FileTargetGuard(lease_root)
+    receipt_store = DurableReceiptStore(layout.control / "intervention-receipts")
+    try:
+        receipt_heads = receipt_store.heads()
+    except ReceiptStoreError as error:
+        raise typer.BadParameter(
+            f"durable intervention receipts cannot be trusted: {error}"
+        ) from error
+    unsafe_receipt_heads = [
+        receipt
+        for receipt in receipt_heads
+        if receipt.stage
+        in {
+            ReceiptStageV2.APPLY_STARTED,
+            ReceiptStageV2.ROLLBACK_ATTEMPTED,
+            ReceiptStageV2.ROLLBACK_VERIFIED,
+        }
+        or (
+            receipt.stage is ReceiptStageV2.SAFETY_TERMINAL
+            and receipt.safety_state is not SafetyState.REJECTED
+        )
+    ]
+    if unsafe_receipt_heads:
+        receipt = unsafe_receipt_heads[0]
+        receipt_target_id = backend.capabilities.target_id
+        if guard.current_attention(receipt_target_id) is None:
+            guard.mark_needs_attention(
+                receipt_target_id,
+                reason=(
+                    "non-terminal durable intervention receipt observed after backend apply; "
+                    "automatic replay is forbidden; reconcile target state before a new run "
+                    f"(operation={receipt.operation.value}, stage={receipt.stage.value}, "
+                    f"execution_id={receipt.execution_id})"
+                ),
+                evidence_digest=receipt.digest,
+                now=datetime.now(UTC),
+            )
+        raise typer.BadParameter(
+            "dynamic run blocked by a non-terminal post-apply receipt; target was marked "
+            "needs-attention for explicit reconciliation"
+        )
     lease = guard.acquire(
         target_id,
         owner_id,
@@ -1280,15 +1350,39 @@ def run_dynamic_phase_session(
             baseline_batch=baseline_batch,
             layout=layout,
         )
-        intervention = SafetyBackedIntervention(
-            controller=controller,
-            manifest=manifest,
-            backend=backend,
-            fencing_token=lease.fencing_token,
-            proposals=proposals.by_id(),
-            planner=planner,
-            layout=layout,
-        )
+        if legacy_session:
+            assert isinstance(proposals, HypothesisProposalsFile)
+            intervention = SafetyBackedIntervention(
+                controller=controller,
+                manifest=manifest,
+                backend=backend,
+                fencing_token=lease.fencing_token,
+                proposals=proposals.by_id(),
+                planner=planner,
+                layout=layout,
+            )
+        else:
+            assert isinstance(proposals, HypothesisProposalsFileV2)
+
+            def attention_sink(reason: str, evidence_digest: str) -> None:
+                guard.mark_needs_attention(
+                    backend.capabilities.target_id,
+                    reason=reason,
+                    evidence_digest=evidence_digest,
+                    now=datetime.now(UTC),
+                )
+
+            durable_intervention = TwoStageSafetyBackedIntervention(
+                controller=controller,
+                manifest=manifest,
+                backend=backend,
+                fencing_token=lease.fencing_token,
+                proposals=proposals.by_id(),
+                planner=planner,
+                layout=layout,
+                receipt_store=receipt_store,
+                attention_sink=attention_sink,
+            )
         live_o1 = None
         live_o2 = None
         if o1_plans is not None:
@@ -1326,23 +1420,48 @@ def run_dynamic_phase_session(
                 manifest.item(item_id).parameter_id: entry.value
                 for item_id, entry in phase_snapshot.entries.items()
             }
-            run = run_dynamic_phase(
-                contract=contract,
-                gate_contract=gate_contract,
-                promotion_contract=promotion_contract,
-                environment_digest=_current_environment_digest(),
-                max_windows=max_windows,
-                probe_top_k=probe_top_k,
-                load_identity=FileLoadIdentity(layout, business_policy),
-                o0_source=FileO0Source(layout, business_policy),
-                hypothesis_source=FileHypothesisProposals(proposals),
-                clock=lambda: datetime.now(UTC),
-                o1_source=live_o1,
-                component_probe=o2_callback,
-                intervention=intervention,
-                retest=FileRetestSource(planner, layout),
-                verification_window_count=verification_window_count,
-            )
+            if legacy_session:
+                assert isinstance(gate_contract, DynamicPhaseGateContract)
+                assert isinstance(proposals, HypothesisProposalsFile)
+                run = run_dynamic_phase(
+                    contract=contract,
+                    gate_contract=gate_contract,
+                    promotion_contract=promotion_contract,
+                    environment_digest=_current_environment_digest(),
+                    max_windows=max_windows,
+                    probe_top_k=probe_top_k,
+                    load_identity=FileLoadIdentity(layout, business_policy),
+                    o0_source=FileO0Source(layout, business_policy),
+                    hypothesis_source=FileHypothesisProposals(proposals),
+                    clock=lambda: datetime.now(UTC),
+                    o1_source=live_o1,
+                    component_probe=o2_callback,
+                    intervention=intervention,
+                    retest=FileRetestSource(planner, layout),
+                    verification_window_count=verification_window_count,
+                )
+            else:
+                assert isinstance(gate_contract, DynamicPhaseGateContractV2)
+                assert isinstance(proposals, HypothesisProposalsFileV2)
+                run = run_dynamic_phase_v2(
+                    contract=contract,
+                    gate_contract=gate_contract,
+                    manifest=manifest,
+                    promotion_contract=promotion_contract,
+                    environment_digest=_current_environment_digest(),
+                    max_windows=max_windows,
+                    probe_top_k=probe_top_k,
+                    load_identity=FileLoadIdentity(layout, business_policy),
+                    o0_source=FileO0Source(layout, business_policy),
+                    hypothesis_source=FileHypothesisProposalsV2(proposals),
+                    prepare_intervention=durable_intervention.prepare_intervention,
+                    execute_intervention=durable_intervention.execute_intervention,
+                    clock=lambda: datetime.now(UTC),
+                    o1_source=live_o1,
+                    component_probe=o2_callback,
+                    retest=FileRetestSource(planner, layout),
+                    verification_window_count=verification_window_count,
+                )
         except Exception as error:
             run_error = error
         finally:

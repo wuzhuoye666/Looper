@@ -24,6 +24,7 @@ import pytest
 import yaml
 from looper_api.cli import _current_environment_digest, app
 from looper_core.system_opt.demo import build_demo_manifest
+from looper_core.system_opt.dynamic_adapters import HYPOTHESIS_PROPOSALS_V2_SCHEMA
 from looper_core.system_opt.dynamic_demo import (
     build_demo_initial_state,
     build_dynamic_demo_session,
@@ -33,7 +34,22 @@ from looper_core.system_opt.hypothesis import (
     ComponentHypothesis,
     InterventionExperiment,
 )
+from looper_core.system_opt.intervention import (
+    INTERVENTION_RISK_SOURCE_SCHEMA,
+    InterventionPlan,
+    ReceiptOperation,
+    ReceiptStageV2,
+    RiskSource,
+    RiskSourceItem,
+    RiskSourceKind,
+)
+from looper_core.system_opt.intervention_receipt import (
+    DurableReceiptStore,
+    ReceiptStoreError,
+)
+from looper_core.system_opt.lease import FileTargetGuard
 from looper_core.system_opt.phase_gate import (
+    DYNAMIC_PHASE_GATE_V2_SCHEMA,
     BoundComparator,
     ConvergencePolicy,
     DegradationGate,
@@ -120,6 +136,24 @@ def _write_demo_inputs(root: Path) -> dict[str, Path]:
     return {"manifest": manifest_path, "evidence": evidence_path, "initial": initial_path}
 
 
+def _upgrade_session_to_v2(session: Path) -> None:
+    gate_path = session / "gate-contract.json"
+    gate = json.loads(gate_path.read_text(encoding="utf-8"))
+    gate["schema_version"] = DYNAMIC_PHASE_GATE_V2_SCHEMA
+    gate_path.write_text(json.dumps(gate, indent=2), encoding="utf-8")
+
+    proposals_path = session / "hypothesis-proposals.yaml"
+    proposals = yaml.safe_load(proposals_path.read_text(encoding="utf-8"))
+    proposals["schema_version"] = HYPOTHESIS_PROPOSALS_V2_SCHEMA
+    for proposal in proposals["proposals"]:
+        proposal["risk"] = "low"
+        proposal["risk_kind"] = "manifest-derived"
+    proposals_path.write_text(
+        yaml.safe_dump(proposals, allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+    )
+
+
 def test_dynamic_run_cli_simulated_end_to_end(tmp_path: Path) -> None:
     session = tmp_path / "session"
     build_dynamic_demo_session(session)
@@ -186,6 +220,131 @@ def test_dynamic_run_cli_simulated_end_to_end(tmp_path: Path) -> None:
     assert verify_request["window_ids"][0] == "verify-window-3-1-run1"
     evidence_index = control / "dynamic-collection-evidence-index.json"
     assert evidence_index.is_file()
+
+
+def test_dynamic_run_cli_v2_persists_terminal_receipts(tmp_path: Path) -> None:
+    session = tmp_path / "session"
+    build_dynamic_demo_session(session)
+    _upgrade_session_to_v2(session)
+    inputs = _write_demo_inputs(tmp_path)
+
+    result = _invoke_demo_dynamic_run(tmp_path, session, inputs)
+
+    assert result.exit_code == 0, result.output
+    run = json.loads((tmp_path / "out.json").read_text(encoding="utf-8"))
+    assert run["schema_version"] == "looper.dynamic-phase-run/v1alpha2"
+    assert run["execution_receipts"]
+    heads = DurableReceiptStore(
+        session / "control" / "intervention-receipts"
+    ).heads()
+    assert heads
+    assert all(head.stage is ReceiptStageV2.OPERATION_TERMINAL for head in heads)
+    assert FileTargetGuard(tmp_path / "leases").current_attention(
+        "demo-dynamic-target"
+    ) is None
+
+
+def test_dynamic_run_cli_blocks_nonterminal_post_apply_receipt_before_lease(
+    tmp_path: Path,
+) -> None:
+    session = tmp_path / "session"
+    build_dynamic_demo_session(session)
+    _upgrade_session_to_v2(session)
+    inputs = _write_demo_inputs(tmp_path)
+    manifest = build_demo_manifest()
+    plan = InterventionPlan(
+        hypothesis=ComponentHypothesis(
+            hypothesis_id="hyp-governor-performance",
+            symptom_id="symptom-window-1",
+            component="cpu",
+            rank=1,
+        ),
+        change={"system.cpu-governor": "performance"},
+        risk="low",
+        risk_source=RiskSource(
+            schema_version=INTERVENTION_RISK_SOURCE_SCHEMA,
+            kind=RiskSourceKind.MANIFEST_DERIVED,
+            manifest_digest=manifest.digest,
+            items=[RiskSourceItem(item_id="cpu-governor", risk="low")],
+        ),
+    )
+    store = DurableReceiptStore(session / "control" / "intervention-receipts")
+    receipt = store.start(
+        plan=plan,
+        execution_id="window-interrupted",
+        operation=ReceiptOperation.CANDIDATE,
+    )
+    receipt = store.advance(
+        receipt,
+        ReceiptStageV2.PREFLIGHT_COMPLETED,
+        safety_state=SafetyState.PREFLIGHT,
+    )
+    receipt = store.advance(
+        receipt,
+        ReceiptStageV2.APPLY_STARTED,
+        safety_state=SafetyState.APPLY,
+    )
+
+    result = _invoke_demo_dynamic_run(tmp_path, session, inputs)
+
+    assert result.exit_code != 0
+    assert "non-terminal post-apply receipt" in result.output
+    assert not (tmp_path / "out.json").exists()
+    assert not list((tmp_path / "leases").glob("*.lease.json"))
+    attention = FileTargetGuard(tmp_path / "leases").current_attention(
+        "demo-dynamic-target"
+    )
+    assert attention is not None
+    assert attention.evidence_digest == receipt.digest
+    assert "automatic replay is forbidden" in attention.reason
+
+
+def test_dynamic_run_cli_v2_post_apply_receipt_failure_marks_attention(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    session = tmp_path / "session"
+    build_dynamic_demo_session(session)
+    _upgrade_session_to_v2(session)
+    inputs = _write_demo_inputs(tmp_path)
+    original_advance = DurableReceiptStore.advance
+
+    def fail_safety_terminal(self, current, stage, **fields):
+        if stage is ReceiptStageV2.SAFETY_TERMINAL:
+            raise ReceiptStoreError("injected post-apply receipt failure")
+        return original_advance(self, current, stage, **fields)
+
+    monkeypatch.setattr(DurableReceiptStore, "advance", fail_safety_terminal)
+
+    result = _invoke_demo_dynamic_run(tmp_path, session, inputs)
+
+    assert result.exit_code == 0, result.output
+    run = json.loads((tmp_path / "out.json").read_text(encoding="utf-8"))
+    assert run["stop_gate_decision"]["stop_class"] == "safety-triggered"
+    assert run["windows"][-1]["action"] == "intervention-failed"
+    attention = FileTargetGuard(tmp_path / "leases").current_attention(
+        "demo-dynamic-target"
+    )
+    assert attention is not None
+    assert "receipt progress failed after apply" in attention.reason
+    assert not list((tmp_path / "leases").glob("*.lease.json"))
+
+
+def test_dynamic_run_cli_rejects_mixed_gate_and_proposal_generations_before_lease(
+    tmp_path: Path,
+) -> None:
+    session = tmp_path / "session"
+    build_dynamic_demo_session(session)
+    gate_path = session / "gate-contract.json"
+    gate = json.loads(gate_path.read_text(encoding="utf-8"))
+    gate["schema_version"] = DYNAMIC_PHASE_GATE_V2_SCHEMA
+    gate_path.write_text(json.dumps(gate, indent=2), encoding="utf-8")
+    inputs = _write_demo_inputs(tmp_path)
+
+    result = _invoke_demo_dynamic_run(tmp_path, session, inputs)
+
+    assert result.exit_code != 0
+    assert "schema generation" in result.output
+    assert not list((tmp_path / "leases").glob("*.lease.json"))
 
 
 class _RunFailure(RuntimeError):
