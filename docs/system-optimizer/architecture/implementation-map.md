@@ -21,7 +21,7 @@
 | L4 采集器 | `collector.py` `interference.py` | BuiltinLinuxGuestCollector（**已窗口化** begin_collection/finish/cancel）；verify_collection_artifact_bundle（ZIP 逐文件 sha256，容器字节不作身份）；干扰检查 | /proc /sys 微指标 + 压力工具产物解析；采集开销 A/B 证据（成对裸墙钟，无阈值） |
 | L5 组件优化器 | `component/__init__.py` `component/mapping.py` `component/strategy.py` + `strategies/*.yaml` | ComponentOptimizer（suggest_candidates/candidate_pool/run）；StrategyFormulaMapping（when 条件 bootstrap 置信 + 域校验） | **只建议不终裁**；越域建议拒绝并留痕（formula_rejections） |
 | L6 回退器 | `rollback/__init__.py` `rollback/regression.py` + API CLI | 四级：候选级（每候选测完即回退，真机验证过）/ 相位级 / 退化级（S8 U_regression 显式阈值触发并恢复 S9 last-good）/ 崩溃级 | verify_phase_restoration 三态；L6c 执行桥与 G5 CLI 安全生命周期均已落地，真实目标退化演练仍待执行 |
-| L7 负缓存 | `negative_cache/__init__.py` | NegativeCacheEntry，身份 = 环境×候选参数×协议×公式版本 四 digest | 严格 sha256 证据引用；JSONL 逻辑追加/快照同目录原子替换，持久化成功后才更新内存索引；调度器开轮前查表跳过已证无效；红线：缓存证据不是结论 |
+| L7 负缓存 | `negative_cache/__init__.py` `hypothesis_cache.py` | 候选条目身份 = 环境×候选参数×协议×公式；假设条目身份 = 环境×workload×组件×症状类×metric/policy×公式×语义版本 | 两类 schema 同一 JSONL 严格分派；假设条目只准入身份可比、样本充分的业务复测无改善，显式 retention 输入后才持久化；任一身份变化 miss；红线：缓存证据不是结论 |
 | L8 总引擎 | `engine/{scorer,judge,scheduler,incumbent,loop}.py` + `tuning.py` | run_engine_loop；evaluate_candidate（S0→S2→S7 固定序） | 只做调度/判断/打分三件事；SO-D017 预筛 tracker **按组件隔离**（SO-D018）；GPT 修复后 scheduler 选中候选被 L5 精确定向执行（身份违规即 raise） |
 
 ## 二、公式总线 S0–S10 → 实现位置
@@ -31,8 +31,8 @@
 | S0 可比性 | `scoring.comparable()` | 身份字段逐项比对 |
 | S1/S1.1 校准+CV 门 | CLI `calibrate-pressure` / `derive-pressure-gate` | 门 = 单侧 95% bootstrap 上界，target-local（今天两台机器两扇门：4.64% / 12.57%） |
 | S2 硬门禁 | `scoring.evaluate_hard_gates` | 不可被收益补偿 |
-| S3 路由 | 静态：tuning `routed_components`；动态：`hypothesis.py`（≥2 竞争假设才许干预）+ `intervention.py`（D5-I1 两阶段纯合同和执行前风险/单变更门禁） | D5-I2 已接线：`dynamic_loop.py` prepare→gate→execute（`evaluate_intervention_gate` 执行前 risk quota/single-change + `risky_interventions` 按 `apply_started` 递增）；`dynamic_adapters.py` `TwoStageSafetyBackedIntervention`；`intervention_receipt.py` durable receipt（candidate/recovery 双链，RCP-02A advisory lock）；`cli.py` attention/restart reconciliation |
-| S4 二维优先级 | `scoring.diagnostic_priorities` + F-PROJECT-002 `pressure_value`/`adverse_change`（显式 scale，方向-方法相容表在 policy 校验） | 样本充足度准入已落地（eligible_metric_ids）；E_m 完整版守提案门 |
+| S3 路由 | 静态：tuning `routed_components`；动态：`online_routing.py` + `hypothesis.py` + `intervention.py` | `online_routing.py` 将 digest 绑定 O1 snapshot 转为冻结 S4 v1 向量和确定性 proposal rank，缺证据不回退文件 rank；D5-I2 已接 prepare→gate→execute、risk quota/single-change、durable receipt 与 attention/restart reconciliation |
+| S4 组件优先级 | `scoring.diagnostic_priorities` + F-PROJECT-002 `pressure_value`/`adverse_change`（显式 scale，方向-方法相容表在 policy 校验） | v1 四维与排序冻结；样本充足度准入已落地（eligible_metric_ids）；E_m 完整版守提案门 |
 | S5 合法搜索域 | `domain.resolve_domain` | 能力∩授权 |
 | S6/S7 改善+接受 | `scoring.bootstrap_improvement`（F-PROJECT-S6-S7/v1alpha1） | **LCB>MDE 严格大于**；黄金数值被特征测试钉死 |
 | S8 结果向量 | `result_vector.py` | 六维 + pareto_layers + PromotionContract |
@@ -61,12 +61,12 @@
 |---|---|---|
 | workload 合同 | `workload.py` | load_provider=external-test 唯一枚举；argv 只存 digest（SO-D020：引擎永不造负载） |
 | 观察窗口 | `observation.py` `dynamic_collection.py` | O0 解析器注册表（stress-ng YAML / fio JSON / iperf3 JSON / sysbench 文本，真实夹具钉数值）；身份漂移即 WorkloadIdentityDrift；活体 O1/O2 回调（o1_live_source / o2_component_probe） |
-| 假设路由 | `hypothesis.py` | D2 三硬规则；confirmed 唯一走 accepted 业务复测；L7 桥接待提案 |
+| 假设路由 | `online_routing.py` `hypothesis.py` `hypothesis_cache.py` | O1→S4 v1→确定性 rank；D2 三硬规则；confirmed 唯一走 accepted 业务复测；可比业务拒绝写 L7 假设缓存 |
 | 结束门禁 | `phase_gate.py` | 判定顺序：安全→身份→预算→目标→收敛；决策必须引用触发字段 |
 | 复验窗口 | `verification.py` | RetestOutcome = 改善 + 原始批次 digest |
 | 重激活 | `reactivation.py` | A+B 案；资格≠自动重启 |
 | **编排器** | `dynamic_loop.py` | run_dynamic_phase：每窗 组装→SLO/症状→账本→干预(注入)→复验→门禁判定→显式停止；负载/施加/测量全注入回调 |
-| **真实接线** | `dynamic_adapters.py` + `dynamic_demo.py` + CLI `system-opt dynamic-run` + `dynamic_collection.py` + `examples/system-optimizer/external_load_session.py` | 会话文件是引擎↔外部负载唯一界面（只读 windows/ 只写 control/）；干预 = L1 keep 施加 + 业务复测 S6/S7 + 拒绝即恢复；相位收尾无条件恢复到相位起点（晋升≠持久变更）；收敛计数器接真实干预轮 LCB；活体 O1/O2 经 `dynamic_collection.py` 注入；外部会话 runner（测试侧）产观察窗 + 按 control/retest-request 补复测/复验窗 |
+| **真实接线** | `dynamic_adapters.py` + `dynamic_demo.py` + CLI `system-opt dynamic-run`/`m3-demo` + `dynamic_collection.py` + `scenario_profile.py` | 会话文件是引擎↔外部负载唯一界面；v2 可选在线路由和假设缓存；干预 = L1 keep + 业务复测 S6/S7 + 拒绝恢复；相位收尾无条件恢复；晋升后场景 Profile 同时绑定原始/通用 Profile 双基线，`m3-demo` 单命令跑完整 synthetic 纵向切片 |
 
 ## 五、证据与纪律机制（答辩硬货）
 
@@ -85,7 +85,7 @@
 | `tests/test_system_opt_engine_composition.py` | GPT 候选身份：选中=执行，越域留痕不执行，非恢复相位不得 completed |
 | `tests/test_system_opt_observation.py` | O0 解析器真实夹具钉数值（stress-ng/fio/iperf3/sysbench）+ 身份漂移 fail-closed + 窗口组装与 digest 确定性 |
 | `tests/test_system_opt_external_session.py` | 外部会话 runner：身份计算、窗口落盘往返、复测请求发现与持续服务多批 |
-| `tests/test_system_opt_dynamic_cli.py` | dynamic-run CLI 端到端（simulated）+ 收敛/退化接线 + O1/O2 参数 fail-closed |
+| `tests/test_system_opt_dynamic_cli.py` | dynamic-run CLI 端到端 + 在线 O1 路由/L7 拒绝缓存/双基线场景 Profile + 单命令 M3 synthetic demo |
 | `tests/test_system_opt_dynamic_collection.py` | 活体 O1/O2 采集（o1_live_source/o2_component_probe）+ O2 探测证据 |
 | `tests/test_system_opt_regression_rollback.py` | L6c：S9 last-good 绑定、显式 S8 阈值、L1 精确恢复与 needs-attention 故障路径 |
 | `tests/test_system_opt_regression_cli.py` | G5：L6c CLI 内容寻址证据图、固定索引、路径隔离、lease/attention 与组合故障生命周期 |

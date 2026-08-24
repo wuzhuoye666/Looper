@@ -161,8 +161,8 @@ loop:
 | S0 | 身份可比性 | L8 判断器 / L2 | ✅ `comparable()` 真机用过 |
 | S1/S1.1 | 基线校准 + CV 门限派生 | L5 | ✅ `calibrate-pressure`/`derive-pressure-gate`，三组件真机 |
 | S2 | 不可补偿硬门禁 | L8 判断器 | ✅ `GateSpec`+`evaluate_hard_gates` |
-| S3 | 组件路由 | L8 调度器 | 静态 workload 模式雏形（未真跑）；动态 S3 假设路由已实现（`hypothesis.py` D2 三硬规则 + ≥2 竞争假设才许干预）并接入动态循环 |
-| S4 | 组件内二维优先级 | L8 打分器 / L5 | 🟡 F-PROJECT-002 v1alpha1 已采用并实现；逐 metric scale 校准、P/D/A/Q/T schema 迁移仍 open |
+| S3 | 组件路由 | L8 调度器 | ✅ 动态 `online_routing.py` 已把 O1 evidence 经冻结 S4 v1 转成确定性 proposal rank；缺失/不可用证据 fail-closed，不混用文件 rank；`hypothesis.py` D2 三硬规则继续生效 |
+| S4 | 组件内优先级 | L8 打分器 / L5 | ✅ 当前四维 `DiagnosticPriority` 与 F-PROJECT-S4-PIECEWISE-LINEAR/v1alpha1 冻结；逐 metric scale 仍须任务显式提供并在目标环境校准；P/D/A/Q/T 与 E_m 仅属 deferred S4-V2 提案 |
 | S5 | 动态合法搜索域 | L5 | ✅ `resolve_domain` 真机用过（dependency/risk 交集待核） |
 | S6 | 方向感知改善量 | L8 打分器 / L5 | ✅ `bootstrap_improvement`（F-PROJECT-S6-S7/v1） |
 | S7 | 稳健接受条件 | L8 判断器 | ✅ LCB>MDE 真机用过 |
@@ -175,13 +175,16 @@ loop:
 
 1. **L8 引擎骨架**：调度器/判断器/打分器三件套，把 S0/S2/S5/S6/S7 的现有散落
    实现收编为引擎统一调用；组件优化器降格为"搜索+映射+上报"。
-2. **S4 补全**：F-PROJECT-002 v1alpha1 已成为调度器输入；后续按提案制处理 E_m，
-   并将 P/D/A/Q/T 与 M9 存量证据迁移合并为一次 schema 版本事件。
+2. **S4 后续提案**：v1 四维与公式版本保持冻结；只有 S4-V2 明确触发时才讨论
+   P/D/A/Q/T、confidence 改名和 E_m，不阻塞现有在线路由。
 3. **L4 采集器**：每组件定义指标采集集，压/采解耦。
 4. **S8 + L6c**：核心执行桥与 G5 CLI 生命周期、证据落盘、租约/attention 接线均已完成；下一步是真实目标退化演练。
 5. **S9 组合复验**：合同和动态复验生产者已完成；真实已接受候选的跨环境验证仍开放。
-6. **L7 负缓存**：身份绑定 + 证据挂钩 + 失效规则（见 §2 红线）。
-7. **S10 相位级结束门禁 + 动态相位**：已实现——`dynamic_loop.py`（六构件受门禁约束的有限循环）+ `dynamic_adapters.py`（真实接线：文件 O0/身份源、声明式假设提案、L1 keep 路径干预、业务复测判定、复验源）+ CLI `system-opt dynamic-run`（simulated/local-linux）+ 会话文件约定（`contracts/dynamic-session-files.md`）。真实 CVM 动态闭环仍未验收。
+6. **L7 负缓存**：候选与 refuted-hypothesis 两类 schema 已同文件并存；假设缓存仅接收
+   可比业务复测无改善，显式 retention 输入、完整身份变化 miss。
+7. **S10 相位级结束门禁 + 动态相位**：代码纵向切片已闭合——v2 `dynamic-run`
+   可执行 O1 在线路由、两阶段安全干预、L7 refutation bridge、复验晋升、相位恢复和
+   双基线场景 Profile；`system-opt m3-demo` 提供 synthetic 单命令演示。真实 CVM 动态闭环仍未验收。
 
 顺序原则：先把"判断与打分的裁决权"收进引擎（1/2），再补观测（3）、系统级
 裁决（4/5），最后缓存（6）与动态相位（7）。负缓存虽列为第 6 步，其架构位置
@@ -217,5 +220,5 @@ loop:
 1. S4 已采用 `F-PROJECT-S4-PIECEWISE-LINEAR/v1alpha1`；各 metric 的 scale、四象限解释阈值及是否启用压缩敏感性对照仍待目标环境校准。
 2. 动态相位的重激活判据（负载模式显著变化的定义）。
 3. L6c 阈值数值仍必须由任务显式给出；last-good 已限定为携带成功 S9 晋升证据的完整配置快照。
-4. L7 负缓存的存储位置（本地文件/CAS/DB）与 TTL 策略。
+4. L7 当前采用任务指定的本地 JSONL；CAS/DB、跨会话退役和通用 TTL 仍属后续存储生命周期决策。
 5. F-MENTOR-002/003 的参数校准时机。

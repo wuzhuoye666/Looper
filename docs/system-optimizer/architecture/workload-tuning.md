@@ -145,11 +145,11 @@ ComponentHypothesis:
   hypothesis_id
   symptom: SymptomRecord          # O0 业务退化/未达 SLO + 触发窗口 window_id
   component: cpu|memory|network|storage|numa
-  rank: 由 S4 二维优先级 (P_m, D_m, Persistence, Confidence) 排出
+  rank: 由冻结 S4 v1 四维 (P_m, D_m, Persistence, Confidence) 排出
   supporting_o1_o2_digests: list  # 支持证据（区分 O1 粗证 / O2 微证）
   competing: list[hypothesis_id]  # 竞争假设（同一症状的其他组件解释）
   status: proposed → probing → confirmed | refuted | superseded
-  refute_evidence_digest         # refuted 时必填（干预无改善/O2 反证）
+  refute_evidence_digest         # refuted 时必填；v1 cache 只接业务复测无改善
 ```
 
 规则提案：
@@ -159,9 +159,10 @@ ComponentHypothesis:
 2. `confirmed` 的唯一路径是**干预实验**：单组件小步干预 → 同 workload 协议
   复测 → 业务指标（不是组件微指标）给出 S7 裁决。O2 证据只能把假设推进到
   `probing`，永远不能直接 `confirmed`。
-3. `refuted` 假设写入 L7 负缓存（身份 = 环境 × 组件 × 症状类 × 公式版本），
-  后续同症状路由自动降优先级；这与现有"候选参数负缓存"共用 L7 骨架但身份
-  分量不同——需要 L7 增加**第二种条目类型**（open：schema 版本如何并存）。
+3. 可比且样本充分的业务复测无改善可写 L7 hypothesis 负缓存（身份 = 环境 ×
+  workload × 组件 × opaque 症状类 × metric/policy × 公式 × 假设语义版本）；完全同身份
+  的组件在后续路由中排除，任一身份变化即 miss。它与候选负缓存共用 JSONL，按独立
+  schema 严格分派；O2 反证须未来 typed evidence，v1 不接收。
 4. 路由输出不是单一组件，而是**假设队列**：预算按 S4 排序切分给前 K 个假设
   （K 为任务输入）；引擎逐个 probing，confirmed 即止或队列耗尽走 S10 收敛停止。
 
@@ -232,11 +233,11 @@ VerificationWindow（复验窗口）:
 |---|---|---|
 | O1 观察窗口 | ✅ M3-2 完成 2026-08-23：`observation.py`（ObservationWindow + `record_window` 组装 + O0 解析器注册表：stress-ng YAML / fio JSON / iperf3 JSON / **sysbench 文本（D 泳道 2026-08-24）**，真实 2026-08-23 阿里云会话输出做夹具钉数值）+ 身份漂移 WorkloadIdentityDrift fail-closed。✅ 2026-08-24 O1/O2 活体采集：`dynamic_collection.py`（o1_live_source / o2_component_probe，接 GPT 窗口化 builtin，采集器不可用即 fail-closed 返回 None 路径） | O3 开窗（时间盒 trace，M6+） |
 | 开销 A/B | ✅ `build_collection_overhead_evidence`（L4 合同，成对裸墙钟）；**O2** 活体探测携带相邻 disabled→enabled 配对证据（f46bc16）；**O1** 会话首个成功窗口执行一次固定顺序 disabled→enabled，后续只跑 enabled 并绑定首窗 overhead，四类证据由 digest 索引落 `control/`（2a3f0dd）。两者均无阈值、无裁决 | 真实 Linux/CVM 开销可接受性仍须任务阈值和实测裁决；O1 集合墙钟只证明 collector 集合成员关系，不做单 collector 归因 |
-| 假设路由 | ✅ M3-4 完成 2026-08-23：`hypothesis.py`（SymptomRecord/ComponentHypothesis/HypothesisLedger；三条 D2 硬规则代码化：≥2 竞争假设才许干预、O2 只推进到 probing、confirmed 唯一走 accepted 业务复测并自动 supersede 兄弟假设；(rank,id) 确定性 probe_queue，top_k 任务注入） | L7 桥接（refuted 假设入负缓存的第二条目类型）按 SO-D019 留 open；O1 活体源已完成，但 v1 假设源仍是声明式提案文件（`dynamic_adapters.py` FileHypothesisProposals，rank 显式注入）；缺少 O1 evidence → S4 vector → ranked proposals 的在线生产者 |
+| 假设路由 | ✅ `hypothesis.py` 保持 D2 三硬规则；`online_routing.py` 把绑定 target/environment/formula 的 O1 snapshots 转为冻结 S4 v1 priority 与确定性 proposal rank，缺证据不回退声明 rank；`hypothesis_cache.py` 只在可比业务复测无改善后写 L7 第二条目 | 真实目标仍需提供 metric scale/参考批次；O2 typed refutation 来源留后续 schema，不在 v1 冒充 |
 | S9 复验生产者 | ✅ M3-5 完成 2026-08-23：`verification.py`（VerificationWindow 绑定合同/观察窗/复测批次三层 digest + `verification_observation` 生产者：passed = 重测改善的 S7 裁决，**可为 false**——测试验证更差重测 → 失败观测 → evaluate_promotion fail-closed 分支首次被真实生产者触达（M11 闭合）；轮内单记录不足以满足 min_distinct_time_blocks，必须由复验窗补足）| ✅ 2026-08-24 已接动态循环（FileRetestSource 复验源）；L6 联动由干预适配器的拒绝恢复 + CLI 相位收尾恢复承担 |
 | 结束门禁合同 | ✅ M3-3 完成 2026-08-23：`phase_gate.py`（DynamicPhaseGateContract 五类停止全字段化 + PhaseGateState + `evaluate_phase_gate` 固定判定顺序：安全→身份→预算→目标→收敛；GateDecision 必须引用触发字段+证据 digest；防振荡字段 reactivation_holdout_windows/single_change_per_window）| 接入动态循环（M3-4/5）与 D5 重激活资格判定 |
 | 重激活 | ✅ M3-6 完成 2026-08-23：`reactivation.py`（A+B 案：身份漂移→迟滞后立即资格（注明新合同语义）、SLO 持续违反→迟滞阈值资格；判定顺序 预算→保持窗→漂移→SLO；资格≠自动重启；ReactivationDecision 模型级一致性校验；C 案列 M6+） | 相位间生命周期由外部在本运行之后判定（已成独立模块） |
-| 动态循环整合 | ✅ 2026-08-23：`dynamic_loop.py`（`run_dynamic_phase` 把六构件串成受门禁约束的有限循环：观察窗组装→SLO/症状→假设账本（D2 规则全程生效）→探测/干预（注入回调，L1 施加与测量在调用方侧）→复验观测→晋升判定→每窗门禁判定→显式停止；身份漂移立即停相位；DynamicPhaseRun 证据模型 + digest；重激活属相位间，循环外判定）。✅ 2026-08-24 Z 泳道真实接线：`dynamic_adapters.py`（文件 O0/身份源 + 声明式假设提案源 + L1 keep 路径干预 + 业务复测判定器 + 复验源；会话文件约定见 `contracts/dynamic-session-files.md`）+ CLI `system-opt dynamic-run`（simulated/local-linux 双后端；相位收尾必过 L1 恢复到相位起点）+ convergence 计数器接真实干预轮 LCB（`InterventionExperiment.business_lcb`，停止类 2 首次可被真实轮次触发）；模拟端到端演示随 739 测试全绿；G 泳道活体 O1/O2（`dynamic_collection.py`）、D 泳道 sysbench 解析器 + 外部会话 runner（`examples/system-optimizer/external_load_session.py`）+ 两侧合龙 e2e 握手测试（`test_system_opt_dynamic_e2e.py`） | O3 真源（M6+） |
+| 动态循环整合 | ✅ v2 `dynamic_loop.py` + `dynamic_adapters.py` + CLI `dynamic-run` 已串起 receipt 安全干预、在线路由、L7 refutation bridge、复验晋升与无条件相位恢复；`scenario_profile.py` 产出环境/workload/公式/运行/晋升绑定的场景 Profile 报告，并按原始基线、通用 Profile 基线固定顺序双报告；`system-opt m3-demo` 单命令跑完整 synthetic 纵向切片 | 真实 CVM 闭环、真实 accepted candidate 跨环境 S9、REAL-L6C/REAL-SSH 仍是验收缺口；O3 留 M6+ |
 | workload 合同 | ✅ M3-1 完成 2026-08-23：`workload.py`（schema + YAML 解析器 + `load_argv_digest`/`same_load`）+ stress-ng 示例合同（argv digest 绑定自验证）+ 7 测试。SO-D020 代码化：`load_provider=external-test` 唯一枚举、argv 只存摘要、身份 digest 不含 prose | O0 解析器已全（stress-ng / fio / iperf3 / sysbench），引擎只解析不启动（SO-D020 代码化）；无剩余缺口 |
 
 依赖顺序建议：workload 合同 → O0/O1 观察窗口 → 门禁合同 → 假设路由 →
