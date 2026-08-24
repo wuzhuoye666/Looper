@@ -22,7 +22,7 @@ from looper_api.scheduler import (
     create_experiment,
     start_experiment,
 )
-from looper_api.serialization import benchmark_view
+from looper_api.serialization import benchmark_view, experiment_view
 from looper_core.canonical import canonical_digest, new_id, utc_now
 from looper_core.state import AttemptStatus
 from sqlalchemy import select
@@ -157,6 +157,54 @@ def test_inactive_target_cannot_be_selected_for_a_new_experiment(db_session: obj
 
     with pytest.raises(SchedulerError, match="archived and cannot be selected"):
         create_experiment(db_session, create_demo_request("inactive target"))
+
+
+def test_experiment_view_keeps_completed_repeat_metrics_while_later_repeats_are_queued(
+    db_session: object,
+) -> None:
+    session = db_session
+    experiment = create_experiment(session, create_demo_request("Result repeat visibility"))
+    start_experiment(session, experiment)
+    attempts = list(
+        session.scalars(
+            select(AttemptRecord)
+            .where(AttemptRecord.experiment_id == experiment.id)
+            .order_by(AttemptRecord.queue_sequence)
+        )
+    )
+    first = attempts[0]
+    assert first.repeat_index == 0
+    same_evaluation = [item for item in attempts if item.evaluation_id == first.evaluation_id]
+    assert [item.repeat_index for item in same_evaluation] == [0, 1, 2]
+    session.add(
+        ObservationRecord(
+            id=new_id("obs"),
+            attempt_id=first.id,
+            metric="throughput_mib_s",
+            value_number=321.5,
+            value_boolean=None,
+            unit="MiB/s",
+            phase="measurement",
+            workload="corpus-small",
+            sample_index=None,
+            sample_count=3,
+            statistic="median",
+            timestamp_text=None,
+            attributes_json={},
+            created_at=utc_now(),
+        )
+    )
+    session.flush()
+
+    view = experiment_view(session, experiment, detail=True)
+    evaluation = next(item for item in view["evaluations"] if item["id"] == first.evaluation_id)
+
+    assert evaluation["attemptId"] == same_evaluation[-1].id
+    assert evaluation["resultAttemptId"] == first.id
+    assert any(
+        item["name"] == "throughput_mib_s" and item["value"] == 321.5
+        for item in evaluation["metrics"]
+    )
 
 
 def test_stage0_adapter_cannot_be_selected_for_a_new_study(

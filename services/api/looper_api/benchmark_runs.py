@@ -87,6 +87,17 @@ def create_benchmark_smoke_run(
     if objective_name is None:
         raise SchedulerError("smoke test requires at least one directed metric")
     metric = metrics[objective_name]
+    # The experiment budget is an end-to-end deadline, while each runtime
+    # command owns an independent timeout. A fixed ten-minute experiment
+    # budget used to expire long-running packages (notably DCPerf) while their
+    # run command was still healthy. Cover the complete declared lifecycle and
+    # leave a small allowance for package delivery and evidence uploads.
+    command_budget = sum(
+        int(command.get("timeoutSeconds", 0))
+        for command in manifest_spec.get("runtime", {}).get("commands", {}).values()
+        if isinstance(command, dict)
+    )
+    smoke_wall_time = max(600, command_budget + 300)
     experiment = create_experiment(
         session,
         ExperimentCreate(
@@ -119,7 +130,7 @@ def create_benchmark_smoke_run(
                 budget=BudgetSpec(
                     max_candidates=1,
                     max_attempts=1,
-                    wall_time_seconds=600,
+                    wall_time_seconds=smoke_wall_time,
                 ),
                 optimizer=OptimizerSpec(type="random", seed=20260822),
             ),

@@ -2,7 +2,7 @@ import { ArrowDownToLine, Clipboard, LoaderCircle, Terminal, Wifi, WifiOff } fro
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { API_BASE, resolveApiUrl } from '../lib/api';
 
-type TerminalStream = 'command' | 'stdout' | 'stderr';
+type TerminalStream = 'command' | 'stdout' | 'stderr' | 'system';
 type ConnectionState = 'connecting' | 'live' | 'reconnecting';
 
 interface ExperimentEvent {
@@ -20,6 +20,10 @@ interface TerminalLine {
   stage: string;
   text: string;
   createdAt: string;
+  sequence: number;
+  attemptId: string;
+  workerId?: string;
+  fencingToken?: number;
 }
 
 const eventNames = [
@@ -27,7 +31,7 @@ const eventNames = [
 ];
 
 const streamLabels: Record<TerminalStream, string> = {
-  command: 'command', stdout: 'stdout', stderr: 'stderr',
+  command: 'input', stdout: 'stdout', stderr: 'stderr', system: 'system',
 };
 
 const stageLabels: Record<string, string> = {
@@ -60,7 +64,7 @@ export function ExperimentTerminal({ experimentId }: { experimentId: string }) {
       sequenceRef.current = payload.sequence;
       const next = eventToLines(payload);
       if (!next.length) return;
-      const merged = [...linesRef.current, ...next].slice(-600);
+      const merged = [...linesRef.current, ...next];
       linesRef.current = merged;
       setLines(merged);
     };
@@ -83,22 +87,22 @@ export function ExperimentTerminal({ experimentId }: { experimentId: string }) {
     return { label: '正在连接', className: 'connecting', icon: <WifiOff size={14} /> };
   }, [connection]);
 
-  const copyOutput = async () => { await navigator.clipboard?.writeText(lines.map(line => line.text).join('')); };
+  const copyOutput = async () => { await navigator.clipboard?.writeText(lines.map(formatCopiedLine).join('')); };
 
   return <section className="panel experiment-terminal" aria-label="远端原始进程输出">
     <div className="experiment-terminal-heading">
-      <div className="panel-heading-copy"><div className="terminal-title"><Terminal size={18} /><div><h2>远端原始输出</h2><p>Worker 从目标机命令的 stdout / stderr 原样分块透传，不改写、不摘要</p></div></div></div>
+      <div className="panel-heading-copy"><div className="terminal-title"><Terminal size={18} /><div><h2>远端原始输出</h2><p>SSH 部署驻留 Worker 后，逐行显示每条命令、stdout、stderr、进程状态；敏感参数自动脱敏</p></div></div></div>
       <div className="terminal-actions">
         <span className={'terminal-connection ' + status.className}>{status.icon}{status.label}</span>
         <button type="button" className={'icon-button' + (autoScroll ? ' active' : '')} title="自动滚动" aria-label="自动滚动" aria-pressed={autoScroll} onClick={() => setAutoScroll(value => !value)}><ArrowDownToLine size={15} /></button>
         <button type="button" className="icon-button" title="复制终端输出" aria-label="复制终端输出" onClick={copyOutput} disabled={!lines.length}><Clipboard size={15} /></button>
       </div>
     </div>
-    <div className="terminal-toolbar"><span>{lines.length ? lines.length + ' 个原始输出块' : '等待远端命令输出…'}</span><code>command · stdout · stderr · SSE</code></div>
+    <div className="terminal-toolbar"><span>{lines.length ? lines.length + ' 行完整输出' : '等待远端命令输出…'}</span><code>input · stdout · stderr · system · SSE</code></div>
     <div className="terminal-viewport" ref={viewportRef} role="log" aria-live="polite">
       {!lines.length && <div className="terminal-empty"><LoaderCircle size={18} /><span>等待 Worker 透传目标机命令和原始输出</span></div>}
       {lines.map(line => <div className={'terminal-line ' + line.stream} key={line.id}>
-        <span className="terminal-line-meta"><b>{streamLabels[line.stream]}</b><small>{stageLabels[line.stage] || line.stage}</small></span>
+        <span className="terminal-line-meta"><time>{formatTime(line.createdAt)}</time><b>{streamLabels[line.stream]}</b><small>{stageLabels[line.stage] || line.stage}</small><small title={line.attemptId}>#{line.sequence} · {shortId(line.attemptId)}{line.workerId ? ' · ' + shortId(line.workerId) : ''}</small></span>
         <pre>{line.text}</pre>
       </div>)}
     </div>
@@ -111,11 +115,35 @@ export function eventToLines(event: ExperimentEvent): TerminalLine[] {
   if (event.type === 'attempt.log') {
     const stream = payload.stream;
     if (!isStream(stream) || typeof payload.text !== 'string') return [];
-    return [{ id: String(event.sequence) + ':log', stream, stage: String(payload.stage || 'run'), text: payload.text, createdAt: timestamp }];
+    const physicalLines = payload.text.match(/[^\n]*\n|[^\n]+$/g) || [];
+    return physicalLines.map((text, index) => ({
+      id: String(event.sequence) + ':log:' + index,
+      stream,
+      stage: String(payload.stage || 'run'),
+      text,
+      createdAt: timestamp,
+      sequence: event.sequence,
+      attemptId: String(payload.attemptId || event.entityId),
+      workerId: typeof payload.workerId === 'string' ? payload.workerId : undefined,
+      fencingToken: typeof payload.fencingToken === 'number' ? payload.fencingToken : undefined,
+    }));
   }
   return [];
 }
 
 function isStream(value: unknown): value is TerminalStream {
-  return value === 'command' || value === 'stdout' || value === 'stderr';
+  return value === 'command' || value === 'stdout' || value === 'stderr' || value === 'system';
+}
+
+function shortId(value: string): string {
+  return value.length > 18 ? value.slice(0, 7) + '…' + value.slice(-6) : value;
+}
+
+function formatTime(value: string): string {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleTimeString('zh-CN', { hour12: false });
+}
+
+function formatCopiedLine(line: TerminalLine): string {
+  return `[${line.createdAt}] [${line.attemptId}] [${line.workerId || 'worker-unknown'}] [${line.stage}/${line.stream}] ${line.text}`;
 }

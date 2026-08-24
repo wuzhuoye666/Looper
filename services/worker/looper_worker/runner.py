@@ -820,9 +820,22 @@ class LocalAttemptRunner:
                         stdout_path,
                         stderr_path,
                     )
+                self._report_log(
+                    attempt_id,
+                    fencing_token,
+                    log_id=f"{log_run_id}:system:started",
+                    stage=stage,
+                    stream="system",
+                    text=(
+                        f"process started pid={process.pid} cwd={working or Path.cwd()} "
+                        f"worker={getattr(self.client, 'worker_id', 'worker-unknown')} "
+                        f"lease={fencing_token}\n"
+                    ),
+                )
 
                 def emit_available_logs() -> tuple[bool, str | None]:
-                    for stream_name, stream_path in (("stdout", stdout_path), ("stderr", stderr_path)):
+                    streams = (("stdout", stdout_path), ("stderr", stderr_path))
+                    for stream_name, stream_path in streams:
                         while True:
                             start_offset = log_offsets[stream_name]
                             end_offset, text = _read_log_chunk(stream_path, start_offset)
@@ -909,6 +922,17 @@ class LocalAttemptRunner:
                         stdout_path,
                         stderr_path,
                     )
+                self._report_log(
+                    attempt_id,
+                    fencing_token,
+                    log_id=f"{log_run_id}:system:exited",
+                    stage=stage,
+                    stream="system",
+                    text=(
+                        f"process exited pid={process.pid} code={process.returncode} "
+                        f"elapsed={time.monotonic() - started:.3f}s\n"
+                    ),
+                )
             finally:
                 if process.poll() is None:
                     _terminate_tree(process.pid)

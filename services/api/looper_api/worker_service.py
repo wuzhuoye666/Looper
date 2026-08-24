@@ -543,6 +543,8 @@ def heartbeat_attempt(
             idempotency_key=f"attempt.log:{attempt.id}:{attempt.fencing_token}:{request.log_id}",
             payload={
                 "attemptId": attempt.id,
+                "workerId": attempt.worker_id,
+                "fencingToken": attempt.fencing_token,
                 "stage": request.log_stage,
                 "stream": request.log_stream,
                 "text": request.log_text,

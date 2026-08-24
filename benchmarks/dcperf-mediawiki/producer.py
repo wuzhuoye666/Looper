@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -167,6 +168,48 @@ def tee_stream(source: Any, artifact: Any, terminal: Any) -> None:
         terminal.flush()
 
 
+def recover_referenced_wrk_output(
+    native_output: str, destination: Path, *, maximum_bytes: int = 8 * 1024 * 1024
+) -> str:
+    """Recover complete wrk files that upstream Benchpress only summarizes.
+
+    Benchpress deliberately prints ``trimmed to last 50 lines`` for a nested
+    service command. The referenced wrk output files still contain the native
+    process output, so copy and echo them before the DCPerf cleanup removes its
+    temporary directory. Only regular files directly referenced by the
+    trusted upstream output are read, under a bounded byte budget.
+    """
+
+    recovered: list[str] = []
+    remaining = maximum_bytes
+    seen: set[Path] = set()
+    for value in re.findall(r"Wrk output:\s+([^\r\n]+)", native_output):
+        referenced_path = Path(value.strip())
+        if referenced_path.is_symlink():
+            continue
+        path = referenced_path.resolve()
+        if os.name != "nt" and path != Path("/tmp") and Path("/tmp") not in path.parents:
+            continue
+        if path in seen or not path.is_file() or remaining <= 0:
+            continue
+        seen.add(path)
+        size = min(path.stat().st_size, remaining)
+        with path.open("rb") as stream:
+            data = stream.read(size)
+        remaining -= len(data)
+        recovered.append(
+            f"=== complete upstream wrk output: {path} ===\n"
+            + data.decode("utf-8", errors="replace")
+            + ("\n" if data and not data.endswith(b"\n") else "")
+        )
+    text = "".join(recovered)
+    if text:
+        destination.write_text(text, encoding="utf-8")
+        sys.stdout.write(text)
+        sys.stdout.flush()
+    return text
+
+
 def copy_regular_files(source: Path, destination: Path) -> list[str]:
     copied: list[str] = []
     if not source.is_dir():
@@ -256,7 +299,7 @@ def main() -> int:
     try:
         envelope = load_json(arguments.envelope)
         params = parameters(envelope)
-        duration = positive_int(params.get("duration_seconds"), "duration_seconds", 600, 45, 3600)
+        duration = positive_int(params.get("duration_seconds"), "duration_seconds", 900, 45, 3600)
         timeout = positive_int(
             params.get("timeout_seconds"), "timeout_seconds", duration + 60, duration + 1, 7200
         )
@@ -338,6 +381,10 @@ def main() -> int:
         stderr_text = (native / "benchpress.stderr.log").read_text(
             encoding="utf-8", errors="replace"
         )
+        recovered_wrk_output = recover_referenced_wrk_output(
+            stdout_text + "\n" + stderr_text,
+            output / "native-wrk-output.log",
+        )
         metric_files = find_benchpress_results(native)
         system_files = find_native_json(native, "_system_specs_")
         result_source: str | None = None
@@ -373,7 +420,12 @@ def main() -> int:
             + "\n=== stdout ===\n"
             + stdout_text
             + "\n=== stderr ===\n"
-            + stderr_text,
+            + stderr_text
+            + (
+                "\n=== recovered nested wrk output ===\n" + recovered_wrk_output
+                if recovered_wrk_output
+                else ""
+            ),
             encoding="utf-8",
         )
         status = {

@@ -140,6 +140,12 @@ def test_worker_forwards_command_stdout_and_stderr_without_rewriting(tmp_path: P
         f"raw\tstderr{os.linesep}"
     )
     assert any(stream == "command" and sys.executable in text for stream, text in client.logs)
+    system_text = "".join(text for stream, text in client.logs if stream == "system")
+    assert "process started pid=" in system_text
+    assert "worker=" in system_text
+    assert "process exited pid=" in system_text
+    assert "code=0" in system_text
+    assert "elapsed=" in system_text
 
 
 def test_configured_producer_and_normalizer_run_without_worker_plugin(tmp_path: Path) -> None:

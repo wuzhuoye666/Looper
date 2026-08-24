@@ -3,7 +3,7 @@ kind: Benchmark
 metadata:
   id: dcperf.mediawiki.closed-loop
   name: DCPerf MediaWiki Closed-Loop
-  version: 2026.08-pilot18
+  version: 2026.08-pilot19
   description: Pinned single-node DCPerf MediaWiki closed-loop capacity workload with resumable managed Ubuntu 22.04/24.04 provisioning and native Benchpress evidence.
   license: MIT
   source:
@@ -18,14 +18,14 @@ spec:
       minimum: 45
       maximum: 3600
       step: 15
-      default: 600
+      default: 900
       description: Native wrk measurement duration in seconds.
     timeout_seconds:
       type: integer
       minimum: 46
       maximum: 7200
       step: 15
-      default: 660
+      default: 960
       description: Client deadline passed to the patched oss-performance workload.
     scale_out:
       type: integer
@@ -51,7 +51,7 @@ spec:
       weight: 1
       metadata:
         load_generator: wrk
-        duration: 10m
+        duration: 15m
         scale_out: 1
         client_threads_formula: 2x-logical-cpus
         native_reporter: Benchpress JSON reporter
@@ -387,6 +387,10 @@ spec:
         role: log
         mediaType: text/plain
         required: true
+      - path: native-wrk-output.log
+        role: log
+        mediaType: text/plain
+        required: false
       - path: profile-status.txt
         role: profile
         mediaType: text/plain

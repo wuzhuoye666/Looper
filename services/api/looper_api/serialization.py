@@ -573,6 +573,26 @@ def experiment_view(
             key=lambda item: (item.repeat_index, item.retry_index, item.created_at),
             default=None,
         )
+        # A selection evaluation owns all repeat Attempts. The highest repeat
+        # can still be queued while an earlier repeat already contains a valid
+        # measurement. Use the newest Attempt with observations for result
+        # display, while retaining ``latest`` for the live evaluation status.
+        attempts_with_observations = set(
+            session.scalars(
+                select(ObservationRecord.attempt_id).where(
+                    ObservationRecord.attempt_id.in_([item.id for item in evaluation_attempts])
+                )
+            )
+        )
+        latest_result = max(
+            (item for item in evaluation_attempts if item.id in attempts_with_observations),
+            key=lambda item: (
+                item.completed_at or item.started_at or item.created_at,
+                item.repeat_index,
+                item.retry_index,
+            ),
+            default=None,
+        )
         candidate_analysis = analysis_map.get(candidate.id, {}) if candidate else {}
         target_analysis = selection_targets.get(evaluation.target_id, {}) if is_selection else {}
         objective_rows = (
@@ -604,11 +624,11 @@ def experiment_view(
         # uploaded. Otherwise a later validation failure makes real collection
         # data appear to have vanished. Prefer the latest attempt's raw
         # observations for the per-run table and Benchmark-specific sections.
-        if latest:
+        if latest_result:
             latest_observations = list(
                 session.scalars(
                     select(ObservationRecord)
-                    .where(ObservationRecord.attempt_id == latest.id)
+                    .where(ObservationRecord.attempt_id == latest_result.id)
                     .order_by(ObservationRecord.created_at)
                 )
             )
@@ -653,6 +673,7 @@ def experiment_view(
             {
                 "id": evaluation.id,
                 "attemptId": latest.id if latest else None,
+                "resultAttemptId": latest_result.id if latest_result else None,
                 "candidate": target_analysis.get("label")
                 if is_selection
                 else _candidate_label(candidate),

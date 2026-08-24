@@ -98,6 +98,25 @@ def test_native_process_output_is_teed_to_terminal_and_artifact(
     assert (tmp_path / "benchpress.stderr.log").read_text(encoding="utf-8") == "native-err\n"
 
 
+def test_recovers_complete_wrk_output_referenced_by_trimmed_summary(
+    tmp_path: Path, capsys: object
+) -> None:
+    producer = _producer_module()
+    native = tmp_path / "wrk-output.log"
+    native.write_text("request line 1\nrequest line 2\n", encoding="utf-8")
+    destination = tmp_path / "recovered.log"
+
+    recovered = producer.recover_referenced_wrk_output(
+        f"[...trimmed to last 50 lines...]\nWrk output: {native}\n",
+        destination,
+    )
+
+    assert "request line 1" in recovered
+    assert "request line 2" in recovered
+    assert destination.read_text(encoding="utf-8") == recovered
+    assert capsys.readouterr().out == recovered
+
+
 def test_stdout_only_benchpress_result_completes_full_adapter_chain(
     tmp_path: Path, monkeypatch: object
 ) -> None:
