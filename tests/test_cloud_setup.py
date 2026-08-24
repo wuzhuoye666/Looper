@@ -60,6 +60,8 @@ def test_external_cloud_adoption_uses_canonical_target_identity(db_session) -> N
     assert record.fingerprint_json["instance_type"] == "SA9.MEDIUM2"
     assert target_view(record)["status"] == "inventory"
     assert target_view(record)["endpoint"] == "172.16.0.10"
+    assert target_view(record)["framework"] == "镜像 img-ubuntu"
+    assert target_view(record)["version"] is None
     record.inventory_json = {**record.inventory_json, "instance_state": "TERMINATED"}
     assert target_view(record)["status"] == "offline"
 
@@ -90,7 +92,10 @@ def test_target_view_uses_legacy_cloud_inventory_hardware_fields(db_session) -> 
         "memory_gib": 16,
     }
 
-    assert target_view(record)["hardware"] == "ecs.c9i.2xlarge · x86_64 · 8 vCPU · 16 GiB"
+    view = target_view(record)
+    assert view["hardware"] == "ecs.c9i.2xlarge · x86_64 · 8 vCPU · 16 GiB"
+    assert view["framework"] == "镜像 ubuntu_24_04_x64_20G_alibase.vhd"
+    assert view["version"] is None
 
 
 def test_cloud_setup_writes_secrets_without_replacing_existing_configuration(tmp_path) -> None:

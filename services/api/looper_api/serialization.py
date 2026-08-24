@@ -272,10 +272,11 @@ def target_view(record: TargetRecord) -> dict[str, Any]:
     # CPU: real processor name, or cloud instance type
     cpu = processor or first_value("instance_type") or ""
 
+    image_id = first_value("image_id")
+
     # Architecture: preserve provider metadata, then explicit image metadata.
     arch = first_value("architecture", "machine", "platform", "cpu_architecture")
     if not arch:
-        image_id = first_value("image_id")
         image_marker = str(image_id or "").casefold()
         if any(marker in image_marker for marker in ("aarch64", "arm64", "arm_", "_arm")):
             arch = "aarch64"
@@ -312,16 +313,15 @@ def target_view(record: TargetRecord) -> dict[str, Any]:
             or ("local" if record.id == "local" else "—")
         ),
         "status": status,
+        # Cloud resources consistently show the purchased image. SSH probes
+        # enrich the fingerprint with the running OS, but must not replace the
+        # stable image identity in the resource table.
         "framework": (
-            display_inventory.get("framework")
-            or display_fingerprint.get("system")
-            or (
-                f"镜像 {display_inventory.get('image_id')}"
-                if display_inventory.get("image_id")
-                else None
-            )
+            f"镜像 {image_id}"
+            if image_id
+            else display_inventory.get("framework") or display_fingerprint.get("system")
         ),
-        "version": display_fingerprint.get("release"),
+        "version": None if image_id else display_fingerprint.get("release"),
         "hardware": " · ".join(str(item) for item in hardware_parts if item),
         "lastSeenAt": _iso(record.last_inventory_seen_at or record.updated_at),
         "tags": record.capabilities_json,
