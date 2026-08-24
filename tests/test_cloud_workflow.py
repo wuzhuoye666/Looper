@@ -5,6 +5,7 @@ from decimal import Decimal
 
 import pytest
 from pydantic import SecretStr
+import looper_api.cloud_service as cloud_service_module
 from looper_api.cloud_contracts import (
     CatalogFilters,
     CloudPurchaseSpec,
@@ -50,6 +51,7 @@ from looper_api.models import (
 )
 from looper_api.providers.base import CloudProvider, CloudProviderError
 from looper_api.providers.registry import CloudProviderRegistry
+from looper_api.remote_credentials import EncryptedSshCredentialStore
 from looper_api.serialization import target_view
 from looper_core.canonical import canonical_digest, utc_now
 from sqlalchemy import select, text, update
@@ -61,13 +63,14 @@ class FakeProvider(CloudProvider):
     display_name = "Fake Tencent"
     sdk_package = "fake"
 
-    def __init__(self, *, ambiguous: bool = False) -> None:
+    def __init__(self, *, ambiguous: bool = False, public_ip: str | None = None) -> None:
         self.catalog_calls = 0
         self.instance_items: list[InstanceTypeInfo] | None = None
         self.image_items: list[ImageInfo] | None = None
         self.purchase_calls: list[str] = []
         self.destroy_calls: list[str] = []
         self.ambiguous = ambiguous
+        self.public_ip = public_ip
         self.fail_catalog = False
         self.quote_amount = Decimal("0.42")
 
@@ -164,6 +167,8 @@ class FakeProvider(CloudProvider):
                     region=spec.region,
                     zone=spec.zone,
                     status="PENDING",
+                    public_ip=self.public_ip,
+                    public_ip_present=self.public_ip is not None,
                 )
             ],
         )
@@ -193,6 +198,12 @@ def test_cloud_ssh_credentials_accept_camel_case_remember_flag() -> None:
 
     assert credentials.remember_credentials is False
     assert credentials.model_dump(by_alias=True)["rememberCredentials"] is False
+
+def test_settings_default_cloud_auth_method_is_password(tmp_path) -> None:
+    app_settings = Settings(_env_file=None, data_dir=tmp_path)
+
+    assert app_settings.default_ssh_auth_method == "password"
+
 
 def spec() -> CloudPurchaseSpec:
     return CloudPurchaseSpec(
@@ -229,7 +240,6 @@ def settings(tmp_path, *, live: bool = False) -> Settings:
         live_purchase_providers="tencent" if live else "",
         purchase_confirmation_secret="x" * 48,
         operator_token="o" * 48 if live else "",
-        default_ssh_auth_method="password",
         default_ssh_password="StrongPassword1#",
     )
 
@@ -723,6 +733,72 @@ def test_purchase_quote_completes_order_without_browser_confirmation(db_session,
     assert result["instanceIds"] == ["ins-fake-1"]
     assert replay["id"] == result["id"]
     assert len(fake.purchase_calls) == 1
+
+
+def test_default_password_purchase_remembers_credentials_and_auto_connects(
+    db_session, tmp_path, monkeypatch
+) -> None:
+    fake = FakeProvider(public_ip="203.0.113.10")
+    reg = registry(fake)
+    app_settings = settings(tmp_path, live=True)
+    observed: dict[str, object] = {}
+    host_key = "SHA256:" + "B" * 43
+
+    def connect(_session, target, request):
+        observed["request"] = request
+        target.fingerprint_json = {**target.fingerprint_json, "host_key_sha256": host_key}
+        return target
+
+    def deploy(request, _target, _settings):
+        observed["deploy_request"] = request
+        return {"status": "deployed", "workerId": "fake-worker"}
+
+    monkeypatch.setattr(cloud_service_module, "connect_existing_target", connect)
+    monkeypatch.setattr(cloud_service_module, "deploy_remote_worker", deploy)
+
+    quote = create_quote(db_session, app_settings, reg, spec(), "quote-key-password-auto-ssh")
+    result = purchase_quote(
+        db_session,
+        app_settings,
+        reg,
+        quote["id"],
+        "order-key-password-auto-ssh",
+        remember_credentials=True,
+    )
+
+    assert result["status"] == "submitted"
+    target = db_session.scalar(select(TargetRecord).where(TargetRecord.provider == "tencent"))
+    assert target is not None
+    assert target.runnable is True
+    assert target.inventory_json["autoSsh"]["status"] == "connected"
+    request = observed["request"]
+    assert request.auth_method == "password"
+    assert request.password is not None
+    assert request.password.get_secret_value() == "StrongPassword1#"
+    saved = EncryptedSshCredentialStore(app_settings).load(target.id)
+    assert saved.auth_method == "password"
+    assert saved.password is not None
+    assert saved.password.get_secret_value() == "StrongPassword1#"
+
+
+def test_private_key_auth_remains_available_when_selected(tmp_path) -> None:
+    key_path = tmp_path / "cloud-key.pem"
+    key_path.write_text("-----BEGIN OPENSSH PRIVATE KEY-----\nkey\n-----END OPENSSH PRIVATE KEY-----\n")
+    app_settings = Settings(
+        _env_file=None,
+        data_dir=tmp_path,
+        default_ssh_auth_method="private-key",
+        default_ssh_private_key_path=str(key_path),
+    )
+
+    credentials = cloud_service_module._default_cloud_ssh_credentials(
+        app_settings,
+        remember_credentials=True,
+    )
+
+    assert credentials.auth_method == "private-key"
+    assert credentials.private_key is not None
+    assert credentials.private_key.get_secret_value().startswith("-----BEGIN OPENSSH PRIVATE KEY-----")
 
 
 def test_ambiguous_provider_result_is_not_automatically_retried(db_session, tmp_path) -> None:

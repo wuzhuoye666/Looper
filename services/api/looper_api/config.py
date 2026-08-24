@@ -23,7 +23,7 @@ class Settings(BaseSettings):
     remember_ssh_credentials: bool = True
     default_ssh_username: str = "root"
     default_ssh_port: int = Field(default=22, ge=1, le=65535)
-    default_ssh_auth_method: Literal["password", "private-key"] = "private-key"
+    default_ssh_auth_method: Literal["password", "private-key"] = "password"
     default_ssh_private_key_path: str = ""
     default_ssh_password: SecretStr | None = Field(default=None, repr=False)
     data_dir: Path = Path(".looper")
