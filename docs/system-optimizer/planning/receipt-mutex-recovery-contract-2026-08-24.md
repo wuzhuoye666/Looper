@@ -1,6 +1,6 @@
 # Receipt Mutex 崩溃恢复合同（RCP-01-R2）
 
-> 状态：**R2 待主 agent 复审**（不得视为 frozen；RCP-02A 不得在本稿通过前启动）。
+> 状态：**R2 已由主 agent 验收，冻结 RCP-02A；RCP-02B schema 仍待逐字段复审**。
 > 基线：`origin/system-optimizer-impl@2e8621c`；本稿修订自 `a2fe0ca`（R1）。
 > 归属：P0 receipt 正确性链第一环，见 `unfinished-task-queue-2026-08-24.md` §3/§4。
 > 本稿只冻结恢复**合同**，不实现代码；不授权作者继续实施 RCP-02A/02B。
@@ -23,6 +23,10 @@ R2 冻结为**单一实现、无 fallback**：
 - **不引入 stale timeout、TTL、PID liveness、自动孤儿判定**。
 - **legacy 空 `.guard` 遗留**由**独立串行包 RCP-02B** 的人工/operator 流程显式恢复，绝不在
   RCP-02A 锁改造中静默处理，绝不自动清理。
+
+协议迁移硬门：部署 RCP-02A 前必须显式停止全部旧版本 writer，禁止新旧 mutex 协议并行；
+RCP-02A 发现 receipt root 下任一 legacy `.guard` 时必须全 store fail-closed，不得进入新锁下的
+链修改。该检测只阻止写入，不清理 guard、不替代 RCP-02B 的 attention/reconciliation 流程。
 
 ---
 

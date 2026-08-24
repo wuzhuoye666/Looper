@@ -40,9 +40,10 @@
 
 ```text
 P0 receipt 正确性链（必须串行）
-RCP-01 锁恢复合同冻结
-  └─ RCP-02 实现 + 线程/进程竞争 + 孤儿 guard + pointer 缺失测试
-      └─ RCP-03 scoped index/增量验证性能设计与实现
+RCP-01 锁恢复合同冻结（已完成）
+  └─ RCP-02A advisory lock + 线程/进程竞争 + pointer 缺失测试
+      └─ RCP-02B legacy guard attention/reconciliation
+          └─ RCP-03 scoped index/增量验证性能设计与实现
 
 P1 M3 功能闭合（两支可并行，汇合点串行）
 S4-01 schema/公式版本决策 ─┬─ S4-02 显式 scale 注入与目标校准
@@ -88,8 +89,9 @@ O3 时间盒 trace；通用采集缓存；中间测量/结果复用；增量下�
 
 | ID | 类型 | 任务 | 依赖 | 可并行性与写集合 | 验收门 |
 |---|---|---|---|---|---|
-| RCP-01 | 决策/设计 | 冻结 receipt mutex 崩溃恢复合同：跨平台锁机制、owner 身份、崩溃判定、显式 reconcile；**不设置隐式 stale timeout** | D5-I2-A/B/C 已完成 | 与 DOC-01、L7H-01 并行；docs-only | 明确同 execution 是否允许恢复、谁有权清 guard、证据如何绑定；异常仍 fail-closed |
-| RCP-02 | 实现/测试 | 按 RCP-01 修复孤儿 guard；加入同 scope 线程和独立进程竞争、持锁进程退出、不同 scope 并行、pointer 完全缺失启动重建、无孤儿 guard 累积测试 | RCP-01 | 独占 `intervention_receipt.py` 与专属 tests | 恰好一个 writer 成功；loser 明确 busy；崩溃后只能按冻结合同恢复；内容/指针链仍完整；Windows/Linux 语义一致 |
+| RCP-01 | 决策/设计 | 冻结 receipt mutex 崩溃恢复合同；**不设置隐式 stale timeout** | D5-I2-A/B/C 已完成 | `accepted-design`：R2 单一 advisory lock、未知文件系统拒绝、新旧 writer 禁止混跑；legacy 恢复拆到 02B | `f54abd6` + `6296d11`；仅 RCP-02A 已获实施授权 |
+| RCP-02A | 实现/测试 | advisory lock；同 scope 线程/独立进程竞争、持锁进程退出、不同 scope 并行、pointer 完全缺失重建；legacy guard 全 store fail-closed | RCP-01 | 独占 `intervention_receipt.py` 与新增 concurrency tests | 恰好一个 writer；崩溃后锁自动释放；常驻 lock 可重取；新旧协议不并行；Windows/Linux 分平台如实报告 |
+| RCP-02B | 实现/测试 | legacy guard 发现、target attention、内容寻址 reconciliation evidence、显式 operator 恢复 | RCP-02A；schema 逐字段复审 | 独占 receipt store + CLI + 专属 tests | 证据先于删除；所有崩溃缝可幂等重试；完整恢复后才清 attention |
 | DOC-01 | 文档 | 同步 `implementation-map.md`、`overall.md`、`workload-tuning.md` 和 2026-08-24 rebaseline：D5-I2 已接线、risk quota 已生产消费、L5 已降级、M3 真实剩余边界 | 无 | 可与所有代码 lane 并行；仅架构/规划文档 | 不改公式和阈值；所有状态可回指 commit/test；历史文档不倒改 |
 
 ### P1：关闭 M3 剩余功能与高优先级真实验收
