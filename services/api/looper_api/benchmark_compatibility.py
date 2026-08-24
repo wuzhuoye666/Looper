@@ -124,18 +124,22 @@ def _normalize_os(value: Any) -> str | None:
 
 
 def _target_architectures(target: TargetRecord) -> set[str]:
-    values = {
-        _normalize_architecture(_first_value(target, "architecture", "machine", "cpu_architecture"))
-    }
-    values.update(_normalize_architecture(item) for item in target.capabilities_json)
+    fingerprint_architecture = _normalize_architecture(
+        _first_value(target, "architecture", "machine", "cpu_architecture")
+    )
+    if fingerprint_architecture:
+        return {fingerprint_architecture}
+    values = {_normalize_architecture(item) for item in target.capabilities_json}
     return {value for value in values if value in {"x86_64", "aarch64", "ppc64le", "riscv64"}}
 
 
 def _target_os_families(target: TargetRecord) -> set[str]:
-    values = {
-        _normalize_os(_first_value(target, "system", "os_name", "platform", "framework"))
-    }
-    values.update(_normalize_os(item) for item in target.capabilities_json)
+    fingerprint_os = _normalize_os(
+        _first_value(target, "system", "os_name", "platform", "framework")
+    )
+    if fingerprint_os:
+        return {fingerprint_os}
+    values = {_normalize_os(item) for item in target.capabilities_json}
     return {value for value in values if value in {"linux", "windows", "macos", "aix"}}
 
 
