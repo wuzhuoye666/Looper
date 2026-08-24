@@ -1,6 +1,6 @@
 # System Optimizer 未完成任务队列（2026-08-24）
 
-> 状态：current backlog；核验基线：`system-optimizer-impl@4f6a4a0`。
+> 状态：current backlog；核验基线：`system-optimizer-impl@a365713`。
 > 本文只登记尚未关闭的工作和依赖关系，不代替
 > `agent-work-ledger-2026-08-24.md` 的 owner、交付、验收与 push 状态。
 > 任何任务正式分配后，必须在 agent 台账另建任务记录。
@@ -28,6 +28,9 @@
   synthetic 纵向切片。synthetic 通过不关闭任何真实环境验收门。
 - 因此本地 M3 功能链已关闭；当前 M3 外部出口只剩真实目标校准/闭环、REAL-S9，
   O3 仍按既定范围留 M6+。
+- `S4-02 local contract`：`f559b1f` 新增显式 MetricContract 审批 bundle、内容寻址落盘和
+  回放验证；它不推导 scale，也尚未接真实 CLI。真实逐 metric 数值、解释阈值和审批证据
+  仍依赖用户确认与目标实测。
 
 ## 2. 本轮报告复核结论
 
@@ -114,7 +117,7 @@ O3 时间盒 trace；通用采集缓存；中间测量/结果复用；增量下�
 |---|---|---|---|---|---|
 | RCP-03 | 性能/安全 | 设计 scope-local 索引或单次扫描快照，消除每次 advance 全局 O(N) 重验；明确其它 scope 损坏时是否仍全局阻断 | RCP-02 | 与 M3 功能 lane 并行；独占 receipt store/tests | 基准证明复杂度改善；篡改/断链/分叉/孤儿仍 fail-closed；不得降低启动全局审计强度 |
 | S4-01 | 决策/合同 | 冻结 v1；V2/P-D-A-Q-T/E_m 延后 | 已完成 | `7bafd4e`；v1 四维、公式 v1alpha1 和旧入口不变 | 无旧 digest 漂移；无默认 scale/阈值 |
-| S4-02 | 校准 | 对每个实际 metric/目标环境生成 scale 与解释阈值校准证据 | S4-01、真实目标授权 | 可按 metric/环境并行 | 四层实测；未获取数据记 unavailable，不用论文数字填充 |
+| S4-02 | 校准 | 本地审批/持久化/回放合同已完成 `f559b1f`；对每个实际 metric/目标环境生成 scale 与解释阈值校准证据仍待实测 | S4-01、真实目标授权、用户确认推导依据 | 可按 metric/环境并行 | 四层实测；未获取数据记 unavailable，不用论文数字填充；真实接线前必须验证 bundle |
 | S3-01 | 实现 | O1 evidence → S4 v1 → 确定性 ranked proposal | 已完成 `9f5c648` | 新模块/tests；v1/v2 声明回放入口保留 | digest 全绑定；数据不足 fail-closed；不回退文件 rank |
 | L7H-01 | 决策/合同 | refuted hypothesis schema/身份/准入/retention | 已完成 `491c855` | docs-only 合同 | v1 仅业务复测来源；TTL 无默认值 |
 | L7H-02 | 实现/回放 | 假设负缓存同文件分派、原子持久化、读取/失效和 loop bridge | 已完成 `eb4422b` | negative-cache + bridge + tests | 同身份命中、任一身份变化 miss、坏行 fail-closed、发布后才更新内存 |
@@ -128,11 +131,11 @@ O3 时间盒 trace；通用采集缓存；中间测量/结果复用；增量下�
 
 | ID | 类型 | 任务 | 依赖/顺序 | 说明 |
 |---|---|---|---|---|
-| M4-01 | 合同/实现 | System Optimizer API、事件投影、EnvironmentSnapshot typed 双写 | 安全/证据合同先冻结；API 与事件模型可并行设计，统一版本后实现 |
+| M4-01 | 合同/实现 | 现状盘点和只读优先设计已完成 `a365713`；System Optimizer API、事件投影、EnvironmentSnapshot typed 双写实现待做 | 先冻结 DB migration/digest 命名/事件序列；统一版本后实现 |
 | M4-02 | 安全 | 操作者权限、审批、真实 backend enablement | 依赖 M4-01；必须先于任何远程写 API |
 | M4-03 | 平台 | 远程目标与可选多节点生命周期 | 依赖 M4-02、REAL-SSH；不得绕过 lease/fencing/attention |
 | M4-04 | 展示 | 可选 UI | 依赖稳定 API/事件；UI 不得启用未授权真实 backend |
-| M5-01 | 交付 | 完整运行手册、三命令验收、schema 稳定承诺、迁移说明、已知限制 | 可现在并行起草；最终签收依赖 P0、M3-INT、选定 M4 出口和真实演练 |
+| M5-01 | 交付 | 运维/恢复/归档/schema/限制骨架已完成 `a365713`；发布版、迁移脚本和真实演练证据待做 | 最终签收依赖 P0、M3-INT、选定 M4 出口和真实演练 |
 | M5-02 | 演练 | 跨组件、动态 receipt、L6c、远程失联 failure drill 汇总 | 依赖对应实现/目标；每个失败必须有恢复或 needs-attention 终态 |
 | CAL-MENTOR | 校准 | F-MENTOR-002/003 参数和目标环境证据 | 与真实校准活动并行；未经数据和用户确认保持禁用 |
 
@@ -150,13 +153,14 @@ O3 时间盒 trace；通用采集缓存；中间测量/结果复用；增量下�
 
 ### 本地可并行（互不共享写集合）
 
-1. **M4-01 合同盘点/设计**：API、事件投影、EnvironmentSnapshot typed 双写；先设计，
-   不开真实写 API。
-2. **M5-01 文档骨架**：运行手册、schema 清单、迁移和已知限制；不得把待执行真机项写成完成。
+1. **M4-01A 实现准备**：复审 typed DB 字段、旧/新 digest 命名和 operation-local event
+   sequence；确认后实现 snapshot 双写及只读 API，不开真实写 API。
+2. **M5-01 发布化**：现有骨架补精确打包入口、migration/rollback 和真实演练证据；
+   不得把待执行真机项写成完成。
 3. **RCP-02B schema 复审**：只逐字段复审 legacy guard reconciliation/attention 模型；
    用户确认前不实施。
-4. **S4-02 校准任务包准备**：只列目标 metric、显式 scale 输入、采样与验收矩阵；
-   不填默认阈值。
+4. **S4-02 真实输入确认**：任务包已完成；由用户确认目标、逐 metric scale/reference
+   推导依据、采样/异常口径和解释阈值后执行，不填默认值。
 
 ### 真实目标可并行（必须不同目标，或共享目标时同 lease 串行）
 
