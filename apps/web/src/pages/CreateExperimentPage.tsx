@@ -1,12 +1,13 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { Boxes, Check, ChevronRight, ClipboardCheck, Server } from 'lucide-react';
+import { Boxes, Check, ChevronRight, ClipboardCheck, Cloud, Server, Sparkles } from 'lucide-react';
 import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { CloudSelectionAdvisor } from '../components/CloudSelectionAdvisor';
 import { BackLink } from '../components/Layout';
 import { ErrorState } from '../components/States';
 import { TargetSshButton } from '../components/TargetSshButton';
 import { api } from '../lib/api';
-import type { Benchmark, BenchmarkTargetRequirementSummary } from '../lib/types';
+import type { Benchmark, BenchmarkTargetRequirementSummary, CloudInstanceType, CloudProviderId } from '../lib/types';
 
 const steps = [
   { label: '采购问题', icon: ClipboardCheck },
@@ -15,6 +16,11 @@ const steps = [
 ];
 
 const FALLBACK_SELECTION_DEFAULTS = { repeats: 5, timeout: 86400, seed: 20260301 };
+type AdvisorProvider = Extract<CloudProviderId, 'tencent' | 'alibaba'>;
+const ADVISOR_PROVIDERS: Array<{ id: AdvisorProvider; label: string }> = [
+  { id: 'tencent', label: '腾讯云 CVM' },
+  { id: 'alibaba', label: '阿里云 ECS' },
+];
 
 function selectionDefaults(benchmark?: Pick<Benchmark, 'selectionDefaults'>) {
   return benchmark?.selectionDefaults || FALLBACK_SELECTION_DEFAULTS;
@@ -38,6 +44,11 @@ export function CreateExperimentPage() {
   const navigate = useNavigate();
   const [step, setStep] = useState(0);
   const [environmentFilter, setEnvironmentFilter] = useState('');
+  const [advisorOpen, setAdvisorOpen] = useState(false);
+  const [advisorProvider, setAdvisorProvider] = useState<AdvisorProvider>('tencent');
+  const [advisorRegion, setAdvisorRegion] = useState('');
+  const [advisorZone, setAdvisorZone] = useState('');
+  const [advisorSelection, setAdvisorSelection] = useState<CloudInstanceType | null>(null);
   const [form, setForm] = useState({
     name: '',
     description: '',
@@ -48,6 +59,26 @@ export function CreateExperimentPage() {
     ...FALLBACK_SELECTION_DEFAULTS,
   });
   const benchmarks = useQuery({ queryKey: ['benchmarks'], queryFn: api.benchmarks });
+  const cloudProviders = useQuery({
+    queryKey: ['cloud-providers'],
+    queryFn: api.providers,
+    enabled: advisorOpen,
+    staleTime: 30_000,
+  });
+  const advisorProviderInfo = cloudProviders.data?.items.find(item => item.id === advisorProvider);
+  const advisorCatalogAvailable = Boolean(advisorProviderInfo?.credentialsConfigured);
+  const advisorRegions = useQuery({
+    queryKey: ['cloud-regions', advisorProvider],
+    queryFn: () => api.regions(advisorProvider),
+    enabled: advisorOpen && advisorCatalogAvailable,
+    staleTime: 300_000,
+  });
+  const advisorZones = useQuery({
+    queryKey: ['cloud-zones', advisorProvider, advisorRegion],
+    queryFn: () => api.zones(advisorProvider, advisorRegion),
+    enabled: advisorOpen && advisorCatalogAvailable && Boolean(advisorRegion),
+    staleTime: 300_000,
+  });
   const benchmarkOptions = useMemo(
     () => benchmarks.data?.items || [],
     [benchmarks.data],
@@ -83,6 +114,21 @@ export function CreateExperimentPage() {
   const visibleTargets = selectedEnvironment?.targets || [];
   const requirements = requirementLabels(targetOptions.data?.nodeGroup.summary);
   useEffect(() => { setEnvironmentFilter(''); }, [form.benchmarkKey]);
+  useEffect(() => {
+    setAdvisorRegion('');
+    setAdvisorZone('');
+    setAdvisorSelection(null);
+  }, [advisorProvider]);
+  useEffect(() => {
+    if (advisorRegion || !advisorRegions.data?.items.length) return;
+    const preferred = advisorRegions.data.items.find(item => item.available !== false) || advisorRegions.data.items[0];
+    setAdvisorRegion(preferred.id);
+  }, [advisorRegion, advisorRegions.data?.items]);
+  useEffect(() => {
+    if (advisorZone || !advisorZones.data?.items.length) return;
+    const preferred = advisorZones.data.items.find(item => item.available !== false) || advisorZones.data.items[0];
+    setAdvisorZone(preferred.id);
+  }, [advisorZone, advisorZones.data?.items]);
   useEffect(() => {
     if (!targetOptions.data || form.targetIds.length === 0) return;
     const targetStillCompatible = targetOptions.data.environments.some(environment =>
@@ -138,15 +184,6 @@ export function CreateExperimentPage() {
       },
     }));
   };
-  const updateBinding = (targetId: string, key: 'variantId' | 'placementPairId', value: string) => {
-    setForm(current => ({
-      ...current,
-      targetBindings: {
-        ...current.targetBindings,
-        [targetId]: { ...current.targetBindings[targetId], [key]: value },
-      },
-    }));
-  };
   const updateInputBinding = (inputId: string, key: 'reference' | 'digest', value: string) => {
     setForm(current => {
       const binding = current.inputBindings[inputId] || { reference: '', digest: '' };
@@ -159,12 +196,44 @@ export function CreateExperimentPage() {
     if (step < 2) setStep(step + 1);
     else mutation.mutate();
   };
+  const changeAdvisorRegion = (value: string) => {
+    setAdvisorRegion(value);
+    setAdvisorZone('');
+    setAdvisorSelection(null);
+  };
 
   return <div className="page narrow-page">
     <BackLink to="/experiments">返回选型研究</BackLink>
     <header className="workspace-heading">
       <div><h1>新建选型研究</h1><p>绑定采购问题、真实 workload 和候选服务器。</p></div>
+      <button type="button" className={`button advisor-entry-button ${advisorOpen ? 'secondary open' : 'primary'}`} aria-expanded={advisorOpen} aria-controls="research-selection-advisor" onClick={() => setAdvisorOpen(current => !current)}><Sparkles size={15} />{advisorOpen ? '收起选型助手' : '打开选型助手'}</button>
     </header>
+    {advisorOpen && <section id="research-selection-advisor" className="research-advisor-section" aria-label="云服务器选型助手">
+      <header className="research-advisor-toolbar">
+        <div><span className="eyebrow">CLOUD ADVISOR</span><h2>先确定合适规格，再纳入候选资源</h2><p>助手属于选型研究流程；购买页只负责配置和下单。</p></div>
+        <div className="research-provider-strip" aria-label="选型助手云厂商">
+          {ADVISOR_PROVIDERS.map(item => {
+            const info = cloudProviders.data?.items.find(provider => provider.id === item.id);
+            return <button type="button" key={item.id} className={advisorProvider === item.id ? 'selected' : ''} onClick={() => setAdvisorProvider(item.id)}><Cloud size={14} /><span>{item.label}</span><i className={`connection-dot ${info?.credentialsConfigured && info.sdkInstalled ? 'ready' : ''}`} /></button>;
+          })}
+        </div>
+      </header>
+      {cloudProviders.isError && <ErrorState error={cloudProviders.error} onRetry={() => cloudProviders.refetch()} />}
+      {!cloudProviders.isError && <CloudSelectionAdvisor
+        key={advisorProvider}
+        provider={advisorProvider}
+        catalogAvailable={advisorCatalogAvailable}
+        regions={advisorRegions.data?.items || []}
+        zones={advisorZones.data?.items || []}
+        region={advisorRegion}
+        zone={advisorZone}
+        onRegionChange={changeAdvisorRegion}
+        onZoneChange={value => { setAdvisorZone(value); setAdvisorSelection(null); }}
+        selected={advisorSelection}
+        onSelect={setAdvisorSelection}
+      />}
+      {advisorSelection && <div className="research-advisor-selection"><div><span>已选建议规格</span><strong>{advisorSelection.id} · {advisorSelection.cpu} vCPU / {advisorSelection.memoryGib} GiB</strong><small>{ADVISOR_PROVIDERS.find(item => item.id === advisorProvider)?.label} · {advisorRegion} · {advisorZone || '自动可用区'}</small></div><button type="button" className="button primary" onClick={() => navigate('/cloud/market')}>打开云资源市场<ChevronRight size={15} /></button></div>}
+    </section>}
     <ol className="stepper" aria-label="创建步骤">
       {steps.map((item, index) => <li className={index === step ? 'active' : index < step ? 'done' : ''} key={item.label}>
         <span>{index < step ? <Check size={15} /> : index + 1}</span>
@@ -239,17 +308,6 @@ export function CreateExperimentPage() {
                 <TargetSshButton target={target} compact/>
               </div>)}
             </div>
-            {form.targetIds.length > 0 && <div className="target-binding-editor">
-              <div className="binding-header"><span>候选资源</span><span>SKU / Variant</span><span>Placement pair</span></div>
-              {form.targetIds.map(targetId => {
-                const binding = form.targetBindings[targetId];
-                return <div className="binding-row" key={targetId}>
-                  <strong>{binding.label}</strong>
-                  <label><span className="sr-only">SKU / Variant · {binding.label}</span><input required value={binding.variantId} onChange={event => updateBinding(targetId, 'variantId', event.target.value)} /></label>
-                  <label><span className="sr-only">Placement pair · {binding.label}</span><input required value={binding.placementPairId} onChange={event => updateBinding(targetId, 'placementPairId', event.target.value)} /></label>
-                </div>;
-              })}
-            </div>}
           </div>
         </div>
       </fieldset>}

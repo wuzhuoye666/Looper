@@ -83,24 +83,58 @@ async function completeDatabaseQuestionnaire(
   zone: string | null = 'cn-test-a',
 ) {
   fireEvent.click(screen.getByRole('button', { name: /数据库/ }));
-  fireEvent.click(screen.getByRole('button', { name: /下一题/ }));
-  fireEvent.click(screen.getByRole('button', { name: '知道配置' }));
   fireEvent.change(screen.getByLabelText('精确 vCPU'), { target: { value: '8' } });
   fireEvent.change(screen.getByLabelText('精确内存 GiB'), { target: { value: '32' } });
-  fireEvent.click(screen.getByRole('button', { name: /下一题/ }));
   fireEvent.click(screen.getByRole('button', { name: '必须' }));
-  fireEvent.click(screen.getByRole('button', { name: /下一题/ }));
+  fireEvent.click(screen.getByRole('button', { name: /继续设置部署约束/ }));
   fireEvent.click(screen.getByRole('button', { name: /可以提供/ }));
   fireEvent.click(screen.getByRole('button', { name: 'x86' }));
   fireEvent.change(screen.getByLabelText('助手地域'), { target: { value: region } });
   if (zone) fireEvent.change(screen.getByLabelText('助手可用区'), { target: { value: zone } });
-  fireEvent.click(screen.getByRole('button', { name: /查看候选/ }));
+  fireEvent.click(screen.getByRole('button', { name: /查看推荐结果/ }));
 }
 
 describe('阿里云 ECS 选型助手', () => {
   afterEach(() => {
     cleanup();
     vi.unstubAllGlobals();
+  });
+
+  it('CPU 与内存直接作为可选输入，代码可用性保持单选', async () => {
+    const requests: Array<Record<string, unknown>> = [];
+    vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body || '{}')) as Record<string, unknown>;
+      requests.push(body);
+      return response(advisorResponse(0));
+    }));
+    renderAdvisor();
+    fireEvent.click(screen.getByRole('button', { name: /数据库/ }));
+
+    expect(screen.queryByRole('button', { name: '知道配置' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '暂不清楚' })).not.toBeInTheDocument();
+    expect(screen.getByLabelText('精确 vCPU')).toHaveAttribute('placeholder', '可选');
+    expect(screen.getByLabelText('精确内存 GiB')).toHaveAttribute('placeholder', '可选');
+    expect(screen.getByRole('button', { name: /继续设置部署约束/ })).toBeEnabled();
+
+    fireEvent.click(screen.getByRole('button', { name: /继续设置部署约束/ }));
+    const available = screen.getByRole('button', { name: '可以提供' });
+    const unavailable = screen.getByRole('button', { name: '无法提供' });
+    const unknown = screen.getByRole('button', { name: '暂不确定' });
+    expect(unknown).toHaveClass('active');
+    expect(available).not.toHaveClass('active');
+    expect(unavailable).not.toHaveClass('active');
+
+    fireEvent.click(unavailable);
+    expect(unavailable).toHaveClass('active');
+    expect(unknown).not.toHaveClass('active');
+    expect(screen.getByText('候选结果会提示兼容性风险')).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText('助手地域'), { target: { value: 'cn-test' } });
+    fireEvent.click(screen.getByRole('button', { name: /查看推荐结果/ }));
+    await waitFor(() => expect(requests).toHaveLength(1));
+    expect(requests[0]).toMatchObject({ sizingMode: 'unknown', codeAvailability: 'unavailable' });
+    expect(requests[0].exactCpu).toBeUndefined();
+    expect(requests[0].exactMemoryGib).toBeUndefined();
   });
 
   it('按前序答案展示分支、精确筛选并加载更多候选', async () => {
@@ -113,10 +147,17 @@ describe('阿里云 ECS 选型助手', () => {
     const view = renderAdvisor();
 
     expect(screen.getByRole('heading', { name: '主要使用场景是什么？' })).toBeInTheDocument();
+    expect(screen.getByLabelText('选型进度 1 / 4')).toBeInTheDocument();
+    expect(screen.queryByLabelText(/选型进度 .*\/ 7/)).not.toBeInTheDocument();
+    expect(screen.queryByText('完成 3 项设置后生成推荐')).not.toBeInTheDocument();
+    expect(view.container.querySelector('.advisor-results')).not.toBeInTheDocument();
+    expect(view.container.querySelector('.advisor-market-layout')).toHaveClass('questionnaire');
     expect(view.container.querySelector('input[type="file"]')).not.toBeInTheDocument();
     await completeDatabaseQuestionnaire();
 
     expect(await screen.findByRole('heading', { name: '剩余 21 个候选' })).toBeInTheDocument();
+    expect(view.container.querySelector('.advisor-results')).toBeInTheDocument();
+    expect(view.container.querySelector('.advisor-market-layout')).not.toHaveClass('questionnaire');
     expect(screen.getByText('ecs.i9i.xlarge')).toBeInTheDocument();
     expect(screen.getByText(/本地存储型 · 本地 SSD 型 i9i/)).toBeInTheDocument();
     expect(requests[0]).toMatchObject({
@@ -136,6 +177,7 @@ describe('阿里云 ECS 选型助手', () => {
     expect(requests[requests.length - 1]).toMatchObject({ query: 'ecs.i8i' });
     fireEvent.click(screen.getByRole('button', { name: '确认' }));
     await waitFor(() => expect(requests[requests.length - 1]).toMatchObject({ query: '本地存储型', offset: 0, limit: 20 }));
+    await screen.findByText('ecs.i9i.xlarge');
 
     const search = screen.getByLabelText('搜索候选机型');
     for (const value of ['本地存储', '本地存', '本地', '本', '']) {
@@ -160,7 +202,7 @@ describe('阿里云 ECS 选型助手', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: '选择此机型' }));
     expect(screen.getByTestId('selected-instance')).toHaveTextContent('ecs.i9i.xlarge');
-    fireEvent.click(screen.getByRole('button', { name: /规格/ }));
+    fireEvent.click(screen.getByRole('button', { name: '资源需求' }));
     fireEvent.change(screen.getByLabelText('精确 vCPU'), { target: { value: '16' } });
 
     await waitFor(() => expect(screen.getByTestId('selected-instance')).toHaveTextContent(''));

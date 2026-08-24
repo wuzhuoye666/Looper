@@ -15,14 +15,12 @@ import {
   Settings2,
   ShieldCheck,
   ShoppingCart,
-  Sparkles,
   Terminal,
   XCircle,
 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { PageHeader } from '../components/PageHeader';
-import { CloudSelectionAdvisor } from '../components/CloudSelectionAdvisor';
 import { InstanceTypeFacetFilter } from '../components/InstanceTypeFacetFilter';
 import { EmptyState, ErrorState, LoadingState } from '../components/States';
 import { api } from '../lib/api';
@@ -172,7 +170,6 @@ export function CloudMarketPage() {
   const [region, setRegion] = useState('');
   const [zone, setZone] = useState('');
   const [step, setStep] = useState<MarketStep>('instance');
-  const [advisorOpen, setAdvisorOpen] = useState(false);
   const [search, setSearch] = useState('');
   const [catalogSearch, setCatalogSearch] = useState('');
   const [minCpu, setMinCpu] = useState(1);
@@ -218,7 +215,7 @@ export function CloudMarketPage() {
   const kind: CatalogKind = step === 'instance' ? 'instance-type' : 'image';
 
   const providerInfo = available.find(item => item.id === provider);
-  const selectionAdvisorSupported = provider === 'alibaba' || provider === 'tencent';
+  const automaticNetworkSetupSupported = provider === 'alibaba' || provider === 'tencent';
   const providerReadiness = readiness.data?.providers.find(item => item.provider === provider);
   const operatorAccessReady = !auth.data?.required || auth.data.authenticated;
   const publicIpSupported = provider !== 'volcengine' && provider !== 'baidu';
@@ -268,8 +265,7 @@ export function CloudMarketPage() {
     }),
     initialPageParam: 0,
     getNextPageParam: lastPage => lastPage.nextOffset ?? undefined,
-    enabled: !!region && !!providerInfo?.credentialsConfigured &&
-      (step === 'instance' || !!selectedType) && !(selectionAdvisorSupported && advisorOpen && step === 'instance'),
+    enabled: !!region && !!providerInfo?.credentialsConfigured && (step === 'instance' || !!selectedType),
     staleTime: 30_000,
   });
   const vpcs = useQuery({
@@ -408,7 +404,6 @@ export function CloudMarketPage() {
     ]);
   }, [step, provider, region, sshAuthMethod]);
   useEffect(() => {
-    setAdvisorOpen(false);
     setStep('instance');
     setRegion('');
     setZone('');
@@ -478,13 +473,13 @@ export function CloudMarketPage() {
   }, [zones.data?.items, zone]);
 
   useEffect(() => {
-    if (kind !== 'instance-type' || advisorOpen || suppressTypeDefault || selectedType || !items.length) return;
+    if (kind !== 'instance-type' || suppressTypeDefault || selectedType || !items.length) return;
     const preferred = (items as CloudInstanceType[]).find(item => item.available !== false && item.attributes?.purchaseCompatible !== false);
     if (preferred) {
       setSelectedType(preferred);
       setDefaultTypeId(preferred.id);
     }
-  }, [advisorOpen, items, kind, selectedType, suppressTypeDefault]);
+  }, [items, kind, selectedType, suppressTypeDefault]);
 
   useEffect(() => {
     const imageItems = kind === 'image' ? (items as CloudImage[]) : [];
@@ -660,23 +655,6 @@ export function CloudMarketPage() {
     resetTransientErrors();
     setStep(next);
   };
-  const openAdvisor = () => {
-    setSelectedType(null);
-    setDefaultTypeId('');
-    setSelectedImage(null);
-    setStep('instance');
-    setAdvisorOpen(true);
-  };
-  const closeAdvisor = () => {
-    setSelectedType(null);
-    setDefaultTypeId('');
-    setSuppressTypeDefault(true);
-    setSelectedImage(null);
-    setStep('instance');
-    setNetworkNotice('');
-    setSelectionError('');
-    setAdvisorOpen(false);
-  };
   const changeZone = (next: string) => {
     resetTransientErrors();
     setZone(next);
@@ -700,7 +678,7 @@ export function CloudMarketPage() {
     resetTransientErrors();
     setNetworkNotice('');
     networkKey.current = key();
-    if (selectionAdvisorSupported) {
+    if (automaticNetworkSetupSupported) {
       networkMutation.mutate(instance);
       return;
     }
@@ -730,7 +708,7 @@ export function CloudMarketPage() {
       </button>)}
     </section>
     {providerReadiness && <PurchaseReadiness provider={providerReadiness} maxHourlyAmount={readiness.data?.maxHourlyAmount || '—'} authRequired={auth.data?.required || false} authenticated={auth.data?.authenticated || false} />}
-    {providerInfo && !providerInfo.credentialsConfigured && <div className="notice warning cloud-connection-notice"><AlertTriangle size={18} /><div><strong>{providerInfo.name} 尚未连接</strong><p>SDK 已安装；API 仅从服务端环境变量读取凭证。当前可查看能力和订单策略，实时目录需要配置：{providerInfo.missingEnvironment.join('、')}。</p></div>{selectionAdvisorSupported && <button type="button" className="button secondary" aria-expanded={advisorOpen} aria-controls="cloud-selection-advisor" onClick={advisorOpen ? closeAdvisor : openAdvisor}>{advisorOpen ? <><ChevronLeft size={14} />返回手动选型</> : <><Sparkles size={14} />打开选型助手</>}</button>}</div>}
+    {providerInfo && !providerInfo.credentialsConfigured && <div className="notice warning cloud-connection-notice"><AlertTriangle size={18} /><div><strong>{providerInfo.name} 尚未连接</strong><p>SDK 已安装；API 仅从服务端环境变量读取凭证。当前可查看能力和订单策略，实时目录需要配置：{providerInfo.missingEnvironment.join('、')}。</p></div></div>}
     {providerInfo?.credentialsConfigured && providerInfo.message && <div className="notice warning"><AlertTriangle size={18} /><div><strong>{providerInfo.name} 购买能力受限</strong><p>{providerInfo.message}</p></div></div>}
     {providerInfo?.credentialsConfigured && <nav className="panel market-steps" aria-label="云服务器选购步骤">
       <button type="button" className={step === 'instance' ? 'active' : ''} onClick={() => goToStep('instance')}><span>1</span><Cpu size={15} />选择机型</button>
@@ -740,14 +718,13 @@ export function CloudMarketPage() {
       {step === 'instance' ? <>
         <div className="field compact"><label htmlFor="market-region">地域</label><select id="market-region" value={region} onChange={event => setRegion(event.target.value)}><option value="">选择地域</option>{regions.data?.items.map(item => <option key={item.id} value={item.id}>{item.name} · {item.id}</option>)}</select></div>
         <div className="field compact"><label htmlFor="market-zone">可用区（可选）</label><select id="market-zone" value={zone} onChange={event => changeZone(event.target.value)} disabled={!region}><option value="">自动选择可售可用区</option>{zones.data?.items.map(item => <option key={item.id} value={item.id}>{item.name} · {item.id}</option>)}</select></div>
-        {!advisorOpen && <><div className="field compact numeric-filter"><label htmlFor="min-cpu">最低 vCPU</label><input id="min-cpu" type="number" min={0} step={1} value={minCpuDraft} onChange={event => setMinCpuDraft(event.target.value)} onBlur={commitMinCpu} onKeyDown={event => { if (event.key === 'Enter') event.currentTarget.blur(); }} /></div><div className="field compact numeric-filter"><label htmlFor="min-memory">最低内存 GiB</label><input id="min-memory" type="number" min={0} step={0.5} value={minMemoryDraft} onChange={event => setMinMemoryDraft(event.target.value)} onBlur={commitMinMemory} onKeyDown={event => { if (event.key === 'Enter') event.currentTarget.blur(); }} /></div><form className="search-submit-group market-search-group" onSubmit={event => { event.preventDefault(); confirmCatalogSearch(); }}><label className="search-field market-search"><Search size={16} /><span className="sr-only">搜索机型</span><input aria-label="搜索机型" value={search} onChange={event => setSearch(event.target.value)} placeholder="搜索机型 ID、规格族或中文类型/分组" /></label><button type="submit" className="button primary search-confirm-button" disabled={search.trim() === catalogSearch}>确认</button></form></>}
-        {selectionAdvisorSupported && <button type="button" className="button secondary advisor-toolbar-button" aria-expanded={advisorOpen} aria-controls="cloud-selection-advisor" onClick={advisorOpen ? closeAdvisor : openAdvisor}>{advisorOpen ? <><ChevronLeft size={14} />返回手动选型</> : <><Sparkles size={14} />打开选型助手</>}</button>}
+        <div className="field compact numeric-filter"><label htmlFor="min-cpu">最低 vCPU</label><input id="min-cpu" type="number" min={0} step={1} value={minCpuDraft} onChange={event => setMinCpuDraft(event.target.value)} onBlur={commitMinCpu} onKeyDown={event => { if (event.key === 'Enter') event.currentTarget.blur(); }} /></div><div className="field compact numeric-filter"><label htmlFor="min-memory">最低内存 GiB</label><input id="min-memory" type="number" min={0} step={0.5} value={minMemoryDraft} onChange={event => setMinMemoryDraft(event.target.value)} onBlur={commitMinMemory} onKeyDown={event => { if (event.key === 'Enter') event.currentTarget.blur(); }} /></div><form className="search-submit-group market-search-group" onSubmit={event => { event.preventDefault(); confirmCatalogSearch(); }}><label className="search-field market-search"><Search size={16} /><span className="sr-only">搜索机型</span><input aria-label="搜索机型" value={search} onChange={event => setSearch(event.target.value)} placeholder="搜索机型 ID、规格族或中文类型/分组" /></label><button type="submit" className="button primary search-confirm-button" disabled={search.trim() === catalogSearch}>确认</button></form>
       </> : <>
         <button type="button" className="button secondary" onClick={() => goToStep('instance')}><ChevronLeft size={14} />返回修改机型</button>
         <div className="market-step-summary"><strong>{selectedType?.id}</strong><span>{zone || '尚未选择可用区'}{selectedImage ? ` · ${selectedImage.name}` : ''}</span></div>
       </>}
     </section>}
-    {providerInfo?.credentialsConfigured && selectionAdvisorSupported && !advisorOpen && step === 'instance' && <InstanceTypeFacetFilter
+    {providerInfo?.credentialsConfigured && step === 'instance' && <InstanceTypeFacetFilter
       facets={catalogResult?.instanceTypeFacets}
       value={{ architectureClass, typeKind, familyToken }}
       resetKey={`${provider}:${region}:${zone}:${minCpu}:${minMemory}`}
@@ -761,8 +738,7 @@ export function CloudMarketPage() {
     {selectionError && <div className="notice danger"><AlertTriangle size={18} /><div><strong>无法继续选购</strong><p>{selectionError}</p></div></div>}
     {networkMutation.isPending && <div className="notice"><RefreshCw className="spin" size={18} /><div><strong>正在准备网络</strong><p>正在核对可售可用区，并复用或创建可购买的子网。</p></div></div>}
     {networkNotice && step !== 'instance' && <div className="notice"><CheckCircle2 size={18} /><div><strong>网络已准备</strong><p>{networkNotice}</p></div></div>}
-    {selectionAdvisorSupported && advisorOpen && step === 'instance' && <div id="cloud-selection-advisor"><CloudSelectionAdvisor key={provider} provider={provider} catalogAvailable={Boolean(providerInfo?.credentialsConfigured)} regions={regions.data?.items || []} zones={zones.data?.items || []} region={region} zone={zone} onRegionChange={setRegion} onZoneChange={changeZone} selected={selectedType} onSelect={value => value ? continueWithInstance(value) : setSelectedType(null)} /></div>}
-    {providerInfo?.credentialsConfigured && step === 'instance' && !advisorOpen && (catalog.isLoading ? <LoadingState /> : catalog.isError ? <ErrorState error={catalog.error} onRetry={() => catalog.refetch()} /> : items.length ? <section className="panel cloud-results"><div className="panel-heading"><div><h2>{providerLabels[provider]} · 机型</h2><p>{catalogResult?.source === 'stale-cache' ? `${catalogResult.warning} · 已显示 ${displayedCatalogCount} / ${catalogResult.total}` : `已显示 ${displayedCatalogCount} / ${catalogResult?.total || 0} 个结果`}</p></div><span className="cache-state">{catalogResult?.source === 'live' ? '实时' : '缓存'}</span></div><InstanceTypeTable items={items as CloudInstanceType[]} selected={selectedType} busy={networkMutation.isPending} onSelect={continueWithInstance} />{catalog.hasNextPage && <button type="button" className="button secondary catalog-load-more" disabled={catalog.isFetchingNextPage} onClick={() => catalog.fetchNextPage()}>{catalog.isFetchingNextPage ? '加载中…' : `加载更多（已显示 ${displayedCatalogCount} / ${catalogResult?.total || 0}）`}</button>}</section> : <EmptyState title="没有匹配的云资源" />)}
+    {providerInfo?.credentialsConfigured && step === 'instance' && (catalog.isLoading ? <LoadingState /> : catalog.isError ? <ErrorState error={catalog.error} onRetry={() => catalog.refetch()} /> : items.length ? <section className="panel cloud-results"><div className="panel-heading"><div><h2>{providerLabels[provider]} · 机型</h2><p>{catalogResult?.source === 'stale-cache' ? `${catalogResult.warning} · 已显示 ${displayedCatalogCount} / ${catalogResult.total}` : `已显示 ${displayedCatalogCount} / ${catalogResult?.total || 0} 个结果`}</p></div><span className="cache-state">{catalogResult?.source === 'live' ? '实时' : '缓存'}</span></div><InstanceTypeTable items={items as CloudInstanceType[]} selected={selectedType} busy={networkMutation.isPending} onSelect={continueWithInstance} />{catalog.hasNextPage && <button type="button" className="button secondary catalog-load-more" disabled={catalog.isFetchingNextPage} onClick={() => catalog.fetchNextPage()}>{catalog.isFetchingNextPage ? '加载中…' : `加载更多（已显示 ${displayedCatalogCount} / ${catalogResult?.total || 0}）`}</button>}</section> : <EmptyState title="没有匹配的云资源" />)}
 
     {step === 'configure' && <section className="panel launch-panel">
       <div className="panel-heading"><div><h2>购买草稿</h2><p>仅按量付费；点击购买后，服务端会自动重验价格、库存和金额上限。</p></div><ShieldCheck size={20} /></div>
@@ -826,11 +802,11 @@ function PurchaseReadiness({ provider, maxHourlyAmount, authRequired, authentica
   const checks = [...provider.checks, browserCheck];
   const ready = provider.ready && browserCheck.ready;
   const configurable = provider.provider === 'tencent' || provider.provider === 'alibaba';
-  return <section className={`purchase-readiness ${ready ? 'ready' : 'blocked'}`} aria-label={`${provider.name}购买就绪状态`}>
-    <div className="purchase-readiness-heading"><div className="readiness-title-icon">{ready ? <CheckCircle2 size={20} /> : <LockKeyhole size={20} />}</div><div><span className="eyebrow">LIVE PURCHASE</span><h2>{ready ? `${provider.name} 可以购买` : `${provider.name} 尚不可购买`}</h2><p>单笔总小时金额上限 {maxHourlyAmount} CNY</p></div></div>
+  return <details className={`purchase-readiness ${ready ? 'ready' : 'blocked'}`} aria-label={`${provider.name}购买就绪状态`}>
+    <summary className="purchase-readiness-heading"><div className="readiness-title-icon">{ready ? <CheckCircle2 size={20} /> : <LockKeyhole size={20} />}</div><div><span className="eyebrow">LIVE PURCHASE</span><h2>{ready ? `${provider.name} 可以购买` : `${provider.name} 尚不可购买`}</h2><p>单笔总小时金额上限 {maxHourlyAmount} CNY</p></div><ChevronDown className="readiness-chevron" size={18} /></summary>
     <div className="readiness-grid">{checks.map(check => <div key={check.code} className={check.ready ? 'ready' : 'blocked'}>{check.ready ? <CheckCircle2 size={15} /> : <XCircle size={15} />}<span><strong>{check.label}</strong><small>{check.detail}</small></span></div>)}</div>
     {!ready && configurable && <div className="setup-command"><Terminal size={16} /><span><strong>本机配置命令</strong><code>.venv\Scripts\looper.exe cloud configure {provider.provider} --max-hourly-amount {maxHourlyAmount === '—' ? '10' : maxHourlyAmount}</code></span></div>}
-  </section>;
+  </details>;
 }
 
 function InstanceTypeTable({ items, selected, busy, onSelect }: { items: CloudInstanceType[]; selected: CloudInstanceType | null; busy: boolean; onSelect: (value: CloudInstanceType) => void }) {

@@ -330,15 +330,8 @@ describe('腾讯云购买网络选择', () => {
     fireEvent.click(screen.getByRole('button', { name: '加载更多（已显示 20 / 25）' }));
     await waitFor(() => expect(view.container.querySelectorAll('.cloud-results tbody tr')).toHaveLength(25));
 
-    fireEvent.click(screen.getByRole('button', { name: '打开选型助手' }));
-    expect(screen.getByRole('button', { name: '返回手动选型' })).toHaveAttribute('aria-expanded', 'true');
-    expect(screen.getByLabelText('腾讯云 CVM 选型助手')).toBeInTheDocument();
-    expect(screen.queryByLabelText('最低 vCPU')).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: '返回手动选型' }));
-    expect(screen.queryByLabelText('腾讯云 CVM 选型助手')).not.toBeInTheDocument();
-    expect(screen.getByLabelText('最低 vCPU')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: '打开选型助手' }));
-    expect(screen.getByRole('heading', { name: '主要使用场景是什么？' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '打开选型助手' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: '腾讯云 CVM 选型助手' })).not.toBeInTheDocument();
   });
 
   it('配置页内联镜像选择器将常用系统置顶，其余收进更多镜像', async () => {

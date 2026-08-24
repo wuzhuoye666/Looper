@@ -79,6 +79,69 @@ def test_selection_defaults_are_benchmark_specific_and_used_by_create_request(
     assert request.spec.design.random_seed == 20260301
 
 
+def test_selection_analysis_accepts_boolean_scenario_flags(db_session: object) -> None:
+    session = db_session
+    benchmark = session.scalar(
+        select(BenchmarkRecord).where(BenchmarkRecord.benchmark_id == "looper.phoronix-phpbench")
+    )
+    assert benchmark is not None
+    request = _normalize_create_request(
+        {
+            "mode": "selection",
+            "name": "PHPBench boolean gate fixture",
+            "benchmarkId": benchmark.benchmark_id,
+            "benchmarkVersion": benchmark.version,
+            "targetIds": ["local"],
+            "config": {"repeats": 3},
+        },
+        session,
+    )
+    experiment = create_experiment(session, request)
+    start_experiment(session, experiment)
+    attempts = list(
+        session.scalars(
+            select(AttemptRecord)
+            .where(AttemptRecord.experiment_id == experiment.id)
+            .order_by(AttemptRecord.repeat_index)
+        )
+    )
+    assert len(attempts) == 3
+    for index, attempt in enumerate(attempts):
+        evaluation = session.get(EvaluationRecord, attempt.evaluation_id)
+        assert evaluation is not None
+        attempt.status = AttemptStatus.SUCCEEDED
+        attempt.completed_at = utc_now()
+        for metric, value, unit in (
+            ("pts_run_ok", True, "flag"),
+            ("profile_version_match", True, "flag"),
+            ("phpbench_score", 100.0 + index, "Score"),
+        ):
+            session.add(
+                ObservationRecord(
+                    id=new_id("obs"),
+                    attempt_id=attempt.id,
+                    metric=metric,
+                    value_number=None if isinstance(value, bool) else float(value),
+                    value_boolean=value if isinstance(value, bool) else None,
+                    unit=unit,
+                    phase="measurement",
+                    workload=evaluation.workload_id,
+                    sample_index=None,
+                    sample_count=3,
+                    statistic="sample",
+                    timestamp_text=None,
+                    attributes_json={},
+                    created_at=utc_now(),
+                )
+            )
+    session.flush()
+
+    result = build_analysis_snapshot(session, experiment.id, persist=False)
+    target = result["targets"][0]
+    assert target["valid_block_count"] == 3
+    assert target["metrics"][0]["raw"] == 101.0
+
+
 def test_benchmark_view_exposes_metric_presentation_without_dropping_metrics(
     db_session: object,
 ) -> None:

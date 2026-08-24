@@ -48,7 +48,7 @@ from looper_api.models import (
     TargetRecord,
 )
 
-ANALYSIS_CODE_VERSION = "0.5.0"
+ANALYSIS_CODE_VERSION = "0.5.1"
 
 
 def _observation_value(record: ObservationRecord) -> float | bool | None:
@@ -342,15 +342,21 @@ def _selection_analysis(
                     metric_values[objective.metric] = value
             scenario_gates: list[dict[str, Any]] = []
             for gate in spec.scenario.slo_gates:
-                numeric = [
-                    float(value)
-                    for item in observations
-                    if item.metric == gate.metric
-                    and not isinstance((value := _observation_value(item)), bool)
-                    and value is not None
-                    and item.phase != "warmup"
-                ]
-                value = aggregate(numeric, Aggregation.MEDIAN) if numeric else None
+                boolean_values = _boolean_values(observations, gate.metric)
+                if boolean_values:
+                    # Flag metrics are valid scenario gates even when the adapter
+                    # emits JSON booleans instead of numeric 0/1 values.
+                    value: float | bool | None = all(boolean_values)
+                else:
+                    numeric = [
+                        float(value)
+                        for item in observations
+                        if item.metric == gate.metric
+                        and not isinstance((value := _observation_value(item)), bool)
+                        and value is not None
+                        and item.phase != "warmup"
+                    ]
+                    value = aggregate(numeric, Aggregation.MEDIAN) if numeric else None
                 scenario_gates.append(
                     {
                         "id": gate.id,

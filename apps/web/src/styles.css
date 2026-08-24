@@ -224,8 +224,11 @@ tbody tr:hover{background:#fafcff}
 .search-field{width:100%}
 .result-count{margin-left:0}
 .catalog-grid,.evidence-list{grid-template-columns:1fr}
-.stepper li{padding:10px}
-.stepper li div{display:none}
+.stepper li{min-width:0;gap:6px;padding:9px 7px}
+.stepper li>span{flex:0 0 22px;width:22px;height:22px}
+.stepper li div{display:block;min-width:0}
+.stepper small{display:none}
+.stepper strong{margin:0;font-size:10px;line-height:1.3;white-space:nowrap}
 .form-panel{padding:18px}
 .form-grid{grid-template-columns:1fr}
 .form-grid label.full{grid-column:auto}
@@ -264,6 +267,54 @@ tbody tr:hover{background:#fafcff}
 @media(max-width:760px){.cloud-instance-table{max-width:100%;overflow:visible;padding:12px}.cloud-instance-table table,.cloud-instance-table tbody{display:block;width:100%}.cloud-instance-table table{white-space:normal}.cloud-instance-table thead{display:none}.cloud-instance-table tbody{display:grid;gap:10px}.cloud-instance-table tr{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;padding:12px;border:1px solid #dfe3e8;border-radius:7px;background:#fff}.cloud-instance-table tr:hover{background:#fafcff}.cloud-instance-table tr.selected-row{border-color:#78aadd;box-shadow:0 0 0 2px #e2effb}.cloud-instance-table td{min-width:0;padding:0;border:0;white-space:normal;overflow-wrap:anywhere}.cloud-instance-table .instance-primary{grid-column:1/-1;padding-bottom:3px}.cloud-instance-table .instance-primary strong{display:block;font-size:13px;line-height:1.4;overflow-wrap:anywhere}.cloud-instance-table .instance-primary .cell-meta{max-width:none;white-space:normal;overflow-wrap:anywhere}.cloud-instance-table .instance-detail{padding:7px 8px;border-radius:5px;background:#f5f7f9;font-size:10px}.cloud-instance-table .instance-mobile-label{display:block;margin-bottom:2px;color:#7b8590;font-size:8px;font-weight:650}.cloud-instance-table .instance-action{grid-column:1/-1;padding-top:2px}.cloud-instance-table .instance-action .button{width:100%;min-height:34px}}
 .advisor-toolbar-button{margin-left:auto;white-space:nowrap}.cloud-connection-notice>div{flex:1;min-width:0}.cloud-connection-notice>.button{flex:0 0 auto;margin-left:auto;white-space:nowrap}.advisor-directory-warning{display:flex;align-items:flex-start;gap:7px;margin:10px 12px 0;padding:9px 10px;border:1px solid #efd8a9;border-radius:5px;background:#fff9ee;color:#84601d;font-size:10px;line-height:1.45}.advisor-directory-warning svg{flex:0 0 auto;margin-top:1px;color:#b17d1f}
 @media(max-width:760px){.advisor-toolbar-button{width:100%;margin-left:0}.cloud-connection-notice{flex-wrap:wrap}.cloud-connection-notice>.button{width:calc(100% - 28px);margin-left:28px}.advisor-directory-warning{margin:10px 10px 0}}
+
+/* Selection advisor moved to the research workflow; keep market controls compact. */
+.provider-strip{display:flex;gap:10px;overflow-x:auto;grid-template-columns:none}
+.provider-card{flex:1 1 0;min-width:0;padding:10px 12px}
+.purchase-readiness{padding:0 18px 14px}
+.purchase-readiness>summary{padding:16px 0;cursor:pointer;list-style:none}
+.purchase-readiness>summary::-webkit-details-marker{display:none}
+.purchase-readiness-heading{display:flex;align-items:flex-start;gap:11px}
+.purchase-readiness-heading>div:nth-child(2){flex:1;min-width:0}
+.readiness-chevron{margin-left:auto;color:#78838f;transition:transform .2s ease}
+.purchase-readiness[open] .readiness-chevron{transform:rotate(180deg)}
+.purchase-readiness .readiness-grid{margin-top:0}
+.research-advisor-section{margin-bottom:18px;padding:16px;border:1px solid var(--border);border-radius:7px;background:#fff}
+.research-advisor-toolbar{display:flex;align-items:flex-start;justify-content:space-between;gap:18px;margin-bottom:14px}
+.research-advisor-toolbar h2{margin:3px 0 0;font-size:16px}
+.research-advisor-toolbar p{margin:4px 0 0;color:var(--muted);font-size:11px}
+.research-provider-strip{display:flex;gap:6px;flex:0 0 auto}
+.research-provider-strip button{display:inline-flex;align-items:center;gap:6px;min-height:32px;padding:0 10px;border:1px solid #d8dee5;border-radius:5px;background:#fafbfc;color:#66717d;font-size:10px;cursor:pointer}
+.research-provider-strip button.selected{border-color:#77a9d8;background:#eef6fd;color:#216aa9;font-weight:700}
+.research-provider-strip button .connection-dot{width:6px;height:6px;margin-left:2px}
+.research-advisor-section .advisor-market-layout{margin-bottom:0}
+.research-advisor-section .advisor-market-layout.questionnaire{grid-template-columns:minmax(0,1fr)}
+.research-advisor-selection{display:flex;align-items:center;justify-content:space-between;gap:14px;margin-top:14px;padding:11px 12px;border:1px solid #b9ddcb;border-radius:6px;background:#f3fbf6}
+.research-advisor-selection span,.research-advisor-selection strong,.research-advisor-selection small{display:block}
+.research-advisor-selection span{color:#287b51;font-size:9px;font-weight:700}
+.research-advisor-selection strong{margin-top:2px;font-size:12px}
+.research-advisor-selection small{margin-top:3px;color:#688273;font-size:10px}
+.research-advisor-section .advisor-step-nav button{flex:1;justify-content:center}
+.advisor-question-section{padding:15px 0;border-top:1px solid #e7eaee}
+.advisor-question-section:first-of-type{padding-top:0;border-top:0}
+.advisor-section-heading{margin-bottom:10px}
+.advisor-section-heading h4{margin:0;font-size:12px}
+.advisor-section-heading p{margin:3px 0 0;color:#7a838e;font-size:9px;line-height:1.45}
+.advisor-question-section .advisor-check-list{grid-template-columns:1fr 1fr}
+.advisor-question-section .advisor-fields,.advisor-question-section .advisor-long-field{margin-top:10px}
+.advisor-choice-grid button.selected{border-color:#77a9d8;background:#eef6fd;box-shadow:0 0 0 1px #d6e9fa}
+.advisor-code-options{margin-top:0}
+.advisor-code-hint{margin:7px 2px 0;color:#6f7a86;font-size:9px;line-height:1.45}
+@media(max-width:760px){
+  .provider-strip{gap:6px}
+  .provider-card{flex:0 0 190px}
+  .research-advisor-toolbar{flex-direction:column}
+  .research-provider-strip{width:100%;overflow-x:auto}
+  .research-provider-strip button{flex:1 0 auto}
+  .advisor-question-section .advisor-check-list{grid-template-columns:1fr}
+  .research-advisor-selection{align-items:stretch;flex-direction:column}
+  .research-advisor-selection .button{width:100%;justify-content:center}
+}
 .advisor-candidate-search-wrap{grid-column:1/-1;display:flex;align-items:center;gap:10px}.advisor-candidate-search-form{flex:1;max-width:540px}.advisor-candidate-search{flex:1;width:auto;max-width:none}.advisor-candidate-search-wrap>small{color:#7c8691;font-size:9px;white-space:nowrap}.advisor-search-empty{display:grid;place-items:center;min-height:150px;padding:24px;text-align:center;color:#7d8792}.advisor-search-empty svg{color:#79a5cd}.advisor-search-empty strong{margin-top:8px;color:#34404c;font-size:12px}.advisor-search-empty span{margin-top:4px;font-size:10px}.catalog-load-more{display:flex;margin:14px auto}
 .instance-facet-filter{display:grid;gap:0;margin-bottom:14px;padding:4px 14px}.instance-facet-row{display:grid;grid-template-columns:86px minmax(0,1fr);gap:10px;padding:10px 0;border-bottom:1px solid #edf0f3}.instance-facet-row:last-child{border-bottom:0}.instance-facet-row>strong{padding-top:7px;color:#56616d;font-size:11px}.instance-facet-row>div{display:flex;flex-wrap:wrap;gap:6px}.instance-facet-row button{display:inline-flex;align-items:center;gap:5px;min-height:29px;padding:5px 9px;border:1px solid #dce1e6;border-radius:5px;background:#fff;color:#68727d;font-size:10px;cursor:pointer}.instance-facet-row button:hover{border-color:#91b9de;background:#f5faff}.instance-facet-row button.active{border-color:#75a8d6;background:#eaf4fd;color:#216ba9;font-weight:700}.instance-facet-row button small{color:#929aa4;font-size:8px;font-weight:500}.instance-facet-row button.active small{color:#5f8db5}.instance-facet-row .facet-load-more{border-style:dashed;color:#2876b7}.advisor-result-summary>.instance-facet-filter{grid-column:1/-1;margin:0;border-color:#e1e6eb;box-shadow:none}
 @media(max-width:760px){.advisor-candidate-search-wrap{align-items:stretch;flex-direction:column}.advisor-candidate-search{width:100%;max-width:none}.advisor-candidate-search-wrap>small{white-space:normal}.catalog-load-more{width:calc(100% - 24px);justify-content:center}}

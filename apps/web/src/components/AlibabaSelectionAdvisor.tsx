@@ -1,5 +1,5 @@
 import { useInfiniteQuery } from '@tanstack/react-query';
-import { AlertTriangle, Check, ChevronLeft, ChevronRight, Code2, Cpu, Filter, Search, Server, Sparkles } from 'lucide-react';
+import { AlertTriangle, Check, ChevronLeft, ChevronRight, Cpu, Filter, Search, Server, Sparkles } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../lib/api';
 import { InstanceTypeFacetFilter } from './InstanceTypeFacetFilter';
@@ -35,10 +35,8 @@ const componentIds: SelectionScenario[] = [
 interface Answers {
   primaryScenario: SelectionScenario;
   coLocatedComponents: SelectionScenario[];
-  sizingMode: 'exact' | 'unknown';
   exactCpu: number;
   exactMemoryGib: number;
-  workloadScale: string;
   minimumGpuCount: number;
   localStorage: 'required' | 'not-required' | 'unknown';
   minimumNetworkBandwidthGbps: number;
@@ -50,10 +48,8 @@ interface Answers {
 const initialAnswers: Answers = {
   primaryScenario: 'web-api',
   coLocatedComponents: [],
-  sizingMode: 'unknown',
   exactCpu: 0,
   exactMemoryGib: 0,
-  workloadScale: '',
   minimumGpuCount: 0,
   localStorage: 'unknown',
   minimumNetworkBandwidthGbps: 0,
@@ -62,7 +58,12 @@ const initialAnswers: Answers = {
   architecture: 'unknown',
 };
 
-const stepLabels = ['场景', '同机组件', '规格', '特殊资源', '代码', '地域与架构', '候选'];
+const stepLabels = ['使用场景', '资源需求', '部署约束', '推荐结果'];
+const codeAvailabilityOptions = [
+  { value: 'available', label: '可以提供', detail: '后续版本可进行兼容性分析' },
+  { value: 'unavailable', label: '无法提供', detail: '候选结果会提示兼容性风险' },
+  { value: 'unknown', label: '暂不确定', detail: '稍后仍可返回修改' },
+] as const;
 
 function architectureKind(value?: string) {
   const normalized = (value || '').toLowerCase().replace(/[_-]/g, '');
@@ -75,13 +76,17 @@ function formatNumber(value: number) {
   return Number.isInteger(value) ? String(value) : value.toFixed(2).replace(/0+$/, '').replace(/\.$/, '');
 }
 
+function hasExactSizing(answers: Answers) {
+  return answers.exactCpu > 0 && answers.exactMemoryGib > 0;
+}
+
 function isStillEligible(
   item: CloudInstanceType,
   answers: Answers,
   zone: string,
 ) {
   if (item.available === false) return false;
-  if (answers.sizingMode === 'exact' && (
+  if (hasExactSizing(answers) && (
     item.cpu !== answers.exactCpu || item.memoryGib !== answers.exactMemoryGib
   )) return false;
   if (answers.architecture !== 'unknown' && architectureKind(item.architecture) !== answers.architecture) return false;
@@ -108,14 +113,6 @@ function isStillEligible(
     item.networkPpsRx || 0, item.networkPpsTx || 0,
   ) < answers.minimumNetworkPps) return false;
   return true;
-}
-
-function workloadScalePrompt(scenario: SelectionScenario) {
-  if (scenario === 'database' || scenario === 'cache' || scenario === 'search-logs') return '数据量、热点数据量或当前内存占用';
-  if (scenario === 'big-data-messaging') return '每日数据量、消息吞吐或集群规模';
-  if (scenario === 'ai') return '模型规模、批大小或预期并发';
-  if (scenario === 'video') return '分辨率、帧率和并发路数';
-  return '峰值 QPS、并发用户数或当前服务器配置';
 }
 
 export function CloudSelectionAdvisor({
@@ -162,10 +159,9 @@ export function CloudSelectionAdvisor({
     zone: zone || undefined,
     primaryScenario: answers.primaryScenario,
     coLocatedComponents: answers.coLocatedComponents,
-    sizingMode: answers.sizingMode,
-    exactCpu: answers.sizingMode === 'exact' ? answers.exactCpu : undefined,
-    exactMemoryGib: answers.sizingMode === 'exact' ? answers.exactMemoryGib : undefined,
-    workloadScale: answers.sizingMode === 'unknown' && answers.workloadScale.trim() ? answers.workloadScale.trim() : undefined,
+    sizingMode: hasExactSizing(answers) ? 'exact' : 'unknown',
+    exactCpu: hasExactSizing(answers) ? answers.exactCpu : undefined,
+    exactMemoryGib: hasExactSizing(answers) ? answers.exactMemoryGib : undefined,
     minimumGpuCount: gpuRelevant ? answers.minimumGpuCount : 0,
     localStorage: localStorageRelevant ? answers.localStorage : 'unknown',
     minimumNetworkBandwidthGbps: networkRelevant && answers.minimumNetworkBandwidthGbps > 0 ? answers.minimumNetworkBandwidthGbps : undefined,
@@ -185,7 +181,7 @@ export function CloudSelectionAdvisor({
     queryFn: ({ pageParam }) => api.selectionAdvisor({ ...request!, offset: pageParam, limit: 20 }),
     initialPageParam: 0,
     getNextPageParam: lastPage => lastPage.nextOffset ?? undefined,
-    enabled: catalogAvailable && step === 6 && request !== null,
+    enabled: catalogAvailable && step === 3 && request !== null,
     staleTime: 30_000,
   });
   const pages = recommendations.data?.pages || [];
@@ -232,13 +228,13 @@ export function CloudSelectionAdvisor({
   );
   const confirmCandidateSearch = () => setCandidateQuery(candidateSearch.trim());
 
-  return <section className="advisor-market-layout" aria-label={`${providerName} 选型助手`}>
+  return <section className={`advisor-market-layout ${step < 3 ? 'questionnaire' : ''}`} aria-label={`${providerName} 选型助手`}>
     <aside className="panel selection-advisor">
       <div className="advisor-heading">
         <span><Sparkles size={17} /></span>
         <div><small>{providerEyebrow}</small><h2>选型助手</h2><p>只用硬约束排除，场景用于排序。</p></div>
       </div>
-      <div className="advisor-progress" aria-label={`选型进度 ${Math.min(step + 1, 7)} / 7`}><span style={{ width: `${((Math.min(step, 6) + 1) / 7) * 100}%` }} /></div>
+      <div className="advisor-progress" aria-label={`选型进度 ${Math.min(step + 1, 4)} / 4`}><span style={{ width: `${((Math.min(step, 3) + 1) / 4) * 100}%` }} /></div>
       <nav className="advisor-step-nav" aria-label="问卷步骤">
         {stepLabels.map((label, index) => <button key={label} type="button" className={index === step ? 'active' : index < step ? 'done' : ''} disabled={index > step} onClick={() => setStep(index)}><span>{index < step ? <Check size={11} /> : index + 1}</span>{label}</button>)}
       </nav>
@@ -249,56 +245,53 @@ export function CloudSelectionAdvisor({
           <div className="advisor-choice-grid">{scenarios.map(item => <button type="button" key={item.id} onClick={() => chooseScenario(item.id)}><strong>{item.label}</strong><small>{item.detail}</small><ChevronRight size={14} /></button>)}</div>
         </>}
         {step === 1 && <>
-          <QuestionTitle title="同一台机器还会运行什么？" detail="可多选，也可以不选择。附加组件只影响排序。" />
-          <div className="advisor-check-list">{componentIds.filter(id => id !== answers.primaryScenario).map(id => {
-            const item = scenarios.find(value => value.id === id)!;
-            return <label key={id} className={answers.coLocatedComponents.includes(id) ? 'selected' : ''}><input type="checkbox" checked={answers.coLocatedComponents.includes(id)} onChange={() => toggleComponent(id)} /><span><strong>{item.label}</strong><small>{item.detail}</small></span></label>;
-          })}</div>
-          <QuestionActions back={() => setStep(0)} next={() => setStep(2)} />
+          <QuestionTitle title="确认资源需求" detail="把容量和特殊资源一次填完；不确定的项目可以保持默认。" />
+          <section className="advisor-question-section">
+            <div className="advisor-section-heading"><h4>同机运行（可选）</h4><p>附加组件只影响推荐顺序，不会直接排除机型。</p></div>
+            <div className="advisor-check-list">{componentIds.filter(id => id !== answers.primaryScenario).map(id => {
+              const item = scenarios.find(value => value.id === id)!;
+              return <label key={id} className={answers.coLocatedComponents.includes(id) ? 'selected' : ''}><input type="checkbox" checked={answers.coLocatedComponents.includes(id)} onChange={() => toggleComponent(id)} /><span><strong>{item.label}</strong><small>{item.detail}</small></span></label>;
+            })}</div>
+          </section>
+          <section className="advisor-question-section">
+            <div className="advisor-section-heading"><h4>CPU 与内存</h4><p>两项都填写时精确匹配；未填完整时不作为硬筛选条件。</p></div>
+            <div className="advisor-fields"><label><span>vCPU</span><input aria-label="精确 vCPU" type="number" min={1} placeholder="可选" value={answers.exactCpu || ''} onChange={event => update('exactCpu', Number(event.target.value))} /></label><label><span>内存 GiB</span><input aria-label="精确内存 GiB" type="number" min={0.25} step={0.25} placeholder="可选" value={answers.exactMemoryGib || ''} onChange={event => update('exactMemoryGib', Number(event.target.value))} /></label></div>
+          </section>
+          <section className="advisor-question-section">
+            <div className="advisor-section-heading"><h4>特殊资源（可选）</h4><p>只有明确填写的 GPU、本地盘和网络要求会排除机型。</p></div>
+            {!gpuRelevant && !localStorageRelevant && !networkRelevant && <div className="advisor-neutral"><Server size={17} /><span>当前场景没有需要追加的特殊资源问题。</span></div>}
+            {gpuRelevant && <label className="advisor-long-field"><span>最低 GPU 数量</span><select aria-label="最低 GPU 数量" value={answers.minimumGpuCount} onChange={event => update('minimumGpuCount', Number(event.target.value))}><option value={0}>不强制 GPU</option><option value={1}>至少 1 块</option><option value={2}>至少 2 块</option><option value={4}>至少 4 块</option><option value={8}>至少 8 块</option></select></label>}
+            {localStorageRelevant && <div className="advisor-long-field"><span>是否强制本地盘？</span><div className="advisor-segmented triple"><button type="button" className={answers.localStorage === 'required' ? 'active' : ''} onClick={() => update('localStorage', 'required')}>必须</button><button type="button" className={answers.localStorage === 'not-required' ? 'active' : ''} onClick={() => update('localStorage', 'not-required')}>不需要</button><button type="button" className={answers.localStorage === 'unknown' ? 'active' : ''} onClick={() => update('localStorage', 'unknown')}>不清楚</button></div></div>}
+            {networkRelevant && <div className="advisor-fields"><label><span>最低内网带宽 Gbit/s</span><input aria-label="最低内网带宽 Gbit/s" type="number" min={0} step={0.1} value={answers.minimumNetworkBandwidthGbps || ''} placeholder="不清楚可留空" onChange={event => update('minimumNetworkBandwidthGbps', Number(event.target.value))} /></label><label><span>最低网络 PPS</span><input aria-label="最低网络 PPS" type="number" min={0} value={answers.minimumNetworkPps || ''} placeholder="不清楚可留空" onChange={event => update('minimumNetworkPps', Number(event.target.value))} /></label></div>}
+          </section>
+          <QuestionActions back={() => setStep(0)} next={() => setStep(2)} nextLabel="继续设置部署约束" />
         </>}
         {step === 2 && <>
-          <QuestionTitle title="是否明确知道所需配置？" detail="明确配置按 CPU 和内存精确匹配；不明确时不会猜测容量。" />
-          <div className="advisor-segmented"><button type="button" className={answers.sizingMode === 'exact' ? 'active' : ''} onClick={() => update('sizingMode', 'exact')}>知道配置</button><button type="button" className={answers.sizingMode === 'unknown' ? 'active' : ''} onClick={() => update('sizingMode', 'unknown')}>暂不清楚</button></div>
-          {answers.sizingMode === 'exact' ? <div className="advisor-fields"><label><span>vCPU</span><input aria-label="精确 vCPU" type="number" min={1} value={answers.exactCpu || ''} onChange={event => update('exactCpu', Number(event.target.value))} /></label><label><span>内存 GiB</span><input aria-label="精确内存 GiB" type="number" min={0.25} step={0.25} value={answers.exactMemoryGib || ''} onChange={event => update('exactMemoryGib', Number(event.target.value))} /></label></div> : <label className="advisor-long-field"><span>{workloadScalePrompt(answers.primaryScenario)}</span><textarea rows={3} value={answers.workloadScale} onChange={event => update('workloadScale', event.target.value)} placeholder="可选；用于解释和排序，不会生成未经验证的硬件下限。" /></label>}
-          <QuestionActions back={() => setStep(1)} next={() => setStep(3)} disabled={answers.sizingMode === 'exact' && (!answers.exactCpu || !answers.exactMemoryGib)} />
+          <QuestionTitle title="确认部署约束" detail="选择代码状态、CPU 架构和部署位置，然后直接生成推荐。" />
+          <section className="advisor-question-section">
+            <div className="advisor-section-heading"><h4>代码可用性</h4><p>本期只记录状态，不上传、不读取，也不执行代码。</p></div>
+            <div className="advisor-segmented triple advisor-code-options">{codeAvailabilityOptions.map(item => <button type="button" key={item.value} className={answers.codeAvailability === item.value ? 'active' : ''} onClick={() => update('codeAvailability', item.value)}>{item.label}</button>)}</div>
+            <p className="advisor-code-hint">{codeAvailabilityOptions.find(item => item.value === answers.codeAvailability)?.detail}</p>
+          </section>
+          <section className="advisor-question-section">
+            <div className="advisor-section-heading"><h4>架构与位置</h4><p>不清楚架构时保留 ARM 候选，但优先展示 x86。</p></div>
+            <div className="advisor-long-field"><span>CPU 架构</span><div className="advisor-segmented triple"><button type="button" className={answers.architecture === 'x86' ? 'active' : ''} onClick={() => update('architecture', 'x86')}>x86</button><button type="button" className={answers.architecture === 'arm' ? 'active' : ''} onClick={() => update('architecture', 'arm')}>ARM</button><button type="button" className={answers.architecture === 'unknown' ? 'active' : ''} onClick={() => update('architecture', 'unknown')}>不清楚</button></div></div>
+            <div className="advisor-fields"><label><span>地域 *</span><select aria-label="助手地域" value={region} onChange={event => onRegionChange(event.target.value)}><option value="">选择地域</option>{regions.map(item => <option key={item.id} value={item.id}>{item.name} · {item.id}</option>)}</select></label><label><span>可用区</span><select aria-label="助手可用区" value={zone} disabled={!region} onChange={event => onZoneChange(event.target.value)}><option value="">不限可用区</option>{zones.map(item => <option key={item.id} value={item.id}>{item.name} · {item.id}</option>)}</select></label></div>
+          </section>
+          <QuestionActions back={() => setStep(1)} next={() => setStep(3)} disabled={!catalogAvailable || !region} nextLabel="查看推荐结果" />
         </>}
         {step === 3 && <>
-          <QuestionTitle title="是否存在特殊资源硬要求？" detail="只有明确填写的要求会排除机型。" />
-          {!gpuRelevant && !localStorageRelevant && !networkRelevant && <div className="advisor-neutral"><Server size={17} /><span>当前场景没有必须追加的特殊资源问题。</span></div>}
-          {gpuRelevant && <label className="advisor-long-field"><span>最低 GPU 数量</span><select aria-label="最低 GPU 数量" value={answers.minimumGpuCount} onChange={event => update('minimumGpuCount', Number(event.target.value))}><option value={0}>不强制 GPU</option><option value={1}>至少 1 块</option><option value={2}>至少 2 块</option><option value={4}>至少 4 块</option><option value={8}>至少 8 块</option></select></label>}
-          {localStorageRelevant && <div className="advisor-long-field"><span>是否强制本地盘？</span><div className="advisor-segmented triple"><button type="button" className={answers.localStorage === 'required' ? 'active' : ''} onClick={() => update('localStorage', 'required')}>必须</button><button type="button" className={answers.localStorage === 'not-required' ? 'active' : ''} onClick={() => update('localStorage', 'not-required')}>不需要</button><button type="button" className={answers.localStorage === 'unknown' ? 'active' : ''} onClick={() => update('localStorage', 'unknown')}>不清楚</button></div></div>}
-          {networkRelevant && <div className="advisor-fields"><label><span>最低内网带宽 Gbit/s</span><input aria-label="最低内网带宽 Gbit/s" type="number" min={0} step={0.1} value={answers.minimumNetworkBandwidthGbps || ''} placeholder="不清楚可留空" onChange={event => update('minimumNetworkBandwidthGbps', Number(event.target.value))} /></label><label><span>最低网络 PPS</span><input aria-label="最低网络 PPS" type="number" min={0} value={answers.minimumNetworkPps || ''} placeholder="不清楚可留空" onChange={event => update('minimumNetworkPps', Number(event.target.value))} /></label></div>}
-          <QuestionActions back={() => setStep(2)} next={() => setStep(4)} />
-        </>}
-        {step === 4 && <>
-          <QuestionTitle title="后续能否提供应用代码？" detail="本期只记录答案，不上传、不读取，也不执行代码。" />
-          <div className="advisor-choice-grid compact">{([
-            ['available', '可以提供', '后续版本可进行兼容性分析'],
-            ['unavailable', '无法提供', '候选结果会提示兼容性风险'],
-            ['unknown', '暂不确定', '稍后仍可返回修改'],
-          ] as const).map(([value, label, detail]) => <button type="button" key={value} onClick={() => { update('codeAvailability', value); setStep(5); }}><Code2 size={15} /><strong>{label}</strong><small>{detail}</small><ChevronRight size={14} /></button>)}</div>
-          <div className="advisor-coming-soon"><Code2 size={14} /><span>代码上传与自动分析将在后续版本支持。</span></div>
-          <QuestionActions back={() => setStep(3)} />
-        </>}
-        {step === 5 && <>
-          <QuestionTitle title="选择地域与 CPU 架构" detail="不清楚架构时保留 ARM，但优先展示 x86。" />
-          <div className="advisor-long-field"><span>CPU 架构</span><div className="advisor-segmented triple"><button type="button" className={answers.architecture === 'x86' ? 'active' : ''} onClick={() => update('architecture', 'x86')}>x86</button><button type="button" className={answers.architecture === 'arm' ? 'active' : ''} onClick={() => update('architecture', 'arm')}>ARM</button><button type="button" className={answers.architecture === 'unknown' ? 'active' : ''} onClick={() => update('architecture', 'unknown')}>不清楚</button></div></div>
-          <div className="advisor-fields"><label><span>地域 *</span><select aria-label="助手地域" value={region} onChange={event => onRegionChange(event.target.value)}><option value="">选择地域</option>{regions.map(item => <option key={item.id} value={item.id}>{item.name} · {item.id}</option>)}</select></label><label><span>可用区</span><select aria-label="助手可用区" value={zone} disabled={!region} onChange={event => onZoneChange(event.target.value)}><option value="">不限可用区</option>{zones.map(item => <option key={item.id} value={item.id}>{item.name} · {item.id}</option>)}</select></label></div>
-          <QuestionActions back={() => setStep(4)} next={() => setStep(6)} disabled={!catalogAvailable || !region} nextLabel="查看候选" />
-        </>}
-        {step === 6 && <>
           <QuestionTitle title="筛选已完成" detail="可返回任一步修改答案，候选列表会重新计算。" />
-          <div className="advisor-answer-summary"><span><strong>{scenarios.find(item => item.id === answers.primaryScenario)?.label}</strong>主场景</span><span><strong>{answers.sizingMode === 'exact' ? `${answers.exactCpu}C / ${answers.exactMemoryGib}G` : '待压测'}</strong>配置</span><span><strong>{answers.architecture === 'unknown' ? 'x86 优先' : answers.architecture.toUpperCase()}</strong>架构</span></div>
+          <div className="advisor-answer-summary"><span><strong>{scenarios.find(item => item.id === answers.primaryScenario)?.label}</strong>主场景</span><span><strong>{hasExactSizing(answers) ? `${answers.exactCpu}C / ${answers.exactMemoryGib}G` : '待压测'}</strong>配置</span><span><strong>{answers.architecture === 'unknown' ? 'x86 优先' : answers.architecture.toUpperCase()}</strong>架构</span></div>
           <button type="button" className="button secondary advisor-edit" onClick={() => setStep(0)}><ChevronLeft size={14} />重新检查答案</button>
         </>}
       </div>
     </aside>
 
-    <div className="advisor-results">
-      {step < 6 && <div className="panel advisor-placeholder"><Filter size={28} /><h2>回答问题后生成候选</h2><p>场景只调整顺序；库存、精确规格、架构、GPU、本地盘和明确的网络阈值才会排除机型。</p></div>}
-      {step === 6 && recommendations.isLoading && <div className="panel advisor-placeholder"><Cpu className="spin" size={28} /><h2>正在读取{providerName}规格目录</h2><p>筛选当前地域的可售规格并计算匹配顺序。</p></div>}
-      {step === 6 && recommendations.isError && <div className="panel advisor-placeholder error"><AlertTriangle size={28} /><h2>候选读取失败</h2><p>{recommendations.error instanceof Error ? recommendations.error.message : '请稍后重试'}</p><button type="button" className="button secondary" onClick={() => recommendations.refetch()}>重试</button></div>}
-      {step === 6 && result && <>
+    {step === 3 && <div className="advisor-results">
+      {recommendations.isLoading && <div className="panel advisor-placeholder"><Cpu className="spin" size={28} /><h2>正在读取{providerName}规格目录</h2><p>筛选当前地域的可售规格并计算匹配顺序。</p></div>}
+      {recommendations.isError && <div className="panel advisor-placeholder error"><AlertTriangle size={28} /><h2>候选读取失败</h2><p>{recommendations.error instanceof Error ? recommendations.error.message : '请稍后重试'}</p><button type="button" className="button secondary" onClick={() => recommendations.refetch()}>重试</button></div>}
+      {result && <>
         <section className="panel advisor-result-summary">
           <div><span className="eyebrow">FILTER RESULT</span><h2>{result.total ? `${candidateFiltersActive ? '匹配' : '剩余'} ${result.total} 个候选` : candidateFiltersActive && result.eligibleTotal ? '全部候选中没有匹配项' : '没有满足全部硬约束的机型'}</h2><p>{result.stale ? result.warning : `目录来源：${result.source === 'live' ? '实时' : '缓存'} · 每次加载 20 个`}</p></div>
           <div className="advisor-elimination">{result.exclusionStages.map(stage => <span key={stage.code}><small>{stage.label}</small><strong>{stage.before} → {stage.after}</strong></span>)}</div>
@@ -320,15 +313,15 @@ export function CloudSelectionAdvisor({
         {candidateFiltersActive && result.eligibleTotal > 0 && !result.total && <div className="panel advisor-search-empty"><Filter size={22} /><strong>全部候选中没有匹配项</strong><span>请尝试其他分类、机型 ID 或规格族。</span></div>}
         {recommendations.hasNextPage && <button type="button" className="button secondary advisor-load-more" disabled={recommendations.isFetchingNextPage} onClick={() => recommendations.fetchNextPage()}>{recommendations.isFetchingNextPage ? '加载中…' : `加载更多（已显示 ${candidates.length} / ${result.total}）`}</button>}
       </>}
-    </div>
+    </div>}
   </section>;
 }
 
 function QuestionTitle({ title, detail }: { title: string; detail: string }) {
-  return <header className="advisor-question-title"><span className="eyebrow">当前问题</span><h3>{title}</h3><p>{detail}</p></header>;
+  return <header className="advisor-question-title"><span className="eyebrow">当前步骤</span><h3>{title}</h3><p>{detail}</p></header>;
 }
 
-function QuestionActions({ back, next, disabled, nextLabel = '下一题' }: { back: () => void; next?: () => void; disabled?: boolean; nextLabel?: string }) {
+function QuestionActions({ back, next, disabled, nextLabel = '下一步' }: { back: () => void; next?: () => void; disabled?: boolean; nextLabel?: string }) {
   return <div className="advisor-actions"><button type="button" className="button secondary" onClick={back}><ChevronLeft size={14} />上一步</button>{next && <button type="button" className="button primary" disabled={disabled} onClick={next}>{nextLabel}<ChevronRight size={14} /></button>}</div>;
 }
 
