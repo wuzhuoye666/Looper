@@ -93,6 +93,9 @@ class SystemOptimizationCreateRequest(StrictModel):
     runtime_profile_digest: str = Field(
         alias="runtimeProfileDigest", pattern=r"^sha256:[0-9a-f]{64}$"
     )
+    allowed_config_item_ids: list[str] = Field(
+        default_factory=list, alias="allowedConfigItemIds", max_length=64
+    )
 
 
 class SystemOptimizationAuthorizationProfileRequest(StrictModel):
@@ -478,6 +481,33 @@ def _record_input_problem(
     )
 
 
+@router.get("/system-optimization-manifest")
+def system_optimization_manifest_api() -> dict[str, Any]:
+    """Read-only builtin config-item inventory (demo manifest).
+
+    Target-bound domains are produced later by the read-only runtime profile;
+    the panel therefore labels this list as the pre-diagnostic default inventory.
+    """
+    manifest = build_demo_manifest()
+    return {
+        "schema_version": "looper.system-optimization-manifest-inventory/v1alpha1",
+        "items": [
+            {
+                "id": item.id,
+                "primary_component": item.primary_component,
+                "category": item.category,
+                "risk": item.risk,
+                "default": item.default,
+                "target": item.target,
+                "description": item.description,
+                "choices": item.domain.choices,
+                "value_type": item.value_type,
+            }
+            for item in manifest.items
+        ],
+    }
+
+
 @router.post("/system-optimization-studies", status_code=201)
 async def create_system_optimization_study_api(
     request: SystemOptimizationCreateRequest,
@@ -517,6 +547,7 @@ async def create_system_optimization_study_api(
         network=request.network,
         minimum_effect=request.minimum_effect,
         authorization_profile_digest=request.authorization_profile_digest,
+        allowed_config_item_ids=list(request.allowed_config_item_ids),
     )
     for reference in _capacity_references("baseline", capacity):
         link_system_optimization_artifact(session, cas, record, reference)

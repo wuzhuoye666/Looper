@@ -340,6 +340,7 @@ def create_system_optimization_study(
     network: Literal["internal", "external"],
     minimum_effect: float,
     authorization_profile_digest: str,
+    allowed_config_item_ids: list[str] | None = None,
 ) -> SystemOptimizationStudyRecord:
     if not math.isfinite(minimum_effect) or minimum_effect < 0:
         _raise_problem(
@@ -380,6 +381,7 @@ def create_system_optimization_study(
             "schemaVersion": SYSTEM_OPTIMIZATION_ORCHESTRATION_SCHEMA,
             "apply": {},
             "capacity": {},
+            "allowed_config_items": allowed_config_item_ids or [],
             "rollback": {},
             "evaluation": {},
         },

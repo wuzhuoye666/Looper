@@ -161,7 +161,7 @@ export const api = {
   ),
   createSystemOptimizationStudy: (payload: {
     baselineCapacityStudyId: string; targetId: string; network: 'internal' | 'external'; minimumEffect: number;
-    authorizationProfileDigest: string; runtimeProfileDigest: string;
+    authorizationProfileDigest: string; runtimeProfileDigest: string; allowedConfigItemIds?: string[];
   }) => request<SystemOptimizationStudy>('/system-optimization-studies', {
     method: 'POST', body: JSON.stringify({
       baselineCapacityStudyId: payload.baselineCapacityStudyId,
@@ -170,9 +170,17 @@ export const api = {
       minimumEffect: payload.minimumEffect,
       authorizationProfileDigest: payload.authorizationProfileDigest,
       runtimeProfileDigest: payload.runtimeProfileDigest,
+      allowedConfigItemIds: payload.allowedConfigItemIds ?? [],
     }),
   }),
   systemOptimizationStudy: (id: string) => request<SystemOptimizationStudy>(`/system-optimization-studies/${encodeURIComponent(id)}`),
+  systemOptimizationManifest: () => request<{
+    schema_version: string;
+    items: Array<{
+      id: string; primary_component: string; category: string; risk: string; default: unknown;
+      target: string; description: string; choices: string[]; value_type: string;
+    }>;
+  }>('/system-optimization-manifest'),
   approveSystemOptimizationStudy: (id: string) => request<SystemOptimizationStudy>(
     `/system-optimization-studies/${encodeURIComponent(id)}/approve`, { method: 'POST' },
   ),

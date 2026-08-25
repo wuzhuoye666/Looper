@@ -43,6 +43,11 @@ export interface SystemOptimizationStudy {
   createdAt?: string; updatedAt?: string; approvedAt?: string | null; completedAt?: string | null;
 }
 
+export interface SystemOptimizationManifestItem {
+  id: string; primary_component: string; category: string; risk: string; default: unknown;
+  target: string; description: string; choices: string[]; value_type: string;
+}
+
 export interface SystemOptimizationAuthorizationProfile {
   digest: string; targetId: string; runtimeProfileDigest: string; manifestDigest: string; activation: 'approval-required';
 }
