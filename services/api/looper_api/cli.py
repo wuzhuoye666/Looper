@@ -78,6 +78,8 @@ from looper_core.system_opt.hypothesis_cache import (
 from looper_core.system_opt.intervention import ReceiptStageV2
 from looper_core.system_opt.intervention_receipt import (
     DurableReceiptStore,
+    GuardReconciliationOutcome,
+    GuardWriterQuiescence,
     ReceiptStoreError,
 )
 from looper_core.system_opt.inventory import (
@@ -690,6 +692,107 @@ def recover_target_attention(
                 "target_id": target_id,
                 "recovery_digest": result.digest,
                 "attention_cleared": True,
+                "output": str(output.resolve()),
+            }
+        )
+    )
+
+
+@system_opt_app.command("reconcile-legacy-guard")
+def reconcile_legacy_receipt_guard(
+    receipt_root: Path = typer.Option(..., "--receipt-root", file_okay=False),
+    target_id: str = typer.Option(..., "--target-id"),
+    operator_id: str = typer.Option(..., "--operator-id"),
+    lease_root: Path = typer.Option(..., "--lease-root", file_okay=False),
+    plan_digest: str = typer.Option(None, "--plan-digest"),
+    execution_id: str = typer.Option(None, "--execution-id"),
+    output: Path = typer.Option(..., "--output", dir_okay=False),
+) -> None:
+    """Explicitly reconcile one legacy receipt guard (RCP-02B frozen order).
+
+    Frozen order: the target must already be in needs-attention, the operator
+    declares legacy-writer quiescence, evidence is durably published before
+    the guard is deleted, and the chain is re-verified after deletion.
+    Attention is NOT cleared here: that stays with ``recover-attention``,
+    which re-verifies the live target state against an approved snapshot.
+    """
+
+    store = DurableReceiptStore(receipt_root)
+    guards = store.discover_legacy_guards()
+    if not guards:
+        raise typer.BadParameter(
+            "no legacy receipt guard found under --receipt-root"
+        )
+    if len(guards) > 1:
+        raise typer.BadParameter(
+            "multiple legacy guards found; reconcile them one at a time"
+        )
+    guard_path = guards[0]
+    guard = FileTargetGuard(lease_root)
+    attention = guard.current_attention(target_id)
+    if attention is None:
+        raise typer.BadParameter(
+            "target has no attention record; establish attention before "
+            "reconciling a legacy guard"
+        )
+    if plan_digest is not None and execution_id is None:
+        raise typer.BadParameter("--plan-digest and --execution-id must be provided together")
+    if execution_id is not None and plan_digest is None:
+        raise typer.BadParameter("--plan-digest and --execution-id must be provided together")
+    try:
+        evidence = store.reconcile_legacy_guard(
+            guard_path,
+            target_id=target_id,
+            operator_id=operator_id,
+            writer_quiescence=GuardWriterQuiescence(
+                declared=True,
+                statement=(
+                    "operator declares every legacy receipt guard writer is stopped"
+                ),
+            ),
+            plan_digest=plan_digest,
+            execution_id=execution_id,
+        )
+    except ReceiptStoreError as error:
+        console.print_json(
+            json.dumps(
+                {
+                    "target_id": target_id,
+                    "guard": guard_path.name,
+                    "outcome": "needs-attention",
+                    "reason": str(error),
+                }
+            )
+        )
+        raise typer.Exit(code=2) from error
+    _write_json(output, evidence)
+    if evidence.outcome is GuardReconciliationOutcome.NEEDS_ATTENTION:
+        console.print_json(
+            json.dumps(
+                {
+                    "target_id": target_id,
+                    "guard": guard_path.name,
+                    "outcome": evidence.outcome.value,
+                    "reason": evidence.reason,
+                    "output": str(output.resolve()),
+                }
+            )
+        )
+        raise typer.Exit(code=2)
+    # Attention clearing stays with the existing recover-attention command:
+    # it requires a manifest, an approved snapshot, and a fresh live target
+    # snapshot; the guard reconciliation evidence written here is the input
+    # the operator cites when clearing.  Frozen order forbids clearing inside
+    # this command without that re-verification.
+    console.print_json(
+        json.dumps(
+            {
+                "target_id": target_id,
+                "guard": guard_path.name,
+                "outcome": evidence.outcome.value,
+                "guard_reconciliation_digest": evidence.digest,
+                "attention_cleared": False,
+                "note": "guard reconciled; clear attention via recover-attention",
                 "output": str(output.resolve()),
             }
         )

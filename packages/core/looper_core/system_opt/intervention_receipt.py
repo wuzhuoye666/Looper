@@ -17,16 +17,21 @@ from __future__ import annotations
 
 import ctypes
 import errno
+import hashlib
 import json
 import os
 import re
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager, suppress
+from datetime import UTC, datetime
+from enum import StrEnum
 from pathlib import Path
 from typing import Literal
 from uuid import uuid4
 
 from pydantic import Field, model_validator
+
+from looper_core.canonical import utc_now
 
 try:
     import fcntl
@@ -173,6 +178,61 @@ class InterventionReceiptPointer(StrictModel):
         if self.execution_digest != expected:
             raise ValueError("receipt pointer execution digest is invalid")
         return self
+
+
+class GuardReconciliationOutcome(StrEnum):
+    ORPHAN_CONFIRMED = "orphan-confirmed"
+    NEEDS_ATTENTION = "needs-attention"
+
+
+class GuardWriterQuiescence(StrictModel):
+    """Operator declaration that every legacy guard writer has been stopped."""
+
+    declared: bool
+    statement: str = Field(min_length=1, max_length=2000)
+
+
+class ReceiptGuardReconciliation(StrictModel):
+    """RCP-02B evidence that a legacy ``.guard`` was explicitly reconciled.
+
+    A legacy guard is an empty file; the only recoverable facts are its
+    filename-encoded identity/operation and its byte digest.  The evidence is
+    content-addressed and must be durably published before the guard file is
+    deleted (frozen order, contract receipt-mutex-recovery-contract §8).
+    """
+
+    schema_version: Literal["looper.receipt-guard-reconciliation/v1alpha1"] = (
+        "looper.receipt-guard-reconciliation/v1alpha1"
+    )
+    guard_filename: str = Field(pattern=r"^\.[0-9a-f]{64}\.(candidate|recovery)\.guard$")
+    execution_digest: str = Field(pattern=_DIGEST)
+    operation: ReceiptOperation
+    guard_sha256: str = Field(pattern=_DIGEST)
+    receipt_root: str = Field(min_length=1, max_length=4096)
+    discovered_at: datetime
+    target_id: str = Field(min_length=1, max_length=200)
+    operator_id: str = Field(min_length=1, max_length=200)
+    writer_quiescence: GuardWriterQuiescence
+    chain_head_digest: str | None = Field(default=None, pattern=_DIGEST)
+    outcome: GuardReconciliationOutcome
+    reason: str = Field(min_length=1, max_length=2000)
+    recorded_at: datetime
+
+    @model_validator(mode="after")
+    def validate_guard_identity(self) -> ReceiptGuardReconciliation:
+        if self.discovered_at.tzinfo is None or self.recorded_at.tzinfo is None:
+            raise ValueError("guard reconciliation timestamps must be timezone-aware")
+        expected_name = (
+            f".{self.execution_digest.removeprefix('sha256:')}."
+            f"{self.operation.value}.guard"
+        )
+        if self.guard_filename != expected_name:
+            raise ValueError("guard filename does not encode the declared identity")
+        return self
+
+    @property
+    def digest(self) -> str:
+        return canonical_digest(self.model_dump(mode="json", exclude_none=False))
 
 
 class DurableReceiptStore:
@@ -594,6 +654,211 @@ class DurableReceiptStore:
             heads.append(head)
         return heads
 
+    def discover_legacy_guards(self) -> list[Path]:
+        """List every legacy ``.guard`` file under the receipt root.
+
+        RCP-02B discovery is read-only: it neither deletes nor mutates the
+        guard, and it must work even though every write path fails closed
+        while a legacy guard is present.
+        """
+
+        guards: list[Path] = []
+        if not os.path.isdir(_native_path(self.root)):
+            return guards
+        for entry in os.scandir(_native_path(self.root)):
+            if _LEGACY_GUARD_NAME.fullmatch(entry.name):
+                guards.append(self.root / entry.name)
+        return sorted(guards, key=lambda path: path.name)
+
+    def reconcile_legacy_guard(
+        self,
+        guard_path: Path,
+        *,
+        target_id: str,
+        operator_id: str,
+        writer_quiescence: GuardWriterQuiescence,
+        plan_digest: str | None = None,
+        execution_id: str | None = None,
+        now: datetime | None = None,
+    ) -> ReceiptGuardReconciliation:
+        """Explicitly reconcile one legacy guard (RCP-02B frozen order).
+
+        The frozen order (contract §8) is: verify the guard facts, take the
+        new advisory lock for the guard's scope, publish the content-addressed
+        reconciliation evidence, then delete the guard, then re-verify the
+        chain.  Evidence always precedes deletion so the crash seam
+        "guard deleted, attention not cleared" stays recoverable from disk.
+
+        GAP-R02B-1: the advisory lock taken here guards only the brief scan
+        window; a genuinely still-running legacy writer holding the old
+        ``O_EXCL`` guard would not contend with this lock at all.  The real
+        protection is the operator's ``writer_quiescence`` declaration plus
+        the deployment hard gate that stopped legacy writers before
+        RCP-02A ever ran.
+        """
+
+        recorded_at = now if now is not None else utc_now()
+        guard_name = guard_path.name
+        if not _LEGACY_GUARD_NAME.fullmatch(guard_name):
+            raise ReceiptStoreError(f"not a legacy receipt guard: {guard_name}")
+        identity_hex, _, operation_text = guard_name[1:].removesuffix(".guard").partition(".")
+        operation = ReceiptOperation(operation_text)
+        execution_digest = f"sha256:{identity_hex}"
+
+        if plan_digest is not None and execution_id is not None:
+            recomputed = self._execution_digest(plan_digest, execution_id)
+            if recomputed != execution_digest:
+                raise ReceiptStoreError(
+                    "guard identity does not match the supplied plan/execution"
+                )
+            plan_for_lock: str | None = plan_digest
+            execution_for_lock: str | None = execution_id
+        else:
+            plan_for_lock = None
+            execution_for_lock = None
+
+        if not writer_quiescence.declared:
+            raise ReceiptStoreError(
+                "writer quiescence must be declared before guard reconciliation"
+            )
+
+        guard_bytes = b""
+        try:
+            with open(_native_path(guard_path), "rb") as stream:
+                guard_bytes = stream.read()
+        except OSError as error:
+            raise ReceiptStoreError(f"cannot read legacy guard: {guard_name}") from error
+        guard_sha256 = "sha256:" + hashlib.sha256(guard_bytes).hexdigest()
+        discovered_at = datetime.fromtimestamp(
+            guard_path.stat().st_mtime, tz=UTC
+        )
+
+        chain_head_digest: str | None = None
+        outcome = GuardReconciliationOutcome.ORPHAN_CONFIRMED
+        reason = "guard holds no receipt content and the chain verifies without it"
+        guard_present_before = os.path.exists(_native_path(guard_path))
+        if not guard_present_before:
+            raise ReceiptStoreError(f"legacy guard disappeared: {guard_name}")
+
+        # Recovery lock entry: the scope's chain (if any) is verified under the
+        # new advisory lock.  A legacy guard cannot be held by this lock, but
+        # the lock still serializes this reconciliation against new-version
+        # writers for the same scope.
+        with self._recovery_mutex(execution_digest, plan_for_lock, execution_for_lock):
+            if plan_for_lock is not None:
+                try:
+                    head = self.head(plan_for_lock, execution_for_lock, operation)
+                    chain_head_digest = head.digest if head is not None else None
+                except ReceiptStoreError as error:
+                    outcome = GuardReconciliationOutcome.NEEDS_ATTENTION
+                    reason = f"receipt chain verification failed: {error}"
+            else:
+                chain_head_digest = self._find_head_by_execution_digest(
+                    execution_digest, operation
+                )
+
+            evidence = ReceiptGuardReconciliation(
+                guard_filename=guard_name,
+                execution_digest=execution_digest,
+                operation=operation,
+                guard_sha256=guard_sha256,
+                receipt_root=str(self.root.resolve()),
+                discovered_at=discovered_at,
+                target_id=target_id,
+                operator_id=operator_id,
+                writer_quiescence=writer_quiescence,
+                chain_head_digest=chain_head_digest,
+                outcome=outcome,
+                reason=reason,
+                recorded_at=recorded_at,
+            )
+            self._publish_guard_reconciliation(evidence)
+
+            if outcome is GuardReconciliationOutcome.ORPHAN_CONFIRMED:
+                os.unlink(_native_path(guard_path))
+                # Post-deletion chain re-verification (frozen step 7): when a
+                # chain exists it must still verify; an absent chain is the
+                # legitimate orphan-guard case (head() returning None above).
+                if plan_for_lock is not None and chain_head_digest is not None:
+                    self.verify_chain(plan_for_lock, execution_for_lock, operation)
+        return evidence
+
+    def _find_head_by_execution_digest(
+        self, execution_digest: str, operation: ReceiptOperation
+    ) -> str | None:
+        """Best-effort head lookup when plan/execution were not supplied.
+
+        GAP-R02B-2: without plan/execution the association is only via the
+        pointer filename.  When no pointer matches, the evidence records a
+        null head and the caller decides whether that is acceptable; it is
+        not a chain-integrity claim.
+        """
+
+        pointer_name = (
+            f"{execution_digest.removeprefix('sha256:')}.{operation.value}.current.json"
+        )
+        pointer_path = self.root / pointer_name
+        pointer = self._read_pointer(pointer_path)
+        if pointer is None:
+            return None
+        return pointer.receipt_digest
+
+    def _publish_guard_reconciliation(
+        self, evidence: ReceiptGuardReconciliation
+    ) -> None:
+        """Durably publish reconciliation evidence next to the receipt root.
+
+        The evidence file is content-addressed by the model digest, so a crash
+        between publish and guard deletion is idempotently retryable: the same
+        reconciliation writes the same file again.
+        """
+
+        self.root.mkdir(parents=True, exist_ok=True)
+        evidence_dir = self.root / "guard-reconciliations"
+        evidence_dir.mkdir(parents=True, exist_ok=True)
+        path = evidence_dir / f"{evidence.digest.removeprefix('sha256:')}.json"
+        if os.path.exists(_native_path(path)):
+            with open(_native_path(path), encoding="utf-8") as stream:
+                existing = json.loads(stream.read())
+            if existing != evidence.model_dump(mode="json", exclude_none=False):
+                raise ReceiptStoreError(
+                    "existing guard reconciliation evidence is not idempotent"
+                )
+        else:
+            self._atomic_write(path, evidence.model_dump(mode="json", exclude_none=False))
+
+    @contextmanager
+    def _recovery_mutex(
+        self,
+        execution_digest: str,
+        plan_digest: str | None,
+        execution_id: str | None,
+    ) -> Iterator[None]:
+        """Advisory lock for the reconciliation scope.
+
+        When plan/execution are known, this is exactly the scope lock of
+        ``_mutex``.  When they are unknown, the lock anchors on the
+        execution-digest identity itself, which still serializes concurrent
+        reconciliations of the same guard file.  Neither path mutates the
+        store, so ``_assert_no_legacy_guard`` must not run here.
+        """
+
+        if plan_digest is not None and execution_id is not None:
+            identity = self._execution_digest(plan_digest, execution_id).removeprefix(
+                "sha256:"
+            )
+        else:
+            identity = execution_digest.removeprefix("sha256:")
+        lock_path = self.root / f".{identity}.reconcile.lock"
+        fd = self._acquire_lock(lock_path)
+        try:
+            yield
+        finally:
+            try:
+                _unlock(fd)
+            finally:
+                os.close(fd)
+
     def _publish_receipt(self, receipt: InterventionExecutionReceiptV2) -> None:
         self.root.mkdir(parents=True, exist_ok=True)
         path = self._content_path(receipt.digest)
@@ -687,8 +952,11 @@ class DurableReceiptStore:
 __all__ = [
     "AttentionSink",
     "DurableReceiptStore",
+    "GuardReconciliationOutcome",
+    "GuardWriterQuiescence",
     "InterventionReceiptPointer",
     "RECEIPT_POINTER_SCHEMA",
+    "ReceiptGuardReconciliation",
     "ReceiptStoreError",
     "ReceiptStoreUnavailable",
 ]
