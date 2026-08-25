@@ -8,9 +8,14 @@ import json
 import math
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
+import threading
+import time
+from contextlib import suppress
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +33,11 @@ class PhoronixError(RuntimeError):
     pass
 
 
+@dataclass(frozen=True, slots=True)
+class CommandResult:
+    returncode: int
+
+
 def _resolve_executable(name: str, explicit: str | None) -> str | None:
     if explicit:
         candidate = Path(explicit).expanduser()
@@ -40,8 +50,8 @@ def _resolve_executable(name: str, explicit: str | None) -> str | None:
 def resolve_pts_command() -> list[str]:
     """Resolve a shell-free PTS argv prefix.
 
-    A source checkout can be executed with `LOOPER_PHP_BIN=/usr/bin/php` and
-    `LOOPER_PTS_BIN=/path/to/phoronix-test-suite`. A system installation only
+    A source checkout can be executed with LOOPER_PHP_BIN=/usr/bin/php and
+    LOOPER_PTS_BIN=/path/to/phoronix-test-suite. A system installation only
     needs the launcher on PATH.
     """
 
@@ -126,23 +136,99 @@ def _subprocess_environment(
     return environment
 
 
-def _append_completed(
-    log_path: Path, label: str, completed: subprocess.CompletedProcess[str]
-) -> None:
-    with log_path.open("a", encoding="utf-8", newline="\n") as log:
-        log.write(f"--- {label} ---\n")
-        log.write(f"exit_code={completed.returncode}\n")
-        log.write("--- stdout ---\n")
-        log.write(completed.stdout)
-        log.write("\n--- stderr ---\n")
-        log.write(completed.stderr)
-        log.write("\n")
-
-
 def _write_metadata(output: Path, metadata: dict[str, Any]) -> None:
     (output / "run-metadata.json").write_text(
         json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8"
     )
+
+
+def _terminate_process_group(process: subprocess.Popen[str]) -> None:
+    """Kill the PTS process and any grandchildren it spawned."""
+    if process.poll() is not None:
+        return
+    if os.name == "posix" and hasattr(os, "killpg"):
+        with suppress(OSError):
+            os.killpg(process.pid, signal.SIGTERM)
+    else:
+        process.terminate()
+    try:
+        process.wait(timeout=5)
+        return
+    except subprocess.TimeoutExpired:
+        if os.name == "posix" and hasattr(os, "killpg"):
+            with suppress(OSError):
+                os.killpg(process.pid, signal.SIGKILL)
+        else:
+            process.kill()
+        process.wait()
+
+
+def run_command(
+    argv: list[str],
+    *,
+    environment: dict[str, str],
+    timeout: int,
+    log_path: Path,
+) -> CommandResult:
+    """Run one PTS command, streaming its merged output to the adapter log and stdout.
+
+    The previous implementation buffered everything with capture_output, so a
+    y/n prompt or a stalled download was invisible until the whole command
+    finished. Streaming makes the prompt visible in the experiment terminal
+    while still writing the authoritative adapter.log. stdin is closed so PTS
+    cannot block waiting for an interactive answer.
+    """
+    with log_path.open("a", encoding="utf-8", newline="\n") as log:
+        log.write(f"--- command ---\n{' '.join(argv)}\n")
+        log.flush()
+        process = subprocess.Popen(
+            argv,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+            env=environment,
+            start_new_session=(os.name == "posix"),
+        )
+        assert process.stdout is not None
+
+        def _pump() -> None:
+            try:
+                for chunk in process.stdout:
+                    log.write(chunk)
+                    sys.stdout.write(chunk)
+                    log.flush()
+                    sys.stdout.flush()
+            except (OSError, ValueError):
+                return
+
+        reader = threading.Thread(target=_pump, daemon=True)
+        reader.start()
+        deadline = time.monotonic() + timeout
+        returncode: int | None = None
+        timed_out = False
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                timed_out = True
+                _terminate_process_group(process)
+                break
+            try:
+                returncode = process.wait(timeout=min(1.0, remaining))
+                break
+            except subprocess.TimeoutExpired:
+                continue
+        if returncode is None and not timed_out:
+            _terminate_process_group(process)
+            with suppress(subprocess.TimeoutExpired):
+                returncode = process.wait(timeout=5)
+        reader.join(timeout=5)
+        log.write(f"exit_code={returncode}\n")
+        log.flush()
+    if timed_out:
+        raise subprocess.TimeoutExpired(argv, timeout)
+    return CommandResult(returncode if returncode is not None else -1)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -189,36 +275,32 @@ def main(argv: list[str] | None = None) -> int:
         )
         benchmark_argv = [*command_prefix, "default-benchmark", profile]
         total_timeout = timeout_minutes * 60 + INSTALL_EXPORT_GRACE_SECONDS
-        completed = subprocess.run(
+        benchmark_result = run_command(
             benchmark_argv,
-            capture_output=True,
-            text=True,
+            environment=environment,
             timeout=total_timeout,
-            env=environment,
+            log_path=log_path,
         )
-        _append_completed(log_path, "default-benchmark", completed)
-        metadata["benchmarkExitCode"] = completed.returncode
-        if completed.returncode != 0:
+        metadata["benchmarkExitCode"] = benchmark_result.returncode
+        if benchmark_result.returncode != 0:
             metadata["exportExitCode"] = None
             _write_metadata(output, metadata)
-            return completed.returncode or 2
+            return benchmark_result.returncode or 2
 
         raw_result = (output / "pts-result.json").resolve()
         export_environment = dict(environment)
         export_environment["OUTPUT_FILE"] = str(raw_result)
         export_argv = [*command_prefix, "result-file-to-json", RESULT_NAME]
-        exported = subprocess.run(
+        export_result = run_command(
             export_argv,
-            capture_output=True,
-            text=True,
+            environment=export_environment,
             timeout=60,
-            env=export_environment,
+            log_path=log_path,
         )
-        _append_completed(log_path, "result-file-to-json", exported)
-        metadata["exportExitCode"] = exported.returncode
+        metadata["exportExitCode"] = export_result.returncode
         _write_metadata(output, metadata)
-        if exported.returncode != 0:
-            return exported.returncode or 2
+        if export_result.returncode != 0:
+            return export_result.returncode or 2
         if not raw_result.is_file():
             raise PhoronixError("PTS export succeeded without producing pts-result.json")
         parsed = json.loads(raw_result.read_text(encoding="utf-8"))

@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import sys
 from pathlib import Path
-from types import ModuleType, SimpleNamespace
+from types import ModuleType
 
 import pytest
 from looper_core.manifest import load_and_validate_manifest
@@ -166,19 +167,19 @@ def test_producer_and_normalizer_fixture_chain(
     output = tmp_path / "output"
     calls: list[tuple[list[str], dict[str, str]]] = []
 
-    def fake_run(argv, capture_output, text, timeout, env):
-        assert capture_output is True and text is True and timeout > 0
-        calls.append((list(argv), dict(env)))
+    def fake_run(argv, *, environment, timeout, log_path):
+        assert timeout > 0 and isinstance(log_path, Path)
+        calls.append((list(argv), dict(environment)))
         if "result-file-to-json" in argv:
-            Path(env["OUTPUT_FILE"]).write_text(
+            Path(environment["OUTPUT_FILE"]).write_text(
                 FIXTURE_PATH.read_text(encoding="utf-8"), encoding="utf-8"
             )
-        return SimpleNamespace(returncode=0, stdout="fixture stdout", stderr="")
+        return producer.CommandResult(returncode=0)
 
     monkeypatch.setattr(
         producer, "resolve_pts_command", lambda: ["php", "phoronix-test-suite"]
     )
-    monkeypatch.setattr(producer.subprocess, "run", fake_run)
+    monkeypatch.setattr(producer, "run_command", fake_run)
     assert producer.main(["--envelope", str(envelope), "--output", str(output)]) == 0
     assert calls[0][0][-2:] == ["default-benchmark", "pts/phpbench-1.1.6"]
     assert calls[0][1]["FORCE_TIMES_TO_RUN"] == "3"
@@ -266,3 +267,22 @@ def test_prepare_download_raises_after_all_attempts_fail(
     with pytest.raises(prepare.PreparationError):
         prepare._download(prepare.PAYLOAD_URLS, tmp_path / "payload.zip", "irrelevant")
     assert len(calls) == prepare.DOWNLOAD_ATTEMPTS
+
+
+def test_run_command_streams_merged_output(tmp_path: Path) -> None:
+    log_path = tmp_path / "adapter.log"
+    result = producer.run_command(
+        [
+            sys.executable,
+            "-c",
+            "import sys; sys.stdout.write('hello\\n'); sys.stderr.write('warn\\n')",
+        ],
+        environment=dict(os.environ),
+        timeout=30,
+        log_path=log_path,
+    )
+    assert result.returncode == 0
+    content = log_path.read_text(encoding="utf-8")
+    assert "hello" in content
+    assert "warn" in content
+    assert "exit_code=0" in content
