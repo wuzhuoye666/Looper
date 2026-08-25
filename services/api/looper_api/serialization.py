@@ -911,13 +911,12 @@ def analysis_view(result: dict[str, Any]) -> dict[str, Any]:
     evidence = [
         {
             "id": "evidence-summary",
-            "title": "完整逐次采集证据",
-            "kind": "content-addressed",
+            "title": "完整实验原始证据",
+            "kind": "内容寻址",
             "summary": (
-                f"共 {evidence_summary.get('attempt_count', 0)} 次采集、"
-                f"{evidence_summary.get('observation_count', 0)} 条观测、"
-                f"{evidence_summary.get('artifact_count', 0)} 个原始文件；"
-                "manifest 按实际采集顺序保留每次数据。"
+                f"{evidence_summary.get('attempt_count', 0)} 次尝试 · "
+                f"{evidence_summary.get('observation_count', 0)} 条观测 · "
+                f"{evidence_summary.get('artifact_count', 0)} 个制品"
             ),
             "createdAt": None,
             "artifacts": [

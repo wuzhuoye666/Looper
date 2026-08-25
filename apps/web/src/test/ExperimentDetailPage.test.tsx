@@ -1,6 +1,6 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
-import { experimentTabs, PhpBenchResultSection, SysbenchWorkloadSection, ValidityGatesSection } from '../pages/ExperimentDetailPage';
+import { Evidence, experimentTabs, PhpBenchResultSection, SysbenchWorkloadSection, ValidityGatesSection } from '../pages/ExperimentDetailPage';
 import type { Experiment } from '../lib/types';
 
 describe('experiment result navigation', () => {
@@ -103,5 +103,39 @@ describe('experiment result navigation', () => {
     expect(screen.getByText('超时请求率处于闭环预算范围内。')).toBeInTheDocument();
     expect(screen.getByText('timeout-budget')).toBeInTheDocument();
     expect(screen.getByText('超时率: 0')).toBeInTheDocument();
+  });
+
+  it('renders localized evidence in full-width file sections and distinguishes retries', () => {
+    render(<Evidence
+      items={[{
+        id: 'evidence-summary', title: 'Immutable experiment evidence', kind: 'content-addressed',
+        summary: '5 attempts, 33 observations, 68 artifacts',
+        artifacts: [{ name: '完整证据包', url: '/evidence' }],
+      }]}
+      evaluations={[{
+        id: 'eval-dcperf', candidate: '测试机3', status: 'completed', runs: [
+          {
+            attemptId: 'att-first', round: 1, retry: 0, status: 'failed', measured: false,
+            artifacts: [{ name: 'prepare.stdout.log', url: '/prepare' }], error: '缺少结果文件',
+          },
+          {
+            attemptId: 'att-retry', round: 1, retry: 1, status: 'completed', measured: true,
+            artifacts: [{ name: 'result.json', url: '/result' }],
+          },
+        ],
+      }]}
+    />);
+
+    expect(screen.getByRole('heading', { name: '完整实验原始证据' })).toBeInTheDocument();
+    expect(screen.getByText('5 次尝试 · 33 条观测 · 68 个制品')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: '第 1 轮 · 首次尝试' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: '第 1 轮 · 重试 1' })).toBeInTheDocument();
+    expect(screen.getByText('环境准备标准输出')).toBeInTheDocument();
+    expect(screen.getByText('标准化测试结果')).toBeInTheDocument();
+    expect(screen.getAllByText('证据文件')).toHaveLength(3);
+    const firstFiles = screen.getAllByText('证据文件')[0].closest('details');
+    expect(firstFiles).not.toHaveAttribute('open');
+    fireEvent.click(screen.getAllByText('证据文件')[0]);
+    expect(firstFiles).toHaveAttribute('open');
   });
 });
