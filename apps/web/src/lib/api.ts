@@ -173,6 +173,15 @@ export const api = {
     }),
   }),
   systemOptimizationStudy: (id: string) => request<SystemOptimizationStudy>(`/system-optimization-studies/${encodeURIComponent(id)}`),
+  approveSystemOptimizationStudy: (id: string) => request<SystemOptimizationStudy>(
+    `/system-optimization-studies/${encodeURIComponent(id)}/approve`, { method: 'POST' },
+  ),
+  activateSystemOptimizationStudy: (id: string) => request<SystemOptimizationStudy>(
+    `/system-optimization-studies/${encodeURIComponent(id)}/activate`, { method: 'POST' },
+  ),
+  rollbackSystemOptimizationStudy: (id: string) => request<SystemOptimizationStudy>(
+    `/system-optimization-studies/${encodeURIComponent(id)}/rollback`, { method: 'POST' },
+  ),
   targets: async (includeInactive = true) => {
     const response = list(await request<Target[] | ListResponse<Target> | { data?: Target[] }>('/targets'));
     return includeInactive ? response : {
