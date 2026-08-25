@@ -64,6 +64,7 @@ from looper_core.system_opt.dynamic_loop import (
     DynamicPhaseRunV2,
     run_dynamic_phase,
     run_dynamic_phase_v2,
+    run_dynamic_phase_v3,
 )
 from looper_core.system_opt.engine import EngineLoopConfig, run_engine_loop
 from looper_core.system_opt.executor import ConfigSnapshot
@@ -110,6 +111,7 @@ from looper_core.system_opt.online_routing import (
 from looper_core.system_opt.phase_gate import (
     DynamicPhaseGateContract,
     DynamicPhaseGateContractV2,
+    DynamicPhaseGateContractV3,
     load_dynamic_phase_gate,
 )
 from looper_core.system_opt.policy import (
@@ -1235,7 +1237,7 @@ def run_dynamic_phase_session(
     lease_ttl_seconds: float = typer.Option(..., "--lease-ttl-seconds", min=1),
     allow_executable: list[str] | None = typer.Option(None, "--allow-executable"),
     writable_root: list[Path] = typer.Option([], "--writable-root", file_okay=False),
-    max_windows: int = typer.Option(..., "--max-windows", min=1),
+    max_windows: int | None = typer.Option(None, "--max-windows", min=1),
     probe_top_k: int = typer.Option(..., "--probe-top-k", min=1),
     verification_window_count: int = typer.Option(..., "--verification-windows", min=0),
     o1_plans_path: Path | None = typer.Option(
@@ -1306,12 +1308,24 @@ def run_dynamic_phase_session(
     durable_session = isinstance(
         gate_contract, DynamicPhaseGateContractV2
     ) and isinstance(proposals, HypothesisProposalsFileV2)
-    if not legacy_session and not durable_session:
+    v3_session = isinstance(
+        gate_contract, DynamicPhaseGateContractV3
+    ) and isinstance(proposals, HypothesisProposalsFileV2)
+    if not legacy_session and not durable_session and not v3_session:
         raise typer.BadParameter(
             "gate contract and hypothesis proposals must use the same schema generation"
         )
-    if online_routing and not durable_session:
-        raise typer.BadParameter("--online-routing requires v1alpha2 gate and proposals")
+    if v3_session and max_windows is not None:
+        raise typer.BadParameter(
+            "--max-windows is forbidden for v1alpha3 sessions; the window budget is "
+            "declared in gate-contract.json"
+        )
+    if not v3_session and max_windows is None:
+        raise typer.BadParameter(
+            "--max-windows is required for v1alpha1/v1alpha2 sessions"
+        )
+    if online_routing and not (durable_session or v3_session):
+        raise typer.BadParameter("--online-routing requires v1alpha2/v1alpha3 gate and proposals")
     if (hypothesis_cache_path is None) != (hypothesis_cache_retention_path is None):
         raise typer.BadParameter(
             "--hypothesis-cache and --hypothesis-cache-retention must be provided together"
@@ -1610,6 +1624,43 @@ def run_dynamic_phase_session(
                     intervention=intervention,
                     retest=FileRetestSource(planner, layout),
                     verification_window_count=verification_window_count,
+                )
+            elif v3_session:
+                assert isinstance(gate_contract, DynamicPhaseGateContractV3)
+                assert isinstance(proposals, HypothesisProposalsFileV2)
+                run = run_dynamic_phase_v3(
+                    contract=contract,
+                    gate_contract=gate_contract,
+                    manifest=manifest,
+                    promotion_contract=promotion_contract,
+                    environment_digest=environment_digest,
+                    probe_top_k=probe_top_k,
+                    load_identity=FileLoadIdentity(layout, business_policy),
+                    o0_source=FileO0Source(layout, business_policy),
+                    hypothesis_source=(
+                        online_source
+                        if online_source is not None
+                        else FileHypothesisProposalsV2(proposals)
+                    ),
+                    prepare_intervention=durable_intervention.prepare_intervention,
+                    execute_intervention=durable_intervention.execute_intervention,
+                    clock=lambda: datetime.now(UTC),
+                    o1_source=live_o1,
+                    component_probe=o2_callback,
+                    retest=FileRetestSource(planner, layout),
+                    verification_window_count=verification_window_count,
+                    refutation_sink=(
+                        (
+                            lambda hypothesis, symptom, experiment: cache_runtime.record_refutation(
+                                hypothesis,
+                                symptom,
+                                experiment,
+                                recorded_at=datetime.now(UTC),
+                            )
+                        )
+                        if cache_runtime is not None
+                        else None
+                    ),
                 )
             else:
                 assert isinstance(gate_contract, DynamicPhaseGateContractV2)
