@@ -65,6 +65,7 @@ from looper_api.providers.utils import (
 )
 from looper_api.remote_credentials import EncryptedSshCredentialStore
 from looper_api.remote_worker import deploy_remote_worker
+from looper_api.retired_benchmarks import RETIRED_BENCHMARK_IDS
 
 CatalogKind = Literal[
     "region",
@@ -2532,7 +2533,10 @@ def global_search(session: Session, query: str, limit: int = 30) -> list[dict[st
         )
     for item in session.scalars(
         select(BenchmarkRecord)
-        .where(BenchmarkRecord.name.ilike(pattern) | BenchmarkRecord.benchmark_id.ilike(pattern))
+        .where(
+            BenchmarkRecord.benchmark_id.not_in(RETIRED_BENCHMARK_IDS),
+            BenchmarkRecord.name.ilike(pattern) | BenchmarkRecord.benchmark_id.ilike(pattern),
+        )
         .order_by(BenchmarkRecord.installed_at.desc())
         .limit(limit)
     ):

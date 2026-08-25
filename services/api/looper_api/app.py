@@ -184,6 +184,7 @@ from looper_api.remote_recovery import (
     target_worker_ready,
 )
 from looper_api.remote_worker import deploy_remote_worker, deployment_status
+from looper_api.retired_benchmarks import RETIRED_BENCHMARK_IDS, is_retired_benchmark
 from looper_api.scheduler import (
     SchedulerError,
     cancel_experiment,
@@ -1265,7 +1266,9 @@ def cloud_order_resolve(
 def list_benchmarks(session: SessionDependency) -> dict[str, Any]:
     records = list(
         session.scalars(
-            select(BenchmarkRecord).order_by(
+            select(BenchmarkRecord).where(
+                BenchmarkRecord.benchmark_id.not_in(RETIRED_BENCHMARK_IDS)
+            ).order_by(
                 BenchmarkRecord.benchmark_id,
                 BenchmarkRecord.installed_at.desc(),
                 BenchmarkRecord.key.desc(),
@@ -1299,6 +1302,8 @@ def benchmark_target_options(
     version: str,
     session: SessionDependency,
 ) -> dict[str, Any]:
+    if is_retired_benchmark(benchmark_id):
+        raise HTTPException(status_code=404, detail="benchmark version not found")
     benchmark = session.scalar(
         select(BenchmarkRecord).where(
             BenchmarkRecord.benchmark_id == benchmark_id,
@@ -2004,6 +2009,8 @@ def _normalize_create_request(payload: dict[str, Any], session: Session) -> Expe
 
 def _selection_create_request(payload: dict[str, Any], session: Session) -> ExperimentCreate:
     benchmark_id = str(payload.get("benchmarkId") or "")
+    if is_retired_benchmark(benchmark_id):
+        raise SchedulerError("scenario benchmark version is not installed")
     benchmark_version = str(payload.get("benchmarkVersion") or "")
     current = session.scalar(
         select(BenchmarkRecord)
