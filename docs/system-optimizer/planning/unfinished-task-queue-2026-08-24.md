@@ -45,6 +45,16 @@
   `stop_gate_decision.stop` 仍可为 `false`，仅 note 写“window budget reached”。这与
   “每个相位必须有显式终点”口径不一致，真实运行成功不掩盖该缺口。
 
+### 2026-08-25 下午 Discovery-Success 双臂状态更新
+
+- `DYN-END-01`：设计已交付（`dyn-end-01-window-endpoint-design-2026-08-25.md`），用户确认走
+  A 案（gate v1alpha3 + PhaseBudgetV3）；`DYN-END-01I` 由 DeepSeek 执行，需一并修复终点
+  `evidence_digest` 绑定 workload digest 而非末窗 digest 的弱绑定。
+- `PERF-CAND-01`：真实 accepted candidate 已产生（REAL-DISC-01 相位 1，THP always
+  +15.59% 晋升），"寻找候选"入口关闭；后续探索性候选仍按原纪律逐个授权。
+- `REAL-S9`：硬前置"真实 accepted candidate"已满足；仍需第二个授权环境并在该环境重新
+  校准 identity/scale，不得复制第一环境阈值。
+
 ## 2. 本轮报告复核结论
 
 | 报告项 | 复核结论 | 当前证据/处置 |
