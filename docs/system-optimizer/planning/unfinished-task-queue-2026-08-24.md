@@ -2,7 +2,7 @@
 
 > 状态：current backlog；最近真实验收代码基线：`system-optimizer-impl@9a32e92`。
 > 本文只登记尚未关闭的工作和依赖关系，不代替
-> `agent-work-ledger-2026-08-24.md` 的 owner、交付、验收与 push 状态。
+> 登记本（主 agent 本地未跟踪文件）的 owner、交付、验收与 push 状态。
 > 任何任务正式分配后，必须在 agent 台账另建任务记录。
 
 ## 1. 口径与边界

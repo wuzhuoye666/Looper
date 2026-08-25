@@ -1,9 +1,10 @@
-# System Optimizer 运维与验收手册（M5-01 草案）
+# System Optimizer 运维与验收手册（M5-01 最小收口版）
 
-> 当前状态：synthetic M3 可运行；真实 CVM 动态闭环已两轮关闭（REAL-M3-01 功能校准
+> 当前状态：synthetic M3 可运行；真实动态闭环已两轮关闭（REAL-M3-01 功能校准
 > 2026-08-25 晨、REAL-DISC-01 双臂发现运行 2026-08-25 午后含首个真实 accepted candidate
-> 与晋升）；REAL-L6C、REAL-SSH、REAL-S9 尚未关闭。本手册不会把 readiness 或 collector
-> smoke test 写成真实闭环成功。
+> 与晋升）；DYN-END-01（显式窗口终点，gate v1alpha3）与 RCP-02B（legacy guard 显式恢复）
+> 已实现并全测通过；REAL-L6C、REAL-SSH、REAL-S9 尚未关闭。本手册不会把 readiness 或
+> collector smoke test 写成真实闭环成功。
 
 ## 1. 三命令本地验收
 
@@ -80,8 +81,15 @@ content-addressed evidence、固定索引、receipt 全链、attention/lease 终
 
 - 已发布 v1/v1alpha1 模型保持显式分派，不就地改变 digest payload。
 - 新字段改变 canonical payload 时必须升 schema；旧 JSON 不静默回填。
-- DB typed EnvironmentSnapshot 双写、M4 API/event、RCP-02B reconciliation schema 尚未实现，
-  迁移脚本和回滚程序因此仍是 M5-01 的开放项。
+- gate 合同三版本并存（v1alpha1/v1alpha2/v1alpha3），`load_dynamic_phase_gate` 按
+  schema_version 分派；v3 窗口预算唯一来源是合同 `PhaseBudgetV3.max_windows`，CLI
+  `--max-windows` 对 v3 禁止、对 v1/v2 必填（DYN-END-01I，含 R2 真实工件回归）。
+- RCP-02B 已实现：`looper.receipt-guard-reconciliation/v1alpha1` 证据模型 +
+  `system-opt reconcile-legacy-guard` CLI；发现 legacy guard 全 store fail-closed，
+  恢复走冻结 9 步顺序，证据先落盘后删 guard（schema 字段待用户逐字段复审，
+  GAP-R02B-1/2 已在代码与登记本标记）。
+- DB typed EnvironmentSnapshot 双写、M4 API/event 仍未实现，迁移脚本和回滚程序
+  因此仍是开放项。
 - candidate/hypothesis cache 共用 JSONL 但按 schema 分派；retention 必须显式提供。
 
 ## 7. 当前已知限制
@@ -95,6 +103,14 @@ content-addressed evidence、固定索引、receipt 全链、attention/lease 终
 
 ## 8. 发布前剩余动作
 
-执行三命令验收并锁定准确入口；补 REAL-L6C/SSH 与至少一条真实动态闭环实录；完成
-EnvironmentSnapshot typed migration 和只读 API；登记每个 schema 的兼容矩阵、升级和回滚；
-最后将本文件从“草案”改为带 commit 和实测证据的发布版。
+当前定位为**最小收口版**：三命令验收入口已锁定，真实闭环证据（REAL-M3-01 /
+REAL-DISC-01）已归档并可离线回放，已知限制如实列出。剩余动作为后续版本内容，
+不阻塞当前交付：
+
+1. REAL-L6C / REAL-SSH / REAL-S9 真实演练（各需用户显式授权目标与参数）。
+2. EnvironmentSnapshot typed migration 与只读 API（M4-01A）。
+3. 每个 schema 的兼容矩阵、升级和回滚登记。
+4. REAL-DISC-01 证据包离线回放入口：
+   `python .artifacts/discovery-8vcpu-20260825/verify_discovery.py
+   .artifacts/discovery-8vcpu-20260825/downloaded-evidence`（需
+   `PYTHONPATH=services/api;packages/core;packages/benchmark-sdk`）。

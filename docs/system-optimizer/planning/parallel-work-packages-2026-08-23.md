@@ -3,7 +3,7 @@
 > 状态：planning；用于把剩余实现拆给多个 agent 并行执行。
 > 本文件冻结 2026-08-23 的 PKG-A～H 历史。2026-08-24 起的任务状态、实际基线、
 > 验收、合入和远端记录以
-> [agent-work-ledger-2026-08-24.md](agent-work-ledger-2026-08-24.md) 为唯一当前登记本。
+> 任务登记本（主 agent 本地未跟踪文件）为唯一当前登记本。
 > 每个包的 agent 必读：`architecture/overall.md`（架构 v2 权威）、
 > `architecture/layer-specifications.md`（分层规范与门禁）、
 > `contracts/formula-provenance.md`（公式总线，动代码前先查）。

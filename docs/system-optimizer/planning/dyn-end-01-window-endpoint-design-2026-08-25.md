@@ -1,7 +1,7 @@
 # DYN-END-01D：动态相位显式窗口终点设计（docs-only）
 
 > 状态：设计稿，**等待用户确认方案后才允许实现（DYN-END-01I）**
-> 任务来源：`agent-handoff-execution-plan-2026-08-25.md` §3 DYN-END-01D；
+> 任务来源：交接执行计划（本地未跟踪）§3 DYN-END-01D；
 > 缺口登记：`unfinished-task-queue-2026-08-24.md` L44/L132（DYN-END-01）；
 > 发现运行：REAL-M3-01（2026-08-25，`8.134.104.213`，证据包
 > `.artifacts/real-demo-2026-08-25/`，sha256 `0cd520cd…3fcb28c`）

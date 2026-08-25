@@ -17,10 +17,9 @@
   merge/cherry-pick 主线以外的 agent 分支。跨 agent 协调只走用户中转和仓库台账。
 - `system-optimizer-impl` 是唯一集成分支。工作 agent 不 push、不合并；主 agent
   `glm5.3` 负责只读验收、选择性 cherry-pick/重做、全量回归和统一 push。
-- 每项任务必须在
-  `planning/agent-work-ledger-2026-08-24.md` 登记唯一 task id、owner、worktree、
-  基线 commit、依赖、写集合、验收命令和合入状态。没有登记不得开工；接口或写集合
-  变化先更新台账，不用私聊约定替代记录。
+- 每项任务必须在主 agent 维护的任务登记本（本地未跟踪文件，不入库）登记唯一
+  task id、owner、worktree、基线 commit、依赖、写集合、验收命令和合入状态。没有
+  登记不得开工；接口或写集合变化先更新台账，不用私聊约定替代记录。
 - 工作分支采用依赖感知同步：若任务依赖、共享接口和写集合均未变化，开工前无需为了
   形式上的最新 commit 执行 rebase/merge；依赖或共享文件发生变化时才必须先同步。
   交付时若任务 commit 不是当前主线的可安全选择性集成后代，主 agent 再要求同步或
