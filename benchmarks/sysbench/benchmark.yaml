@@ -160,6 +160,8 @@ spec:
         argv: ["{python}", "{benchmarkRoot}/producer.py", "--envelope", "{envelope}", "--output", "{output}"]
         timeoutSeconds: 360
         allowedExitCodes: [0]
+        environment:
+          LOOPER_SYSBENCH_BIN: "{cache}/bin/sysbench"
       normalize:
         argv: ["{python}", "{benchmarkRoot}/normalizer.py", "--envelope", "{envelope}", "--output", "{output}"]
         timeoutSeconds: 60

@@ -324,7 +324,7 @@ export function CreateExperimentPage() {
               {visibleTargets.map(target => <div key={target.id} className={`target-choice-row ${form.targetIds.includes(target.id) ? 'selected' : ''}`}>
                 <label>
                   <input type="radio" name="benchmark-target" checked={form.targetIds.includes(target.id)} onChange={() => selectTarget(target.id, target.name)} />
-                  <span><strong>{target.name}</strong><small><b>{selectedEnvironment?.label}</b> · {target.hardware || target.id}</small></span>
+                  <span><strong>{target.name}</strong><small>{target.hardware || target.id} · <b>{selectedEnvironment?.label}</b></small></span>
                   <em>符合要求 · 可测试</em>
                 </label>
                 <TargetSshButton target={target} compact/>

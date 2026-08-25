@@ -843,6 +843,31 @@ def test_pending_password_credentials_retry_after_endpoint_appears(
     assert target.id in EncryptedSshCredentialStore(app_settings).verified_target_ids()
 
 
+def test_failed_auto_ssh_uses_persisted_exponential_backoff(db_session) -> None:
+    target = db_session.get(TargetRecord, "local")
+    assert target is not None
+    target.inventory_json = {"endpoint": "203.0.113.12"}
+
+    target.inventory_json = cloud_service_module._inventory_with_auto_ssh_failure(
+        target,
+        RuntimeError("SSH banner unavailable"),
+    )
+    first = target.inventory_json["autoSsh"]
+
+    assert first["status"] == "failed"
+    assert first["failureCount"] == 1
+    assert cloud_service_module._auto_ssh_retry_due(target) is False
+
+    first["nextRetryAt"] = (cloud_service_module.utc_now() - timedelta(seconds=1)).isoformat()
+    assert cloud_service_module._auto_ssh_retry_due(target) is True
+
+    target.inventory_json = cloud_service_module._inventory_with_auto_ssh_failure(
+        target,
+        RuntimeError("SSH banner unavailable again"),
+    )
+    assert target.inventory_json["autoSsh"]["failureCount"] == 2
+
+
 def test_private_key_auth_remains_available_when_selected(tmp_path) -> None:
     key_path = tmp_path / "cloud-key.pem"
     key_path.write_text(

@@ -9,7 +9,7 @@ import logging
 import threading
 import time
 import zipfile
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager, suppress
 from importlib.resources import files
 from pathlib import Path
@@ -1585,28 +1585,62 @@ def _sync_all_cloud_inventory(
     session: Session,
     registry: CloudProviderRegistry,
     credential_store: EncryptedSshCredentialStore,
+    *,
+    checkpoint: Callable[[], None] | None = None,
 ) -> dict[str, Any]:
     records_by_id: dict[str, TargetRecord] = {}
     synced_regions: dict[str, list[str]] = {}
+    completed_regions: dict[str, list[str]] = {}
+    errors: list[dict[str, Any]] = []
     syncers = {
         ProviderId.TENCENT: sync_cvm_inventory,
         ProviderId.ALIBABA: sync_ecs_inventory,
     }
     for provider_id, sync_inventory in syncers.items():
-        regions = sorted({item.id for item in registry.get(provider_id).list_regions()})
+        completed_regions[provider_id.value] = []
+        try:
+            regions = sorted({item.id for item in registry.get(provider_id).list_regions()})
+        except CloudProviderError as error:
+            synced_regions[provider_id.value] = []
+            errors.append(
+                {
+                    "provider": provider_id.value,
+                    "region": None,
+                    "code": error.code,
+                    "message": str(error),
+                }
+            )
+            continue
         synced_regions[provider_id.value] = regions
         for region in regions:
-            records = sync_inventory(
-                session,
-                region,
-                credential_store=credential_store,
-            )
+            try:
+                records = sync_inventory(
+                    session,
+                    region,
+                    credential_store=credential_store,
+                )
+            except CloudProviderError as error:
+                session.rollback()
+                errors.append(
+                    {
+                        "provider": provider_id.value,
+                        "region": region,
+                        "code": error.code,
+                        "message": str(error),
+                    }
+                )
+                continue
             records_by_id.update({record.id: record for record in records})
+            completed_regions[provider_id.value].append(region)
+            if checkpoint is not None:
+                checkpoint()
     records = list(records_by_id.values())
     return {
         "items": [target_view(item) for item in records],
         "total": len(records),
         "regions": synced_regions,
+        "completedRegions": completed_regions,
+        "errors": errors,
     }
 
 
@@ -1621,6 +1655,7 @@ def sync_cloud_targets(
         session,
         registry,
         EncryptedSshCredentialStore(app_settings),
+        checkpoint=session.commit,
     )
     session.commit()
     return result
@@ -1690,6 +1725,64 @@ def get_target_worker(target_id: str, session: SessionDependency) -> dict[str, A
     return deployment_status(target_id)
 
 
+def _automatic_target_ssh_request(
+    target: TargetRecord,
+    app_settings: Settings,
+    store: EncryptedSshCredentialStore,
+) -> ConnectExternalTargetRequest:
+    """Resolve the same saved/default SSH credentials used by the manual test."""
+
+    endpoint = str((target.inventory_json or {}).get("endpoint") or "").strip()
+    if not endpoint:
+        raise ExternalTargetError("cloud target has no reachable endpoint")
+    if target.id in store.verified_target_ids():
+        return remembered_target_request(target, app_settings)
+    try:
+        return store.load_pending(target.id, endpoint)
+    except RemoteCredentialError:
+        if target.provider == "external":
+            raise
+    credentials = _default_cloud_ssh_credentials(
+        app_settings,
+        remember_credentials=True,
+    )
+    return ConnectExternalTargetRequest(
+        endpoint=endpoint,
+        port=credentials.port,
+        username=credentials.username,
+        auth_method=credentials.auth_method,
+        password=credentials.password,
+        private_key=credentials.private_key,
+        passphrase=credentials.passphrase,
+        deploy_worker=True,
+        remember_credentials=True,
+    )
+
+
+def _verify_target_ssh_for_worker(
+    session: Session,
+    target: TargetRecord,
+    app_settings: Settings,
+) -> tuple[TargetRecord, ConnectExternalTargetRequest, bool]:
+    """Probe SSH, pin the observed host key, and promote credentials for recovery."""
+
+    store = EncryptedSshCredentialStore(app_settings)
+    request = _automatic_target_ssh_request(target, app_settings, store)
+    refreshed = (
+        connect_external_target(session, request)
+        if target.provider == "external"
+        else connect_existing_target(session, target, request)
+    )
+    if refreshed.id != target.id:
+        raise ExternalTargetError("SSH endpoint no longer resolves to the selected target")
+    # Persist the verified inventory before the Worker registers through a
+    # separate API request, then make the pinned credentials recovery-safe.
+    session.commit()
+    host_key = str(refreshed.fingerprint_json.get("host_key_sha256") or "")
+    remembered = store.save(refreshed.id, request, host_key)
+    return refreshed, request, remembered
+
+
 @app.post("/api/v1/targets/{target_id}/ssh-test")
 def test_target_ssh_connection(
     target_id: str,
@@ -1702,43 +1795,12 @@ def test_target_ssh_connection(
     target = session.get(TargetRecord, target_id)
     if target is None:
         raise HTTPException(status_code=404, detail="target not found")
-    endpoint = str((target.inventory_json or {}).get("endpoint") or "")
-    if not endpoint:
-        raise ExternalTargetError("cloud target has no reachable endpoint")
-    store = EncryptedSshCredentialStore(app_settings)
-    if target.id in store.verified_target_ids():
-        request = remembered_target_request(target, app_settings)
-    else:
-        try:
-            request = store.load_pending(target.id, endpoint)
-        except RemoteCredentialError:
-            if target.provider == "external":
-                raise
-            credentials = _default_cloud_ssh_credentials(
-                app_settings,
-                remember_credentials=True,
-                auth_method="password",
-            )
-            request = ConnectExternalTargetRequest(
-                endpoint=endpoint,
-                port=credentials.port,
-                username=credentials.username,
-                auth_method="password",
-                password=credentials.password,
-                deploy_worker=True,
-                remember_credentials=True,
-            )
-    refreshed = (
-        connect_external_target(session, request)
-        if target.provider == "external"
-        else connect_existing_target(session, target, request)
+    refreshed, request, remembered = _verify_target_ssh_for_worker(
+        session,
+        target,
+        app_settings,
     )
-    if refreshed.id != target_id:
-        raise ExternalTargetError("SSH endpoint no longer resolves to the selected target")
-    session.commit()
     deployment = deploy_remote_worker(request, refreshed, app_settings)
-    host_key = str(refreshed.fingerprint_json.get("host_key_sha256") or "")
-    remembered = store.save(refreshed.id, request, host_key)
     if target.provider != "external":
         refreshed.status = "available"
         refreshed.runnable = True
@@ -2262,16 +2324,41 @@ def _ensure_experiment_workers(
     if spec.selection is not None and spec.selection.load_generator_target_id:
         target_ids = [spec.selection.load_generator_target_id]
     for target_id in dict.fromkeys(target_ids):
-        provider = session.scalar(
-            select(TargetRecord.provider).where(TargetRecord.id == target_id)
-        )
+        target = session.get(TargetRecord, target_id)
+        provider = target.provider if target is not None else None
         if provider not in REMOTE_TARGET_PROVIDERS:
             continue
-        ensure_target_worker(target_id, app_settings)
+        try:
+            deployment = ensure_target_worker(target_id, app_settings)
+        except RemoteWorkerRecoveryError:
+            # A newly purchased cloud target can have encrypted pending/default
+            # credentials without a manually pinned SSH identity. Perform the
+            # same probe as the SSH button before allowing work into the queue.
+            store = EncryptedSshCredentialStore(app_settings)
+            if target is None or target_id in store.verified_target_ids():
+                raise
+            _verify_target_ssh_for_worker(session, target, app_settings)
+            deployment = ensure_target_worker(target_id, app_settings)
         # Registration is committed by a separate Worker request. Discard
         # identity-map snapshots so scheduler readiness sees the refreshed
         # runnable/capability projection instead of the pre-recovery row.
         session.expire_all()
+        refreshed = session.get(TargetRecord, target_id)
+        if refreshed is not None and refreshed.provider != "external":
+            deployment_status_value = deployment or {}
+            refreshed.inventory_json = {
+                **(refreshed.inventory_json or {}),
+                "autoSsh": {
+                    "status": "connected",
+                    "deployment": deployment_status_value.get("status", "ready"),
+                },
+            }
+            refreshed.snapshot_digest = canonical_digest(
+                {
+                    "fingerprint": refreshed.fingerprint_json,
+                    "inventory": refreshed.inventory_json,
+                }
+            )
 
 
 def _experiment_action(

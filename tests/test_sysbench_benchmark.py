@@ -14,6 +14,7 @@ SYSBENCH_DIR = REPO_ROOT / "benchmarks" / "sysbench"
 sys.path.insert(0, str(SYSBENCH_DIR))
 
 import normalizer  # noqa: E402
+import prepare  # noqa: E402
 import producer  # noqa: E402
 from looper_core.manifest import load_and_validate_manifest  # noqa: E402
 
@@ -118,6 +119,9 @@ def test_manifest_validates_against_schema() -> None:
     assert provisioning["hostCapabilities"] == ["python", "local-process", "linux"]
     assert provisioning["provides"] == ["sysbench"]
     assert "prepare" in document["spec"]["runtime"]["commands"]
+    assert document["spec"]["runtime"]["commands"]["run"]["environment"] == {
+        "LOOPER_SYSBENCH_BIN": "{cache}/bin/sysbench"
+    }
     result_sections = document["spec"]["x-extensions"]["resultPresentation"]["sections"]
     assert result_sections[0]["view"] == "sysbench-workloads"
     assert "throughput_mib_s" in result_sections[0]["metrics"]
@@ -165,6 +169,46 @@ def test_resolve_sysbench_explicit_bin_must_exist(monkeypatch, tmp_path) -> None
     monkeypatch.setenv("LOOPER_SYSBENCH_BIN", str(tmp_path / "missing-sysbench"))
     with pytest.raises(producer.SysbenchError, match="missing file"):
         producer.resolve_sysbench_bin()
+
+
+def test_resolve_sysbench_rejects_incompatible_1_1_binary(monkeypatch, tmp_path) -> None:
+    binary = tmp_path / "sysbench"
+    binary.write_text("placeholder", encoding="utf-8")
+    monkeypatch.setenv("LOOPER_SYSBENCH_BIN", str(binary))
+    monkeypatch.setattr(
+        producer.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=0,
+            stdout="sysbench 1.1.0-3ceba0b (using bundled LuaJIT 2.1.0-beta3)",
+            stderr="",
+        ),
+    )
+    with pytest.raises(producer.SysbenchError, match="expected sysbench 1.0.x"):
+        producer.resolve_sysbench_bin()
+
+
+def test_prepare_pins_cache_binary_to_supported_version(monkeypatch, tmp_path) -> None:
+    binary = tmp_path / "usr-bin-sysbench"
+    binary.write_text("placeholder", encoding="utf-8")
+    monkeypatch.setattr(prepare.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(
+        prepare.shutil,
+        "which",
+        lambda name: str(binary) if name == "sysbench" else None,
+    )
+    monkeypatch.setattr(
+        prepare, "_sysbench_version", lambda _binary: "sysbench 1.0.20"
+    )
+
+    result = prepare.prepare(tmp_path / "cache")
+
+    assert result["version"] == "sysbench 1.0.20"
+    run_binary = tmp_path / "cache" / "bin" / "sysbench"
+    assert run_binary.is_file()
+    assert json.loads((tmp_path / "cache" / "prepared.json").read_text())[
+        "runBinary"
+    ] == str(run_binary.resolve())
 
 
 # --- Full chain via stub ------------------------------------------------------------

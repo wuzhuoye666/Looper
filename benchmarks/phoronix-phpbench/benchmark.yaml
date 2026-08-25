@@ -3,7 +3,7 @@ kind: Benchmark
 metadata:
   id: looper.phoronix-phpbench
   name: Phoronix Test Suite / PHPBench
-  version: 10.8.6-phpbench1.1.6-looper8
+  version: 10.8.6-phpbench1.1.6-looper12
   description: "Phoronix Test Suite 10.8.6 的固定 profile 接入包。Looper 在用户选定目标后自动部署 PTS、PHP CLI、unzip 和 Adapter；producer 仅允许执行 pts/phpbench-1.1.6，保存 PTS 原始 JSON；normalizer 校验 profile、Score 单位与 HIB 方向后生成标准观测。"
   license: GPL-3.0-or-later
   source:
@@ -115,12 +115,12 @@ spec:
   runtime:
     type: local-process
     workingDirectory: .
-    dependencyLockDigest: sha256:876cfccea5d04e6f277445d132be7a9a413739fafae24ab31b33cb5cb8becb22
+    dependencyLockDigest: sha256:63f32c14ba20dd7401202945c983dbe0005af4315d4537a690f24c4da941a6bd
     provisioning:
       mode: managed
       hostCapabilities: [python, local-process, linux]
       provides: [phoronix-test-suite, php-cli, unzip]
-      cacheKey: sha256:876cfccea5d04e6f277445d132be7a9a413739fafae24ab31b33cb5cb8becb22
+      cacheKey: sha256:63f32c14ba20dd7401202945c983dbe0005af4315d4537a690f24c4da941a6bd
       requiresNetwork: true
       privilege: sudo
     dependencies:
@@ -129,7 +129,7 @@ spec:
         digest: sha256:9d4b811a1ff4710ac89d19b34ba7ef4188b8ce1bfe61d5d276b0ee689dba1dc4
         license: GPL-3.0-or-later
       - id: phpbench-payload
-        source: http://phoronix-test-suite.com/benchmark-files/phpbench-081-patched2.zip
+        source: bundled:phpbench-081-patched2.zip
         digest: sha256:32503bd4ace0c8429493de864ca48bb16febed867e52b75f4369d7145f797718
         license: upstream-Free
     commands:
@@ -145,6 +145,7 @@ spec:
           LOOPER_PTS_BIN: "{cache}/phoronix-test-suite/phoronix-test-suite"
           LOOPER_PHP_BIN: "{cache}/bin/php"
           LOOPER_PHPBENCH_PAYLOAD: "{cache}/phpbench-081-patched2.zip"
+          LOOPER_PTS_USER_PATH: "{cache}/pts-user"
       normalize:
         argv: ["{python}", "{benchmarkRoot}/normalizer.py", "--envelope", "{envelope}", "--output", "{output}"]
         timeoutSeconds: 60

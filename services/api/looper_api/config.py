@@ -112,6 +112,10 @@ class Settings(BaseSettings):
         return self.data_dir / "remote-worker-credentials.key"
 
     @property
+    def control_plane_id_path(self) -> Path:
+        return self.data_dir / "control-plane.id"
+
+    @property
     def remote_credential_store_path(self) -> Path:
         return self.data_dir / "remote-worker-credentials.json"
 

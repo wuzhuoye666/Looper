@@ -14,7 +14,7 @@ import sys
 import tempfile
 import threading
 import time
-from contextlib import suppress
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -36,6 +36,43 @@ class PhoronixError(RuntimeError):
 @dataclass(frozen=True, slots=True)
 class CommandResult:
     returncode: int
+
+
+def _pts_user_path_override(path: Path) -> str:
+    """Return the PTS user path with the separator required by PTS 10.8.x.
+
+    PTS concatenates ``PTS_USER_PATH`` with ``download-cache/``.  Its
+    ``PTS_USER_PATH_OVERRIDE`` branch does not add a trailing separator (unlike
+    the normal HOME-derived branch), so passing a bare temporary directory
+    makes PTS look beside the directory and ignore the seeded payload.
+    """
+
+    value = str(path)
+    return value if value.endswith(('/', '\\')) else value + os.sep
+
+
+@contextmanager
+def _pts_user_workspace(output: Path):
+    """Reuse PTS indexes/install state while serializing access on the target."""
+
+    configured = os.environ.get("LOOPER_PTS_USER_PATH")
+    if not configured:
+        with tempfile.TemporaryDirectory(prefix="pts-user-", dir=output) as user_dir:
+            yield Path(user_dir)
+        return
+
+    pts_user_path = Path(configured).resolve()
+    pts_user_path.mkdir(parents=True, exist_ok=True)
+    with (pts_user_path / ".looper-run.lock").open("a+", encoding="utf-8") as lock:
+        if os.name == "posix":
+            import fcntl
+
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        try:
+            yield pts_user_path
+        finally:
+            if os.name == "posix":
+                fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
 
 
 def _resolve_executable(name: str, explicit: str | None) -> str | None:
@@ -121,7 +158,8 @@ def _subprocess_environment(
     }
     environment.update(
         {
-            "PTS_USER_PATH_OVERRIDE": str(pts_user_path),
+            "PTS_USER_PATH_OVERRIDE": _pts_user_path_override(pts_user_path),
+            "PTS_DOWNLOAD_CACHE": str(pts_user_path / "download-cache"),
             "PTS_SILENT_MODE": "1",
             "PHP_BIN": os.environ.get("LOOPER_PHP_BIN")
             or shutil.which("php")
@@ -256,8 +294,11 @@ def main(argv: list[str] | None = None) -> int:
         "resultIdentifier": RESULT_IDENTIFIER,
     }
 
-    with tempfile.TemporaryDirectory(prefix="pts-user-", dir=output) as user_dir:
-        pts_user_path = Path(user_dir)
+    with _pts_user_workspace(output) as pts_user_path:
+        # The install tree and OpenBenchmarking indexes are intentionally
+        # persistent, but each exported result must start from a clean name.
+        result_directory = pts_user_path / "test-results" / RESULT_NAME
+        shutil.rmtree(result_directory, ignore_errors=True)
         prepared_payload = os.environ.get("LOOPER_PHPBENCH_PAYLOAD")
         if prepared_payload:
             payload = Path(prepared_payload).resolve()
@@ -308,6 +349,7 @@ def main(argv: list[str] | None = None) -> int:
             raise PhoronixError("PTS exported JSON does not contain a results object")
         if not math.isfinite(float(raw_result.stat().st_size)):
             raise PhoronixError("PTS exported result has an invalid size")
+        shutil.rmtree(result_directory, ignore_errors=True)
     return 0
 
 

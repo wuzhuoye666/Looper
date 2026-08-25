@@ -8,7 +8,7 @@ import type {
   BenchmarkTargetOptions, Target, TargetDestroyPreview, TargetDestroyResult, VariabilityData, SystemOptimizationStudy, SystemOptimizationAuthorizationProfile,
 } from './types';
 
-export const API_BASE = (import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8001/api/v1').replace(/\/$/, '');
+export const API_BASE = (import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000/api/v1').replace(/\/$/, '');
 
 export function resolveApiUrl(value = API_BASE, origin = window.location.origin) {
   return new URL(value, origin);
@@ -195,7 +195,11 @@ export const api = {
   syncAlibabaTargets: (region = 'cn-hangzhou') => request<ListResponse<Target>>(
     `/targets/alibaba-ecs/sync?region=${encodeURIComponent(region)}`, { method: 'POST' },
   ),
-  syncCloudTargets: () => request<ListResponse<Target>>('/targets/cloud/sync', { method: 'POST' }),
+  syncCloudTargets: () => request<ListResponse<Target> & {
+    regions: Record<string, string[]>;
+    completedRegions: Record<string, string[]>;
+    errors: Array<{ provider: string; region: string | null; code: string; message: string }>;
+  }>('/targets/cloud/sync', { method: 'POST' }),
   importExternalTarget: (payload: Record<string, unknown>) => request<Target>(
     '/targets/import', { method: 'POST', body: JSON.stringify(payload) },
   ),

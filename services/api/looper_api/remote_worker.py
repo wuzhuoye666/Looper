@@ -6,6 +6,7 @@ import base64
 import hashlib
 import io
 import select
+import secrets
 import shlex
 import socket
 import threading
@@ -49,6 +50,7 @@ _deployments_lock = threading.Lock()
 
 _deploy_locks: dict[str, threading.Lock] = {}
 _deploy_locks_guard = threading.Lock()
+_control_plane_id_lock = threading.Lock()
 
 
 def _deploy_lock(target_id: str) -> threading.Lock:
@@ -58,6 +60,32 @@ def _deploy_lock(target_id: str) -> threading.Lock:
             lock = threading.Lock()
             _deploy_locks[target_id] = lock
         return lock
+
+
+def _control_plane_namespace(settings: Settings) -> str:
+    """Return a stable per-data-directory ID for remote deployment isolation."""
+
+    path = settings.control_plane_id_path
+    with _control_plane_id_lock:
+        if path.is_file():
+            value = path.read_text(encoding="ascii").strip().lower()
+            if len(value) == 16 and all(character in "0123456789abcdef" for character in value):
+                return value
+        value = secrets.token_hex(8)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_suffix(f".{secrets.token_hex(4)}.tmp")
+        temporary.write_text(value + "\n", encoding="ascii")
+        try:
+            temporary.replace(path)
+        finally:
+            temporary.unlink(missing_ok=True)
+        return value
+
+
+def _remote_worker_identity(settings: Settings, target_id: str) -> tuple[str, str]:
+    namespace = _control_plane_namespace(settings)
+    target_digest = canonical_digest({"target": target_id})[-12:]
+    return namespace, f"remote-{namespace}-{target_digest}"
 
 
 def _source_archive() -> bytes:
@@ -340,7 +368,7 @@ def _deploy_remote_worker_impl(
         privilege_prefix = "sudo -n " if elevate else ""
 
         worker_api_url, remote_port, transport_mode = _worker_api_endpoint(settings, transport)
-        worker_id = f"remote-{canonical_digest({'target': target.id})[-16:]}"
+        control_plane_namespace, worker_id = _remote_worker_identity(settings, target.id)
         deployment = RemoteWorkerDeployment(
             target.id,
             client if transport_mode == "reverse-tunnel" else None,
@@ -362,7 +390,10 @@ def _deploy_remote_worker_impl(
         remote_home_path = PurePosixPath(remote_home)
         if not remote_home_path.is_absolute() or ".." in remote_home_path.parts:
             raise ExternalTargetError("remote account returned an invalid home directory")
-        remote_root = remote_home_path / ".looper-worker"
+        # Multiple developers may connect separate Looper control planes to the
+        # same machine. Isolate source, token, PID, venv, and work cache so one
+        # deployment cannot kill or overwrite another control plane's Worker.
+        remote_root = remote_home_path / ".looper-worker" / control_plane_namespace
         _run(client, f"mkdir -p {shlex.quote(str(remote_root))}", timeout=30)
         sftp = client.open_sftp()
         try:

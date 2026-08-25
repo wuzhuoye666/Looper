@@ -79,4 +79,23 @@ describe('云订单加载恢复', () => {
     expect(await screen.findByRole('link', { name: /order-resilient/ })).toBeInTheDocument();
     expect(screen.queryByText('无法获取数据')).not.toBeInTheDocument();
   });
+
+  it('首次重试耗尽时继续显示加载态而不是闪现失败页', async () => {
+    let orderRequests = 0;
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/operator/session')) return response({ required: true, configured: true, authenticated: true, operatorGateReady: true });
+      if (url.endsWith('/cloud/orders')) {
+        orderRequests += 1;
+        if (orderRequests <= 4) return new Response('backend is starting', { status: 503 });
+        return response({ items: [resilientOrder], total: 1 });
+      }
+      return response({ items: [] });
+    }));
+
+    renderOrders();
+    expect(screen.queryByText('无法获取数据')).not.toBeInTheDocument();
+    expect(await screen.findByRole('link', { name: /order-resilient/ }, { timeout: 5_000 })).toBeInTheDocument();
+    expect(screen.queryByText('无法获取数据')).not.toBeInTheDocument();
+  });
 });

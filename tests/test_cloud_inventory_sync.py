@@ -4,6 +4,7 @@ from importlib import import_module
 from types import SimpleNamespace
 
 from looper_api.cloud_contracts import ProviderId
+from looper_api.providers.base import CloudProviderError
 from looper_api.providers.tencent_cvm import TencentCvmProvider, sync_cvm_inventory
 
 app_module = import_module("looper_api.app")
@@ -46,7 +47,59 @@ def test_sync_all_cloud_inventory_visits_every_tencent_and_alibaba_region(monkey
             "tencent": ["ap-guangzhou", "ap-shanghai"],
             "alibaba": ["cn-beijing", "cn-hangzhou"],
         },
+        "completedRegions": {
+            "tencent": ["ap-guangzhou", "ap-shanghai"],
+            "alibaba": ["cn-beijing", "cn-hangzhou"],
+        },
+        "errors": [],
     }
+
+
+def test_sync_all_cloud_inventory_keeps_later_regions_after_one_failure(monkeypatch) -> None:
+    regions = {
+        ProviderId.TENCENT: [SimpleNamespace(id="ap-guangzhou")],
+        ProviderId.ALIBABA: [
+            SimpleNamespace(id="cn-beijing"),
+            SimpleNamespace(id="cn-qingdao"),
+        ],
+    }
+    registry = SimpleNamespace(
+        get=lambda provider_id: SimpleNamespace(list_regions=lambda: regions[provider_id])
+    )
+    session = SimpleNamespace(rollback_calls=0)
+    session.rollback = lambda: setattr(session, "rollback_calls", session.rollback_calls + 1)
+    checkpoints: list[str] = []
+
+    monkeypatch.setattr(app_module, "sync_cvm_inventory", lambda *_args, **_kwargs: [])
+
+    def sync_alibaba(_session, region, **_kwargs):
+        if region == "cn-beijing":
+            raise CloudProviderError("temporary region failure", code="region_unavailable")
+        return []
+
+    monkeypatch.setattr(app_module, "sync_ecs_inventory", sync_alibaba)
+
+    result = app_module._sync_all_cloud_inventory(
+        session,
+        registry,
+        object(),
+        checkpoint=lambda: checkpoints.append("committed"),
+    )
+
+    assert session.rollback_calls == 1
+    assert checkpoints == ["committed", "committed"]
+    assert result["completedRegions"] == {
+        "tencent": ["ap-guangzhou"],
+        "alibaba": ["cn-qingdao"],
+    }
+    assert result["errors"] == [
+        {
+            "provider": "alibaba",
+            "region": "cn-beijing",
+            "code": "region_unavailable",
+            "message": "temporary region failure",
+        }
+    ]
 
 
 def test_tencent_inventory_accepts_a_global_region(monkeypatch, db_session) -> None:

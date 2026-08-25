@@ -20,10 +20,32 @@ from pathlib import Path
 from looper_benchmark_sdk import load_envelope
 
 DEFAULT_TIMEOUT_SECONDS = 360
+SUPPORTED_VERSION_PATTERN = re.compile(
+    r"^sysbench\s+(1\.0\.\d+)(?:\s|$)", re.MULTILINE
+)
 
 
 class SysbenchError(RuntimeError):
     pass
+
+
+def _validate_sysbench_binary(binary: str) -> None:
+    """Reject binaries outside the 1.0.x output contract before measuring."""
+
+    try:
+        completed = subprocess.run(
+            [binary, "--version"], capture_output=True, text=True, timeout=30
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise SysbenchError(f"could not inspect sysbench executable {binary}: {error}") from error
+    output = "\n".join((completed.stdout or "", completed.stderr or "")).strip()
+    match = SUPPORTED_VERSION_PATTERN.search(output)
+    if completed.returncode != 0 or match is None:
+        detail = output or f"exit code {completed.returncode}"
+        raise SysbenchError(
+            "expected sysbench 1.0.x; refusing incompatible executable "
+            f"{binary}: {detail}"
+        )
 
 
 def resolve_sysbench_bin() -> str:
@@ -34,13 +56,16 @@ def resolve_sysbench_bin() -> str:
             raise SysbenchError(
                 f"LOOPER_SYSBENCH_BIN points to a missing file: {candidate}"
             )
-        return str(candidate.resolve())
+        resolved = str(candidate.resolve())
+        _validate_sysbench_binary(resolved)
+        return resolved
     found = shutil.which("sysbench")
     if found is None:
         raise SysbenchError(
             "sysbench executable not found in PATH; install sysbench or set "
             "LOOPER_SYSBENCH_BIN (e.g. WSL/Docker path to the sysbench binary)"
         )
+    _validate_sysbench_binary(found)
     return found
 
 

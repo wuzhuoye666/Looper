@@ -7,7 +7,12 @@ from unittest.mock import Mock
 import httpx
 import pytest
 from looper_api.config import Settings
-from looper_api.remote_worker import RemoteWorkerDeployment, _worker_api_endpoint
+from looper_api.remote_worker import (
+    RemoteWorkerDeployment,
+    _control_plane_namespace,
+    _remote_worker_identity,
+    _worker_api_endpoint,
+)
 from looper_worker import main as worker_main
 
 
@@ -48,6 +53,21 @@ def test_empty_remote_worker_api_url_is_treated_as_unset(tmp_path) -> None:
     )
 
     assert settings.remote_worker_api_url is None
+
+
+def test_remote_worker_identity_is_stable_and_control_plane_scoped(tmp_path) -> None:
+    first = Settings(_env_file=None, data_dir=tmp_path / "first")
+    second = Settings(_env_file=None, data_dir=tmp_path / "second")
+
+    first_namespace = _control_plane_namespace(first)
+    repeated_namespace, first_worker = _remote_worker_identity(first, "cloud:target:1")
+    second_namespace, second_worker = _remote_worker_identity(second, "cloud:target:1")
+
+    assert repeated_namespace == first_namespace
+    assert second_namespace != first_namespace
+    assert first_worker.startswith(f"remote-{first_namespace}-")
+    assert second_worker.startswith(f"remote-{second_namespace}-")
+    assert first_worker != second_worker
 
 
 def test_deployment_generation_is_stable() -> None:

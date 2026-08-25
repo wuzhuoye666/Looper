@@ -263,6 +263,62 @@ def test_start_preflight_recovers_remote_execution_target(
     assert recovered == ["local"]
 
 
+def test_start_preflight_automatically_probes_pending_cloud_ssh(
+    db_session, tmp_path, monkeypatch
+) -> None:
+    settings = Settings(_env_file=None, data_dir=tmp_path)
+    target = db_session.get(app_module.TargetRecord, "local")
+    target.provider = "alibaba"
+    target.inventory_json = {
+        **(target.inventory_json or {}),
+        "endpoint": "203.0.113.18",
+        "autoSsh": {"status": "waiting_endpoint"},
+    }
+    credentials = CloudSshCredentials(
+        username="root",
+        authMethod="password",
+        password="StrongPassword1#",
+        rememberCredentials=True,
+    )
+    store = EncryptedSshCredentialStore(settings)
+    assert store.save_pending(target.id, credentials) is True
+    request = app_module.create_demo_request()
+    experiment = SimpleNamespace(spec_json=request.spec.model_dump(mode="json"))
+    observed_requests = []
+    recovery_calls = []
+
+    def connect(_session, record, ssh_request):
+        observed_requests.append(ssh_request)
+        record.fingerprint_json = {
+            **(record.fingerprint_json or {}),
+            "host_key_sha256": "SHA256:" + "C" * 43,
+        }
+        return record
+
+    def ensure(target_id, _settings):
+        recovery_calls.append(target_id)
+        if len(recovery_calls) == 1:
+            raise remote_recovery.RemoteWorkerRecoveryError("missing credentials")
+        saved = store.load(target_id)
+        assert saved.expected_host_key_sha256 == "SHA256:" + "C" * 43
+        return {"status": "recovered", "workerId": "remote-auto"}
+
+    monkeypatch.setattr(app_module, "connect_existing_target", connect)
+    monkeypatch.setattr(app_module, "ensure_target_worker", ensure)
+
+    app_module._ensure_experiment_workers(db_session, experiment, settings)
+
+    assert recovery_calls == ["local", "local"]
+    assert observed_requests[0].endpoint == "203.0.113.18"
+    assert observed_requests[0].password.get_secret_value() == "StrongPassword1#"
+    assert target.id not in store.pending_target_ids()
+    assert target.id in store.verified_target_ids()
+    assert target.inventory_json["autoSsh"] == {
+        "status": "connected",
+        "deployment": "recovered",
+    }
+
+
 def test_manual_ssh_test_reuses_saved_credentials_and_restores_worker(
     tmp_path, monkeypatch
 ) -> None:

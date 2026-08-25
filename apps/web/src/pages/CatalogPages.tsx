@@ -65,10 +65,21 @@ export function TargetsPage() {
   const [importOpen, setImportOpen] = useState(false);
   const [destroyTarget, setDestroyTarget] = useState<Target | null>(null);
   const [sshTarget, setSshTarget] = useState<Target | null>(null);
-  const query = useQuery({ queryKey: ['targets', 'all'], queryFn: () => api.targets(true), refetchInterval: 30_000 });
+  const [cloudSyncing, setCloudSyncing] = useState(false);
+  const query = useQuery({
+    queryKey: ['targets', 'all'],
+    queryFn: () => api.targets(true),
+    // The API checkpoints every completed cloud region. Poll while the long
+    // cross-region sync is running so newly bought machines appear immediately.
+    refetchInterval: cloudSyncing ? 1_500 : 30_000,
+  });
   const syncCloud = useMutation({
     mutationFn: api.syncCloudTargets,
-    onSettled: () => query.refetch(),
+    onMutate: () => setCloudSyncing(true),
+    onSettled: () => {
+      setCloudSyncing(false);
+      return query.refetch();
+    },
   });
   const items = useMemo(() => query.data?.items.filter(x => {
     if (x.type === 'local' || x.id === 'local') return false;
@@ -83,10 +94,12 @@ export function TargetsPage() {
   return (
     <div className="page">
       <PageHeader title="候选资源" description="查看服务器规格、环境指纹和执行就绪状态。" actions={<>
-        <button className="button secondary" disabled={syncCloud.isPending} onClick={() => syncCloud.mutate()}><RefreshCw size={15} />{syncCloud.isPending ? '同步中…' : '同步云库存'}</button>
+        <button className="button secondary" disabled={syncCloud.isPending} onClick={() => syncCloud.mutate()}><RefreshCw className={syncCloud.isPending ? 'spin' : undefined} size={15} />{syncCloud.isPending ? '逐地区同步中…' : '同步云库存'}</button>
         <button className="button primary" onClick={() => setImportOpen(true)}><Download size={15} />连接外部机器</button>
       </>} />
       {syncCloud.isError && <div className="inline-alert"><AlertTriangle size={16} />{syncCloud.error.message}</div>}
+      {syncCloud.isPending && <div className="inline-alert" role="status"><RefreshCw className="spin" size={16} />正在检查腾讯云和阿里云全部地区；已完成地区的机器会立即出现在列表中。</div>}
+      {(syncCloud.data?.errors?.length ?? 0) > 0 && <div className="inline-alert" role="status"><AlertTriangle size={16} />已同步其余地区，另有 {syncCloud.data!.errors.length} 个地区暂时查询失败，可稍后再次同步。</div>}
       <div className="toolbar">
         <label className="search-field"><Search size={16} /><span className="sr-only">搜索目标</span><input value={search} onChange={e => setSearch(e.target.value)} placeholder="搜索名称、框架或硬件" /></label>
         <label className="select-field"><Filter size={15} /><select aria-label="资源状态" value={status} onChange={e => setStatus(e.target.value)}>

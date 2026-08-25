@@ -1432,10 +1432,7 @@ def _auto_connect_provisioned_target(
         if credentials.remember_credentials:
             with suppress(Exception):
                 EncryptedSshCredentialStore(settings).save_pending(target.id, credentials)
-        target.inventory_json = {
-            **target.inventory_json,
-            "autoSsh": {"status": "failed", "message": str(error)},
-        }
+        target.inventory_json = _inventory_with_auto_ssh_failure(target, error)
         target.snapshot_digest = canonical_digest(
             {"fingerprint": target.fingerprint_json, "inventory": target.inventory_json}
         )
@@ -1451,6 +1448,40 @@ def _auto_connect_provisioned_target(
         )
 
 
+def _inventory_with_auto_ssh_failure(
+    target: TargetRecord,
+    error: Exception,
+) -> dict[str, Any]:
+    """Persist exponential retry state so one bad SSH endpoint is not hammered."""
+
+    inventory = dict(target.inventory_json or {})
+    previous = inventory.get("autoSsh") or {}
+    previous_failures = int(previous.get("failureCount") or 0)
+    failure_count = min(previous_failures + 1, 32)
+    delay_seconds = min(600, 15 * (2 ** min(failure_count - 1, 6)))
+    inventory["autoSsh"] = {
+        "status": "failed",
+        "message": str(error),
+        "failureCount": failure_count,
+        "nextRetryAt": (utc_now() + timedelta(seconds=delay_seconds)).isoformat(),
+    }
+    return inventory
+
+
+def _auto_ssh_retry_due(target: TargetRecord) -> bool:
+    auto_ssh = (target.inventory_json or {}).get("autoSsh") or {}
+    retry_at = str(auto_ssh.get("nextRetryAt") or "").strip()
+    if not retry_at:
+        return True
+    try:
+        parsed = datetime.fromisoformat(retry_at)
+    except ValueError:
+        return True
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed <= utc_now()
+
+
 def retry_pending_cloud_ssh(session: Session, settings: Settings) -> int:
     """Retry saved cloud SSH credentials after inventory discovers an endpoint."""
 
@@ -1460,6 +1491,8 @@ def retry_pending_cloud_ssh(session: Session, settings: Settings) -> int:
     for target_id in sorted(pending_ids):
         target = session.get(TargetRecord, target_id)
         if target is None:
+            continue
+        if not _auto_ssh_retry_due(target):
             continue
         inventory = target.inventory_json or {}
         endpoint = str(inventory.get("endpoint") or "").strip()
@@ -1510,10 +1543,7 @@ def retry_pending_cloud_ssh(session: Session, settings: Settings) -> int:
                 connected += 1
         except Exception as error:
             # Keep the encrypted pending credentials for the next inventory retry.
-            target.inventory_json = {
-                **(target.inventory_json or {}),
-                "autoSsh": {"status": "failed", "message": str(error)},
-            }
+            target.inventory_json = _inventory_with_auto_ssh_failure(target, error)
             continue
     return connected
 

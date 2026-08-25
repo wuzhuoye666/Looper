@@ -78,6 +78,7 @@ def test_package_is_canonicalized_installed_and_materialized(tmp_path: Path) -> 
                 "prepare.py",
                 "producer.py",
                 "README.md",
+                "phpbench-081-patched2.zip",
                 "fixtures/pts-result.json",
             },
         ),
@@ -139,7 +140,7 @@ def test_executable_zip_registration_grants_explicit_local_package_trust(
     )
     benchmark = db_session.get(
         BenchmarkRecord,
-        "looper.phoronix-phpbench@10.8.6-phpbench1.1.6-looper8",
+        "looper.phoronix-phpbench@10.8.6-phpbench1.1.6-looper12",
     )
     assert benchmark is not None
     assert benchmark.trusted is True

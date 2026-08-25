@@ -14,6 +14,8 @@ import time
 import urllib.error
 import urllib.request
 import zipfile
+import xml.etree.ElementTree as ET
+from contextlib import contextmanager
 from pathlib import Path, PurePosixPath
 
 PTS_URL = (
@@ -26,15 +28,15 @@ PTS_CODELOAD_URL = (
 )
 PTS_SHA256 = "9d4b811a1ff4710ac89d19b34ba7ef4188b8ce1bfe61d5d276b0ee689dba1dc4"
 PTS_VERSION = "10.8.6"
-PAYLOAD_URL = "http://phoronix-test-suite.com/benchmark-files/phpbench-081-patched2.zip"
 PAYLOAD_SHA256 = "32503bd4ace0c8429493de864ca48bb16febed867e52b75f4369d7145f797718"
+PAYLOAD_BUNDLE = Path(__file__).with_name("phpbench-081-patched2.zip")
 MAX_DOWNLOAD_BYTES = 32 * 1024 * 1024
 
 # Some cloud targets have slow or flaky egress to GitHub/codeload. Keep the
 # digest-pinned sources ordered so a slow (but not failed) connection can fall
-# back to the equivalent codeload endpoint. A mirror can be injected through
-# LOOPER_PTS_ARCHIVE_URL / LOOPER_PHPBENCH_PAYLOAD_URL; the SHA-256 digest is
-# still enforced, so a mirror serving different bytes fails closed.
+# back to the equivalent codeload endpoint. A PTS mirror can be injected through
+# LOOPER_PTS_ARCHIVE_URL; the SHA-256 digest is still enforced, so a mirror
+# serving different bytes fails closed. The small PHPBench payload is bundled.
 PTS_URLS = tuple(
     url
     for url in dict.fromkeys(
@@ -42,23 +44,33 @@ PTS_URLS = tuple(
     )
     if url
 )
-PAYLOAD_URLS = tuple(
-    url
-    for url in dict.fromkeys(
-        [os.environ.get("LOOPER_PHPBENCH_PAYLOAD_URL"), PAYLOAD_URL]
-    )
-    if url
-)
-
 DOWNLOAD_ATTEMPTS = 3
 DOWNLOAD_READ_TIMEOUT = 60
 DOWNLOAD_TOTAL_TIMEOUT = 600
 DOWNLOAD_CHUNK_BYTES = 128 * 1024
 DOWNLOAD_RETRY_DELAYS = (2, 5, 10)
+RUNTIME_MARKER_VERSION = 1
 
 
 class PreparationError(RuntimeError):
     pass
+
+
+@contextmanager
+def _exclusive_cache_lock(cache: Path):
+    """Serialize duplicate lease preparation without leaving a stale lock."""
+
+    lock_path = cache / ".prepare.lock"
+    with lock_path.open("a+", encoding="utf-8") as lock:
+        if os.name == "posix":
+            import fcntl
+
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            if os.name == "posix":
+                fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
 
 
 def _run(argv: list[str], *, timeout: int = 600) -> None:
@@ -204,6 +216,29 @@ def _download(
     raise PreparationError(f"dependency download failed for {destination.name}: {last_error}")
 
 
+def _seed_bundled_payload(source: Path, destination: Path, expected_sha256: str) -> None:
+    """Copy the small pinned PHPBench payload shipped inside the package."""
+
+    if not source.is_file():
+        raise PreparationError(f"bundled PHPBench payload is missing: {source.name}")
+    observed = hashlib.sha256(source.read_bytes()).hexdigest()
+    if observed != expected_sha256:
+        raise PreparationError(
+            "bundled PHPBench payload digest mismatch: "
+            f"expected {expected_sha256}, got {observed}"
+        )
+    if (
+        destination.is_file()
+        and hashlib.sha256(destination.read_bytes()).hexdigest() == expected_sha256
+    ):
+        print(f"using cached {destination.name} (sha256 ok)", flush=True)
+        return
+    temporary = destination.with_suffix(destination.suffix + ".tmp")
+    shutil.copyfile(source, temporary)
+    temporary.replace(destination)
+    print(f"seeded bundled {destination.name} ({destination.stat().st_size} bytes)", flush=True)
+
+
 def _extract_pts(archive_path: Path, destination: Path) -> Path:
     ready = destination / ".ready.json"
     launcher = destination / "phoronix-test-suite"
@@ -230,6 +265,74 @@ def _extract_pts(archive_path: Path, destination: Path) -> Path:
     return launcher
 
 
+def _runtime_marker(cache: Path) -> Path:
+    return cache / ".looper-phpbench-ready.json"
+
+
+def _runtime_is_ready(cache: Path, php: str) -> bool:
+    marker_path = _runtime_marker(cache)
+    required = (
+        cache / "phoronix-test-suite" / "phoronix-test-suite",
+        cache / "phoronix-test-suite" / "pts-core" / "phoronix-test-suite.php",
+        cache / "phoronix-test-suite" / "pts-core" / "pts-core.php",
+        cache / "phpbench-081-patched2.zip",
+        cache / "bin" / "php",
+        cache / "pts-user" / "user-config.xml",
+    )
+    if not marker_path.is_file() or not all(path.is_file() for path in required):
+        return False
+    try:
+        marker = json.loads(marker_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    return marker == {
+        "markerVersion": RUNTIME_MARKER_VERSION,
+        "ptsVersion": PTS_VERSION,
+        "ptsArchiveSha256": PTS_SHA256,
+        "phpbenchPayloadSha256": PAYLOAD_SHA256,
+        "phpExecutable": str(Path(php).resolve()),
+    }
+
+
+def _configure_pts_user_path(launcher: Path, pts_user_path: Path) -> None:
+    """Create a reusable, non-interactive PTS configuration from pinned defaults."""
+
+    defaults = launcher.parent / "pts-core" / "static" / "user-config-defaults.xml"
+    if not defaults.is_file():
+        raise PreparationError("prepared PTS user-config defaults are missing")
+    try:
+        tree = ET.parse(defaults)
+    except ET.ParseError as error:
+        raise PreparationError(f"prepared PTS user-config defaults are invalid: {error}") from error
+    updates = {
+        ".//OpenBenchmarking/AnonymousUsageReporting": "FALSE",
+        ".//OpenBenchmarking/IndexCacheTTL": "0",
+        ".//OpenBenchmarking/AllowResultUploadsToOpenBenchmarking": "FALSE",
+        ".//Installation/PromptForDownloadMirror": "FALSE",
+    }
+    for xpath, value in updates.items():
+        node = tree.find(xpath)
+        if node is not None:
+            node.text = value
+    pts_user_path.mkdir(parents=True, exist_ok=True)
+    temporary = pts_user_path / "user-config.xml.tmp"
+    tree.write(temporary, encoding="utf-8", xml_declaration=True)
+    temporary.replace(pts_user_path / "user-config.xml")
+
+
+def _write_runtime_marker(cache: Path, php: str) -> None:
+    payload = {
+        "markerVersion": RUNTIME_MARKER_VERSION,
+        "ptsVersion": PTS_VERSION,
+        "ptsArchiveSha256": PTS_SHA256,
+        "phpbenchPayloadSha256": PAYLOAD_SHA256,
+        "phpExecutable": str(Path(php).resolve()),
+    }
+    temporary = _runtime_marker(cache).with_suffix(".tmp")
+    temporary.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
+    temporary.replace(_runtime_marker(cache))
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Prepare PTS PHPBench dependencies")
     parser.add_argument("--cache", required=True)
@@ -237,36 +340,39 @@ def main(argv: list[str] | None = None) -> int:
     cache = Path(args.cache).resolve()
     cache.mkdir(parents=True, exist_ok=True)
 
-    php, _unzip = _ensure_system_packages()
-    pts_archive = cache / "phoronix-test-suite.zip"
-    payload = cache / "phpbench-081-patched2.zip"
-    _download(PTS_URLS, pts_archive, PTS_SHA256)
-    _download(PAYLOAD_URLS, payload, PAYLOAD_SHA256)
-    launcher = _extract_pts(pts_archive, cache / "phoronix-test-suite")
+    with _exclusive_cache_lock(cache):
+        php, _unzip = _ensure_system_packages()
+        if _runtime_is_ready(cache, php):
+            print(
+                f"using prepared Phoronix Test Suite {PTS_VERSION} and PHPBench cache",
+                flush=True,
+            )
+            return 0
 
-    bin_dir = cache / "bin"
-    bin_dir.mkdir(exist_ok=True)
-    php_link = bin_dir / "php"
-    php_link.unlink(missing_ok=True)
-    php_link.symlink_to(Path(php).resolve())
-    core_entrypoint = launcher.parent / "pts-core" / "phoronix-test-suite.php"
-    if not core_entrypoint.is_file():
-        raise PreparationError("prepared PTS core PHP entrypoint is missing")
-    completed = subprocess.run(
-        [str(php_link), str(core_entrypoint), "version"],
-        check=False,
-        capture_output=True,
-        text=True,
-        timeout=30,
-        env={
-            **os.environ,
-            "PTS_SILENT_MODE": "1",
-            "PTS_USER_PATH_OVERRIDE": str((cache / "version-check-user").resolve()),
-        },
-    )
-    if completed.returncode != 0 or PTS_VERSION not in completed.stdout + completed.stderr:
-        raise PreparationError("prepared PTS launcher did not report the pinned version")
-    print(f"prepared Phoronix Test Suite {PTS_VERSION} and pinned PHPBench payload")
+        pts_archive = cache / "phoronix-test-suite.zip"
+        payload = cache / "phpbench-081-patched2.zip"
+        _download(PTS_URLS, pts_archive, PTS_SHA256)
+        _seed_bundled_payload(PAYLOAD_BUNDLE, payload, PAYLOAD_SHA256)
+        launcher = _extract_pts(pts_archive, cache / "phoronix-test-suite")
+
+        bin_dir = cache / "bin"
+        bin_dir.mkdir(exist_ok=True)
+        php_link = bin_dir / "php"
+        php_link.unlink(missing_ok=True)
+        php_link.symlink_to(Path(php).resolve())
+        core_entrypoint = launcher.parent / "pts-core" / "phoronix-test-suite.php"
+        version_source = launcher.parent / "pts-core" / "pts-core.php"
+        if not core_entrypoint.is_file() or not version_source.is_file():
+            raise PreparationError("prepared PTS core PHP entrypoint is missing")
+        core_source = version_source.read_text(encoding="utf-8", errors="replace")
+        if "PTS_VERSION" not in core_source or PTS_VERSION not in core_source:
+            raise PreparationError("prepared PTS core does not contain the pinned version")
+        _configure_pts_user_path(launcher, cache / "pts-user")
+        _write_runtime_marker(cache, php)
+        print(
+            f"prepared Phoronix Test Suite {PTS_VERSION} and pinned PHPBench payload",
+            flush=True,
+        )
     return 0
 
 

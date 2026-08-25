@@ -70,6 +70,9 @@ def test_manifest_is_pinned_and_managed_executable() -> None:
     assert provisioning["hostCapabilities"] == ["python", "local-process", "linux"]
     assert provisioning["provides"] == ["phoronix-test-suite", "php-cli", "unzip"]
     assert "prepare" in document["spec"]["runtime"]["commands"]
+    assert document["spec"]["runtime"]["commands"]["run"]["environment"][
+        "LOOPER_PTS_USER_PATH"
+    ] == "{cache}/pts-user"
     assert document["spec"]["infrastructure"]["nodeGroups"][0]["count"] == {
         "minimum": 1,
         "default": 1,
@@ -152,6 +155,13 @@ def test_resolve_pts_source_checkout_uses_core_php_entrypoint(
     assert producer.resolve_pts_command() == [str(php.resolve()), str(core.resolve())]
 
 
+def test_pts_user_path_override_is_separator_terminated(tmp_path: Path) -> None:
+    override = producer._pts_user_path_override(tmp_path)
+    assert override.endswith(os.sep)
+    # This is the exact directory PTS 10.8.x computes for its download cache.
+    assert Path(override) / "download-cache" == tmp_path / "download-cache"
+
+
 def test_run_contract_rejects_arbitrary_profile(tmp_path: Path) -> None:
     envelope_path = _write_envelope(tmp_path)
     envelope = json.loads(envelope_path.read_text(encoding="utf-8"))
@@ -185,6 +195,7 @@ def test_producer_and_normalizer_fixture_chain(
     assert calls[0][1]["FORCE_TIMES_TO_RUN"] == "3"
     assert calls[0][1]["PHP_BIN"]
     assert calls[0][1]["TEST_RESULTS_NAME"] == "looper-phpbench"
+    assert calls[0][1]["PTS_USER_PATH_OVERRIDE"].endswith(os.sep)
     assert "OUTPUT_FILE" not in calls[0][1]
     assert calls[1][0][-2:] == ["result-file-to-json", "looper-phpbench"]
 
@@ -265,8 +276,20 @@ def test_prepare_download_raises_after_all_attempts_fail(
     monkeypatch.setattr(prepare, "_download_once", fake_download_once)
     monkeypatch.setattr(prepare, "DOWNLOAD_RETRY_DELAYS", (0, 0, 0))
     with pytest.raises(prepare.PreparationError):
-        prepare._download(prepare.PAYLOAD_URLS, tmp_path / "payload.zip", "irrelevant")
+        prepare._download(("https://example.invalid/payload.zip",), tmp_path / "payload.zip", "irrelevant")
     assert len(calls) == prepare.DOWNLOAD_ATTEMPTS
+
+
+def test_prepare_seeds_bundled_phpbench_payload(tmp_path: Path) -> None:
+    destination = tmp_path / "phpbench-081-patched2.zip"
+
+    prepare._seed_bundled_payload(
+        prepare.PAYLOAD_BUNDLE,
+        destination,
+        prepare.PAYLOAD_SHA256,
+    )
+
+    assert destination.read_bytes() == prepare.PAYLOAD_BUNDLE.read_bytes()
 
 
 def test_run_command_streams_merged_output(tmp_path: Path) -> None:
@@ -286,3 +309,54 @@ def test_run_command_streams_merged_output(tmp_path: Path) -> None:
     assert "hello" in content
     assert "warn" in content
     assert "exit_code=0" in content
+
+
+def test_subprocess_environment_seeds_download_cache(tmp_path: Path) -> None:
+    environment = producer._subprocess_environment(tmp_path, 3, 10)
+    assert environment["PTS_DOWNLOAD_CACHE"] == str(tmp_path / "download-cache")
+    assert environment["PTS_USER_PATH_OVERRIDE"].endswith(("/", "\\"))
+
+
+def test_prepare_runtime_marker_skips_revalidating_complete_cache(tmp_path: Path) -> None:
+    php = tmp_path / "usr" / "bin" / "php"
+    php.parent.mkdir(parents=True)
+    php.write_text("php", encoding="utf-8")
+    for relative in (
+        "phoronix-test-suite/phoronix-test-suite",
+        "phoronix-test-suite/pts-core/phoronix-test-suite.php",
+        "phoronix-test-suite/pts-core/pts-core.php",
+        "phpbench-081-patched2.zip",
+        "bin/php",
+        "pts-user/user-config.xml",
+    ):
+        path = tmp_path / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("ready", encoding="utf-8")
+
+    prepare._write_runtime_marker(tmp_path, str(php))
+
+    assert prepare._runtime_is_ready(tmp_path, str(php)) is True
+
+
+def test_prepare_config_disables_automatic_index_refresh(tmp_path: Path) -> None:
+    launcher = tmp_path / "pts" / "phoronix-test-suite"
+    defaults = launcher.parent / "pts-core" / "static" / "user-config-defaults.xml"
+    defaults.parent.mkdir(parents=True)
+    defaults.write_text(
+        "<PhoronixTestSuite><Options><OpenBenchmarking>"
+        "<AnonymousUsageReporting>TRUE</AnonymousUsageReporting>"
+        "<IndexCacheTTL>3</IndexCacheTTL>"
+        "<AllowResultUploadsToOpenBenchmarking>TRUE</AllowResultUploadsToOpenBenchmarking>"
+        "</OpenBenchmarking><Installation>"
+        "<PromptForDownloadMirror>TRUE</PromptForDownloadMirror>"
+        "</Installation></Options></PhoronixTestSuite>",
+        encoding="utf-8",
+    )
+    user_path = tmp_path / "pts-user"
+
+    prepare._configure_pts_user_path(launcher, user_path)
+    config = (user_path / "user-config.xml").read_text(encoding="utf-8")
+
+    assert "<IndexCacheTTL>0</IndexCacheTTL>" in config
+    assert "<AnonymousUsageReporting>FALSE</AnonymousUsageReporting>" in config
+    assert "<AllowResultUploadsToOpenBenchmarking>FALSE" in config

@@ -46,6 +46,8 @@ deploy/ssh/*.key
 Thumbs.db
 debug.log
 /.looper-api.*.log
+/.looper-*.log
+/NUL
 
 # Downloaded upstream sources
 third_party/cache/
