@@ -83,3 +83,17 @@
 
 - REAL-L6C、REAL-SSH、REAL-S9 均未关闭。
 - 当前 CVM 只有 readiness / 直读代理证据（`4bfa29d` audit），不能写成完整真实闭环验收。
+
+---
+
+## 2026-08-25 真实动态闭环 addendum（代码基线 `9a32e92`）
+
+上段是 `4f121cc` 时点的历史结论。其后 `REAL-M3-01` 已在目标
+`8.134.104.213` 完成真实 sysbench 外部负载、O1/O2 live、v2 risk gate、THP
+候选写入、业务复测、candidate/recovery receipt 和最终恢复：`never` 与 `always`
+分别在独立相位执行，均被显式最小效果 0.26698 拒绝，最终回到 `madvise`。
+
+因此“只有 readiness/直读代理证据”已过时；现在可以声明**真实功能闭环已跑通**，
+但不能声明性能收益、accepted candidate、场景 Profile 或 REAL-S9。证据包 sha256 为
+`0cd520cd89679cd9d22acf23b9c0ddb6389e273d235c64531a4fa83903fcb28c`。实测另发现
+窗口预算耗尽时 `stop_gate_decision.stop=false` 的 `DYN-END-01`，已进入未完成队列。

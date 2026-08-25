@@ -1,6 +1,6 @@
 # System Optimizer 未完成任务队列（2026-08-24）
 
-> 状态：current backlog；核验基线：`system-optimizer-impl@a365713`。
+> 状态：current backlog；最近真实验收代码基线：`system-optimizer-impl@9a32e92`。
 > 本文只登记尚未关闭的工作和依赖关系，不代替
 > `agent-work-ledger-2026-08-24.md` 的 owner、交付、验收与 push 状态。
 > 任何任务正式分配后，必须在 agent 台账另建任务记录。
@@ -31,6 +31,19 @@
 - `S4-02 local contract`：`f559b1f` 新增显式 MetricContract 审批 bundle、内容寻址落盘和
   回放验证；它不推导 scale，也尚未接真实 CLI。真实逐 metric 数值、解释阈值和审批证据
   仍依赖用户确认与目标实测。
+
+### 2026-08-25 真实 M3 功能闭环校准
+
+- `REAL-M3-01` 已在低规格目标 `8.134.104.213` 运行真实 sysbench 外部负载、O1/O2
+  live 采集、v2 风险门禁、THP 写入、业务复测、durable receipt 和拒绝恢复。`never`
+  与 `always` 均未达到用户确认的最小效果 0.26698，未接受、未晋升，不形成性能推荐。
+- D2 会在一个假设 refute 后阻断唯一剩余假设；为保持硬门禁且不伪造第三假设，两个
+  THP 候选分别在独立相位执行。该行为不是安全失败，但多候选穷举流程必须显式考虑。
+- 两个相位最终均恢复 `madvise`，无 guard/lease/attention；下载证据经当前代码重算
+  dynamic run、receipt chain 和 O1/O2 evidence index 通过。
+- 新发现 `DYN-END-01`：`max_windows` 是循环参数而非 gate budget；窗口耗尽时 run 的
+  `stop_gate_decision.stop` 仍可为 `false`，仅 note 写“window budget reached”。这与
+  “每个相位必须有显式终点”口径不一致，真实运行成功不掩盖该缺口。
 
 ## 2. 本轮报告复核结论
 
@@ -116,6 +129,7 @@ O3 时间盒 trace；通用采集缓存；中间测量/结果复用；增量下�
 | ID | 类型 | 任务 | 依赖 | 可并行性与写集合 | 验收门 |
 |---|---|---|---|---|---|
 | RCP-03 | 性能/安全 | 设计 scope-local 索引或单次扫描快照，消除每次 advance 全局 O(N) 重验；明确其它 scope 损坏时是否仍全局阻断 | RCP-02 | 与 M3 功能 lane 并行；独占 receipt store/tests | 基准证明复杂度改善；篡改/断链/分叉/孤儿仍 fail-closed；不得降低启动全局审计强度 |
+| DYN-END-01 | 正确性 | 把 `max_windows` 耗尽建模为可回放的显式停止决定，或将窗口预算纳入版本化 gate 合同；禁止返回“运行已结束但 stop=false” | v1 digest/loader 兼容评审 | 独占 `dynamic_loop.py`/`phase_gate.py` 与专属 tests；不得顺带放宽 D2 | v1 历史回放零漂移；v2 到窗上限必须 `stop=true` 且引用合同字段/证据 digest；CLI 仍无条件恢复 |
 | S4-01 | 决策/合同 | 冻结 v1；V2/P-D-A-Q-T/E_m 延后 | 已完成 | `7bafd4e`；v1 四维、公式 v1alpha1 和旧入口不变 | 无旧 digest 漂移；无默认 scale/阈值 |
 | S4-02 | 校准 | 本地审批/持久化/回放合同已完成 `f559b1f`；对每个实际 metric/目标环境生成 scale 与解释阈值校准证据仍待实测 | S4-01、真实目标授权、用户确认推导依据 | 可按 metric/环境并行 | 四层实测；未获取数据记 unavailable，不用论文数字填充；真实接线前必须验证 bundle |
 | S3-01 | 实现 | O1 evidence → S4 v1 → 确定性 ranked proposal | 已完成 `9f5c648` | 新模块/tests；v1/v2 声明回放入口保留 | digest 全绑定；数据不足 fail-closed；不回退文件 rank |

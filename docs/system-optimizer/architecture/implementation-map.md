@@ -68,6 +68,11 @@
 | **编排器** | `dynamic_loop.py` | run_dynamic_phase：每窗 组装→SLO/症状→账本→干预(注入)→复验→门禁判定→显式停止；负载/施加/测量全注入回调 |
 | **真实接线** | `dynamic_adapters.py` + `dynamic_demo.py` + CLI `system-opt dynamic-run`/`m3-demo` + `dynamic_collection.py` + `scenario_profile.py` | 会话文件是引擎↔外部负载唯一界面；v2 可选在线路由和假设缓存；干预 = L1 keep + 业务复测 S6/S7 + 拒绝恢复；相位收尾无条件恢复；晋升后场景 Profile 同时绑定原始/通用 Profile 双基线，`m3-demo` 单命令跑完整 synthetic 纵向切片 |
 
+2026-08-25 已在 `8.134.104.213` 以真实 sysbench + THP `never`/`always` 两个独立
+相位验收上述生产接线：两候选都被 S7 拒绝并恢复到 `madvise`，所以只关闭“真实功能
+闭环可执行”出口，不关闭真实收益、晋升/Profile 或跨环境 S9。实测同时暴露
+`DYN-END-01`：`max_windows` 耗尽时可能结束运行但 gate decision 仍为 `stop=false`。
+
 ## 五、证据与纪律机制（答辩硬货）
 
 - **digest 三层**：单指标 canonical / 整批 / 运行记录——所有结论可从原始字节重算；
