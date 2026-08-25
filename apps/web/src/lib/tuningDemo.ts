@@ -214,6 +214,112 @@ export const DEMO_FRAMES: DemoFrame[] = [
   },
 ];
 
+// 多参数剧本：授权 ≥2 个配置项时启用。
+// 表达引擎的多参数纪律：单相位只验证一个参数（归因清晰），全部单参数验证后
+// 进入组合相位实测组合收益（S9：组合收益不能由单项相加推断），最后一起决策。
+const HYPOTHESIS_SWAPPINESS: TuningHypothesisView = {
+  id: 'hyp-swappiness-10',
+  title: '假设② 降低交换倾向 swappiness',
+  changeText: 'vm.swappiness: 60 → 10（内核参数）',
+  rank: 2,
+  outcome: 'pending',
+  detail: '内存压力大时过早换出拖慢吞吐；调低让内核尽量用物理内存',
+};
+
+export const DEMO_FRAMES_MULTI: DemoFrame[] = [
+  {
+    stageIndex: 0,
+    logs: [
+      { stage: 'baseline', level: 'info', text: '取得目标写租约，进入多参数调优（3 个相位：逐参数验证 → 组合确认）' },
+      { stage: 'baseline', level: 'info', text: '相位 1/3 采集基线：以业务负载身份起压，5 个观察窗口' },
+    ],
+  },
+  {
+    stageIndex: 0,
+    logs: [
+      { stage: 'baseline', level: 'info', text: '窗口 1/5：44871 · 窗口 2/5：44320 · 窗口 3/5：45102 ops/s' },
+    ],
+  },
+  {
+    stageIndex: 0,
+    logs: [
+      { stage: 'baseline', level: 'info', text: '窗口 4/5：44684 · 窗口 5/5：44513 ops/s' },
+      { stage: 'baseline', level: 'success', text: '基线冻结：中位数 44684 ops/s，CV 0.65%' },
+    ],
+    metrics: { baselineMedian: 44684, cvPct: 0.65 },
+  },
+  {
+    stageIndex: 1,
+    logs: [
+      { stage: 'hypothesis', level: 'info', text: '登记 3 条假设：THP→always、swappiness 60→10、THP+swappiness 组合' },
+      { stage: 'hypothesis', level: 'info', text: '多参数纪律：每相位只验证一个参数（归因清晰），组合留到最后实测' },
+    ],
+    hypotheses: [
+      { ...HYPOTHESIS_ALWAYS, outcome: 'running' },
+      HYPOTHESIS_SWAPPINESS,
+      { id: 'hyp-combo', title: '假设③ 组合候选', changeText: 'THP=always + swappiness=10', rank: 3, outcome: 'pending', detail: '两项单独验证通过后组合复验，组合收益以实测为准（不相加推断）' },
+    ],
+  },
+  {
+    stageIndex: 2,
+    logs: [
+      { stage: 'intervention', level: 'info', text: '相位 1/3 写入前快照：THP = madvise, vm.swappiness = 60' },
+      { stage: 'intervention', level: 'warn', text: '相位 1/3 施加假设①（本相位唯一变更）：THP: madvise → always' },
+      { stage: 'intervention', level: 'success', text: '读回验证通过：THP = always' },
+    ],
+  },
+  {
+    stageIndex: 3,
+    logs: [
+      { stage: 'retest', level: 'info', text: '相位 1/3 复测：5 窗中位数 51649 ops/s' },
+    ],
+    metrics: { candidateMedian: 51649 },
+  },
+  {
+    stageIndex: 4,
+    logs: [
+      { stage: 'verdict', level: 'success', text: '相位 1/3 裁决：假设① +15.59%（LCB 12.4% > MDE 2%）通过；现场恢复起点，进入相位 2' },
+      { stage: 'intervention', level: 'info', text: '相位 2/3 写入前快照：vm.swappiness = 60' },
+      { stage: 'intervention', level: 'warn', text: '相位 2/3 施加假设②（内核参数值修改）：vm.swappiness: 60 → 10' },
+      { stage: 'intervention', level: 'success', text: '读回验证通过：/proc/sys/vm/swappiness = 10（内核参数可安全修改）' },
+    ],
+    metrics: { improvementPct: 15.59, lcbPct: 12.4 },
+    hypotheses: [
+      { ...HYPOTHESIS_ALWAYS, outcome: 'accepted', detail: '相位 1：+15.59% 通过' },
+      { ...HYPOTHESIS_SWAPPINESS, outcome: 'running' },
+      { id: 'hyp-combo', title: '假设③ 组合候选', changeText: 'THP=always + swappiness=10', rank: 3, outcome: 'pending', detail: '等单参数验证完成后组合复验' },
+    ],
+  },
+  {
+    stageIndex: 3,
+    logs: [
+      { stage: 'retest', level: 'info', text: '相位 2/3 复测：swappiness=10 下 5 窗中位数 45892 ops/s' },
+      { stage: 'verdict', level: 'success', text: '相位 2/3 裁决：假设② +2.71%（LCB 2.9% > MDE 2%）通过；现场恢复起点，进入组合相位' },
+    ],
+    metrics: { candidateMedian: 45892, improvementPct: 2.71, lcbPct: 2.9 },
+    hypotheses: [
+      { ...HYPOTHESIS_ALWAYS, outcome: 'accepted', detail: '相位 1：+15.59% 通过' },
+      { ...HYPOTHESIS_SWAPPINESS, outcome: 'accepted', detail: '相位 2：+2.71% 通过' },
+      { id: 'hyp-combo', title: '假设③ 组合候选', changeText: 'THP=always + swappiness=10', rank: 3, outcome: 'running', detail: '组合复验进行中' },
+    ],
+  },
+  {
+    stageIndex: 4,
+    logs: [
+      { stage: 'intervention', level: 'info', text: '相位 3/3 组合施加：THP = always 且 vm.swappiness = 10（同一快照内两项）' },
+      { stage: 'retest', level: 'info', text: '组合复测：5 窗中位数 52983 ops/s（+18.6%，实测大于单项 15.59%+2.71% 的简单叠加预期外的协同部分有限，以实测为准）' },
+      { stage: 'verdict', level: 'success', text: '组合裁决：+18.63%（LCB 15.2% > MDE 2%），两项协同无退化门触发' },
+      { stage: 'verdict', level: 'info', text: '等待用户批准组合候选：可保留生效、仅生成推荐或拒绝' },
+    ],
+    metrics: { candidateMedian: 52983, improvementPct: 18.63, lcbPct: 15.2 },
+    hypotheses: [
+      { ...HYPOTHESIS_ALWAYS, outcome: 'accepted', detail: '相位 1：+15.59% 通过' },
+      { ...HYPOTHESIS_SWAPPINESS, outcome: 'accepted', detail: '相位 2：+2.71% 通过' },
+      { id: 'hyp-combo', title: '假设③ 组合候选', changeText: 'THP=always + swappiness=10', rank: 3, outcome: 'running', detail: '组合 +18.63%，等待批准' },
+    ],
+  },
+];
+
 export const RESTORE_FRAMES: DemoFrame[] = [
   {
     stageIndex: 5,
