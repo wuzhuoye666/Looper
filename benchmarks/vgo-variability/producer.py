@@ -74,9 +74,9 @@ def bounded_integer(
     return value
 
 
-def experiment_id(attempt_id: str) -> str:
+def experiment_id(attempt_id: str, lease_token: int) -> str:
     normalized = re.sub(r"[^A-Za-z0-9._-]+", "-", attempt_id).strip("-._")
-    return f"looper_{normalized or 'attempt'}"
+    return f"looper_{normalized or 'attempt'}_lease-{lease_token}"
 
 
 def completed_output(value: str | bytes | None) -> str:
@@ -207,7 +207,7 @@ def main() -> int:
 
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
-    run_id = experiment_id(str(envelope["attemptId"]))
+    run_id = experiment_id(str(envelope["attemptId"]), int(envelope["leaseToken"]))
     raw_dir = source_root / "data" / "raw" / run_id / workload
     log_dir = source_root / "logs" / run_id / workload
     commands: list[dict[str, Any]] = []

@@ -321,6 +321,7 @@ def main() -> int:
                 sampleCount=len(rows),
             ),
         ]
+        sample_offset = 0
         for condition in ("baseline", "mitigated"):
             values = [float(row["app_metric"]) for row in valid_groups[condition]]
             metric_rows.extend(
@@ -331,11 +332,12 @@ def main() -> int:
                     workload,
                     "sample",
                     attributes={"condition": condition, "design": "randomized-blocked-ab"},
-                    sampleIndex=index,
+                    sampleIndex=sample_offset + index,
                     sampleCount=len(values),
                 )
                 for index, value in enumerate(values)
             )
+            sample_offset += len(values)
 
     (output / "vgo-diagnostics.json").write_text(
         json.dumps(diagnostics, ensure_ascii=False, indent=2, sort_keys=True) + "\n",

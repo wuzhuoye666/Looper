@@ -176,6 +176,7 @@ def test_vgo_producer_invokes_original_entry_point_and_keeps_other_attempts(
     keep.write_text("keep\n", encoding="utf-8")
     envelope = {
         "attemptId": "attempt-1",
+        "leaseToken": 7,
         "experimentId": "experiment-1",
         "workload": {"id": "7z", "metadata": {}},
         "candidate": {
@@ -237,6 +238,7 @@ def test_vgo_producer_invokes_original_entry_point_and_keeps_other_attempts(
     native = json.loads((output / "vgo-native.json").read_text(encoding="utf-8"))
     assert native["machineGate"] == "partial"
     assert native["schemaVersion"] == "looper.vgo-native/v2"
+    assert native["vgoExperimentId"] == "looper_attempt-1_lease-7"
     assert native["requestedCounts"] == {
         "baseline": 6,
         "profile": 3,
@@ -255,7 +257,7 @@ def test_vgo_producer_invokes_original_entry_point_and_keeps_other_attempts(
     ]
     assert len(observed_commands) == 6
     assert keep.read_text(encoding="utf-8") == "keep\n"
-    assert not (source_root / "data" / "raw" / "looper_attempt-1").exists()
+    assert not (source_root / "data" / "raw" / "looper_attempt-1_lease-7").exists()
 
 
 def test_vgo_partial_gate_keeps_sad_hard_blocked(tmp_path: Path) -> None:
@@ -397,7 +399,19 @@ def test_vgo_normalizer_emits_variability_metrics_from_original_csv(
     assert by_metric["optimized_runtime_cv"].value < by_metric["runtime_cv"].value
     assert by_metric["cv_reduction_ratio"].value > 0
     assert by_metric["correctness_rate"].value == 1.0
-    assert len([item for item in observations if item.metric == "runtime_seconds"]) == 8
+    runtime_samples = [item for item in observations if item.metric == "runtime_seconds"]
+    assert len(runtime_samples) == 8
+    assert [item.sample_index for item in runtime_samples] == list(range(8))
+    assert [item.attributes["condition"] for item in runtime_samples] == [
+        "baseline",
+        "baseline",
+        "baseline",
+        "baseline",
+        "mitigated",
+        "mitigated",
+        "mitigated",
+        "mitigated",
+    ]
     result = AttemptResult.model_validate_json((output / "result.json").read_text(encoding="utf-8"))
     assert result.status == "succeeded"
     assert all(check.passed for check in result.checks)
