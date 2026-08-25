@@ -1,6 +1,25 @@
 # workload 场景调优
 
-> 状态：architecture draft；有限闭环、低开销优先和业务结果裁决已 confirmed。
+> 状态：architecture draft，**方向已确认**（SO-D019，用户 2026-08-23）：O0-O3
+> 定名、D2 两条硬规则、D5 重激活 A+B 组合；L7 第二条目类型细节与全部数值
+> 校准仍 open（提案制）。有限闭环、低开销优先和业务结果裁决已 confirmed。
+> 本文所有数值参数均为**占位符（待校准）**，不构成实现默认值。
+
+## 术语对齐：观察分层 O0–O3（消歧）
+
+本文原先用 "L0 业务指标 / L1 低开销系统指标 / L2 微指标 / L3 trace" 描述观察
+深度，与九层架构（overall.md 的 L0 执行后端 … L8 引擎）撞名。自本次扩写起统一
+改称**观察分层 O0–O3**，与九层架构的 L 编号互不混用：
+
+| 观察层 | 内容 | 采集载体 | 开销 | 授权 |
+|---|---|---|---|---|
+| O0 | 业务指标（吞吐/SLO 达成/尾延迟/正确性） | workload 合同自带输出 | 近零（读任务自身产物） | 任务合同 |
+| O1 | 低开销系统粗指标（CPU busy、PSI、netdev、iostat 级计数器） | L4 采集器 builtin 集，固定节拍 | 有界、可 A/B | 任务合同 |
+| O2 | 组件微指标（PMU、slab、TCP ext、per-CPU 细账） | L4 采集器按组件触发窗口 | 显著、须证据 | 路由决策 + 任务合同 |
+| O3 | 短时 trace（perf trace / eBPF / 抓包） | 授权时间盒内一次性 | 最高、时间盒限定 | 显式单独授权 |
+
+升级规则：O1 常态；O2 只在被路由选中的组件上开窗；O3 只在 O2 证据不足且
+显式授权时短时启用。**禁止全量常开 O2/O3**（SO-D007）。
 
 ## 目标
 
@@ -10,10 +29,10 @@
 
 1. workload 合同声明业务目标、SLO、正确性、阶段和输入身份。
 2. 以原始配置或经确认的通用 Profile 建立冻结基线。
-3. 运行 workload，同步采集 L0 业务指标和 L1 低开销系统指标。
+3. 运行 workload，同步采集 O0 业务指标和 O1 低开销系统指标。
 4. 识别业务退化、资源压力和可比 workload 阶段。
 5. 通过诊断路由保留一个或多个候选组件。
-6. 对组件按需启用 L2 微指标；必要且授权时短时启用 L3 trace。
+6. 对组件按需启用 O2 微指标；必要且授权时短时启用 O3 trace。
 7. 在组件内部计算当前不利压力与不利变化，形成有证据的瓶颈假设。
 8. 将假设映射到安全可控配置，执行单轮干预。
 9. 用相同 workload 协议复测；先过正确性、安全和 SLO，再判断业务收益。
@@ -42,3 +61,187 @@
 - 不根据一次相关性自动认定根因。
 - 不在第一阶段部署常驻在线调参或阶段切换器。
 - 不因未来可能缓存而跳过当前真实复测。
+
+---
+
+# 动态相位设计草案（PKG-G，2026-08-23）
+
+> 以下为 overall.md §3.2/§3.3（动态优化与结束门禁）的展开设计。D0–D5 为设计
+> 草案（PKG-G，2026-08-23），D6 为设计件→实现的差距映射；动态优化已于
+> 2026-08-24 落地（见 D6）。全部数值为占位符（待校准）；标 open 的条目按提案
+> 制等用户确认后才可进入公式登记表与代码。
+
+## D0. 负载供给边界：基础套件的双重角色（用户定位 2026-08-23，SO-D020）
+
+M3 阶段没有真实业务应用，用 stress-ng / sysbench / fio / iperf3 等基础套件充当
+workload（业务负载替身）。**同一批工具在两条相位里角色不同，边界写死**：
+
+| 相位 | 谁启动压力工具 | 工具角色 | 引擎行为 |
+|---|---|---|---|
+| 静态（M2，已实现） | **优化器主动调用**——L3 压力器按 StandardPressureProtocol 的 prepare/warmup/measure/verify/cleanup 阶段合同驱动 | 受控探测负载 | 引擎经 L3 加压后由 L4 采集 |
+| 动态（M3，本设计） | **测试/操作侧外部启动**并维持（测试 harness 或操作者按 workload 合同起压） | 业务负载替身——"测试给的压力" | 引擎**永不主动调用**压力工具；只观测（O0/O1）→ 打分 → 小步干预系统配置 → 复验 |
+
+为什么必须这样切：
+
+1. **可比性（S0 的动态版）**：负载由外部按合同提供，基线窗、观察窗、复验窗
+   看到的是同一 `workload_identity_digest` 的负载；若引擎自己起压，任何配置
+   干预都可能同时改变负载本身，改善量归因被污染。
+2. **防自证**：引擎若既能造负载又能评收益，等于自己出题自己改卷。负载外置后
+   引擎唯一能动的只剩系统配置，收益只能来自配置。
+3. **生产语义对齐**：真实场景里业务方拥有 workload，优化器只能在业务之下调
+   系统。stress-ng 替身保持这个方向：负载生命周期归"业务方"（测试侧）。
+4. **观察者效应隔离**：O1 常态采集与配置施加都不触碰负载进程；负载的
+   启动/停止/重启是外部事件，各自带测试侧证据记录。
+5. **审计两侧分账**：负载启停属测试侧台账；引擎台账只含观测窗口与配置干预；
+   两侧证据在 `workload_identity_digest` 上汇合。
+
+**workload 合同相应新增字段（提案）**：
+
+- `load_provider: external-test`——第一版只有这一种；**不提供**引擎自起压的
+  模式（`load_provider=optimizer` 不进合同枚举）。
+- `load_command_identity`——工具+参数+时长的身份摘要，由测试侧声明、观察窗
+  核对；引擎持有它只为验身份，不因此获得执行权。
+- O0 业务指标 = **读取外部负载自身的产出**（如 stress-ng 的 bogo-ops 统计、
+  sysbench 的 tx 计数、fio 的 iops/lat 输出），引擎只解析产物，不启动进程。
+
+对 D3（S9 复验窗）的影响：复验窗要求测试侧**重新提供同一身份的负载**——引擎
+发出"复验窗请求"（附 `load_command_identity`），由测试侧起压；测试侧无法重供
+（身份漂移/负载消失）→ 走 D4 `identity_drift_policy`，晋升 fail-closed。
+
+对 D6 的影响：**动态引擎循环中不存在任何 L3 调用路径**；L3 压力器仍是静态相位
+专用（PKG-B 压/采解耦同样只服务静态相位）。
+
+## D1. 观测合同（O0–O3）与采集开销 A/B
+
+**观察窗口（ObservationWindow）**：动态相位的基本观测单位。字段提案：
+
+```
+ObservationWindow:
+  window_id            # 时间块标识，进 S9 复验的 time_block_id
+  phase                # workload 阶段（manifest 显式声明；自动识别 open）
+  o0_business:  list[metric_sample]   # 合同业务指标
+  o1_system:    ComponentMetricSnapshot（L4 builtin 集）
+  o2_windows:   list[ComponentCollectionRun]  # 仅被路由选中的组件
+  o3_records:   list[authorization_scoped_trace]  # 显式授权时间盒
+  workload_identity_digest  # 输入+阶段+规模的身份（S0 可比性的动态版）
+  overhead_digest           # 指向本轮启用的各观察层开销证据
+```
+
+- 每个观察窗口携带自己的 `workload_identity_digest`；相邻窗口身份漂移超过任务
+  声明容差 → 触发 S0–S10 中动态相位的窗口预算自 v1alpha3 起由 gate 合同 `PhaseBudgetV3.max_windows` 唯一承载：窗口耗尽在末窗常规评估内产生 `stop=true`（BUDGET_EXHAUSTED，优先级低于安全/漂移/干预数/墙钟、高于 target-met），证据绑定末窗观测 digest（DYN-END-01I，2026-08-25）。
+
+S10 的"负载消失/剧变"停止类评估（不是静默继续）。
+- **开销 A/B 复用 L4 已有合同**：`build_collection_overhead_evidence`（成对
+  裸墙钟、无阈值无裁决）。O2 开窗与 O3 授权必须各自携带开销证据 digest；
+  开销证据只记录不裁决——"开销是否可接受"是任务输入，不内置默认。
+- 观察与施加分离（overall §3.2 干预约束）：一个窗口内**要么纯观察要么含一次
+  干预后的复测**，不混"边改边看"。
+
+## D2. S3 动态路由：症状 → 多组件假设（open decision #4 的提案）
+
+现状：S3 只有静态侧雏形（`diagnostic_priorities → routed_components`，未真跑）。
+动态相位提案——**假设是一等记录，不是一次路由调用**：
+
+```
+ComponentHypothesis:
+  hypothesis_id
+  symptom: SymptomRecord          # O0 业务退化/未达 SLO + 触发窗口 window_id
+  component: cpu|memory|network|storage|numa
+  rank: 由冻结 S4 v1 四维 (P_m, D_m, Persistence, Confidence) 排出
+  supporting_o1_o2_digests: list  # 支持证据（区分 O1 粗证 / O2 微证）
+  competing: list[hypothesis_id]  # 竞争假设（同一症状的其他组件解释）
+  status: proposed → probing → confirmed | refuted | superseded
+  refute_evidence_digest         # refuted 时必填；v1 cache 只接业务复测无改善
+```
+
+规则提案：
+
+1. **一个症状至少登记两个竞争假设后才允许干预**（防单次相关归因，对齐"不做"
+   条款）；假设数低于 2 时只允许 O2 开窗取证，不允许改配置。
+2. `confirmed` 的唯一路径是**干预实验**：单组件小步干预 → 同 workload 协议
+  复测 → 业务指标（不是组件微指标）给出 S7 裁决。O2 证据只能把假设推进到
+  `probing`，永远不能直接 `confirmed`。
+3. 可比且样本充分的业务复测无改善可写 L7 hypothesis 负缓存（身份 = 环境 ×
+  workload × 组件 × opaque 症状类 × metric/policy × 公式 × 假设语义版本）；完全同身份
+  的组件在后续路由中排除，任一身份变化即 miss。它与候选负缓存共用 JSONL，按独立
+  schema 严格分派；O2 反证须未来 typed evidence，v1 不接收。
+4. 路由输出不是单一组件，而是**假设队列**：预算按 S4 排序切分给前 K 个假设
+  （K 为任务输入）；引擎逐个 probing，confirmed 即止或队列耗尽走 S10 收敛停止。
+
+## D3. S9 复验观测生产路径（闭合 M11：现 passed 恒真、无真实复验生产者）
+
+现状：`evaluate_promotion` 合同要求跨时间块/跨环境复验，但当前唯一观测源是
+引擎轮内终裁（`passed` 复用同轮 verdict，恒真）。设计提案——**复验窗口作为
+`VerificationObservation` 的真实生产者**：
+
+```
+VerificationWindow（复验窗口）:
+  promoted_candidate_id      # 待晋升候选
+  window_id                  # → VerificationObservation.time_block_id
+  workload_identity_digest   # 必须与候选采纳轮 S0 可比
+  outcome:
+    passed: bool             # = S7 接受条件对【业务主指标】的裁决结果
+    evidence_digest          # → 本窗口 MeasurementBatch digest
+```
+
+- **静态相位**（现有 engine-round 观测）：保留为"采纳记录"性质；晋升合同
+  `min_observations` 与 distinct time blocks 的要求意味着仅靠轮内观测天然
+  不够，必须等动态复验窗口补足——这一约束已实现（PromotionContract），本设计
+  只补生产者，不改合同。
+- **动态相位**：晋升候选进入"保留观察"状态，其后每个验证窗口对同一
+  `workload_identity` 重测（负载由测试侧按 D0 重新提供，引擎只发复验窗请求）；
+  `passed` 由重测批次的 S7 裁决产生（可为 false），
+  失败观测走 `evaluate_promotion` fail-closed → 不晋升 + 触发 L6 候选级回退。
+- 复验窗口计入结束门禁预算（防"无限复验"）：复验窗口数 ≤ 任务输入上限，
+  超限走 S10 收敛停止，best-observed 以未晋升状态如实报告。
+
+## D4. 结束门禁参数化合同（overall §3.3 五类停止的合同化）
+
+提案 `DynamicPhaseGateContract`（**全部字段任务注入，无默认值**；合同 digest
+进入证据身份，改参数即新身份）：
+
+| 字段 | 对应停止类（S10） | 语义（数值待校准） |
+|---|---|---|
+| `slo_target + hold_windows N` | 目标达成 | 业务指标达标并保持 N 个连续观察窗口 |
+| `convergence_rounds K + lcb_threshold` | 收敛 | 连续 K 轮候选业务收益 LCB ≤ 阈值 |
+| `max_interventions / wall_clock_budget / risk_quota` | 预算 | 干预次数/墙钟/风险额度任一耗尽 |
+| `degradation_gate`（业务退化显著性的任务声明） | 安全触发 | 任一变更致业务显著退化 → 回滚并停止本相位 |
+| `identity_drift_policy`（workload 身份漂移容差） | 负载消失/剧变 | 漂移超容差 → 当前证据链失效，停止 |
+
+防振荡补充（提案）：
+
+- **迟滞**：结束门禁触发后，`reactivation_holdout`（任务输入）时间/窗口内
+  不得重激活；
+- **单窗单改**：每窗口至多一次配置变更（overall §3.2 已有，落进合同校验）；
+- 停止记录必须引用：触发的合同字段 + 触发时的证据 digest + 当时假设队列状态
+  （哪些 confirmed/refuted/open）——保证"为什么停"可回放。
+
+## D5. 重激活判据提案（overall §10 open #2，三案等用户选）
+
+| 案 | 判据 | 优点 | 缺点 |
+|---|---|---|---|
+| A 身份漂移 | workload_identity_digest 变化超 `reactivation_identity_tolerance` | 确定性、证据绑定、最便宜 | 需要任务合同暴露身份特征；"同身份但强度变"会漏 |
+| B SLO 持续违反 | 曾达标后业务指标连续 `reactivation_slo_windows` 窗违反 SLO | 直接对准目标函数、带迟滞天然防噪 | 只盯 SLO 会漏成本类回退机会 |
+| C O1 分布漂移 | O1 指标分布做统计漂移检验（如 PSI/分位数移动）超校准阈 | 最敏感、覆盖非 SLO 退化 | 需校准数据；误激活风险最高（振荡源） |
+
+**推荐**：A + B 组合先行（身份漂移 → 立即具备重激活资格；SLO 持续违反 →
+迟滞后具备资格），C 列为 M6+ 候选（等有校准数据再评估）。重激活一律消耗
+`reactivation_budget` 并重置结束门禁计数，全程记决策日志；**重激活资格 ≠ 自动
+重启**——是否重开相位由任务所有者决定（对齐"不做常驻自治"红线）。
+
+## D6. 与现有实现的差距映射
+
+| 设计件 | 现有雏形 | 缺口 |
+|---|---|---|
+| O1 观察窗口 | ✅ M3-2 完成 2026-08-23：`observation.py`（ObservationWindow + `record_window` 组装 + O0 解析器注册表：stress-ng YAML / fio JSON / iperf3 JSON / **sysbench 文本（D 泳道 2026-08-24）**，真实 2026-08-23 阿里云会话输出做夹具钉数值）+ 身份漂移 WorkloadIdentityDrift fail-closed。✅ 2026-08-24 O1/O2 活体采集：`dynamic_collection.py`（o1_live_source / o2_component_probe，接 GPT 窗口化 builtin，采集器不可用即 fail-closed 返回 None 路径） | O3 开窗（时间盒 trace，M6+） |
+| 开销 A/B | ✅ `build_collection_overhead_evidence`（L4 合同，成对裸墙钟）；**O2** 活体探测携带相邻 disabled→enabled 配对证据（f46bc16）；**O1** 会话首个成功窗口执行一次固定顺序 disabled→enabled，后续只跑 enabled 并绑定首窗 overhead，四类证据由 digest 索引落 `control/`（2a3f0dd）。两者均无阈值、无裁决 | 真实 Linux/CVM 开销可接受性仍须任务阈值和实测裁决；O1 集合墙钟只证明 collector 集合成员关系，不做单 collector 归因 |
+| 假设路由 | ✅ `hypothesis.py` 保持 D2 三硬规则；`online_routing.py` 把绑定 target/environment/formula 的 O1 snapshots 转为冻结 S4 v1 priority 与确定性 proposal rank，缺证据不回退声明 rank；`hypothesis_cache.py` 只在可比业务复测无改善后写 L7 第二条目 | 真实目标仍需提供 metric scale/参考批次；O2 typed refutation 来源留后续 schema，不在 v1 冒充 |
+| S9 复验生产者 | ✅ M3-5 完成 2026-08-23：`verification.py`（VerificationWindow 绑定合同/观察窗/复测批次三层 digest + `verification_observation` 生产者：passed = 重测改善的 S7 裁决，**可为 false**——测试验证更差重测 → 失败观测 → evaluate_promotion fail-closed 分支首次被真实生产者触达（M11 闭合）；轮内单记录不足以满足 min_distinct_time_blocks，必须由复验窗补足）| ✅ 2026-08-24 已接动态循环（FileRetestSource 复验源）；L6 联动由干预适配器的拒绝恢复 + CLI 相位收尾恢复承担 |
+| 结束门禁合同 | ✅ M3-3 完成 2026-08-23：`phase_gate.py`（DynamicPhaseGateContract 五类停止全字段化 + PhaseGateState + `evaluate_phase_gate` 固定判定顺序：安全→身份→预算→目标→收敛；GateDecision 必须引用触发字段+证据 digest；防振荡字段 reactivation_holdout_windows/single_change_per_window）| 接入动态循环（M3-4/5）与 D5 重激活资格判定 |
+| 重激活 | ✅ M3-6 完成 2026-08-23：`reactivation.py`（A+B 案：身份漂移→迟滞后立即资格（注明新合同语义）、SLO 持续违反→迟滞阈值资格；判定顺序 预算→保持窗→漂移→SLO；资格≠自动重启；ReactivationDecision 模型级一致性校验；C 案列 M6+） | 相位间生命周期由外部在本运行之后判定（已成独立模块） |
+| 动态循环整合 | ✅ v2 `dynamic_loop.py` + `dynamic_adapters.py` + CLI `dynamic-run` 已串起 receipt 安全干预、在线路由、L7 refutation bridge、复验晋升与无条件相位恢复；`scenario_profile.py` 产出环境/workload/公式/运行/晋升绑定的场景 Profile 报告，并按原始基线、通用 Profile 基线固定顺序双报告；`system-opt m3-demo` 单命令跑完整 synthetic 纵向切片；2026-08-25 在 `8.134.104.213` 以真实 sysbench + THP `never`/`always` 两独立相位验证 O0/O1/O2→写入→复测→拒绝恢复，最终均为 `madvise` | 真实 accepted candidate、场景 Profile、跨环境 S9、REAL-L6C/REAL-SSH 仍是验收缺口；`max_windows` 耗尽仍可能携带 `stop=false`（DYN-END-01）；O3 留 M6+ |
+| workload 合同 | ✅ M3-1 完成 2026-08-23：`workload.py`（schema + YAML 解析器 + `load_argv_digest`/`same_load`）+ stress-ng 示例合同（argv digest 绑定自验证）+ 7 测试。SO-D020 代码化：`load_provider=external-test` 唯一枚举、argv 只存摘要、身份 digest 不含 prose | O0 解析器已全（stress-ng / fio / iperf3 / sysbench），引擎只解析不启动（SO-D020 代码化）；无剩余缺口 |
+
+依赖顺序建议：workload 合同 → O0/O1 观察窗口 → 门禁合同 → 假设路由 →
+复验窗口 → 重激活。前四项不依赖 GPT PKG-B（L4 解耦）落地；复验窗口的
+供数路径受益于 PKG-B（主指标走 L4 解析）但可先用现有 MeasurementBatch 路径。

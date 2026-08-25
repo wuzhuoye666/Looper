@@ -99,6 +99,26 @@
 
 至少考虑 host、NUMA node、CPU/core、device、queue、interface、process/thread、cgroup、container 和 VM。scope instance 不同的值不能未经聚合规则直接合并。
 
+## 证据摘要命名
+
+摘要字段名必须携带范围限定词，禁止裸用 `digest` 或两个不同范围共用同义命名。已确认的范围层级（源自 2026-08-23 阿里云内存实录发现的 A 级命名歧义）：
+
+| 字段名 | 范围 | 来源对象 |
+| --- | --- | --- |
+| `primary_metric_evidence_digest` | 单个指标的全部样本值 | `MetricEvidence.digest`（含于 `MeasurementBatch.metrics`） |
+| `measurement_batch_digest` | 一次测量的完整批次（identity、全部指标、gate 值、阶段与稳定性证据） | `MeasurementBatch.digest` |
+| `optimization_run_digest` | 整个优化运行（批次、候选、判定、停止原因） | `OptimizationRun.digest` |
+| `policy_digest` / `manifest_digest` / `pressure_protocol_digest` | 策略 / 配置清单 / 压力协议 | 对应 StrictModel `.digest` |
+
+规则：
+
+- `ImprovementEvidence.candidate_digest` / `baseline_digest` 是 per-metric 摘要，与
+  `primary_metric_evidence_digest` 同范围；引用时必须同时给出所属 `metric_id`。
+- 任何摘要引用必须能定位到上表某一行；两个范围不同的摘要不得断言相等。
+- 机器可读验收摘要（`looper.system-opt-acceptance-summary/v1alpha1`）中 baseline 与
+  每个候选必须同时携带 `primary_metric_evidence_digest` 与
+  `measurement_batch_digest`，并在 `closed_loop.primary_metric_id` 声明主指标 id。
+
 ## 缺失与语义验证
 
 - 关键 workload objective 缺失：候选不可评分。

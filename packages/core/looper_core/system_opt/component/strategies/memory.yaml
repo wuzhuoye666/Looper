@@ -1,0 +1,17 @@
+schema_version: looper.component-strategy/v1alpha1
+component: memory
+primary_metric: memory.bandwidth-mib-per-second
+direction: maximize
+stability_metric: memory.bandwidth-mib-per-second
+search_item_ids: [thp-enabled]
+candidate_sources:
+  - formula_id: F-PROJECT-PRESSURE-CV-BOOTSTRAP-UPPER/v1alpha1
+    provenance: official-doc
+    applies_when: "batch CV exceeds gate; contamination or instability first, tuning later"
+  - formula_id: F-MEM-THP-CHOICE/v0-proposal
+    provenance: heuristic
+    applies_when: "sequential-write bandwidth primary; madvise baseline, always/never candidates (2026-08-23 loop: both LCB<=0, keep madvise)"
+hard_gates: [memory-execution-success]
+boundaries: "sysbench event p95 is not MESS loaded latency; sysbench bandwidth is not STREAM; recalibrate per workload."
+references:
+  - docs/system-optimizer/research/aliyun-ecs-m2-memory-thp-closed-loop-2026-08-23.md

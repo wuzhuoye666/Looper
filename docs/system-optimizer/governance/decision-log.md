@@ -20,6 +20,18 @@
 | SO-D011 | 缓存和中间结果复用推迟到功能闭环跑通后的过程优化 | 缓存有效性依赖尚未稳定的环境和证据合同 | confirmed 2026-08-22 |
 | SO-D012 | 第一阶段不做按 workload 阶段在线切换 Profile | 在线控制器具有不同的安全和抖动模型 | confirmed boundary 2026-08-22 |
 | SO-D013 | 旧方案无损迁入 legacy，新入口作为当前设计来源 | 保留历史与计数，不让过时定义继续冒充合同 | confirmed 2026-08-22 |
+| SO-D014 | 架构重排为"独立组件优化器 ×N + 总引擎（调度/判断/打分）+ 九层"：压力器、采集器、公式映射、回退器、负缓存层为显式层；计算唯一依据是 formula-provenance S0–S10；静态（初始无负载）与动态（任务负载下，带结束门禁）两种运行情境 | 用户 2026-08-23 架构定位系列决定；裁决权上收引擎，组件降格为搜索+映射+上报 | confirmed 2026-08-23 |
+| SO-D015 | 负结果缓存（L7）提前为架构层：缓存"未能优化到的指标"，身份绑定（环境×配置×协议×公式版本 digest），条目挂证据 digest，任一身份变化即失效 | 用户 2026-08-23 要求；对 SO-D011 的部分修订——仅负缓存提前，通用结果复用/中间测量缓存仍在 M6 | confirmed 2026-08-23 |
+| SO-D016 | L4 实现缺口确认：collector.py 仅 /proc、/sys 微指标，架构要求 L4 承载主指标+分布+微指标采集（含压力工具输出解析）；修复由 GPT agent 承担，PKG-B 解耦子项阻塞至新 L4 合同落地 | 2026-08-23 A 级审计发现；架构 overall.md §L4 原文即此要求，属实现缺口非架构变更 | confirmed 2026-08-23 |
+| SO-D017 | 轮级预筛（用户设计输入 2026-08-23）：置信度判定需要多轮重复、成本高；在置信证据不足的早期轮（如首轮），以"候选轮整体性能指标不得低于当前最佳轮（incumbent）超过任务容差"做廉价预筛，淘汰者不再消耗后续测量轮预算。容差为任务输入，不得内置默认 | 预算是保护对象；置信度是统计证据。红线：预筛淘汰≠置信性无改善证明，不得写入 L7 负缓存的 no-improvement-lcb（verdict 语义不同），预算充足时允许重评；实现位置=L8 引擎轮循环，依赖"当前最佳轮跟踪"，当前 loop 尚无 incumbent 概念 | confirmed direction，实现待引擎轮循环扩展 |
+| SO-D018 | SO-D017 预筛作用域澄清（2026-08-23 外部只读审查 C3 发现）：incumbent 跟踪必须按「组件 × 主指标」隔离——一个 IncumbentTracker 实例只服务同一组件的同一主指标，跨组件/跨指标的效用不得进入同一 incumbent 比较（S0 可比性）。原实现使用 loop 级单例 tracker，cpu 与 memory 的改善量混入同一 best，语义不成立，已修复为每组件各持一个 tracker | "候选轮整体性能指标"指该轮所测组件的主指标整体表现，非跨组件聚合；跨组件"轮级整体效用"聚合方案（如 S8 向量聚合）属 open decision，不得在预筛层默认 | confirmed 2026-08-23（修复随引擎回归测试落地） |
+| SO-D019 | PKG-G 动态相位设计方向确认（用户 2026-08-23"我认为可以"）：① D3 观察分层 O0-O3 定名（消除与九层架构 L0-L8 的撞名）；② D2 两条硬规则——一个症状至少两个竞争假设才允许干预、confirmed 的唯一路径是干预实验的业务指标裁决（O2 微证最多推进到 probing）；③ D5 重激活采 A+B 组合（身份漂移 + SLO 持续违反，C 分布漂移列 M6+）。重激活资格 ≠ 自动重启 | L7 第二条目类型（假设级负缓存）的 schema 并存细节留待实现提案另行确认；全部数值参数仍为待校准占位，不得进代码默认 | confirmed direction 2026-08-23（设计稿 workload-tuning.md D1-D6，实现未开始） |
+| SO-D020 | 动态相位负载供给边界（用户定位 2026-08-23）：M3 workload 用 stress-ng/sysbench/fio/iperf3 等基础套件作**业务负载替身**，但由测试/操作侧**外部启动**（"测试给的压力"）；优化器在动态相位**永不主动调用压力工具**——主动造载是静态相位 L3 的专属职责。理由：跨窗负载同身份可比（S0 动态版）、防自证（引擎只能动配置不能动负载）、生产语义对齐（业务方拥有 workload）、观察者效应隔离、两侧台账分账 | 合同落点：workload 合同新增 `load_provider=external-test`（唯一枚举）与 `load_command_identity`（测试侧声明、观察窗核对，不授予引擎执行权）；O0=解析外部负载自身产物；S9 复验窗由测试侧重供同身份负载，无法重供则晋升 fail-closed；动态引擎循环无任何 L3 调用路径 | confirmed 2026-08-23（详见 workload-tuning.md D0） |
+| SO-D021 | 历史证据兼容修复（GPT PKG-B 加载测试发现，2026-08-23）：2cd521e 在未升版本串的情况下给 OptimizationRun/CandidateEvaluation 加了五个必填字段（baseline_history、attempt_count、round_index、attempt_index、comparison_baseline_digest），导致多轮控制器之前的历史证据（aliyun-ecs-fio-20260823）无法加载——违反 D0-09。修复：新增 LegacyOptimizationRun/LegacyCandidateEvaluation（旧形状镜像，按原样加载、不回填不造数）+ `load_optimization_run()` 按 schema_version 分派（v1alpha1 有两个历史形态，按 2cd521e 引入的字段集区分）；**今后新运行发射 v1alpha2**。规则重申：任何证据模型加必填字段必须同时升 schema 版本串并提供分派加载路径 | 影响面：仅 1 份工件（fio 首次会话）受影响，其余 4 份 v1alpha1 工件含新字段走现行模型；遗留工件 digest 钉死 sha256:8bcc…作防篡改锚 | confirmed 2026-08-23（随分派加载器与 4 项测试落地） |
+| SO-D022 | 证据文件 checkout 字节保真（GPT A 级上报后根因确认，2026-08-23）：`core.autocrlf=true` 的全新 Windows checkout 会把 examples 下的能力证据 raw 文件 smudge 成 CRLF（23B LF→24B），digest 锚测试在任何新检出 worktree 上必假失败；git blob 与登记值一致，**非篡改，是测试环境可移植性缺陷**。修复：`.gitattributes` 增 `examples/system-optimizer/*-raw.txt -text`（把 `.artifacts/**` 的字节保真政策延伸到 examples 证据）；测试保持严格判定，失败信息附可行动诊断。已在 autocrlf=true 全新克隆中验证三份 raw 文件字节不变、全量回归绿 | 一般规则：凡被 digest 锚定的证据文件必须 `-text`；新证据文件入库时同步加属性 | confirmed 2026-08-23（2548a27） |
+| SO-D023 | 审查分诊三项拍板（用户与 DeepSeek 讨论后定，2026-08-23）：① **M1** adverse_change 的 TARGET/RANGE 分支改为 `(_distance(current)−_distance(baseline))/scale`（除 scale 归一，不另立字段；scale 缺失 fail-closed）——S4 登记表原文即此要求，属代码合规修复；归一后与 S6 恒等 `adverse_change ≡ −improvement`（要求写成属性测试）。② **M2/M3** 破坏面扫描≈0（target/range 方向零触达、demo 压力指标全显式 scale），全部 `scale or X` 兜底改函数内 fail-closed（含 UPPER/LOWER_LIMIT_EXCESS 的 abs(reference) 兜底；函数内 raise 防 model_construct 绕过校验）。③ **C5** 稳定性拒绝**不入负缓存**：CV 超限是测量质量结论非候选无改善结论，负缓存身份键装不下逐批次性质；`STABILITY_REJECTED` 枚举**删除**（从未写入、无持久化值）；候选引发不稳定未来走 S8 U_stability/U_regression | 未卡项方案：M5 统一到 analysis.quantile 插值 + M8 重采样参数化（合并为 F-PROJECT-CONDITION-BOOTSTRAP 一次 /v2 升版）；M10 仅 UTILIZATION 去 clamp（EXCESS 的 max(0,·) 是"无超限=0"合法语义不动） | confirmed 2026-08-23，DeepSeek 第二批实施 |
+| SO-D024 | 动态相位真实接线落地（Z 泳道，2026-08-24）：① 会话文件约定成为引擎↔外部负载侧唯一界面（引擎只读 windows/ 只写 control/，复测/复验是组不是单窗——单窗无分布不得假装置信区间）；② 干预走 L1 keep 路径（施加→业务复测 S6/S7 裁决），被拒假设立即用 pre-apply 快照值恢复，恢复失败=停相位安全事件（宁停不溜）；相位收尾无条件恢复到相位起点——晋升是证据与推荐，不是持久变更（与静态相位候选级回退同纪律）；③ `InterventionExperiment` 增可选字段 `business_lcb`（S6 下界随实验证据携带，向后兼容），停止类 2 收敛计数器由此接线——只计干预轮，复验窗是已接受假设的确认不是搜索轮；④ v1 假设源=声明式提案文件（rank 显式注入），O2 探测证据源暂用观察窗 digest 占位——两者都是可替换注入缝，在线 S4 推导与真 O2 窗口随 G 泳道接入后替换 | 交付物：`dynamic_adapters.py` + CLI `system-opt dynamic-run`（simulated/local-linux）+ 模拟端到端演示（症状→双假设→干预→复验→晋升→相位恢复）+ `contracts/dynamic-session-files.md` 对齐合同；测试 736→739 全绿 | confirmed 2026-08-24 |
+| SO-D025 | 多 Agent 改为独立 worktree + 统一任务台账 + 主 agent 单点集成/push：每项任务登记唯一 ID、实际基线、依赖、写集合、验收和远端状态；工作 agent 不 push/merge；`delivered` 不等于接受，只有主 agent 独立验收并确认远端 commit 后才是 `pushed` | 2026-08-23 已发生跨 worktree 误写与过期基线误报；2026-08-24 新 G/D/Z 泳道又缺统一完成台账。用户要求统一接入、严格记录和修复历史记录 | confirmed 2026-08-24 |
 
 ## 仍有效但需在新架构中复核的历史原则
 
@@ -27,9 +39,9 @@
 |---|---|---|
 | D0-05 | 多接口 apply 是补偿事务，不宣称内核级原子 | 原则保留；失败项补偿边界必须修复实测 |
 | D0-06 | 不能凭当前值不同于默认值推断管理员所有权 | 原则保留；完整所有权状态机待设计 |
-| D0-09 | 新增证据字段不能静默改变 legacy digest | 原则保留；新证据 schema 另行版本化 |
+| D0-09 | 新增证据字段不能静默改变 legacy digest | 原则保留；2026-08-23 发生一次违约（2cd521e 未升版本串加必填字段，破坏历史工件加载），已由 SO-D021 双 schema 分派修复并立规：加必填字段必须同时升版本串 |
 | D0-10 | simulated 是唯一默认启用后端，真实后端显式授权 | 原则保留；真实能力仍 unverified |
-| D0-12 | 共享工作树采用独立 basetemp 和严格时间分片 | 当前协作治理继续有效 |
+| D0-12 | 共享工作树采用独立 basetemp 和严格时间分片 | 测试隔离原则保留；共享工作树/时间分片已由 SO-D025 的独立 worktree + 统一集成取代 |
 
 ## 重新打开的决定
 

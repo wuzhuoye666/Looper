@@ -1,0 +1,63 @@
+schema_version: looper.standard-pressure-protocol/v1alpha1
+id: network-iperf3-peer-cc-aliyun-hard-gate-20260823
+component: network
+target_scope: Alibaba ECS iZ7xvcxcry1ejfjcd1d7igZ as iperf3 client toward controlled peer 172.28.106.37 (iZ7xv1fc2pmggfdftlu37jZ, VPC intranet; public path is bandwidth-throttled), fixed two-stream method, cubic baseline.
+limitation: Target-local exploratory congestion-control search on the real peer path under the default cubic control; loopback gates do not transfer and this is not an approved candidate stability gate.
+required_executables: [python3, /opt/looper-system-opt-78f2f4f/.venv/bin/python]
+input_identity:
+  policy_id: aliyun-network-cc-20260823
+  evidence_kind: empirical-target-local
+  stability_calibration_digest: sha256:809665d1eb363a29f8f8f18fc385285fa732d6b08432aede07d625c7bfadcc59
+metric_ids: [network.receive-throughput-gbps, network.retransmits, network.success]
+gate_metric_ids: [network.success]
+stability:
+  metric_id: network.receive-throughput-gbps
+  statistic: cv
+  enforcement: hard-gate
+  acceptance_limit: 0.02671447338975931
+  minimum_repeats: 7
+  maximum_repeats: 7
+  source: Target-local one-sided 95-percent bootstrap upper CV from seven frozen intranet cubic-baseline samples, 2000 resamples, seed 20260823.
+phases:
+  - id: exclusive-window
+    kind: prepare
+    command:
+      argv: [/opt/looper-system-opt-78f2f4f/.venv/bin/python, -m, looper_core.system_opt.interference, --forbid-regex, "Phoronix Test Suite", --forbid-regex, phpbench, --forbid-regex, "benchmark-packages/.*/producer.py", --forbid-regex, stress-ng, --forbid-regex, sysbench, --forbid-regex, "(^|/)fio( |$)", --forbid-regex, iperf3, --forbid-regex, pytest, --output, .artifacts/system-opt/m2-network-cc-search-20260823/interference-preflight.json]
+      timeout_seconds: 15
+    declared_duration_seconds: 0
+    purpose: Fail before warmup when another benchmark or pressure tool owns the shared target window.
+  - id: prepare
+    kind: prepare
+    command:
+      argv: [python3, examples/system-optimizer/network_pressure_measure.py, prepare, --output-dir, .artifacts/system-opt/m2-network-cc-search-20260823, --repeats, "{repeats}", --host, 172.28.106.37, --port, "5201", --duration-seconds, "5", --omit-seconds, "2", --parallel-streams, "2", --server-startup-seconds, "0.1"]
+      timeout_seconds: 180
+    declared_duration_seconds: 0
+    purpose: prepare phase of the fixed two-stream peer calibration.
+  - id: warmup
+    kind: warmup
+    command:
+      argv: [python3, examples/system-optimizer/network_pressure_measure.py, warmup, --output-dir, .artifacts/system-opt/m2-network-cc-search-20260823, --repeats, "{repeats}", --host, 172.28.106.37, --port, "5201", --duration-seconds, "5", --omit-seconds, "2", --parallel-streams, "2", --server-startup-seconds, "0.1"]
+      timeout_seconds: 180
+    declared_duration_seconds: 5
+    purpose: warmup phase of the fixed two-stream peer calibration.
+  - id: measure
+    kind: measure
+    command:
+      argv: [python3, examples/system-optimizer/network_pressure_measure.py, measure, --output-dir, .artifacts/system-opt/m2-network-cc-search-20260823, --repeats, "{repeats}", --host, 172.28.106.37, --port, "5201", --duration-seconds, "5", --omit-seconds, "2", --parallel-streams, "2", --server-startup-seconds, "0.1"]
+      timeout_seconds: 180
+    declared_duration_seconds: 35
+    purpose: measure phase of the fixed two-stream peer calibration.
+  - id: verify
+    kind: verify
+    command:
+      argv: [python3, examples/system-optimizer/network_pressure_measure.py, verify, --output-dir, .artifacts/system-opt/m2-network-cc-search-20260823, --repeats, "{repeats}", --host, 172.28.106.37, --port, "5201", --duration-seconds, "5", --omit-seconds, "2", --parallel-streams, "2", --server-startup-seconds, "0.1"]
+      timeout_seconds: 180
+    declared_duration_seconds: 0
+    purpose: verify phase of the fixed two-stream peer calibration.
+  - id: cleanup
+    kind: cleanup
+    command:
+      argv: [python3, examples/system-optimizer/network_pressure_measure.py, cleanup, --output-dir, .artifacts/system-opt/m2-network-cc-search-20260823, --repeats, "{repeats}", --host, 172.28.106.37, --port, "5201", --duration-seconds, "5", --omit-seconds, "2", --parallel-streams, "2", --server-startup-seconds, "0.1"]
+      timeout_seconds: 180
+    declared_duration_seconds: 0
+    purpose: cleanup phase of the fixed two-stream peer calibration.

@@ -1,0 +1,52 @@
+# 动态相位真机会话模板：workload 合同（8vCPU discovery 演示用）
+#
+# ⚠️ 模板纪律：
+# - argv_digest 是对下方 declared argv（stress-ng --cpu 8 --timeout 120s --yaml
+#   --metrics-brief）计算的；若测试侧 runner 实际执行的 argv 与此不同，
+#   必须用 looper_core.system_opt.workload.load_argv_digest 重新计算并同步，
+#   否则每个观察窗都会身份漂移停相位。
+# - 合同本身不执行任何命令（SO-D020）；它只是外部负载的身份声明。
+schema_version: looper.workload-contract/v1alpha1
+workload_id: stress-ng-cpu8-discovery-demo-v1
+load_provider: external-test
+load_command:
+  tool: stress-ng
+  argv_digest: sha256:bd60edd0ead91fdf5217008a0c5b9a4f7ecd48acaf498767ecad83e81ec5c172
+  declared_duration_seconds: 120
+  description: >
+    stress-ng --cpu 8 --timeout 120s --yaml --metrics-brief（argv 由测试侧
+    会话脚本持有并执行；引擎只持摘要做观察窗身份核对）
+o0_metrics:
+  - metric_id: stress-ng.bogo-ops-per-second-usr-sys-time
+    unit: bogo-ops/s
+    direction: maximize
+    aggregation: mean
+    source: stress-ng --yaml 输出 metrics[].bogo-ops-per-second-usr-sys-time
+  - metric_id: stress-ng.bogo-ops
+    unit: ops
+    direction: maximize
+    aggregation: mean
+    source: stress-ng --yaml 输出 metrics[].bogo-ops
+objective:
+  primary_metric_id: stress-ng.bogo-ops-per-second-usr-sys-time
+  scale: 1.0
+  mde: 0.01
+# SLO bound 依机器基线定：README 步骤 2 校准后填（约为基线的 97%，
+# 使基线态达标、退化态可检出即可；不要拍脑袋）
+slos: []
+correctness_gates:
+  - metric_id: stress-ng.bogo-ops
+    comparator: at-least
+    bound: 1
+    unit: ops
+phases:
+  - phase_id: steady
+    purpose: 持续 CPU 负载，逐窗 O0 观察 + 动态干预
+    declared_duration_seconds: 120
+    o0_metric_ids:
+      - stress-ng.bogo-ops-per-second-usr-sys-time
+      - stress-ng.bogo-ops
+limitations: >
+  单机 CPU 替身负载；bogo-ops 跨 stress-ng 版本不可比；结论只对声明的
+  工具、argv 身份与本机环境成立；SLO bound 与 business-policy 数值必须
+  在本机基线校准后填写，模板缺省值不可直接使用。

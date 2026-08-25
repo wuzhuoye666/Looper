@@ -1,0 +1,14 @@
+schema_version: looper.component-strategy/v1alpha1
+component: network
+primary_metric: network.throughput-gbps
+direction: maximize
+stability_metric: network.throughput-gbps
+search_item_ids: [tcp-congestion-control]
+candidate_sources:
+  - formula_id: F-NET-CC-CHOICE/v0-proposal
+    provenance: heuristic
+    applies_when: "real-peer path with loss/queueing evidence; cubic baseline, bbr candidate requires module availability probe first; loopback evidence does not transfer"
+hard_gates: [network-execution-success]
+boundaries: "Loopback validates the TCP stack only; real-peer loop requires a second controlled host; both endpoints' sysctls must be recorded."
+references:
+  - docs/system-optimizer/planning/m2-component-pressure-contract-2026-08-23.md

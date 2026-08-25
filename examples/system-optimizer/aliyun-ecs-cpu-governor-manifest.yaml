@@ -1,0 +1,42 @@
+schema_version: looper.system-config-manifest/v1alpha1
+id: aliyun-ecs-cpu-governor-validation-20260823
+version: "1"
+description: One-item, task-specific search over the uniform cpufreq governor after the tuned ownership handover.
+metadata:
+  target_os: linux
+  evidence_kind: empirical-aliyun-ecs
+  portability: not valid for Tencent Cloud CVM without independent capability validation
+  handover: tuned was stopped by the operator on 2026-08-23; governors reverted to the kernel-default schedutil, which is the honest baseline state
+items:
+  - id: cpufreq-governor-uniform
+    category: cpufreq
+    primary_component: cpu
+    related_components: []
+    target: /sys/devices/system/cpu/cpufreq/policy0/scaling_governor
+    persistent_keys: []
+    value_type: categorical
+    domain: {minimum: null, maximum: null, step: null, choices: [conservative, ondemand, userspace, powersave, performance, schedutil], log: false}
+    default: schedutil
+    read:
+      command: {argv: [python3, examples/system-optimizer/cpu_governor_control.py, read], timeout_seconds: 10}
+      parser: raw
+      true_values: []
+      false_values: []
+    apply: {argv: [python3, examples/system-optimizer/cpu_governor_control.py, apply, --value, "{value}"], timeout_seconds: 30}
+    rollback: {mode: restore-snapshot, command: null}
+    activation: immediate
+    risk: medium
+    risk_reason: null
+    dependencies: []
+    preconditions:
+      - {kind: path, key: /sys/devices/system/cpu/cpufreq/policy0/scaling_governor, operator: exists, value: null}
+      - {kind: path, key: /sys/devices/system/cpu/cpufreq/policy0/scaling_available_governors, operator: exists, value: null}
+    compatibility:
+      distributions: [ubuntu]
+      architectures: [x86_64]
+      required_paths: [/sys/devices/system/cpu/cpufreq/policy0/scaling_governor, /sys/devices/system/cpu/cpufreq/policy0/scaling_available_governors]
+      required_commands: []
+    searchable: true
+    value_aliases: {}
+    description: Uniform governor across every per-vCPU policy; helper writes all policies, verifies uniform readback, and fails closed on any divergence.
+    source: https://docs.kernel.org/admin-guide/pm/cpufreq.html

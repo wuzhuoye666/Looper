@@ -1,3 +1,10 @@
+"""L1 状态与所有权证据：manifest → 当前状态证据 → 所有权/授权声明。
+
+架构层：L1（docs/system-optimizer/architecture/overall.md）。
+状态证据校验当前环境与 digest，所有权声明决定哪些项可被自动修改；
+证据缺失或身份不一致时 fail-closed。
+"""
+
 from __future__ import annotations
 
 import hashlib

@@ -229,3 +229,52 @@ def test_real_manual_command_rejects_non_linux_host_before_write(tmp_path: Path)
 
     assert result.exit_code != 0
     assert not (tmp_path / "out.json").exists()
+
+
+def test_derive_pressure_gate_writes_reproducible_evidence(tmp_path: Path) -> None:
+    batch_path = tmp_path / "batch.json"
+    output_path = tmp_path / "gate.json"
+    batch_path.write_text(
+        json.dumps(
+            {
+                "identity": {"target": "target-1"},
+                "metrics": {
+                    "cpu.score": {
+                        "metric_id": "cpu.score",
+                        "values": [9.0, 10.0, 11.0, 10.0, 9.5, 10.5, 10.0],
+                    }
+                },
+                "gate_values": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "system-opt",
+            "derive-pressure-gate",
+            "--measurement-batch",
+            str(batch_path),
+            "--metric-id",
+            "cpu.score",
+            "--confidence-level",
+            "0.95",
+            "--bootstrap-resamples",
+            "2000",
+            "--random-seed",
+            "20260823",
+            "--target-scope",
+            "one test target",
+            "--portability",
+            "test-only",
+            "--output",
+            str(output_path),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert payload["formula_id"] == "F-PROJECT-PRESSURE-CV-BOOTSTRAP-UPPER/v1alpha1"
+    assert payload["acceptance_limit"] > payload["observed_value"]

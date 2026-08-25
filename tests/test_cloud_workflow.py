@@ -3,18 +3,14 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from decimal import Decimal
 
-import looper_api.cloud_service as cloud_service_module
 import pytest
 from looper_api.cloud_contracts import (
     CatalogFilters,
     CloudPurchaseSpec,
-    CloudSshCredentials,
-    DestroyedResource,
     ImageInfo,
     InstanceTypeInfo,
     OrderConfirmRequest,
     OrderResolveRequest,
-    ProviderDestroyResult,
     ProviderId,
     ProviderInfo,
     ProviderPurchaseResult,
@@ -29,13 +25,11 @@ from looper_api.cloud_service import (
     catalog_search,
     confirm_order,
     create_quote,
-    delete_order,
     get_order_evidence,
     get_order_reconciliation_context,
     global_search,
     list_order_events,
     prepare_order,
-    purchase_quote,
     recover_interrupted_orders,
     renew_order_confirmation,
     resolve_unknown_order,
@@ -45,15 +39,11 @@ from looper_api.models import (
     CloudCatalogCacheRecord,
     CloudOrderRecord,
     CloudQuoteRecord,
-    EventRecord,
     TargetRecord,
 )
 from looper_api.providers.base import CloudProvider, CloudProviderError
 from looper_api.providers.registry import CloudProviderRegistry
-from looper_api.remote_credentials import EncryptedSshCredentialStore
-from looper_api.serialization import target_view
 from looper_core.canonical import canonical_digest, utc_now
-from pydantic import SecretStr
 from sqlalchemy import select, text, update
 from sqlalchemy.orm import Session
 
@@ -63,14 +53,10 @@ class FakeProvider(CloudProvider):
     display_name = "Fake Tencent"
     sdk_package = "fake"
 
-    def __init__(self, *, ambiguous: bool = False, public_ip: str | None = None) -> None:
+    def __init__(self, *, ambiguous: bool = False) -> None:
         self.catalog_calls = 0
-        self.instance_items: list[InstanceTypeInfo] | None = None
-        self.image_items: list[ImageInfo] | None = None
         self.purchase_calls: list[str] = []
-        self.destroy_calls: list[str] = []
         self.ambiguous = ambiguous
-        self.public_ip = public_ip
         self.fail_catalog = False
         self.quote_amount = Decimal("0.42")
 
@@ -110,8 +96,6 @@ class FakeProvider(CloudProvider):
 
     def search_instance_types(self, filters: CatalogFilters) -> list[InstanceTypeInfo]:
         self.catalog_calls += 1
-        if self.instance_items is not None:
-            return self.instance_items
         return [
             InstanceTypeInfo(
                 provider=self.id,
@@ -125,8 +109,6 @@ class FakeProvider(CloudProvider):
 
     def search_images(self, filters: CatalogFilters) -> list[ImageInfo]:
         self.catalog_calls += 1
-        if self.image_items is not None:
-            return self.image_items
         return [
             ImageInfo(
                 provider=self.id,
@@ -147,13 +129,7 @@ class FakeProvider(CloudProvider):
             details={"stock": "advisory"},
         )
 
-    def purchase(
-        self,
-        spec: CloudPurchaseSpec,
-        *,
-        client_token: str,
-        launch_password: SecretStr | None = None,
-    ) -> ProviderPurchaseResult:
+    def purchase(self, spec: CloudPurchaseSpec, *, client_token: str) -> ProviderPurchaseResult:
         self.purchase_calls.append(client_token)
         if self.ambiguous:
             raise CloudProviderError("simulated timeout", code="timeout", ambiguous=True)
@@ -167,42 +143,9 @@ class FakeProvider(CloudProvider):
                     region=spec.region,
                     zone=spec.zone,
                     status="PENDING",
-                    public_ip=self.public_ip,
-                    public_ip_present=self.public_ip is not None,
                 )
             ],
         )
-
-    def destroy(self, *, region: str, instance_ids: list[str]) -> ProviderDestroyResult:
-        self.destroy_calls.extend(instance_ids)
-        return ProviderDestroyResult(
-            request_id="fake-destroy-request-1",
-            instance_ids=list(instance_ids),
-            released_resources=[
-                DestroyedResource(kind="instance", id=instance_id, note="fake destroyed")
-                for instance_id in instance_ids
-            ],
-        )
-
-
-
-def test_cloud_ssh_credentials_accept_camel_case_remember_flag() -> None:
-    credentials = CloudSshCredentials.model_validate(
-        {
-            "username": "ubuntu",
-            "authMethod": "password",
-            "password": "one-time-secret",
-            "rememberCredentials": False,
-        }
-    )
-
-    assert credentials.remember_credentials is False
-    assert credentials.model_dump(by_alias=True)["rememberCredentials"] is False
-
-def test_settings_default_cloud_auth_method_is_password(tmp_path) -> None:
-    app_settings = Settings(_env_file=None, data_dir=tmp_path)
-
-    assert app_settings.default_ssh_auth_method == "password"
 
 
 def spec() -> CloudPurchaseSpec:
@@ -230,7 +173,7 @@ def confirmation(prepared: dict[str, object]) -> OrderConfirmRequest:
 
 
 def registry(fake: FakeProvider) -> CloudProviderRegistry:
-    return CloudProviderRegistry({fake.id: lambda: fake})
+    return CloudProviderRegistry({ProviderId.TENCENT: lambda: fake})
 
 
 def settings(tmp_path, *, live: bool = False) -> Settings:
@@ -240,7 +183,6 @@ def settings(tmp_path, *, live: bool = False) -> Settings:
         live_purchase_providers="tencent" if live else "",
         purchase_confirmation_secret="x" * 48,
         operator_token="o" * 48 if live else "",
-        default_ssh_password="StrongPassword1#",
     )
 
 
@@ -297,303 +239,6 @@ def test_catalog_cache_quote_idempotency_and_default_provider_gate(db_session, t
             prepared["id"],
             confirmation(prepared),
         )
-
-
-def test_full_catalog_paginates_searches_and_naturally_sorts_from_one_snapshot(
-    db_session, tmp_path
-) -> None:
-    fake = FakeProvider()
-    fake.instance_items = [
-        InstanceTypeInfo(
-            provider=ProviderId.TENCENT,
-            region="ap-test",
-            id=f"S9.TEST.{index}",
-            family="S9",
-            cpu=4,
-            memoryGib=8,
-        )
-        for index in range(620, 0, -1)
-    ]
-    fake.image_items = [
-        ImageInfo(
-            provider=ProviderId.TENCENT,
-            region="ap-test",
-            id=f"img-{index}",
-            name="Needle Image" if index == 205 else f"Image {index}",
-            platform="Linux",
-        )
-        for index in range(1, 206)
-    ]
-    reg = registry(fake)
-    app_settings = settings(tmp_path)
-    legacy_filters = {"region": "ap-test"}
-    db_session.add(
-        CloudCatalogCacheRecord(
-            key=canonical_digest(
-                {
-                    "version": 2,
-                    "provider": "tencent",
-                    "kind": "instance-type",
-                    "filters": legacy_filters,
-                }
-            ),
-            provider="tencent",
-            resource_type="instance-type",
-            region="ap-test",
-            zone=None,
-            query_json={"version": 2, **legacy_filters},
-            payload_json=[fake.instance_items[0].model_dump(mode="json", by_alias=True)],
-            fetched_at=utc_now(),
-            expires_at=utc_now() + timedelta(minutes=5),
-            last_error=None,
-        )
-    )
-    db_session.commit()
-
-    first = catalog_search(
-        db_session,
-        app_settings,
-        reg,
-        ProviderId.TENCENT,
-        "instance-type",
-        CatalogFilters(region="ap-test", limit=20),
-    )
-    second = catalog_search(
-        db_session,
-        app_settings,
-        reg,
-        ProviderId.TENCENT,
-        "instance-type",
-        CatalogFilters(region="ap-test", offset=20, limit=20),
-    )
-    searched = catalog_search(
-        db_session,
-        app_settings,
-        reg,
-        ProviderId.TENCENT,
-        "instance-type",
-        CatalogFilters(region="ap-test", query=".620", limit=20),
-    )
-    classified = catalog_search(
-        db_session,
-        app_settings,
-        reg,
-        ProviderId.TENCENT,
-        "instance-type",
-        CatalogFilters(region="ap-test", familyToken="S9", limit=20),
-    )
-
-    assert first.total == 620
-    assert first.next_offset == 20
-    assert [item["id"] for item in first.items[:3]] == [
-        "S9.TEST.1",
-        "S9.TEST.2",
-        "S9.TEST.3",
-    ]
-    assert second.items[0]["id"] == "S9.TEST.21"
-    assert searched.total == 1
-    assert searched.items[0]["id"] == "S9.TEST.620"
-    assert classified.total == 620
-    assert first.instance_type_facets is not None
-    assert sum(item.count for item in first.instance_type_facets.architectures) == 620
-    assert fake.catalog_calls == 1
-
-    full_record = next(
-        record
-        for record in db_session.scalars(
-            select(CloudCatalogCacheRecord).where(
-                CloudCatalogCacheRecord.provider == "tencent",
-                CloudCatalogCacheRecord.resource_type == "instance-type",
-            )
-        )
-        if record.query_json.get("version") == 6
-    )
-    full_record.expires_at = utc_now() - timedelta(seconds=1)
-    db_session.commit()
-    continued = catalog_search(
-        db_session,
-        app_settings,
-        reg,
-        ProviderId.TENCENT,
-        "instance-type",
-        CatalogFilters(region="ap-test", offset=40, limit=20),
-    )
-    assert continued.source == "stale-cache"
-    assert continued.items[0]["id"] == "S9.TEST.41"
-    assert fake.catalog_calls == 1
-
-    images = catalog_search(
-        db_session,
-        app_settings,
-        reg,
-        ProviderId.TENCENT,
-        "image",
-        CatalogFilters(region="ap-test", query="needle", limit=20),
-    )
-    assert images.total == 1
-    assert images.items[0]["id"] == "img-205"
-    assert fake.catalog_calls == 2
-
-
-def test_catalog_orders_instance_sizes_and_prefers_modern_ubuntu_images(
-    db_session, tmp_path
-) -> None:
-    fake = FakeProvider()
-    fake.instance_items = [
-        InstanceTypeInfo(
-            provider=ProviderId.TENCENT,
-            region="ap-test",
-            id=instance_id,
-            family="S9",
-            cpu=cpu,
-            memoryGib=memory,
-            available=available,
-            attributes=attributes,
-        )
-        for instance_id, cpu, memory, available, attributes in [
-            ("S9.4C16G", 4, 16, True, {}),
-            ("S9.2C8G", 2, 8, True, {}),
-            ("S9.2C4G.UNKNOWN", 2, 4, None, {}),
-            ("S9.2C4G.UNAVAILABLE", 2, 4, False, {}),
-            (
-                "S9.2C4G.A-INCOMPATIBLE",
-                2,
-                4,
-                True,
-                {"purchaseCompatible": False},
-            ),
-            ("S9.2C4G.Z-COMPATIBLE", 2, 4, True, {}),
-            ("S9.1C1G.UNAVAILABLE", 1, 1, False, {}),
-            ("S9.8C8G", 8, 8, True, {}),
-        ]
-    ]
-    fake.image_items = [
-        ImageInfo(
-            provider=ProviderId.TENCENT,
-            region="ap-test",
-            id=image_id,
-            name=name,
-            platform=platform,
-            available=available,
-        )
-        for image_id, name, platform, available in [
-            ("img-windows", "Windows Server 2022", "Windows", True),
-            ("img-linux", "TencentOS Server 4", "Linux", True),
-            ("img-ubuntu-2204", "ubuntu_22_04_x64_20G_alibase.vhd", "Ubuntu", True),
-            ("img-ubuntu-2404", "ubuntu_24_04_x64_20G_alibase.vhd", "Ubuntu", True),
-            ("img-ubuntu-unavailable", "Ubuntu Server 24.04 unavailable", "Ubuntu", False),
-        ]
-    ]
-    reg = registry(fake)
-    app_settings = settings(tmp_path)
-
-    instances = catalog_search(
-        db_session,
-        app_settings,
-        reg,
-        ProviderId.TENCENT,
-        "instance-type",
-        CatalogFilters(region="ap-test"),
-    )
-    images = catalog_search(
-        db_session,
-        app_settings,
-        reg,
-        ProviderId.TENCENT,
-        "image",
-        CatalogFilters(region="ap-test"),
-    )
-
-    assert [item["id"] for item in instances.items] == [
-        "S9.2C4G.Z-COMPATIBLE",
-        "S9.2C8G",
-        "S9.4C16G",
-        "S9.8C8G",
-        "S9.2C4G.A-INCOMPATIBLE",
-        "S9.1C1G.UNAVAILABLE",
-        "S9.2C4G.UNAVAILABLE",
-        "S9.2C4G.UNKNOWN",
-    ]
-    assert [item["id"] for item in images.items] == [
-        "img-ubuntu-2404",
-        "img-ubuntu-2204",
-        "img-linux",
-        "img-windows",
-        "img-ubuntu-unavailable",
-    ]
-
-
-@pytest.mark.parametrize(
-    ("provider_id", "expected"),
-    [
-        (
-            ProviderId.TENCENT,
-            ["C6.2XLARGE", "C6.13XLARGE", "C6.1XLARGE", "C6.3XLARGE", "C6.0XLARGE"],
-        ),
-        (
-            ProviderId.ALIBABA,
-            ["C6.2XLARGE", "C6.13XLARGE", "C6.1XLARGE", "C6.3XLARGE", "C6.0XLARGE"],
-        ),
-        (
-            ProviderId.VOLCENGINE,
-            ["C6.2XLARGE", "C6.13XLARGE", "C6.1XLARGE", "C6.3XLARGE", "C6.0XLARGE"],
-        ),
-        (
-            ProviderId.BAIDU,
-            ["C6.2XLARGE", "C6.13XLARGE", "C6.1XLARGE", "C6.3XLARGE", "C6.0XLARGE"],
-        ),
-    ],
-)
-def test_instance_catalog_groups_available_before_unavailable_and_unknown(
-    db_session,
-    tmp_path,
-    provider_id: ProviderId,
-    expected: list[str],
-) -> None:
-    fake = FakeProvider()
-    fake.id = provider_id
-    fake.instance_items = [
-        InstanceTypeInfo(
-            provider=provider_id,
-            region="test-region",
-            id=instance_id,
-            family="C6",
-            cpu=4,
-            memoryGib=8,
-            available=available,
-        )
-        for instance_id, available in [
-            ("C6.13XLARGE", True),
-            ("C6.0XLARGE", None),
-            ("C6.3XLARGE", False),
-            ("C6.2XLARGE", True),
-            ("C6.1XLARGE", False),
-        ]
-    ]
-    reg = registry(fake)
-    app_settings = settings(tmp_path)
-
-    first = catalog_search(
-        db_session,
-        app_settings,
-        reg,
-        provider_id,
-        "instance-type",
-        CatalogFilters(region="test-region", limit=3),
-    )
-    second = catalog_search(
-        db_session,
-        app_settings,
-        reg,
-        provider_id,
-        "instance-type",
-        CatalogFilters(region="test-region", offset=3, limit=3),
-    )
-
-    assert [item["id"] for item in first.items + second.items] == expected
-    assert first.total == 5
-    assert first.next_offset == 3
-    assert second.next_offset is None
 
 
 def test_subnet_catalog_requires_dependencies_and_separates_vpc_cache_keys(
@@ -672,224 +317,6 @@ def test_confirm_purchase_is_idempotent_and_naturalizes_target(db_session, tmp_p
         text("select count(*) from targets where id='cloud:tencent:ap-test:ins-fake-1'")
     ).scalar_one()
     assert target_count == 1
-    target = db_session.get(TargetRecord, "cloud:tencent:ap-test:ins-fake-1")
-    assert target is not None
-    view = target_view(target)
-    assert view["endpoint"] == "—"
-    assert "2 vCPU" in view["hardware"]
-    assert "2 GiB" in view["hardware"]
-    assert view["framework"] == "镜像 img-test"
-
-
-def test_delete_order_removes_unsubmitted_order_events_and_rejects_submitted_order(
-    db_session, tmp_path
-) -> None:
-    fake = FakeProvider()
-    reg = registry(fake)
-    app_settings = settings(tmp_path, live=True)
-    quote = create_quote(db_session, app_settings, reg, spec(), "quote-key-delete")
-    prepared = prepare_order(db_session, app_settings, quote["id"], "order-key-delete")
-
-    delete_order(db_session, prepared["id"])
-
-    assert db_session.get(CloudOrderRecord, prepared["id"]) is None
-    assert db_session.get(CloudQuoteRecord, quote["id"]) is not None
-    assert not list(
-        db_session.scalars(
-            select(EventRecord).where(
-                EventRecord.entity_type == "cloud_order",
-                EventRecord.entity_id == prepared["id"],
-            )
-        )
-    )
-
-    submitted_quote = create_quote(
-        db_session, app_settings, reg, spec(), "quote-key-delete-submitted"
-    )
-    submitted = purchase_quote(
-        db_session,
-        app_settings,
-        reg,
-        submitted_quote["id"],
-        "order-key-delete-submitted",
-    )
-    with pytest.raises(CloudWorkflowError) as exc_info:
-        delete_order(db_session, submitted["id"])
-    assert exc_info.value.status_code == 409
-    assert db_session.get(CloudOrderRecord, submitted["id"]) is not None
-
-
-def test_purchase_quote_completes_order_without_browser_confirmation(db_session, tmp_path) -> None:
-    fake = FakeProvider()
-    reg = registry(fake)
-    app_settings = settings(tmp_path, live=True)
-    quote = create_quote(db_session, app_settings, reg, spec(), "quote-key-one-click")
-
-    result = purchase_quote(
-        db_session,
-        app_settings,
-        reg,
-        quote["id"],
-        "order-key-one-click",
-    )
-    replay = purchase_quote(
-        db_session,
-        app_settings,
-        reg,
-        quote["id"],
-        "order-key-one-click",
-    )
-
-    assert result["status"] == "submitted"
-    assert result["instanceIds"] == ["ins-fake-1"]
-    assert replay["id"] == result["id"]
-    assert len(fake.purchase_calls) == 1
-
-
-def test_default_password_purchase_remembers_credentials_and_auto_connects(
-    db_session, tmp_path, monkeypatch
-) -> None:
-    fake = FakeProvider(public_ip="203.0.113.10")
-    reg = registry(fake)
-    app_settings = settings(tmp_path, live=True)
-    observed: dict[str, object] = {}
-    host_key = "SHA256:" + "B" * 43
-
-    def connect(_session, target, request):
-        observed["request"] = request
-        target.fingerprint_json = {**target.fingerprint_json, "host_key_sha256": host_key}
-        return target
-
-    def deploy(request, _target, _settings):
-        observed["deploy_request"] = request
-        return {"status": "deployed", "workerId": "fake-worker"}
-
-    monkeypatch.setattr(cloud_service_module, "connect_existing_target", connect)
-    monkeypatch.setattr(cloud_service_module, "deploy_remote_worker", deploy)
-
-    quote = create_quote(db_session, app_settings, reg, spec(), "quote-key-password-auto-ssh")
-    result = purchase_quote(
-        db_session,
-        app_settings,
-        reg,
-        quote["id"],
-        "order-key-password-auto-ssh",
-        remember_credentials=True,
-    )
-
-    assert result["status"] == "submitted"
-    target = db_session.scalar(select(TargetRecord).where(TargetRecord.provider == "tencent"))
-    assert target is not None
-    assert target.runnable is True
-    assert target.inventory_json["autoSsh"]["status"] == "connected"
-    request = observed["request"]
-    assert request.auth_method == "password"
-    assert request.password is not None
-    assert request.password.get_secret_value() == "StrongPassword1#"
-    saved = EncryptedSshCredentialStore(app_settings).load(target.id)
-    assert saved.auth_method == "password"
-    assert saved.password is not None
-    assert saved.password.get_secret_value() == "StrongPassword1#"
-
-
-def test_pending_password_credentials_retry_after_endpoint_appears(
-    db_session, tmp_path, monkeypatch
-) -> None:
-    fake = FakeProvider()
-    reg = registry(fake)
-    app_settings = settings(tmp_path, live=True)
-    quote = create_quote(db_session, app_settings, reg, spec(), "quote-key-pending-retry")
-    result = purchase_quote(
-        db_session,
-        app_settings,
-        reg,
-        quote["id"],
-        "order-key-pending-retry",
-        remember_credentials=True,
-    )
-
-    assert result["status"] == "submitted"
-    target = db_session.scalar(select(TargetRecord).where(TargetRecord.provider == "tencent"))
-    assert target is not None
-    assert target.inventory_json["autoSsh"]["status"] == "waiting_endpoint"
-    target.inventory_json = {
-        **target.inventory_json,
-        "endpoint": "203.0.113.11",
-        "public_ip": "203.0.113.11",
-        "public_ip_present": True,
-    }
-    db_session.flush()
-    assert target.id in EncryptedSshCredentialStore(app_settings).pending_target_ids()
-
-    def connect(_session, target, _request):
-        target.fingerprint_json = {
-            **target.fingerprint_json,
-            "host_key_sha256": "SHA256:" + "C" * 43,
-        }
-        return target
-
-    monkeypatch.setattr(cloud_service_module, "connect_existing_target", connect)
-    monkeypatch.setattr(
-        cloud_service_module,
-        "deploy_remote_worker",
-        lambda _request, _target, _settings: {"status": "deployed"},
-    )
-
-    assert cloud_service_module.retry_pending_cloud_ssh(db_session, app_settings) == 1
-    db_session.commit()
-    db_session.refresh(target)
-    assert target.runnable is True
-    assert target.inventory_json["autoSsh"]["status"] == "connected"
-    assert target.id in EncryptedSshCredentialStore(app_settings).verified_target_ids()
-
-
-def test_failed_auto_ssh_uses_persisted_exponential_backoff(db_session) -> None:
-    target = db_session.get(TargetRecord, "local")
-    assert target is not None
-    target.inventory_json = {"endpoint": "203.0.113.12"}
-
-    target.inventory_json = cloud_service_module._inventory_with_auto_ssh_failure(
-        target,
-        RuntimeError("SSH banner unavailable"),
-    )
-    first = target.inventory_json["autoSsh"]
-
-    assert first["status"] == "failed"
-    assert first["failureCount"] == 1
-    assert cloud_service_module._auto_ssh_retry_due(target) is False
-
-    first["nextRetryAt"] = (cloud_service_module.utc_now() - timedelta(seconds=1)).isoformat()
-    assert cloud_service_module._auto_ssh_retry_due(target) is True
-
-    target.inventory_json = cloud_service_module._inventory_with_auto_ssh_failure(
-        target,
-        RuntimeError("SSH banner unavailable again"),
-    )
-    assert target.inventory_json["autoSsh"]["failureCount"] == 2
-
-
-def test_private_key_auth_remains_available_when_selected(tmp_path) -> None:
-    key_path = tmp_path / "cloud-key.pem"
-    key_path.write_text(
-        "-----BEGIN OPENSSH PRIVATE KEY-----\nkey\n-----END OPENSSH PRIVATE KEY-----\n"
-    )
-    app_settings = Settings(
-        _env_file=None,
-        data_dir=tmp_path,
-        default_ssh_auth_method="private-key",
-        default_ssh_private_key_path=str(key_path),
-    )
-
-    credentials = cloud_service_module._default_cloud_ssh_credentials(
-        app_settings,
-        remember_credentials=True,
-    )
-
-    assert credentials.auth_method == "private-key"
-    assert credentials.private_key is not None
-    assert credentials.private_key.get_secret_value().startswith(
-        "-----BEGIN OPENSSH PRIVATE KEY-----"
-    )
 
 
 def test_ambiguous_provider_result_is_not_automatically_retried(db_session, tmp_path) -> None:

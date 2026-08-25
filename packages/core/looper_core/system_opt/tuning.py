@@ -1,7 +1,16 @@
+"""组件闭环引擎（L5）：基线→候选→安全施加→测量→回退的单组件循环。
+
+终裁语义（2026-08-23 架构 v2 起）：``CandidateEvaluation.accepted`` 是**组件级
+晋级建议**（S7 组件内判定），不是最终接受结论；终裁由 L8 引擎判断器
+（``looper_core.system_opt.engine.evaluate_candidate``）产出。字段名保留以兼容
+存量工件，语义变化见 architecture/overall.md 与 component.py。
+"""
+
 from __future__ import annotations
 
+import math
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from enum import StrEnum
 from typing import Any
 
@@ -40,6 +49,19 @@ from looper_core.system_opt.scoring import (
 MeasurementAdapter = Callable[[int], MeasurementBatch]
 
 
+def _improvement_directions(metrics: list[Any]) -> list[Direction]:
+    """Direction for search/Pareto over improvement estimates.
+
+    ``scoring.improvement_value`` already folds each metric's own direction
+    (maximize/minimize/target/range) into the estimate sign, so every estimate
+    means "positive = better". The search generator and the Pareto ranking must
+    therefore treat the estimate itself as a single maximize objective; applying
+    the per-metric direction again would double-count it.
+    """
+
+    return [Direction.MAXIMIZE for _ in metrics]
+
+
 class StopReason(StrEnum):
     TARGET_ACHIEVED = "target-achieved"
     SEARCH_SPACE_EXHAUSTED = "search-space-exhausted"
@@ -67,6 +89,8 @@ class CandidateEvaluation(StrictModel):
     gates: list[GateEvidence]
     improvements: dict[str, ImprovementEvidence]
     feasible: bool
+    # Semantic (architecture v2): component-level promotion suggestion only;
+    # the final verdict belongs to the L8 engine judge.
     accepted: bool
     pareto_rank: int | None = None
 
@@ -93,6 +117,84 @@ class OptimizationRun(StrictModel):
     @property
     def digest(self) -> str:
         return canonical_digest(self.model_dump(mode="json", exclude_none=False))
+
+
+OPTIMIZATION_RUN_SCHEMA_V1 = "looper.system-optimization-run/v1alpha1"
+OPTIMIZATION_RUN_SCHEMA_V2 = "looper.system-optimization-run/v1alpha2"
+
+
+class LegacyCandidateEvaluation(StrictModel):
+    """Pre-multi-round candidate shape (before commit 2cd521e).
+
+    Loads committed historical evidence as-is. Round/attempt tracking and the
+    per-candidate comparison baseline did not exist in that era; their absence
+    is the honest record and is never back-filled (SO-D021, D0-09 repair).
+    """
+
+    candidate_id: str
+    parameters: dict[str, Any]
+    change_count: int
+    safety_state: SafetyState
+    safety_reason: str | None = None
+    measurement_digest: str | None = None
+    comparable: bool
+    identity_mismatches: list[str]
+    gates: list[GateEvidence]
+    improvements: dict[str, ImprovementEvidence]
+    feasible: bool
+    accepted: bool
+    pareto_rank: int | None = None
+
+
+class LegacyOptimizationRun(StrictModel):
+    """Pre-multi-round run shape (before commit 2cd521e).
+
+    Kept only for replaying committed evidence; new runs emit
+    OPTIMIZATION_RUN_SCHEMA_V2.
+    """
+
+    schema_version: str
+    policy_id: str
+    policy_digest: str
+    manifest_digest: str
+    mode: OptimizationMode
+    baseline: MeasurementBatch
+    diagnostic_reference: MeasurementBatch | None = None
+    diagnostic_priorities: list[DiagnosticPriority]
+    routed_components: list[str]
+    candidates: list[LegacyCandidateEvaluation]
+    recommended_candidate_id: str | None = None
+    stop_reason: StopReason
+    stop_detail: str
+    elapsed_seconds: float = Field(ge=0)
+
+    @property
+    def digest(self) -> str:
+        return canonical_digest(self.model_dump(mode="json", exclude_none=False))
+
+
+def load_optimization_run(
+    payload: Mapping[str, Any],
+) -> OptimizationRun | LegacyOptimizationRun:
+    """Load one optimization-run payload by schema version (SO-D021).
+
+    v1alpha1 has two historical shapes: the pre-multi-round shape (before
+    2cd521e) and the multi-round shape emitted afterwards under the same
+    version string. Dispatch on the field set introduced by 2cd521e and never
+    fabricate the missing values in legacy evidence.
+    """
+
+    version = payload.get("schema_version")
+    if version == OPTIMIZATION_RUN_SCHEMA_V2:
+        return OptimizationRun.model_validate(payload)
+    if version == OPTIMIZATION_RUN_SCHEMA_V1:
+        if "baseline_history" in payload and "attempt_count" in payload:
+            return OptimizationRun.model_validate(payload)
+        return LegacyOptimizationRun.model_validate(payload)
+    raise ValueError(
+        f"unsupported optimization-run schema_version: {version!r}; expected "
+        f"{OPTIMIZATION_RUN_SCHEMA_V1!r} or {OPTIMIZATION_RUN_SCHEMA_V2!r}"
+    )
 
 
 class SystemOptimizationEngine:
@@ -128,6 +230,8 @@ class SystemOptimizationEngine:
         measure: MeasurementAdapter,
         fencing_token: int,
         diagnostic_reference: MeasurementBatch | None = None,
+        preexisting: Sequence[Mapping[str, Any]] | None = None,
+        selected_parameters: Mapping[str, Any] | None = None,
     ) -> OptimizationRun:
         started = time.monotonic()
         baseline = measure(self.policy.statistics.baseline_repeats)
@@ -151,13 +255,15 @@ class SystemOptimizationEngine:
                 if metric.role == MetricRole.COMPONENT_DIAGNOSTIC
             ]
             priorities = diagnostic_priorities(baseline, diagnostic_reference, diagnostic_contracts)
-            component_order: list[str] = []
-            for priority in priorities:
-                if (
-                    priority.component in self.policy.authorized_components
-                    and priority.component not in component_order
-                ):
-                    component_order.append(priority.component)
+            diagnosed_components = {priority.component for priority in priorities}
+            # F-PROJECT-002 Pareto ranks are component-local. Cross-component routing
+            # therefore follows the policy's explicit authorization order rather than
+            # pretending unlike metric coordinates form a calibrated severity score.
+            component_order = [
+                component
+                for component in self.policy.authorized_components
+                if component in diagnosed_components
+            ]
             assert self.policy.search.routed_component_limit is not None
             routed_components = component_order[: self.policy.search.routed_component_limit]
             if not routed_components:
@@ -189,6 +295,16 @@ class SystemOptimizationEngine:
         missing_baseline = sorted(set(search_space) - set(baseline_parameters))
         if missing_baseline:
             raise ValueError(f"baseline parameters are missing: {missing_baseline}")
+        selected = dict(selected_parameters) if selected_parameters is not None else None
+        if selected is not None:
+            self._validate_selected_parameters(selected, search_space)
+            if all(
+                canonical_json(value) == canonical_json(baseline_parameters.get(name))
+                for name, value in selected.items()
+            ):
+                raise ValueError("selected candidate is identical to the baseline parameters")
+            if any(dict(item) == selected for item in preexisting or ()):
+                raise ValueError("selected candidate is blocked by the preexisting exclusion set")
 
         optimizer = OptimizerSpec(
             type=self.policy.search.generator,
@@ -205,10 +321,14 @@ class SystemOptimizationEngine:
                 MetricRole.RISK,
             }
         ]
-        objective_directions = [Direction.MAXIMIZE for _ in scored_metrics]
+        objective_directions = _improvement_directions(scored_metrics)
         existing: list[dict[str, Any]] = [
             {"parameters": {name: baseline_parameters[name] for name in search_space}}
         ]
+        # Negative-cached (or otherwise already-tried) candidates are excluded
+        # from search instead of being re-measured.
+        for tried in preexisting or ():
+            existing.append({"parameters": dict(tried)})
         history: list[dict[str, Any]] = []
         candidates: list[CandidateEvaluation] = []
         no_improvement = 0
@@ -250,19 +370,22 @@ class SystemOptimizationEngine:
                 stop_reason = StopReason.WALL_TIME_BUDGET
                 stop_detail = "explicit wall-time budget reached"
                 break
-            try:
-                parameters = suggest_candidate(
-                    search_space,
-                    optimizer,
-                    sequence=attempts,
-                    existing=existing,
-                    objective_directions=objective_directions,
-                    history=history,
-                )
-            except SearchSpaceExhausted as error:
-                stop_reason = StopReason.SEARCH_SPACE_EXHAUSTED
-                stop_detail = str(error)
-                break
+            if selected is not None:
+                parameters = dict(selected)
+            else:
+                try:
+                    parameters = suggest_candidate(
+                        search_space,
+                        optimizer,
+                        sequence=attempts,
+                        existing=existing,
+                        objective_directions=objective_directions,
+                        history=history,
+                    )
+                except SearchSpaceExhausted as error:
+                    stop_reason = StopReason.SEARCH_SPACE_EXHAUSTED
+                    stop_detail = str(error)
+                    break
             attempts += 1
             existing.append({"parameters": parameters})
             evaluation = self._evaluate(
@@ -292,6 +415,10 @@ class SystemOptimizationEngine:
             if evaluation.safety_state == SafetyState.NEEDS_ATTENTION:
                 stop_reason = StopReason.SAFETY_STOP
                 stop_detail = evaluation.safety_reason or "target needs attention"
+                break
+            if selected is not None:
+                stop_reason = StopReason.COMPLETED
+                stop_detail = "the scheduler-selected candidate completed one evaluation"
                 break
             primary = evaluation.improvements.get(self.policy.primary_metric.id)
             if primary is not None and primary.accepted and primary.lower > best_lower:
@@ -326,6 +453,53 @@ class SystemOptimizationEngine:
             stop_detail,
             recommended.candidate_id if recommended else None,
             attempts,
+        )
+
+    @staticmethod
+    def _validate_selected_parameters(
+        selected: Mapping[str, Any], search_space: Mapping[str, Any]
+    ) -> None:
+        if not selected:
+            raise ValueError("selected candidate parameters cannot be empty")
+        unknown = sorted(set(selected) - set(search_space))
+        if unknown:
+            raise ValueError(
+                f"selected candidate parameters are outside the search space: {unknown}"
+            )
+        for name, value in selected.items():
+            parameter = search_space[name]
+            if parameter.type == "boolean":
+                valid = type(value) is bool
+            elif parameter.type == "categorical":
+                valid = value in list(parameter.choices or [])
+            elif parameter.type == "integer":
+                valid = type(value) is int
+            else:
+                valid = not isinstance(value, bool) and isinstance(value, (int, float))
+            if not valid:
+                raise ValueError(f"selected value {value!r} is invalid for parameter '{name}'")
+            if parameter.type not in {"integer", "number"}:
+                continue
+            numeric = float(value)
+            assert parameter.minimum is not None and parameter.maximum is not None
+            if numeric < parameter.minimum or numeric > parameter.maximum:
+                raise ValueError(
+                    f"selected value {value!r} for '{name}' is outside "
+                    f"[{parameter.minimum}, {parameter.maximum}]"
+                )
+            if parameter.step is not None:
+                steps = (numeric - parameter.minimum) / parameter.step
+                if not math.isclose(steps, round(steps), abs_tol=1e-9):
+                    raise ValueError(
+                        f"selected value {value!r} for '{name}' is not aligned "
+                        f"to step {parameter.step}"
+                    )
+
+    def search_space(self, components: set[str] | None = None) -> dict[str, Any]:
+        """Public search-space view for the L8 engine loop and candidate pools."""
+
+        return self._search_space(
+            components if components is not None else set(self.policy.authorized_components)
         )
 
     def _search_space(self, components: set[str]) -> dict[str, Any]:
@@ -449,6 +623,8 @@ class SystemOptimizationEngine:
             }
             for candidate in candidates
         ]
+        # Improvement estimates are direction-normalized (positive = better), so
+        # every scored metric is a maximize objective (see _improvement_directions).
         ranks = pareto_ranks(
             points,
             {metric.id: Direction.MAXIMIZE for metric in metrics},
@@ -497,7 +673,7 @@ class SystemOptimizationEngine:
         attempts: int = 1,
     ) -> OptimizationRun:
         return OptimizationRun(
-            schema_version="looper.system-optimization-run/v1alpha1",
+            schema_version=OPTIMIZATION_RUN_SCHEMA_V2,
             policy_id=self.policy.id,
             policy_digest=canonical_digest(self.policy.model_dump(mode="json")),
             manifest_digest=self.manifest.digest,
@@ -518,9 +694,14 @@ class SystemOptimizationEngine:
 
 
 __all__ = [
+    "OPTIMIZATION_RUN_SCHEMA_V1",
+    "OPTIMIZATION_RUN_SCHEMA_V2",
     "CandidateEvaluation",
+    "LegacyCandidateEvaluation",
+    "LegacyOptimizationRun",
     "MeasurementAdapter",
     "OptimizationRun",
     "StopReason",
     "SystemOptimizationEngine",
+    "load_optimization_run",
 ]

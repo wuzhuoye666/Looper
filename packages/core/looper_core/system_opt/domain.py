@@ -1,3 +1,9 @@
+"""L1/L5 动态合法域（S5）：声明域 ∩ 目标能力域 ∩ 任务授权域 求交。
+
+架构层：L1/L5（docs/system-optimizer/architecture/overall.md，公式 S5）。
+任一来源域缺失或未验证时 fail-closed；输出 ResolvedDomain 作为候选搜索的合法域。
+"""
+
 from __future__ import annotations
 
 from typing import Any

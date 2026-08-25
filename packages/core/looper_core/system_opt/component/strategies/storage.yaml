@@ -1,0 +1,14 @@
+schema_version: looper.component-strategy/v1alpha1
+component: storage
+primary_metric: storage.randread-iops
+direction: maximize
+stability_metric: storage.randread-iops
+search_item_ids: [io-nvme0n1-scheduler]
+candidate_sources:
+  - formula_id: F-IO-SCHEDULER-CHOICE/v0-proposal
+    provenance: heuristic
+    applies_when: "direct 4K randread on NVMe; mq-deadline baseline, none candidate (2026-08-23 five-candidate loop: no acceptance)"
+hard_gates: [storage-execution-success]
+boundaries: "Direct I/O only; storage protocol not yet under StandardPressureProtocol (PKG-B item); cloud-block devices differ from local NVMe."
+references:
+  - docs/system-optimizer/research/aliyun-ecs-fio-multiround-acceptance-2026-08-23.md

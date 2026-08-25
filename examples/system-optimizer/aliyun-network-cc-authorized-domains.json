@@ -1,0 +1,7 @@
+[
+  {
+    "item_id": "tcp-congestion-control",
+    "domain": {"minimum": null, "maximum": null, "step": null, "choices": ["cubic", "bbr", "reno"], "log": false},
+    "reason": "User authorized controlled Linux optimization on 2026-08-23; congestion control changes apply to the tuning client only, must verify readback, and roll back to the cubic baseline after every measurement."
+  }
+]

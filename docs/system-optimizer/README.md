@@ -1,9 +1,10 @@
 # Looper System Optimizer 文档入口
 
-> 状态：runnable vertical slice；CVM unverified  
-> 日期：2026-08-23  
-> 当前阶段：M1 主体及双闭环 simulated 纵向切片已跑通，下一目标是 CVM 能力重采和受控验证。  
-> 实现口径：WSL2 只读 Linux 路径已验证；真实 CVM 写入、压力稳定性、区分度和收益仍未验证。
+> 状态：runnable vertical slice；真实动态功能闭环已校准，收益/跨环境未验收
+> 日期：2026-08-25
+> 当前阶段：M1/M2 阿里云受控切片完成；M3 已在阿里云低规格目标跑通真实拒绝/恢复路径，真实 accepted candidate 与跨环境 S9 仍开放。
+> 实现口径：阿里云 ECS 已验证配置安全闭环、存储多轮和 CPU/Memory/Network-loopback
+> 压力出数；腾讯云 CVM 与正向收益仍未验证。
 
 ## 当前结论
 
@@ -26,11 +27,12 @@ System Optimizer 是一个操作系统配置采集、人工管理和有限闭环
 - governance/decision-log.md：已确认、重新打开、待确认的架构决定。
 - governance/terminology.md：通用调优、场景调优、微指标、优先级和评分等术语。
 - governance/document-rules.md：规范状态、事实/推断、默认值和变更记录规则。
-- governance/collaboration-protocol.md：共享工作树、异常、测试隔离和用户决策边界。
+- governance/collaboration-protocol.md：独立 worktree、任务生命周期、统一集成、异常、测试隔离和用户决策边界。
 
 ### 架构
 
-- architecture/overall.md：共同底座、两条闭环、任务生命周期和模块边界。
+- architecture/overall.md：**总体架构 v2（权威）**——组件化分层（独立组件优化器 ×N + 总引擎调度/判断/打分 + 九层：压力器/采集器/组件优化器/回退器/负缓存/引擎），静态与动态两种运行情境、结束门禁、S0–S10 公式总线映射与实现状态、建议实现顺序。
+- architecture/layer-specifications.md：**分层实现规范与目录说明**——目录↔层对应表、逐层验收门禁（含通过状态）、L4 guest 盲区契约、L7 负缓存红线、L8 三器官规范。
 - architecture/configuration-plane.md：配置发现、采集、人工修改、Profile 和动态合法域。
 - architecture/general-tuning.md：无业务载荷的标准压力调优。
 - architecture/workload-tuning.md：workload 动态观测与有限闭环。
@@ -46,13 +48,19 @@ System Optimizer 是一个操作系统配置采集、人工管理和有限闭环
 ### 安全与执行
 
 - safety/execution-and-recovery.md：安全事务、单写者、漂移、崩溃恢复和多节点边界。
+- safety/operations-runbook.md：M5-01 运维、失败恢复、证据归档、迁移与已知限制草案。
 
 ### 规划与验收
 
 - planning/roadmap.md：重新基线后的阶段计划、依赖和交付物。
 - planning/acceptance-criteria.md：功能、证据、安全、指标和文档验收。
 - planning/implementation-rebaseline-2026-08-23.md：当前实际能力与原 M1–M5 对照。
+- planning/implementation-rebaseline-2026-08-24.md：动态接线、O1/O2 证据、L6c 与当前并行缺口的最新实现基线。
+- planning/unfinished-task-queue-2026-08-24.md：按依赖 DAG 分批的当前未完成任务队列，区分实现、验收、决策和 M6+ 延后项。
 - planning/m1-state-ownership-recovery-contract-2026-08-23.md：M1 状态来源、逐项所有权授权、完整快照崩溃对账与未完成边界。
+- planning/m2-component-pressure-contract-2026-08-23.md：五组件口径、标准阶段合同、校准与正式门禁的边界。
+- planning/s4-02-target-local-scale-calibration-2026-08-24.md：无隐式默认的目标本地 scale/reference 校准任务包。
+- planning/m4-01-api-event-environment-contract-2026-08-24.md：只读优先 API、事件投影和 typed EnvironmentSnapshot 双写设计。
 
 ### 调研与历史
 
@@ -60,6 +68,7 @@ System Optimizer 是一个操作系统配置采集、人工管理和有限闭环
 - research/kernel-official-config-catalog-2026-08-23.md：按原验收口径核对的 20 个官方候选。
 - research/wsl2-capability-probe-2026-08-23.md：WSL2 代码能力、缺接口与工具缺口实录。
 - research/aliyun-ecs-m1-state-recovery-acceptance-2026-08-23.md：M1 20 项采集、状态归属、人工修改、崩溃对账与 rollback failure 恢复实测。
+- research/aliyun-ecs-m2-component-calibration-2026-08-23.md：CPU/Memory/NUMA/Network 首次组件压力校准与不可外推边界。
 - legacy/system-optimizer-m0-m1-2026-08-22.md：迁移前的 M0/M1 主方案，仅供追溯，不再是当前合同。
 
 ## 当前实施状态
@@ -68,9 +77,9 @@ System Optimizer 是一个操作系统配置采集、人工管理和有限闭环
 |---|---|---|
 | 新架构与规范 | draft | 已确认核心方向，仍有明确 open decisions |
 | 配置模型、inventory、Profile、安全执行 | Alibaba ECS KVM accepted | 腾讯云 CVM 仍须独立复验 |
-| 通用标准压力闭环 | simulated vertical slice | 真实组件压力、稳定性和区分度未验证 |
-| workload 动态下钻闭环 | simulated vertical slice | 真实低开销采集、下钻和业务复验未验证 |
-| 真实 local Linux/CVM | unverified | 默认不得宣称可用 |
+| 通用标准压力闭环 | Alibaba ECS calibration in progress | 存储真实多轮；CPU/Memory/Network-loopback 首次出数；NUMA 单节点 unavailable；候选收益与组合复验未完成 |
+| workload 动态下钻闭环 | simulated vertical slice wired | O0/O1/O2、假设、干预、业务复测/复验、门禁与恢复已接线；真实业务/CVM 未验证 |
+| 真实 local Linux | Alibaba ECS partially verified | 不能外推腾讯云 CVM；仅按各实录声明的作用域使用 |
 | 缓存与中间结果复用 | deferred | 功能闭环通过后进入过程优化阶段 |
 
 ## 进入 CVM 验证前的阻断项

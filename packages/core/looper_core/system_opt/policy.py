@@ -1,5 +1,12 @@
+"""L5 优化策略合同：mode、指标、门禁、统计、搜索与安全合同的声明式定义。
+
+架构层：L5（docs/system-optimizer/architecture/overall.md）。
+所有数值策略必须由任务合同显式提供，禁止隐式默认；YAML 解析失败即 fail-closed。
+"""
+
 from __future__ import annotations
 
+import math
 from enum import StrEnum
 from typing import Any, Literal
 
@@ -66,6 +73,20 @@ class MetricContract(StrictModel):
     pressure_reference: float | None = None
     source: str = Field(min_length=1, max_length=1000)
 
+    @field_validator(
+        "scale",
+        "minimum_effect",
+        "target",
+        "lower_bound",
+        "upper_bound",
+        "pressure_reference",
+    )
+    @classmethod
+    def require_finite_parameters(cls, value: float | None) -> float | None:
+        if value is not None and not math.isfinite(value):
+            raise ValueError("metric numeric parameters must be finite")
+        return value
+
     @model_validator(mode="after")
     def validate_semantics(self) -> MetricContract:
         scored_roles = {
@@ -93,11 +114,60 @@ class MetricContract(StrictModel):
         if self.pressure_method == PressureMethod.NONE:
             if self.role == MetricRole.COMPONENT_DIAGNOSTIC:
                 raise ValueError("component diagnostic metrics require a pressure transform")
-        elif (
-            self.pressure_method != PressureMethod.EXPLICIT_SCORE
+            return self
+
+        reference_pressure_methods = {
+            PressureMethod.UTILIZATION,
+            PressureMethod.UPPER_LIMIT_EXCESS,
+            PressureMethod.LOWER_LIMIT_DEFICIT,
+            PressureMethod.TARGET_DISTANCE,
+        }
+        if (
+            self.pressure_method in reference_pressure_methods
             and self.pressure_reference is None
         ):
             raise ValueError("pressure transform requires pressure_reference")
+        scaled_pressure_methods = {
+            PressureMethod.UPPER_LIMIT_EXCESS,
+            PressureMethod.LOWER_LIMIT_DEFICIT,
+            PressureMethod.TARGET_DISTANCE,
+            PressureMethod.RANGE_EXCESS,
+        }
+        if self.pressure_method in scaled_pressure_methods and self.scale is None:
+            raise ValueError("scaled pressure transforms require an explicit scale")
+
+        # F-PROJECT-002 方向-方法相容表：压力语义必须与指标声明的坏方向一致，
+        # 否则 P 与 D 会在相反方向上各算各的（登记表 R2 节，fail-closed）。
+        compatible_directions = {
+            PressureMethod.UTILIZATION: {
+                MetricDirection.MINIMIZE,
+                MetricDirection.DIAGNOSTIC_ONLY,
+            },
+            PressureMethod.UPPER_LIMIT_EXCESS: {
+                MetricDirection.MINIMIZE,
+                MetricDirection.DIAGNOSTIC_ONLY,
+            },
+            PressureMethod.LOWER_LIMIT_DEFICIT: {
+                MetricDirection.MAXIMIZE,
+                MetricDirection.DIAGNOSTIC_ONLY,
+            },
+            PressureMethod.TARGET_DISTANCE: {MetricDirection.TARGET},
+            PressureMethod.RANGE_EXCESS: {MetricDirection.RANGE},
+            PressureMethod.EXPLICIT_SCORE: {
+                MetricDirection.MINIMIZE,
+                MetricDirection.DIAGNOSTIC_ONLY,
+            },
+        }
+        if self.direction not in compatible_directions[self.pressure_method]:
+            raise ValueError(
+                f"pressure method {self.pressure_method.value} is incompatible with "
+                f"direction {self.direction.value}"
+            )
+        if (
+            self.pressure_method == PressureMethod.TARGET_DISTANCE
+            and self.target != self.pressure_reference
+        ):
+            raise ValueError("target-distance pressure reference must equal metric target")
         return self
 
 

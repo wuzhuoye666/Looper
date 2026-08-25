@@ -1,0 +1,33 @@
+schema_version: looper.tuning-profile/v1alpha1
+id: aliyun-ecs-general-20260823
+kind: general-static
+target_scope: "Alibaba ECS iZ7xvcxcry1ejfjcd1d7igZ, Ubuntu 24.04, 6.8.0-137-generic, 8 vCPU, 14 GiB, single NUMA node"
+derived_from:
+  component_loops:
+    - component: storage
+      record: docs/system-optimizer/research/aliyun-ecs-fio-multiround-acceptance-2026-08-23.md
+      accepted_candidates: 0
+    - component: memory
+      record: docs/system-optimizer/research/aliyun-ecs-m2-memory-thp-closed-loop-2026-08-23.md
+      accepted_candidates: 0
+    - component: cpu
+      record: docs/system-optimizer/research/aliyun-ecs-cpu-governor-closed-loop-2026-08-23.md
+      accepted_candidates: 0
+    - component: network
+      record: docs/system-optimizer/research/dual-host-blindspot-and-network-blocked-2026-08-23.md
+      accepted_candidates: 0
+    - component: numa
+      record: docs/system-optimizer/research/dual-host-numa-unavailable-2026-08-23.md
+      status: unavailable-single-node
+settings: {}
+rationale: >
+  No candidate passed the robust acceptance rule (primary LCB95 > MDE with hard
+  gates and stability gates) in any component loop on this target. The general
+  profile therefore keeps every default: governor stays on the kernel default
+  under tuned management (tuned restored to active/performance), THP stays
+  madvise, I/O scheduler stays mq-deadline, congestion control stays cubic.
+boundaries: >
+  Valid only for this target and these fixed protocols. Not a claim that the
+  defaults are optimal for other workloads, other guests, or public network
+  paths; bbr reduced retransmits ~59% without significant throughput gain and
+  remains a diagnostic lead, not an accepted change.

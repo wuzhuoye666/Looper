@@ -54,6 +54,42 @@ M2/M3 代码切片不代表对应里程碑已经验收。
 [计划差距审计](gap-audit-after-real-multiround-2026-08-23.md)。该实测只关闭真实存储
 多轮纵向切片，不改变 M2 其他组件和 M3–M5 的出口标准。
 
+2026-08-23 已新增统一标准压力阶段合同与 CPU/Memory/NUMA/Network 探针，并完成阿里云
+ECS 首次 `report-only` 校准。CPU、Memory、Network-loopback 能重复出数，NUMA 因单节点
+明确 unavailable；详情见
+[M2 组件合同](m2-component-pressure-contract-2026-08-23.md)与
+[组件校准实录](../research/aliyun-ecs-m2-component-calibration-2026-08-23.md)。这不等于
+M2 完成：CPU/Network 合法候选闭环、双节点 NUMA、真实跨机网络和组合复验仍未关闭。
+
+同日已按冻结校准数据派生 CPU、Memory 与 Network-loopback 的 target-local CV gate，并完成
+Memory THP 的 `madvise` 基线加 `always/never` 两候选真实闭环。首次正式基线被并发
+Phoronix PHPBench 污染并由硬门禁阻止；补充前后进程干扰门禁后闭环完成，两个候选均无
+显著收益且已回滚。详情见
+[内存 THP 实录](../research/aliyun-ecs-m2-memory-thp-closed-loop-2026-08-23.md)。
+
+同日完成 CPU governor 候选闭环：操作者按合同停止 tuned 完成 governor 所有权交接
+（stop 后 governor 回退内核默认 `schedutil`，即真实基线），在新基线下重新校准 CV
+门禁后完成 `powersave`/`performance` 两候选闭环。`powersave` 批次 CV 0.00441 超硬
+门禁被拒，`performance` 估计 +0.17% 但 LCB95 为 -0.20% 未采纳；全部回滚。governor
+建模为单一逻辑项（helper 一致写全部 per-vCPU policy）。详情见
+[CPU governor 实录](../research/aliyun-ecs-cpu-governor-closed-loop-2026-08-23.md)。
+NUMA 已补第二台（24 vCPU）单节点证据，双机均 unavailable，见
+[双机 NUMA 探测](../research/dual-host-numa-unavailable-2026-08-23.md)。
+
+M2 剩余缺口更新（2026-08-23 晚）：
+
+- CPU：候选闭环已完成（含 tuned 交接与基线重校准）。
+- Memory：THP 闭环已完成；换 workload 仍需重校准。
+- NUMA：两台可用目标均单节点，保持 unavailable（有证据）。
+- Network：第二台受控 peer 于会话中途失联（实例不可达，疑似平台侧故障），真实
+  跨机候选闭环仍开放；loopback 协议栈证据已有。
+- 组合复验与通用 Profile（2026-08-23 晚收口）：网络组件亦完成且零接受候选，
+  五组件全部零接受 → 无可组合项，通用 Profile 正式落盘
+  `profiles/aliyun-ecs-general-20260823.yaml`（结论：保持默认配置，附四组件
+  证据链接与边界声明）。组合机制验证仍开放，待任一组件出现已接受候选时启用。
+  **M2 出口条件满足：受控环境有限运行 + 明确报告 best observed（无）、稳定性、
+  适用边界和回滚状态（全部验证）。M2 关闭。**
+
 ## M3：workload 动态观测与下钻调优
 
 交付：

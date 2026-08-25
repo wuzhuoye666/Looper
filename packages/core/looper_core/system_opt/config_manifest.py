@@ -1,3 +1,10 @@
+"""L1 配置清单：声明配置项、默认值/值域、读写命令、风险、依赖与激活条件。
+
+架构层：L1（docs/system-optimizer/architecture/overall.md）。
+清单是配置采集与安全执行的第一等输入：每一项绑定读/写命令、合法域、所有权与
+依赖关系；未知字段、越域默认值或依赖环在模型校验层 fail-closed。
+"""
+
 from __future__ import annotations
 
 import math

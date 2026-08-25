@@ -1,0 +1,15 @@
+[
+  {
+    "item_id": "thp-enabled",
+    "domain": {
+      "minimum": null,
+      "maximum": null,
+      "step": null,
+      "choices": ["always", "madvise", "never"],
+      "log": false
+    },
+    "verified": true,
+    "source": "2026-08-23 byte-level target readback artifact aliyun-ecs-memory-thp-capability-raw.txt",
+    "evidence_digest": "sha256:4ca7db7e514787a42c69893c196cd4f7ed14154bda6d690fc2f7771b7ae497d1"
+  }
+]

@@ -1,3 +1,9 @@
+"""确定性合成演示/测试夹具：构建 synthetic manifest、policy、域与测量适配器。
+
+性质：只证明代码闭环可跑，不证明任何真实性能收益（source 一律标注 synthetic）。
+GENERAL 与 WORKLOAD 两种模式的 E2E 都从这里构造，供 demo 与测试复用。
+"""
+
 from __future__ import annotations
 
 import hashlib
@@ -44,6 +50,8 @@ from looper_core.system_opt.policy import (
 )
 from looper_core.system_opt.scoring import MeasurementBatch, MetricEvidence
 from looper_core.system_opt.tuning import OptimizationRun, SystemOptimizationEngine
+
+SYNTHETIC_PRESSURE_PROTOCOL_DIGEST = "sha256:" + "d" * 64
 
 
 def _command(*argv: str) -> CommandTemplate:
@@ -292,7 +300,7 @@ def build_demo_policy(mode: OptimizationMode) -> SystemOptimizationPolicy:
         id=f"synthetic-{mode.value}-closed-loop",
         mode=mode,
         identity=IdentityPolicy(
-            required_fields=["target", "workload", "phase", "tool", "statistics"]
+            required_fields=["target", "workload", "phase", "load_state", "tool", "statistics"]
         ),
         statistics=StatisticsPolicy(
             confidence_level=0.95,
@@ -415,6 +423,7 @@ class SyntheticMeasurementAdapter:
                 "target": "synthetic-linux-guest",
                 "workload": f"synthetic-{self.mode.value}",
                 "phase": "steady-state",
+                "load_state": "loaded",
                 "tool": "looper-system-opt-synthetic/v1",
                 "statistics": "explicit-policy",
             },
@@ -423,6 +432,7 @@ class SyntheticMeasurementAdapter:
                 for metric, values in metric_values.items()
             },
             gate_values={"gate.correctness": True},
+            pressure_protocol_digest=SYNTHETIC_PRESSURE_PROTOCOL_DIGEST,
         )
 
 
@@ -439,6 +449,7 @@ def build_workload_reference(policy: SystemOptimizationPolicy) -> MeasurementBat
             "target": "synthetic-linux-guest",
             "workload": "synthetic-workload",
             "phase": "steady-state",
+            "load_state": "loaded",
             "tool": "looper-system-opt-synthetic/v1",
             "statistics": "explicit-policy",
         },
@@ -447,6 +458,7 @@ def build_workload_reference(policy: SystemOptimizationPolicy) -> MeasurementBat
             for metric, observations in values.items()
         },
         gate_values={},
+        pressure_protocol_digest=SYNTHETIC_PRESSURE_PROTOCOL_DIGEST,
     )
 
 

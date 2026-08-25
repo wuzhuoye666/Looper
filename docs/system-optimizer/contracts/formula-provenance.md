@@ -64,6 +64,29 @@ Comparable(x)=\bigwedge_{i=1}^{N}IdentityMatch_i(x)
 
 `MDE_m` 可以来自业务最小收益、基线噪声校准或两者中更严格者，但任务必须记录选择依据和数值。没有合格基线或必需校准参数时停止，不自行填值。
 
+### S1.1：目标机 CV 稳定门禁派生
+
+来源类型：PROJECT-CONTRACT；formula id：
+`F-PROJECT-PRESSURE-CV-BOOTSTRAP-UPPER/v1alpha1`。
+
+给定冻结校准样本 `Y={y_1,...,y_n}`，每次有放回抽取同样本量得到 `Y_b`，并且必须从
+同一个 `Y_b` 同时计算均值与样本标准差：
+
+\[
+CV_b=\frac{s(Y_b)}{|\bar{Y_b}|},\qquad
+Limit_{CV}=Q_{confidence}(\{CV_b\}_{b=1}^{B})
+\]
+
+置信水平、重采样次数、随机种子、样本数、目标作用域和环境可迁移边界必须显式记录。
+`Limit_CV` 只用于相同目标环境和相同测量协议的后续批次；不得从阿里云、WSL 或 loopback
+外推到腾讯云 CVM/NIC。均值为零、样本少于 3、关键身份改变或派生上界为零时 fail-closed。
+该门禁只判断测量批次是否足够稳定，不等于候选收益 MDE，也不证明候选有效。
+
+同节登记 S1.1 的点估计 CV 报告公式 id：`F-PROJECT-PRESSURE-CV/v1alpha1`，定义
+`CV=s(Y)/|\bar Y|`（`evaluate_measurement_stability` 的 report 口径）。它只用于报告
+单批次的样本变异系数，不派生 `Limit_CV` 门限；门限派生只认
+`F-PROJECT-PRESSURE-CV-BOOTSTRAP-UPPER/v1alpha1`。
+
 ### S2：不可补偿门禁
 
 来源类型：PROJECT-CONTRACT，与 F-MENTOR-001 对齐。
@@ -102,6 +125,11 @@ Priority_m=(P_m,D_m,Persistence_m,Confidence_m)
 
 第一版采用确定性的 Pareto 层和词典序决胜，不将该向量加权为跨组件总分。target、range、近零、负值、计数器回绕和跨阶段指标必须使用各自合同中的绝对尺度或超限距离。
 
+实现契约（fail-closed，无隐式分母）：target/range 指标的不利变化为
+`D_m=(distance(C_m)-distance(B_m))/scale_m`，`scale_m` 缺失时 fail-closed；
+压力变换 `PressureTransform_m`（EXCESS/DEFICIT/TARGET_DISTANCE/RANGE_EXCESS）同样要求显式 `scale_m`，
+不再以 `abs(reference)` 或 `1.0` 作为隐式分母。
+
 ### S5：动态合法搜索域
 
 来源类型：PROJECT-CONTRACT。
@@ -129,6 +157,10 @@ I_m(x)=
 
 target 指标使用到目标距离的减少量，range 指标使用到合法区间超限距离的减少量。必须同时保存原始值、估计值、不确定性、公式 ID、公式版本和输入摘要。
 
+`I_m(x)` 的符号已方向归一化（改善为正）：后续搜索生成器与 Pareto 排名一律把改善量当作最大化目标，不得再次叠加指标自身方向（否则方向被双重编码）。
+
+实现契约（fail-closed，无隐式分母）：target/range 指标的 `I_m(x)` 使用到目标/区间距离的减少量除以显式 `scale_m`；`scale_m` 缺失时 fail-closed，不再使用隐式 `1.0` 分母。
+
 ### S7：稳健接受条件
 
 来源类型：PROJECT-CONTRACT，与 F-MENTOR-002 对齐。
@@ -141,6 +173,11 @@ LCB_{confidence}(I_{primary}(x))>MDE_{primary}
 \]
 
 置信水平、重采样方法、重复次数和 `MDE` 必须由任务显式给出。只看到均值上升不能晋级。
+
+`bootstrap_improvement` 产出的 `ImprovementEvidence` 统一标注公式 id
+`F-PROJECT-S6-S7/v1alpha1`：它覆盖 S6 的点估计（`improvement_value`）与 S7 的
+bootstrap 置信下界（`LCB=Q_{\alpha/2}(\{I_b\}_{b=1}^{B})`），是 S6/S7 的组合证据
+标签，不含任何新的权重或阈值。
 
 ### S8：结果向量与排名
 
@@ -495,7 +532,7 @@ D^{rel}_m=d_m\cdot\frac{C_m-B_m}{|B_m|}
 
 ### F-PROJECT-002：组件内二维坐标
 
-来源类型：PROJECT-DRAFT，核心分工已确认，变换函数未确认。
+来源类型：PROJECT-CONTRACT；formula id：`F-PROJECT-S4-PIECEWISE-LINEAR/v1alpha1`。核心分工与候选 A 已确认试用；它只进入组件诊断，不进入候选终裁。
 
 \[
 P_m(t)=PressureTransform_m(x_m(t),Reference_m,Scope_m,Phase_m)
@@ -505,7 +542,7 @@ P_m(t)=PressureTransform_m(x_m(t),Reference_m,Scope_m,Phase_m)
 D_m(t)=AdverseChangeTransform_m(x_m(t),B_m,Direction_m,Phase_m)
 \]
 
-二维结果 (P_m,D_m) 只在同一组件内部决定下钻顺序：
+二维结果 `(P_m,D_m)` 只在同一组件内部决定下钻顺序：
 
 | P | D | 含义 |
 |---|---|---|
@@ -514,7 +551,147 @@ D_m(t)=AdverseChangeTransform_m(x_m(t),B_m,Direction_m,Phase_m)
 | 低 | 大 | 新出现风险，先验证持续性 |
 | 低 | 小 | 当前证据弱 |
 
-建议第一版保存二维坐标、持续性和不确定性，不急于压成一个标量。高/低阈值、PressureTransform 和 AdverseChangeTransform 都是 open decision。
+第一版继续保存二维坐标、持续性和不确定性，不压成跨组件标量。`高/低` 只用于解释四象限，
+Pareto 排序不需要先设高/低阈值；在目标机校准前不得擅自写阈值。
+
+#### F-PROJECT-002-R1：问题定义与“理论最优”的边界
+
+不存在脱离损失函数、数据分布和误判成本的全局最优变换。本提案把“理论最优”限定为：在下列
+第一版设计公理下，找假设最少且不引入未经校准杠杆的变换。
+
+1. **量纲不变**：换单位不应改变坐标，所有非显式分数必须除以合同声明的正尺度。
+2. **观测语义单调**：在 workload、phase、scope、配置能力 reference 与测量身份固定时，观测指标向合同声明的不利方向移动，`D_m` 不减；压力越严重时 `P_m` 不减。它不假设“配置降低必然变坏”，也不声称配置方向与整体业务收益单调。
+3. **零点明确**：无 excess/deficit/distance 时压力为零；无变化时 `D_m=0`。
+4. **增量可加、路径无关**：同一语义区间内，从 A 到 C 的不利变化等于 A→B 与 B→C 之和。
+5. **职责正交**：`D_m` 不重复编码 persistence/confidence；噪声与持续性仍留在另外两个坐标。
+6. **无隐式裁决**：公式不内置跨环境通用阈值、epsilon、经验权重或跨指标补偿。
+
+VGO 支持“低层指标与性能分布区域的关联可指导缓解实验”，但不提供统一压力公式，也不把关联
+证明为因果；MESS 提供 bandwidth-latency 曲线、loaded latency、slope 和 saturation 等局部语义，
+不提供跨 CPU/内存/网络/存储的统一标量。因此以下三组均是项目扩展，不冒充论文原式。
+
+公式的运行位置固定为：受控负载的 measure window 完成并通过聚合/稳定性检查之后、候选生成之前。
+它不逐采样点改配置，也不接管 S6/S8/L8 的整体业务收益裁决。组件压力恶化与整体业务效用改善允许
+同时成立；`P/D` 只提高诊断下钻优先级，不能直接推出配置应该增加还是降低。
+
+无压力采集与动态/有负载采集复用 L4 collector、窗口、artifact bundle、digest 和 MeasurementBatch，
+但身份与状态推进隔离：capability、idle、overhead-control 等批次只作为采集证据；只有显式
+`load_state=loaded`，且 current/reference 的 workload、phase、load_state 相同、MetricContract.phase
+也匹配时才可进入本公式。idle 与 loaded 默认禁止混算；若未来需要 `loaded-idle`，必须另立公式、
+统计合同和 formula id，不能借用本式的 `D_m`。
+
+#### F-PROJECT-002-R2：候选 A——语义分派的显式尺度分段线性族（v1alpha1 已采用）
+
+先对已按指标合同聚合的当前值 `C` 和同阶段冻结基线 `B` 定义压力；`s_m>0` 是显式尺度，
+`r_m` 是显式 reference，`dist(x,[l,u])=max(l-x,0,x-u)`：
+
+\[
+P_m(C)=
+\begin{cases}
+C/r_m, & UTILIZATION,\ C\ge 0,\ r_m>0\\
+\max(0,C-r_m)/s_m, & UPPER\_LIMIT\_EXCESS\\
+\max(0,r_m-C)/s_m, & LOWER\_LIMIT\_DEFICIT\\
+|C-r_m|/s_m, & TARGET\_DISTANCE\\
+\operatorname{dist}(C,[l_m,u_m])/s_m, & RANGE\_EXCESS\\
+C, & EXPLICIT\_SCORE,\ 0\le C\le1.
+\end{cases}
+\]
+
+不利变化独立保留“趋势”语义，使尚未越过 upper/lower reference 的低压指标也能出现 `P` 低、
+`D` 大；不能简单写成所有情形都用 `P(C)-P(B)`：
+
+\[
+D_m(C,B)=
+\begin{cases}
+(C-B)/r_m, & UTILIZATION\\
+(C-B)/s_m, & UPPER\_LIMIT\_EXCESS\\
+(B-C)/s_m, & LOWER\_LIMIT\_DEFICIT\\
+(|C-r_m|-|B-r_m|)/s_m, & TARGET\_DISTANCE\\
+(\operatorname{dist}(C,[l_m,u_m])-\operatorname{dist}(B,[l_m,u_m]))/s_m,
+& RANGE\_EXCESS\\
+C-B, & EXPLICIT\_SCORE.
+\end{cases}
+\]
+
+`D_m>0` 统一表示不利变化。该候选要求 pressure method 与指标坏方向相容；不相容时 fail-closed，
+不得一边按 direction 算 `D`、另一边按相反的 pressure method 算 `P`：
+
+| pressure method | 允许的变化语义 | 必需参数 |
+|---|---|---|
+| UTILIZATION | higher-is-worse 的诊断压力 | `reference>0` |
+| UPPER_LIMIT_EXCESS | minimize 或显式 higher-is-worse | `reference, scale>0` |
+| LOWER_LIMIT_DEFICIT | maximize 或显式 lower-is-worse | `reference, scale>0` |
+| TARGET_DISTANCE | target | `reference, scale>0` |
+| RANGE_EXCESS | range | `lower_bound<=upper_bound, scale>0` |
+| EXPLICIT_SCORE | 已由上游规范化为 higher-is-worse | `[0,1]` 的值及上游 formula identity |
+
+这里的 `scale` 是“一个坐标单位代表多少原始指标变化”，不是 MDE、基线均值或标准差的隐式替身。
+跨指标比较只有在各合同 scale 都代表可比较严重度时才有意义；公式本身无法替用户决定该校准。
+
+**唯一性结论（限定于上述公理）**：归一化后的同一语义区间令不利位移为 `z`。若连续变换
+`F(z)` 满足路径可加 `F(a+b)=F(a)+F(b)`、方向单调和 `F(0)=0`，Cauchy 方程给出
+`F(z)=kz (k>0)`；把坐标单位约定进显式 scale 后 `k=1`。压力在每个 excess/deficit/distance
+语义区间再要求零点和成比例响应，得到上面的 hinge/absolute-distance 线性形式。因此候选 A 是
+这些公理下的唯一最简族，而不是对未知业务损失的无条件全局最优。
+
+#### F-PROJECT-002-R3：候选 B——对数压缩族
+
+令候选 A 的非负压力为 `P_A`、有符号变化为 `D_A`：
+
+\[
+P_B=\log(1+P_A),\qquad
+D_B=\operatorname{sign}(D_A)\log(1+|D_A|).
+\]
+
+优点是动态范围很大时单个异常指标不易占据词典序决胜；零点、符号和单调性保留。缺点是破坏
+增量可加与路径无关，并在高压力区降低真实差异分辨率。只有目标机证据证明线性尺度下存在稳定的
+重尾杠杆、且排名敏感性分析支持压缩时才可选；第一版不推荐。
+
+#### F-PROJECT-002-R4：候选 C——有界有理压缩族
+
+\[
+P_C=\frac{P_A}{1+P_A},\qquad
+D_C=\frac{D_A}{1+|D_A|}.
+\]
+
+它把两个坐标限制到 `P_C in [0,1)`、`D_C in (-1,1)`，便于展示，也最能限制极端值；但接近
+饱和后不同严重度几乎不可区分，同样不满足增量可加。它适合作为 UI 派生显示值，不应替代可重算的
+原始线性坐标；若进入排序，必须有误判成本和实测排名稳定性依据。
+
+#### F-PROJECT-002-R5：采用结论、实现状态与剩余确认门
+
+v1alpha1 采用候选 A，B/C 仅作为使用同一原始证据可重算的敏感性对照。理由是 A 假设最少、
+可解释、可审计，并且不会把置信度、持续性或未知的风险厌恶函数偷偷写进坐标。
+
+实现已完成以下整改：
+
+- `adverse_change` 不再按 `B==0` 在 `abs(B)` 与 scale 间切换，消除近零非零处的不连续杠杆；
+- utilization 使用显式 capacity reference，其余语义使用显式 scale；
+- `MetricContract` 验证 direction 与 pressure method 相容性，矛盾时 fail-closed；
+- 诊断入口要求 `load_state=loaded`，并验证 workload/phase/load_state 与 metric phase，idle 仍可由
+  同一 MeasurementBatch/collector 管线保存，但不能推进组件诊断；
+- 新生成的 DiagnosticPriority 继续保存 formula id 与 current/reference batch digest。metric contract、
+  pressure protocol、配置/容量 provenance 的字段化会改变存量 JSON 形状，因此本批不做未版本化追加；
+  它必须与第二阶段 P/D/A/Q/T 及 M9 迁移合并为一次 schema 版本事件。在迁移前，诊断入口直接校验
+  current/reference pressure protocol digest，合同参数仍由 policy digest 绑定，不伪造旧工件身份；
+- current/reference 必须存在且使用同一 pressure protocol；指标缺失或任一侧样本少于合同
+  `minimum_samples` 时，诊断报告显式列出 issue 与 coverage，路由入口 fail-closed；
+- 现字段 `confidence=n/minimum_samples` 不具统计置信含义，只能解释为样本充足率。为避免一次
+  未版本化的 schema 漂移，本批不单独改名；它将与第二阶段 P/D/A/Q/T 拆分及存量 JSON 迁移
+  捆绑为同一个 DiagnosticPriority schema 版本事件。由于 `minimum_samples` 已是准入门槛，获准项
+  的该旧值恒为 1，不能再解释为排序区分度；
+- Pareto 层只在同一 component 内计算；不同 component 没有经过校准的共同坐标，不互相支配。
+  跨组件路由只遵循 policy 已显式声明的 `authorized_components` 顺序，不从 P/D 伪造总严重度；
+- `MetricEvidence` 拒绝 NaN/Inf，MeasurementBatch 强制 metrics 字典 key 与内部 metric_id 一致；
+- 组件压力恶化与业务效用改善的并存行为已由组合测试固定。
+
+仍然开放：
+
+- `高/低` 解释阈值以及是否需要 B/C 压缩，必须由目标环境重复分布和排名敏感性决定；
+- 每个 metric 的 scale 数值仍须逐合同说明依据并经目标机校准；
+- `E_m` 尚未定义、尚未实现。任何候选必须先以 `PROJECT-DRAFT` 进入本公式登记表，列明输入证据、量纲、边界行为和误判成本，经用户确认后才允许改代码；
+- 环境内 ECDF/Z 分位比较 parked 到 M6+。只有积累了同环境、同协议、同 metric 的真实校准分布并完成版本登记后才可提案启用；没有校准数据时必须保持禁用，不得回退到跨组件加权总分；
+- 本式只完成诊断坐标，不证明压力与配置的因果关系，不关闭干预复测和 L8 终裁。
 
 ### F-PROJECT-003：瓶颈假设证据
 
@@ -565,7 +742,50 @@ I_{upper}=\frac{Cfail}{Bpass}-1
 
 `I_lower` 是区间语义下的最坏情况收益，不冒充额外的统计置信下界。只有两个 frontier
 均 resolved、强制身份完全一致、`I_lower` 越过任务显式最小收益且 rollback 已验证时才接受。
-区间跨越阈值时结论为 inconclusive；不得用中点估计强行排名。
+区间跨越阈值时结论为 inconclusive；不得用中点估计强行排名。### F-PROJECT-006：L5 条件判定分布统计量与置信界
+
+来源类型：PROJECT-CONTRACT；formula id：`F-PROJECT-CONDITION-BOOTSTRAP/v2`。
+
+L5 公式映射的 `when` 条件可声明分布统计量（median / mean / p95 / cv）与置信模式
+（point / lcb95 / ucb95）。置信模式为 lcb95/ucb95 时，用 bootstrap 有放回重采样该统计量，
+取 5%/95% 分位作为下/上界；样本数低于规则的 `minimum_samples`，或置信模式/分布统计量
+缺乏分布证据（collector 快照只有点值）时，条件判为“未决”且规则不触发（fail-closed，不猜）。
+该公式只用于 L5 内部的条件触发判定，不进入整体业务得分，也不替代 S7 的 LCB 接受判据。
+
+v2 变更（2026-08-23）：分位数由最近邻取整改为 `analysis.quantile` 的线性插值口径；
+bootstrap 重采样次数由固定 2000 改为由调用方显式提供（`bootstrap_resamples`，任务合同来源）。
+
+### F-PROJECT-007：容量感知安全调制（PROJECT-DRAFT，仅记录，未实现）
+
+来源类型：PROJECT-DRAFT（用户真机观察 2026-08-23，两机对照实证）。
+
+**实证发现**：资源余量 × 配置状态 → 测量噪声放大。同日对照：8 vCPU/15 GiB 机器上
+THP 关闭不放大批次 CV（2.28% → 1.6-1.8%）；2 vCPU/1.6 GiB 机器上同配置改动使
+CV 放大约三倍（3.48% → 9.90%，门 4.64% → 12.57%）。机制：余量即缓冲——小机器上
+单次扰动占比更大、扰动链（缺页→reclaim→CPU 争用→延迟尖峰）串联放大、且近饱和区
+存在相变点，使配置改动呈非线性杠杆。
+
+**提案方向**：以容量与配置先验调制**规划层**参数——风险档位随余量升档、风险额度
+消耗加权、重复次数自适应。**明确边界**（防止做成臆测公式）：
+
+1. 先验公式只允许调制预算/重复次数/风险档（planning layer），**不得直接生成或调整
+   裁决阈值（门）**——门继续唯一走 S1.1 实测校准（它已是"动态"的：随基线状态实测
+   派生，今日 4.64%→12.57% 即例）；
+2. 任何系数必须来自 ≥3 个机型等级的真实校准对照，当前 n=1 对照**禁止**拟合函数形状
+   或写入默认指数（公理 6：无隐式裁决）；
+3. 安全的近期形式：adaptive repeats——重复次数随**实测 CV** 缩放（用测量值，不用
+   预测值），高噪声状态下自动增加重复以恢复统计力，仍由 LCB>MDE 终裁。
+
+**前置条件**：多机型校准数据积累（至少再一类中间规格机器）；提案评审通过前不写代码。
+
+**补充 case（用户观察 2026-08-23 b）：不稳但明显更高的候选**。区分两种不稳：候选自身
+导致（尾延迟敏感的业务里"平均高但抖"可能更差；若目标真是均值，足够大的真效应本就
+能过 LCB>MDE——过不了的"明显更高"即噪声上沿）vs 测量污染（既不能接受也不能拒绝，
+只能重测）。**红线：不得以"明显高于"为由绕过稳定门提前接受**（按峰值选配置是回归
+溜入的标准通道）。正确响应是**升级而非丢弃**：当前实现的已知缺口——稳定门 fail 会
+中止整个 run（N0024 实录），候选未被接受也未否定还烧掉会话；目标行为 = 候选转复测
+轨道（adaptive repeats / 安静窗口重测），搜索继续。C5 决策（稳定拒绝不写负缓存）
+已为此保留重测合法性，缺的只是自动重测轨道（属本提案 adaptive repeats 的同一机制）。
 
 ## 7. 来源纠错与禁止表述
 

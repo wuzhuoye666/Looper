@@ -1,3 +1,11 @@
+"""L2 测量合同 —— 层包（含接口与调用规范）。
+
+调用规范：对上提供 MeasurementBatch/MetricEvidence（L3+L4 统一输出）与
+S0 comparable / S2 evaluate_hard_gates / S4 diagnostic_priorities /
+S6 bootstrap_improvement；本层不发起测量、不执行命令、不解析上游工具
+原始格式；digest 双范围命名；缺证据/单位不符/样本不足一律显式失败。
+"""
+
 from __future__ import annotations
 
 import json

@@ -1,0 +1,28 @@
+# 动态相位真机会话模板：竞争假设提案（8vCPU discovery 演示用）
+#
+# D2 规则 1 要求 ≥2 竞争假设才允许干预——本模板给两条：
+#   rank 1：THP never→madvise（M2 在 8vCPU 级机器实测 never 态 −3.8%，LCB −5.6%）
+#   rank 2：cpufreq governor→performance（竞争归因，用于满足多假设纪律）
+# change 的键必须是本机 manifest 的 parameter_id（system. 前缀），
+# 与静态会话用同一份 manifest（thp + governor item 均在）。
+schema_version: looper.hypothesis-proposals/v1alpha1
+proposals:
+  - hypothesis_id: hyp-thp-madvise
+    component: memory
+    rank: 1
+    rationale: >
+      M2 实测（8vCPU 级机器）：THP=never 相对 madvise 有约 3.8% 的
+      bogo-ops 损失（LCB −5.6%）；在持续 CPU 压力下 THP 折叠缺失放大
+      缺页开销
+    change:
+      system.thp-enabled: madvise
+    supporting_digests: []
+  - hypothesis_id: hyp-governor-performance
+    component: cpu
+    rank: 2
+    rationale: >
+      竞争归因：schedutil 调频延迟在持续全核压力下可能限制睿频驻留；
+      与 THP 假设互为对照，防止单相关归因
+    change:
+      system.cpu-governor: performance
+    supporting_digests: []

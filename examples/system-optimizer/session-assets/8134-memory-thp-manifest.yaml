@@ -1,0 +1,72 @@
+schema_version: looper.system-config-manifest/v1alpha1
+id: ecs8134-memory-thp-validation-20260823
+version: '1'
+description: Task-local THP candidate domain for the calibrated sysbench memory-write
+  protocol.
+metadata:
+  target_os: linux
+  target_hostname: iZ7xvhz4676o4p0ohgytbuZ
+  kernel_release: 5.15.0-187-generic
+  evidence_kind: empirical-aliyun-ecs
+  portability: not valid for Tencent Cloud CVM without independent capability and
+    ownership validation
+  active_tuning_profile: virtual-guest
+items:
+- id: thp-enabled
+  category: thp
+  primary_component: memory
+  related_components:
+  - numa
+  target: /sys/kernel/mm/transparent_hugepage/enabled
+  value_type: categorical
+  domain:
+    minimum: null
+    maximum: null
+    step: null
+    choices:
+    - always
+    - madvise
+    - never
+    log: false
+  default: madvise
+  read:
+    command:
+      argv:
+      - read-file
+      - '{target}'
+      timeout_seconds: 5
+    parser: bracket-selected
+    true_values: []
+    false_values: []
+  apply:
+    argv:
+    - write-file
+    - '{target}'
+    - '{value}'
+    timeout_seconds: 5
+  rollback:
+    mode: restore-snapshot
+    command: null
+  activation: immediate
+  risk: medium
+  risk_reason: null
+  dependencies: []
+  preconditions:
+  - kind: path
+    key: /sys/kernel/mm/transparent_hugepage/enabled
+    operator: exists
+    value: null
+  compatibility:
+    kernel_min: '5.15'
+    distributions:
+    - ubuntu
+    architectures:
+    - x86_64
+    required_paths:
+    - /sys/kernel/mm/transparent_hugepage/enabled
+    required_commands: []
+  searchable: true
+  value_aliases: {}
+  description: Compare only the three policies exposed by the target readback; measurement
+    always rolls back.
+  source: https://docs.kernel.org/admin-guide/mm/transhuge.html#global-thp-controls

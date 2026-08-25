@@ -1,0 +1,15 @@
+[
+  {
+    "item_id": "cpufreq-governor-uniform",
+    "domain": {
+      "minimum": null,
+      "maximum": null,
+      "step": null,
+      "choices": ["conservative", "ondemand", "userspace", "powersave", "performance", "schedutil"],
+      "log": false
+    },
+    "verified": true,
+    "source": "2026-08-23 byte-level target readback artifact aliyun-ecs-cpu-governor-capability-raw.txt, captured after the tuned handover with every policy on schedutil",
+    "evidence_digest": "sha256:9e8df9ec9e04b2cc5dc36bf6848c18d2ffec3a7bc67383d959f2c613d50a5025"
+  }
+]

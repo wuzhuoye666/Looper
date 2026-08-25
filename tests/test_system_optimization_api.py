@@ -27,6 +27,7 @@ def test_router_exposes_only_the_constrained_v1_lifecycle() -> None:
 
     assert routes == {
         ("GET", "/api/v1/system-optimization-baseline-context"),
+        ("GET", "/api/v1/system-optimization-manifest"),
         ("GET", "/api/v1/system-optimization-runtime-profiles/{experiment_id}"),
         ("POST", "/api/v1/system-optimization-authorization-profiles"),
         ("POST", "/api/v1/system-optimization-studies"),

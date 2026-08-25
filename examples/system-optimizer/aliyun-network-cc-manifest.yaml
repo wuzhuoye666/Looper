@@ -1,0 +1,40 @@
+schema_version: looper.system-config-manifest/v1alpha1
+id: aliyun-network-cc-validation-20260823
+version: "1"
+description: One-item, task-specific search over the default TCP congestion control on the real peer path.
+metadata:
+  target_os: linux
+  evidence_kind: empirical-aliyun-ecs
+  portability: not valid for Tencent Cloud CVM without independent capability validation
+items:
+  - id: tcp-congestion-control
+    category: net
+    primary_component: network
+    related_components: []
+    target: /proc/sys/net/ipv4/tcp_congestion_control
+    persistent_keys: []
+    value_type: categorical
+    domain: {minimum: null, maximum: null, step: null, choices: [cubic, reno, bbr], log: false}
+    default: cubic
+    read:
+      command: {argv: [read-file, "{target}"], timeout_seconds: 5}
+      parser: raw
+      true_values: []
+      false_values: []
+    apply: {argv: [write-file, "{target}", "{value}"], timeout_seconds: 10}
+    rollback: {mode: restore-snapshot, command: null}
+    activation: immediate
+    risk: medium
+    risk_reason: null
+    dependencies: []
+    preconditions:
+      - {kind: path, key: /proc/sys/net/ipv4/tcp_congestion_control, operator: exists, value: null}
+    compatibility:
+      distributions: [ubuntu]
+      architectures: [x86_64]
+      required_paths: [/proc/sys/net/ipv4/tcp_congestion_control]
+      required_commands: []
+    searchable: true
+    value_aliases: {}
+    description: Default congestion control for new TCP connections; bbr write relies on module auto-load, failure is fail-closed.
+    source: https://docs.kernel.org/networking/tcp.html

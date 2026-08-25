@@ -1,3 +1,9 @@
+"""L0 本机 Linux 执行后端：argv 白名单 + 可写根 + 读回 + 权限状态。
+
+架构层：L0（docs/system-optimizer/architecture/overall.md）。
+写入默认禁用；WSL2 只读验证过，真实 CVM 写入未验收。
+"""
+
 from __future__ import annotations
 
 import os

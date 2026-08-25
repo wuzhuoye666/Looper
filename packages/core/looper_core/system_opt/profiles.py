@@ -1,3 +1,9 @@
+"""L5 配置档：Profile 展开、条件、变量解析与参数映射。
+
+架构层：L5（docs/system-optimizer/architecture/overall.md）。
+include/条件/变量展开必须确定且不越域；循环或未决变量 fail-closed。
+"""
+
 from __future__ import annotations
 
 import re

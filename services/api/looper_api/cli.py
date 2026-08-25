@@ -3,30 +3,85 @@ from __future__ import annotations
 import json
 import os
 import platform
+from collections.abc import Callable
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
+from typing import Any
 
 import typer
 from looper_core.action_loop import VerificationPolicy
 from looper_core.adapters import load_and_apply_adapter
 from looper_core.canonical import canonical_digest
 from looper_core.manifest import load_and_validate_manifest
+from looper_core.system_opt.collector import (
+    BuiltinLinuxGuestCollector,
+    ComponentMetricSnapshot,
+)
+from looper_core.system_opt.component import ComponentOptimizer
 from looper_core.system_opt.config_manifest import (
     ConfigItem,
     ConfigManifest,
     parse_config_manifest_yaml,
 )
-from looper_core.system_opt.demo import run_full_demo
+from looper_core.system_opt.demo import (
+    SyntheticMeasurementAdapter,
+    build_demo_manifest,
+    build_demo_policy,
+    resolve_demo_domains,
+    run_full_demo,
+)
 from looper_core.system_opt.domain import (
     AuthorizedDomain,
     DomainEvidence,
     resolve_domain,
 )
+from looper_core.system_opt.dynamic_adapters import (
+    BusinessRetestPlanner,
+    FileHypothesisProposals,
+    FileHypothesisProposalsV2,
+    FileLoadIdentity,
+    FileO0Source,
+    FileRetestSource,
+    HypothesisProposalsFile,
+    HypothesisProposalsFileV2,
+    SafetyBackedIntervention,
+    SessionLayout,
+    TwoStageSafetyBackedIntervention,
+    build_business_metric_contract,
+    load_business_policy,
+    load_hypothesis_proposals_versioned,
+    load_o1_collection_plans,
+    load_workload_contract,
+)
+from looper_core.system_opt.dynamic_collection import (
+    o1_live_source,
+    o2_component_probe,
+    persist_dynamic_collection_evidence,
+)
+from looper_core.system_opt.dynamic_demo import build_m3_demo_workspace
+from looper_core.system_opt.dynamic_loop import (
+    DynamicPhaseRunV2,
+    run_dynamic_phase,
+    run_dynamic_phase_v2,
+    run_dynamic_phase_v3,
+)
+from looper_core.system_opt.engine import EngineLoopConfig, run_engine_loop
 from looper_core.system_opt.executor import ConfigSnapshot
 from looper_core.system_opt.executor.local_linux import LocalLinuxBackend
 from looper_core.system_opt.executor.runner import SubprocessCommandRunner
 from looper_core.system_opt.executor.simulated import SimulatedBackend
+from looper_core.system_opt.hypothesis_cache import (
+    HypothesisCacheBinding,
+    HypothesisCacheRuntime,
+)
+from looper_core.system_opt.intervention import ReceiptStageV2
+from looper_core.system_opt.intervention_receipt import (
+    DurableReceiptStore,
+    GuardReconciliationOutcome,
+    GuardWriterQuiescence,
+    ReceiptStoreError,
+)
 from looper_core.system_opt.inventory import (
     LinuxDiscoveryPolicy,
     LinuxRawCollector,
@@ -45,11 +100,49 @@ from looper_core.system_opt.measurement import (
     CommandMeasurementAdapter,
     MeasurementCommandSpec,
 )
+from looper_core.system_opt.negative_cache import (
+    HypothesisCacheRetentionPolicy,
+    NegativeCache,
+    formula_versions_digest,
+)
+from looper_core.system_opt.online_routing import (
+    OnlineHypothesisSource,
+    OnlineRoutingContract,
+    persist_online_routing_evidence,
+)
+from looper_core.system_opt.phase_gate import (
+    DynamicPhaseGateContract,
+    DynamicPhaseGateContractV2,
+    DynamicPhaseGateContractV3,
+    load_dynamic_phase_gate,
+)
 from looper_core.system_opt.policy import (
     OptimizationMode,
     parse_optimization_policy_yaml,
 )
+from looper_core.system_opt.pressure import (
+    PhasedPressureMeasurementAdapter,
+    StandardPressureProtocol,
+    calibrate_cv_acceptance_limit,
+    parse_standard_pressure_protocol_yaml,
+    validate_pressure_policy,
+)
+from looper_core.system_opt.result_vector import PromotionContract
+from looper_core.system_opt.rollback.regression import (
+    RegressionRecoveryOutcome,
+    RegressionRecoveryRequest,
+    RegressionRecoveryStatus,
+    execute_regression_recovery,
+)
+from looper_core.system_opt.rollback.regression_evidence import (
+    RegressionRecoveryEvidenceGraph,
+    build_regression_recovery_evidence_graph,
+)
 from looper_core.system_opt.safety import SafetyController, SafetyPolicy, SafetyState
+from looper_core.system_opt.scenario_profile import (
+    build_scenario_profile_report,
+    persist_scenario_profile,
+)
 from looper_core.system_opt.scoring import MeasurementBatch
 from looper_core.system_opt.state_evidence import (
     OWNERSHIP_DECLARATION_SCHEMA,
@@ -108,6 +201,89 @@ def _write_json(path: Path, value: object) -> None:
         json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2),
         encoding="utf-8",
     )
+
+
+def _write_json_atomic(path: Path, value: object) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if hasattr(value, "model_dump"):
+        value = value.model_dump(mode="json", exclude_none=False)
+    payload = (
+        json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
+    ).encode("utf-8")
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    try:
+        with temporary.open("wb") as stream:
+            stream.write(payload)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _normalized_path(path: Path) -> Path:
+    return path.expanduser().resolve(strict=False)
+
+
+def _ensure_distinct_paths(named_paths: dict[str, Path]) -> dict[str, Path]:
+    normalized = {name: _normalized_path(path) for name, path in named_paths.items()}
+    seen: dict[Path, str] = {}
+    for name, path in normalized.items():
+        if path in seen:
+            raise typer.BadParameter(f"path collision between {seen[path]} and {name}: {path}")
+        seen[path] = name
+    evidence_root = normalized.get("evidence-root")
+    if evidence_root is not None:
+        for name in ("request", "manifest", "state-evidence", "initial-state", "output"):
+            path = normalized.get(name)
+            if path is not None and evidence_root in path.parents:
+                raise typer.BadParameter(f"input path {name} is inside evidence root: {path}")
+    return normalized
+
+
+def _persist_regression_recovery_evidence_graph(
+    evidence_dir: Path,
+    graph: RegressionRecoveryEvidenceGraph,
+) -> None:
+    """Publish digest files atomically and the fixed index last.
+
+    A failed publication may retain unindexed forensic files, but it cannot
+    publish a new index that presents a partial graph as complete.
+    """
+
+    index = graph.index
+    _write_json_atomic(evidence_dir / index.request_path, graph.request)
+    _write_json_atomic(evidence_dir / index.outcome_path, graph.outcome)
+    rollback = graph.outcome.rollback_record
+    if rollback is not None:
+        assert index.rollback_record_path is not None
+        _write_json_atomic(evidence_dir / index.rollback_record_path, rollback)
+    _write_json_atomic(
+        evidence_dir / "regression-recovery-evidence-index.json",
+        index,
+    )
+
+
+def _mark_regression_attention(
+    guard: FileTargetGuard,
+    *,
+    target_id: str,
+    reason: str,
+    evidence_digest: str,
+    primary_error: Exception | None = None,
+) -> None:
+    try:
+        guard.mark_needs_attention(
+            target_id,
+            reason=reason,
+            evidence_digest=evidence_digest,
+            now=datetime.now(UTC),
+        )
+    except Exception as attention_error:
+        combined = f"{reason}; attention write failed: {attention_error}"
+        if primary_error is not None:
+            raise RuntimeError(combined) from primary_error
+        raise RuntimeError(combined) from attention_error
 
 
 def _load_state_evidence(path: Path) -> ConfigurationStateEvidence:
@@ -198,6 +374,47 @@ def validate_system_optimizer_contracts(
                 "target_os": "linux",
             }
         )
+    )
+
+
+@system_opt_app.command("m3-demo")
+def run_m3_system_optimizer_demo(
+    workspace: Path = typer.Option(..., "--workspace", file_okay=False),
+) -> None:
+    """Run the complete synthetic M3 slice through the production CLI path."""
+
+    try:
+        assets = build_m3_demo_workspace(
+            workspace, environment_digest=_current_environment_digest()
+        )
+    except ValueError as error:
+        raise typer.BadParameter(str(error)) from error
+    run_dynamic_phase_session(
+        session_dir=assets["session"],
+        manifest_path=assets["manifest"],
+        state_evidence_path=assets["state_evidence"],
+        backend_kind="simulated",
+        initial_state=assets["initial_state"],
+        target_id="demo-dynamic-target",
+        owner_id="m3-demo-owner",
+        lease_root=assets["lease_root"],
+        lease_ttl_seconds=7200,
+        allow_executable=None,
+        writable_root=[],
+        max_windows=6,
+        probe_top_k=2,
+        verification_window_count=2,
+        o1_plans_path=None,
+        o1_window_seconds=None,
+        o2_window_seconds=None,
+        o2_source="window-digest",
+        enable_real=False,
+        confirmation="",
+        online_routing=True,
+        hypothesis_cache_path=assets["hypothesis_cache"],
+        hypothesis_cache_retention_path=assets["retention_policy"],
+        scenario_profile=True,
+        output=assets["output"],
     )
 
 
@@ -481,6 +698,107 @@ def recover_target_attention(
     )
 
 
+@system_opt_app.command("reconcile-legacy-guard")
+def reconcile_legacy_receipt_guard(
+    receipt_root: Path = typer.Option(..., "--receipt-root", file_okay=False),
+    target_id: str = typer.Option(..., "--target-id"),
+    operator_id: str = typer.Option(..., "--operator-id"),
+    lease_root: Path = typer.Option(..., "--lease-root", file_okay=False),
+    plan_digest: str = typer.Option(None, "--plan-digest"),
+    execution_id: str = typer.Option(None, "--execution-id"),
+    output: Path = typer.Option(..., "--output", dir_okay=False),
+) -> None:
+    """Explicitly reconcile one legacy receipt guard (RCP-02B frozen order).
+
+    Frozen order: the target must already be in needs-attention, the operator
+    declares legacy-writer quiescence, evidence is durably published before
+    the guard is deleted, and the chain is re-verified after deletion.
+    Attention is NOT cleared here: that stays with ``recover-attention``,
+    which re-verifies the live target state against an approved snapshot.
+    """
+
+    store = DurableReceiptStore(receipt_root)
+    guards = store.discover_legacy_guards()
+    if not guards:
+        raise typer.BadParameter(
+            "no legacy receipt guard found under --receipt-root"
+        )
+    if len(guards) > 1:
+        raise typer.BadParameter(
+            "multiple legacy guards found; reconcile them one at a time"
+        )
+    guard_path = guards[0]
+    guard = FileTargetGuard(lease_root)
+    attention = guard.current_attention(target_id)
+    if attention is None:
+        raise typer.BadParameter(
+            "target has no attention record; establish attention before "
+            "reconciling a legacy guard"
+        )
+    if plan_digest is not None and execution_id is None:
+        raise typer.BadParameter("--plan-digest and --execution-id must be provided together")
+    if execution_id is not None and plan_digest is None:
+        raise typer.BadParameter("--plan-digest and --execution-id must be provided together")
+    try:
+        evidence = store.reconcile_legacy_guard(
+            guard_path,
+            target_id=target_id,
+            operator_id=operator_id,
+            writer_quiescence=GuardWriterQuiescence(
+                declared=True,
+                statement=(
+                    "operator declares every legacy receipt guard writer is stopped"
+                ),
+            ),
+            plan_digest=plan_digest,
+            execution_id=execution_id,
+        )
+    except ReceiptStoreError as error:
+        console.print_json(
+            json.dumps(
+                {
+                    "target_id": target_id,
+                    "guard": guard_path.name,
+                    "outcome": "needs-attention",
+                    "reason": str(error),
+                }
+            )
+        )
+        raise typer.Exit(code=2) from error
+    _write_json(output, evidence)
+    if evidence.outcome is GuardReconciliationOutcome.NEEDS_ATTENTION:
+        console.print_json(
+            json.dumps(
+                {
+                    "target_id": target_id,
+                    "guard": guard_path.name,
+                    "outcome": evidence.outcome.value,
+                    "reason": evidence.reason,
+                    "output": str(output.resolve()),
+                }
+            )
+        )
+        raise typer.Exit(code=2)
+    # Attention clearing stays with the existing recover-attention command:
+    # it requires a manifest, an approved snapshot, and a fresh live target
+    # snapshot; the guard reconciliation evidence written here is the input
+    # the operator cites when clearing.  Frozen order forbids clearing inside
+    # this command without that re-verification.
+    console.print_json(
+        json.dumps(
+            {
+                "target_id": target_id,
+                "guard": guard_path.name,
+                "outcome": evidence.outcome.value,
+                "guard_reconciliation_digest": evidence.digest,
+                "attention_cleared": False,
+                "note": "guard reconciled; clear attention via recover-attention",
+                "output": str(output.resolve()),
+            }
+        )
+    )
+
+
 @system_opt_app.command("raw-inventory")
 def collect_linux_raw_inventory(
     root: list[Path] = typer.Option(..., "--root", file_okay=False),
@@ -632,6 +950,62 @@ def apply_manual_system_configuration(
         raise typer.Exit(code=2)
 
 
+def _decoupled_pressure_measure(
+    protocol: StandardPressureProtocol,
+    runner: SubprocessCommandRunner,
+    *,
+    target_id: str,
+    collection_enabled: bool,
+    collector: Any | None = None,
+) -> Callable[[int], MeasurementBatch] | None:
+    """Route collection-decoupled pressure protocols to an L4 windowed collector.
+
+    Returns ``None`` for legacy protocols (no ``collection`` contract) so callers
+    keep the existing PhasedPressureMeasurementAdapter path unchanged. The
+    decoupled symbols are imported lazily so this CLI stays importable on trees
+    where the PKG-B collection contract has not landed yet.
+    """
+
+    contract = getattr(protocol, "collection", None)
+    if contract is None:
+        return None
+    if not collection_enabled:
+        raise typer.BadParameter(
+            "collection-decoupled protocols require collection to be enabled: "
+            "a disabled collection run emits no MeasurementBatch"
+        )
+    from looper_core.system_opt.collector import BuiltinLinuxGuestCollector
+    from looper_core.system_opt.pressure import PhasedPressureCollectionAdapter
+
+    selected = collector if collector is not None else BuiltinLinuxGuestCollector()
+    if contract.collector_id != selected.collector_id:
+        raise typer.BadParameter(
+            f"collection contract selects collector '{contract.collector_id}' but "
+            f"only '{selected.collector_id}' is available to this CLI"
+        )
+    if not hasattr(selected, "begin_collection"):
+        raise typer.BadParameter(
+            f"collector '{selected.collector_id}' does not implement measure-window "
+            "collection sessions; windowed production collection is pending PKG-B"
+        )
+    adapter = PhasedPressureCollectionAdapter(
+        protocol,
+        runner,
+        collector=selected,
+        target_id=target_id,
+        environment_digest=_current_environment_digest(),
+        collection_enabled=True,
+    )
+
+    def measure(repeats: int) -> MeasurementBatch:
+        envelope = adapter(repeats).envelope
+        if envelope is None:
+            raise RuntimeError("enabled pressure collection produced no measurement envelope")
+        return envelope.measurement_batch
+
+    return measure
+
+
 @system_opt_app.command("run")
 def run_linux_system_optimization(
     manifest_path: Path = typer.Option(..., "--manifest", exists=True, dir_okay=False),
@@ -645,8 +1019,16 @@ def run_linux_system_optimization(
     baseline_parameters_path: Path = typer.Option(
         ..., "--baseline-parameters", exists=True, dir_okay=False
     ),
-    measurement_command_path: Path = typer.Option(
-        ..., "--measurement-command", exists=True, dir_okay=False
+    measurement_command_path: Path | None = typer.Option(
+        None, "--measurement-command", exists=True, dir_okay=False
+    ),
+    pressure_protocol_path: Path | None = typer.Option(
+        None, "--pressure-protocol", exists=True, dir_okay=False
+    ),
+    collection_enabled: bool = typer.Option(
+        True,
+        "--collection-enabled/--no-collection-enabled",
+        help="enable L4 windowed collection for collection-decoupled pressure protocols",
     ),
     diagnostic_reference_path: Path | None = typer.Option(
         None, "--diagnostic-reference", exists=True, dir_okay=False
@@ -668,6 +1050,22 @@ def run_linux_system_optimization(
     _require_linux_confirmation(enable_real, confirmation)
     manifest = parse_config_manifest_yaml(manifest_path.read_text(encoding="utf-8"))
     policy = parse_optimization_policy_yaml(policy_path.read_text(encoding="utf-8"))
+    if (measurement_command_path is None) == (pressure_protocol_path is None):
+        raise typer.BadParameter(
+            "provide exactly one of --measurement-command or --pressure-protocol"
+        )
+    pressure_protocol = (
+        parse_standard_pressure_protocol_yaml(
+            pressure_protocol_path.read_text(encoding="utf-8")
+        )
+        if pressure_protocol_path is not None
+        else None
+    )
+    if pressure_protocol is not None:
+        try:
+            validate_pressure_policy(pressure_protocol, policy)
+        except ValueError as error:
+            raise typer.BadParameter(str(error)) from error
     capability_domains = TypeAdapter(list[DomainEvidence]).validate_python(
         _read_json(capability_domains_path)
     )
@@ -685,14 +1083,32 @@ def run_linux_system_optimization(
     baseline = _read_json(baseline_parameters_path)
     if not isinstance(baseline, dict):
         raise typer.BadParameter("baseline parameters must be a JSON object")
-    measurement_spec = MeasurementCommandSpec.model_validate(_read_json(measurement_command_path))
-    minimum_lease = policy.search.wall_time_seconds + measurement_spec.timeout_seconds
+    measurement_spec = (
+        MeasurementCommandSpec.model_validate(_read_json(measurement_command_path))
+        if measurement_command_path is not None
+        else None
+    )
+    measurement_timeout = (
+        measurement_spec.timeout_seconds
+        if measurement_spec is not None
+        else sum(phase.command.timeout_seconds for phase in pressure_protocol.phases)
+    )
+    minimum_lease = policy.search.wall_time_seconds + measurement_timeout
     if lease_ttl_seconds <= minimum_lease:
         raise typer.BadParameter(
             "lease TTL must exceed search wall-time plus one measurement timeout"
         )
-    if measurement_spec.argv[0] not in set(allow_executable):
+    allowed_executables = set(allow_executable)
+    if measurement_spec is not None and measurement_spec.argv[0] not in allowed_executables:
         raise typer.BadParameter("measurement executable is not allowlisted")
+    if pressure_protocol is not None:
+        missing_executables = sorted(
+            set(pressure_protocol.required_executables) - allowed_executables
+        )
+        if missing_executables:
+            raise typer.BadParameter(
+                f"pressure executables are not allowlisted: {missing_executables}"
+            )
     backend = _local_backend(
         manifest,
         target_id=target_id,
@@ -715,7 +1131,21 @@ def run_linux_system_optimization(
         allowed_executables=set(allow_executable),
         writable_file_roots=writable_root,
     )
-    measure = CommandMeasurementAdapter(measurement_spec, runner)
+    if measurement_spec is not None:
+        measure: Callable[[int], MeasurementBatch] = CommandMeasurementAdapter(
+            measurement_spec, runner
+        )
+    else:
+        assert pressure_protocol is not None
+        decoupled = _decoupled_pressure_measure(
+            pressure_protocol,
+            runner,
+            target_id=target_id,
+            collection_enabled=collection_enabled,
+        )
+        measure = decoupled if decoupled is not None else PhasedPressureMeasurementAdapter(
+            pressure_protocol, runner
+        )
     reference = (
         MeasurementBatch.model_validate(_read_json(diagnostic_reference_path))
         if diagnostic_reference_path is not None
@@ -765,6 +1195,1083 @@ def run_linux_system_optimization(
                 "measurement_attempts": result.attempt_count,
                 "baseline_measurements": len(result.baseline_history),
                 "recommended_candidate_id": result.recommended_candidate_id,
+                "output": str(output.resolve()),
+            }
+        )
+    )
+
+
+@system_opt_app.command("calibrate-pressure")
+def calibrate_linux_pressure(
+    pressure_protocol_path: Path = typer.Option(
+        ..., "--pressure-protocol", exists=True, dir_okay=False
+    ),
+    repeats: int = typer.Option(..., "--repeats", min=2),
+    target_id: str = typer.Option(..., "--target-id"),
+    owner_id: str = typer.Option(..., "--owner-id"),
+    lease_root: Path = typer.Option(..., "--lease-root", file_okay=False),
+    lease_ttl_seconds: float = typer.Option(..., "--lease-ttl-seconds", min=1),
+    allow_executable: list[str] = typer.Option(..., "--allow-executable"),
+    writable_root: list[Path] = typer.Option(..., "--writable-root", file_okay=False),
+    collection_enabled: bool = typer.Option(
+        True,
+        "--collection-enabled/--no-collection-enabled",
+        help="enable L4 windowed collection for collection-decoupled pressure protocols",
+    ),
+    enable_real: bool = typer.Option(False, "--enable-real"),
+    confirmation: str = typer.Option("", "--confirmation"),
+    output: Path = typer.Option(..., "--output", dir_okay=False),
+) -> None:
+    _require_linux_confirmation(enable_real, confirmation)
+    protocol = parse_standard_pressure_protocol_yaml(
+        pressure_protocol_path.read_text(encoding="utf-8")
+    )
+    allowed_executables = set(allow_executable)
+    missing_executables = sorted(set(protocol.required_executables) - allowed_executables)
+    if missing_executables:
+        raise typer.BadParameter(
+            f"pressure executables are not allowlisted: {missing_executables}"
+        )
+    maximum_runtime = sum(phase.command.timeout_seconds for phase in protocol.phases)
+    if lease_ttl_seconds <= maximum_runtime:
+        raise typer.BadParameter("lease TTL must exceed the sum of pressure phase timeouts")
+    runner = SubprocessCommandRunner(
+        allowed_executables=allowed_executables,
+        writable_file_roots=writable_root,
+    )
+    guard = FileTargetGuard(lease_root)
+    lease = guard.acquire(
+        target_id,
+        owner_id,
+        ttl_seconds=lease_ttl_seconds,
+        now=datetime.now(UTC),
+        reconciliation=None,
+    )
+    try:
+        decoupled = _decoupled_pressure_measure(
+            protocol,
+            runner,
+            target_id=target_id,
+            collection_enabled=collection_enabled,
+        )
+        measure = (
+            decoupled
+            if decoupled is not None
+            else PhasedPressureMeasurementAdapter(protocol, runner)
+        )
+        batch = measure(repeats)
+        _write_json(output, batch)
+    finally:
+        guard.release(lease)
+    console.print_json(
+        json.dumps(
+            {
+                "protocol_id": protocol.id,
+                "protocol_digest": protocol.digest,
+                "component": protocol.component,
+                "stability": (
+                    batch.stability_evidence.model_dump(mode="json")
+                    if batch.stability_evidence is not None
+                    else None
+                ),
+                "output": str(output.resolve()),
+            }
+        )
+    )
+
+
+@system_opt_app.command("derive-pressure-gate")
+def derive_pressure_gate(
+    measurement_batch_path: Path = typer.Option(
+        ..., "--measurement-batch", exists=True, dir_okay=False
+    ),
+    metric_id: str = typer.Option(..., "--metric-id"),
+    confidence_level: float = typer.Option(..., "--confidence-level", min=0.500001, max=0.999999),
+    bootstrap_resamples: int = typer.Option(
+        ..., "--bootstrap-resamples", min=100, max=100000
+    ),
+    random_seed: int = typer.Option(..., "--random-seed", min=0),
+    target_scope: str = typer.Option(..., "--target-scope"),
+    portability: str = typer.Option(..., "--portability"),
+    output: Path = typer.Option(..., "--output", dir_okay=False),
+) -> None:
+    """Derive an explicit target-local CV gate from a frozen calibration batch."""
+
+    batch = MeasurementBatch.model_validate(_read_json(measurement_batch_path))
+    try:
+        evidence = calibrate_cv_acceptance_limit(
+            batch,
+            metric_id,
+            confidence_level=confidence_level,
+            bootstrap_resamples=bootstrap_resamples,
+            random_seed=random_seed,
+            target_scope=target_scope,
+            portability=portability,
+        )
+    except ValueError as error:
+        raise typer.BadParameter(str(error)) from error
+    _write_json(output, evidence)
+    console.print_json(
+        json.dumps(
+            {
+                "metric_id": evidence.metric_id,
+                "acceptance_limit": evidence.acceptance_limit,
+                "calibration_digest": evidence.digest,
+                "output": str(output.resolve()),
+            }
+        )
+    )
+
+
+@system_opt_app.command("dynamic-run")
+def run_dynamic_phase_session(
+    session_dir: Path = typer.Option(..., "--session", exists=True, file_okay=False),
+    manifest_path: Path = typer.Option(..., "--manifest", exists=True, dir_okay=False),
+    state_evidence_path: Path = typer.Option(
+        ..., "--state-evidence", exists=True, dir_okay=False
+    ),
+    backend_kind: str = typer.Option(..., "--backend"),
+    initial_state: Path | None = typer.Option(
+        None, "--initial-state", exists=True, dir_okay=False
+    ),
+    target_id: str = typer.Option(..., "--target-id"),
+    owner_id: str = typer.Option(..., "--owner-id"),
+    lease_root: Path = typer.Option(..., "--lease-root", file_okay=False),
+    lease_ttl_seconds: float = typer.Option(..., "--lease-ttl-seconds", min=1),
+    allow_executable: list[str] | None = typer.Option(None, "--allow-executable"),
+    writable_root: list[Path] = typer.Option([], "--writable-root", file_okay=False),
+    max_windows: int | None = typer.Option(None, "--max-windows", min=1),
+    probe_top_k: int = typer.Option(..., "--probe-top-k", min=1),
+    verification_window_count: int = typer.Option(..., "--verification-windows", min=0),
+    o1_plans_path: Path | None = typer.Option(
+        None, "--o1-plans", exists=True, dir_okay=False
+    ),
+    o1_window_seconds: float | None = typer.Option(
+        None, "--o1-window-seconds", min=0.001
+    ),
+    o2_window_seconds: float | None = typer.Option(
+        None, "--o2-window-seconds", min=0.001
+    ),
+    o2_source: str = typer.Option(
+        "window-digest", "--o2-source", help="probe evidence source: window-digest | live"
+    ),
+    enable_real: bool = typer.Option(False, "--enable-real"),
+    confirmation: str = typer.Option("", "--confirmation"),
+    online_routing: bool = typer.Option(False, "--online-routing"),
+    hypothesis_cache_path: Path | None = typer.Option(
+        None, "--hypothesis-cache", dir_okay=False
+    ),
+    hypothesis_cache_retention_path: Path | None = typer.Option(
+        None,
+        "--hypothesis-cache-retention",
+        exists=True,
+        dir_okay=False,
+    ),
+    scenario_profile: bool = typer.Option(False, "--scenario-profile"),
+    output: Path = typer.Option(..., "--output", dir_okay=False),
+) -> None:
+    """Run one dynamic phase over an externally loaded session directory.
+
+    SO-D020: the load is external; this command only reads ``windows/`` and
+    writes ``control/`` inside the session directory. The phase always ends by
+    restoring the phase-start configuration through the L1 safety path, so the
+    machine returns to its starting state regardless of promotion outcome.
+    """
+
+    if backend_kind == "local-linux":
+        _require_linux_confirmation(enable_real, confirmation)
+    elif backend_kind != "simulated":
+        raise typer.BadParameter("backend must be simulated or local-linux")
+    if backend_kind == "simulated" and initial_state is None:
+        raise typer.BadParameter("simulated backend requires --initial-state")
+
+    layout = SessionLayout(session_dir)
+    contract = load_workload_contract(layout)
+    gate_payload = _read_json(layout.gate_contract)
+    if not isinstance(gate_payload, dict):
+        raise typer.BadParameter("dynamic phase gate file must be a JSON object")
+    try:
+        gate_contract = load_dynamic_phase_gate(gate_payload)
+    except ValueError as error:
+        raise typer.BadParameter(str(error)) from error
+    promotion_contract = PromotionContract.model_validate_json(
+        layout.promotion_contract.read_text(encoding="utf-8")
+    )
+    business_policy = load_business_policy(layout.business_policy)
+    baseline_batch = MeasurementBatch.model_validate_json(
+        layout.baseline_batch.read_text(encoding="utf-8")
+    )
+    try:
+        proposals = load_hypothesis_proposals_versioned(layout.hypothesis_proposals)
+    except ValueError as error:
+        raise typer.BadParameter(str(error)) from error
+    legacy_session = isinstance(gate_contract, DynamicPhaseGateContract) and isinstance(
+        proposals, HypothesisProposalsFile
+    )
+    durable_session = isinstance(
+        gate_contract, DynamicPhaseGateContractV2
+    ) and isinstance(proposals, HypothesisProposalsFileV2)
+    v3_session = isinstance(
+        gate_contract, DynamicPhaseGateContractV3
+    ) and isinstance(proposals, HypothesisProposalsFileV2)
+    if not legacy_session and not durable_session and not v3_session:
+        raise typer.BadParameter(
+            "gate contract and hypothesis proposals must use the same schema generation"
+        )
+    if v3_session and max_windows is not None:
+        raise typer.BadParameter(
+            "--max-windows is forbidden for v1alpha3 sessions; the window budget is "
+            "declared in gate-contract.json"
+        )
+    if not v3_session and max_windows is None:
+        raise typer.BadParameter(
+            "--max-windows is required for v1alpha1/v1alpha2 sessions"
+        )
+    if online_routing and not (durable_session or v3_session):
+        raise typer.BadParameter("--online-routing requires v1alpha2/v1alpha3 gate and proposals")
+    if (hypothesis_cache_path is None) != (hypothesis_cache_retention_path is None):
+        raise typer.BadParameter(
+            "--hypothesis-cache and --hypothesis-cache-retention must be provided together"
+        )
+    if hypothesis_cache_path is not None and not online_routing:
+        raise typer.BadParameter("hypothesis cache runtime requires --online-routing")
+    if scenario_profile and not online_routing:
+        raise typer.BadParameter("--scenario-profile requires --online-routing")
+    if lease_ttl_seconds <= gate_contract.budget.wall_clock_seconds:
+        raise typer.BadParameter(
+            "lease TTL must exceed the gate contract wall-clock budget"
+        )
+    if o2_source not in {"window-digest", "live"}:
+        raise typer.BadParameter("--o2-source must be window-digest or live")
+    o1_plans = None
+    if o1_plans_path is not None:
+        if o1_window_seconds is None:
+            raise typer.BadParameter("--o1-plans requires --o1-window-seconds")
+        if o2_source == "live" and o2_window_seconds is None:
+            raise typer.BadParameter("--o2-source live requires --o2-window-seconds")
+        if backend_kind != "local-linux":
+            raise typer.BadParameter(
+                "live O1/O2 collection requires the local-linux backend"
+            )
+        try:
+            o1_plans = load_o1_collection_plans(
+                o1_plans_path, environment_digest=_current_environment_digest()
+            )
+        except ValueError as error:
+            raise typer.BadParameter(str(error)) from error
+
+    environment_digest = _current_environment_digest()
+    manifest = parse_config_manifest_yaml(manifest_path.read_text(encoding="utf-8"))
+    if backend_kind == "simulated":
+        payload = _read_json(initial_state)
+        if not isinstance(payload, dict):
+            raise typer.BadParameter("initial state must be a JSON object")
+        backend = SimulatedBackend(payload, target_id=target_id)
+    else:
+        backend = _local_backend(
+            manifest,
+            target_id=target_id,
+            allowed_executables=allow_executable or [],
+            writable_roots=list(writable_root),
+        )
+
+    state_evidence = _load_state_evidence(state_evidence_path)
+    pinned_items, ownership_unknown_items = state_evidence.safety_constraints(
+        manifest,
+        target_id=target_id,
+        actor_id=owner_id,
+        environment_digest=environment_digest,
+    )
+    safety_policy = SafetyPolicy(
+        allow_keep=True,
+        pinned_items=sorted(pinned_items),
+        ownership_unknown_items=sorted(ownership_unknown_items),
+    )
+    controller = SafetyController(safety_policy)
+
+    guard = FileTargetGuard(lease_root)
+    receipt_store = DurableReceiptStore(layout.control / "intervention-receipts")
+    try:
+        receipt_heads = receipt_store.heads()
+    except ReceiptStoreError as error:
+        raise typer.BadParameter(
+            f"durable intervention receipts cannot be trusted: {error}"
+        ) from error
+    unsafe_receipt_heads = [
+        receipt
+        for receipt in receipt_heads
+        if receipt.stage
+        in {
+            ReceiptStageV2.APPLY_STARTED,
+            ReceiptStageV2.ROLLBACK_ATTEMPTED,
+            ReceiptStageV2.ROLLBACK_VERIFIED,
+        }
+        or (
+            receipt.stage is ReceiptStageV2.SAFETY_TERMINAL
+            and receipt.safety_state is not SafetyState.REJECTED
+        )
+    ]
+    if unsafe_receipt_heads:
+        receipt = unsafe_receipt_heads[0]
+        receipt_target_id = backend.capabilities.target_id
+        if guard.current_attention(receipt_target_id) is None:
+            guard.mark_needs_attention(
+                receipt_target_id,
+                reason=(
+                    "non-terminal durable intervention receipt observed after backend apply; "
+                    "automatic replay is forbidden; reconcile target state before a new run "
+                    f"(operation={receipt.operation.value}, stage={receipt.stage.value}, "
+                    f"execution_id={receipt.execution_id})"
+                ),
+                evidence_digest=receipt.digest,
+                now=datetime.now(UTC),
+            )
+        raise typer.BadParameter(
+            "dynamic run blocked by a non-terminal post-apply receipt; target was marked "
+            "needs-attention for explicit reconciliation"
+        )
+    lease = guard.acquire(
+        target_id,
+        owner_id,
+        ttl_seconds=lease_ttl_seconds,
+        now=datetime.now(UTC),
+        reconciliation=_load_reconciliation(None),
+    )
+    try:
+        changeable_ids: set[str] = set()
+        for proposal in proposals.proposals:
+            for parameter_id in proposal.change:
+                changeable_ids.add(manifest.item_for_parameter(parameter_id).id)
+        phase_items = manifest.ordered_items(changeable_ids)
+        phase_snapshot = backend.snapshot(phase_items, fencing_token=lease.fencing_token)
+        if not phase_snapshot.complete:
+            raise typer.BadParameter(
+                "phase-start snapshot is incomplete; refusing to start a dynamic "
+                "phase whose restoration cannot be guaranteed"
+            )
+
+        planner = BusinessRetestPlanner(
+            contract=contract,
+            policy=business_policy,
+            baseline_batch=baseline_batch,
+            layout=layout,
+        )
+        online_source = None
+        cache_runtime = None
+        routing_contract = None
+        if online_routing:
+            required_online_assets = [
+                layout.online_routing_policy,
+                layout.diagnostic_reference,
+                layout.online_o1_snapshots,
+                layout.online_routing_contract,
+            ]
+            missing_online_assets = [
+                str(path) for path in required_online_assets if not path.is_file()
+            ]
+            if missing_online_assets:
+                raise typer.BadParameter(
+                    f"online routing assets are missing: {missing_online_assets}"
+                )
+            online_policy = parse_optimization_policy_yaml(
+                layout.online_routing_policy.read_text(encoding="utf-8")
+            )
+            diagnostic_reference = MeasurementBatch.model_validate_json(
+                layout.diagnostic_reference.read_text(encoding="utf-8")
+            )
+            snapshots = TypeAdapter(list[ComponentMetricSnapshot]).validate_json(
+                layout.online_o1_snapshots.read_text(encoding="utf-8")
+            )
+            routing_contract = OnlineRoutingContract.model_validate_json(
+                layout.online_routing_contract.read_text(encoding="utf-8")
+            )
+            if routing_contract.target_id != target_id:
+                raise typer.BadParameter("online routing contract targets a different target")
+            if routing_contract.environment_digest != environment_digest:
+                raise typer.BadParameter(
+                    "online routing contract targets a different environment"
+                )
+            excluded_components: set[str] = set()
+            if hypothesis_cache_path is not None:
+                assert hypothesis_cache_retention_path is not None
+                retention_policy = HypothesisCacheRetentionPolicy.model_validate_json(
+                    hypothesis_cache_retention_path.read_text(encoding="utf-8")
+                )
+                cache = (
+                    NegativeCache.load(hypothesis_cache_path)
+                    if hypothesis_cache_path.is_file()
+                    else NegativeCache()
+                )
+                metric_contract = build_business_metric_contract(contract, business_policy)
+                cache_runtime = HypothesisCacheRuntime(
+                    cache=cache,
+                    path=hypothesis_cache_path,
+                    binding=HypothesisCacheBinding(
+                        environment_digest=environment_digest,
+                        workload_contract_digest=contract.digest,
+                        symptom_class_digest=routing_contract.symptom_class_digest,
+                        metric_contract=metric_contract,
+                        refutation_policy_digest=canonical_digest(
+                            business_policy.model_dump(mode="json")
+                        ),
+                        formula_versions=dict(routing_contract.formula_versions),
+                        hypothesis_semantics_version=(
+                            routing_contract.hypothesis_semantics_version
+                        ),
+                    ),
+                    retention_policy=retention_policy,
+                )
+                assert isinstance(proposals, HypothesisProposalsFileV2)
+                excluded_components = cache_runtime.excluded_proposal_components(
+                    {
+                        proposal.hypothesis_id: proposal.component
+                        for proposal in proposals.proposals
+                    },
+                    at=datetime.now(UTC),
+                )
+            assert isinstance(proposals, HypothesisProposalsFileV2)
+            online_source = OnlineHypothesisSource(
+                proposals=proposals,
+                snapshots=snapshots,
+                reference=diagnostic_reference,
+                policy=online_policy,
+                routing_contract=routing_contract,
+                excluded_components=sorted(excluded_components),
+            )
+        if legacy_session:
+            assert isinstance(proposals, HypothesisProposalsFile)
+            intervention = SafetyBackedIntervention(
+                controller=controller,
+                manifest=manifest,
+                backend=backend,
+                fencing_token=lease.fencing_token,
+                proposals=proposals.by_id(),
+                planner=planner,
+                layout=layout,
+            )
+        else:
+            assert isinstance(proposals, HypothesisProposalsFileV2)
+
+            def attention_sink(reason: str, evidence_digest: str) -> None:
+                guard.mark_needs_attention(
+                    backend.capabilities.target_id,
+                    reason=reason,
+                    evidence_digest=evidence_digest,
+                    now=datetime.now(UTC),
+                )
+
+            durable_intervention = TwoStageSafetyBackedIntervention(
+                controller=controller,
+                manifest=manifest,
+                backend=backend,
+                fencing_token=lease.fencing_token,
+                proposals=proposals.by_id(),
+                planner=planner,
+                layout=layout,
+                receipt_store=receipt_store,
+                attention_sink=attention_sink,
+            )
+        live_o1 = None
+        live_o2 = None
+        if o1_plans is not None:
+            collectors = {
+                plan.component: BuiltinLinuxGuestCollector() for plan in o1_plans
+            }
+            live_o1 = o1_live_source(
+                plans=o1_plans,
+                collectors=collectors,
+                window_seconds=o1_window_seconds,
+            )
+            if o2_source == "live":
+                live_o2 = o2_component_probe(
+                    plans=o1_plans,
+                    collectors=collectors,
+                    window_seconds=o2_window_seconds,
+                )
+        # Unavailable live sources degrade explicitly: O1 stays off, O2 falls
+        # back to the window-digest placeholder; the summary reports which
+        # mode actually ran, never silently pretending live collection.
+        o2_callback = (
+            live_o2
+            if live_o2 is not None
+            else (lambda hypothesis, window: window.digest)
+        )
+        restoration_values: dict[str, Any] | None = None
+        run = None
+        run_error: Exception | None = None
+        restoration_error: Exception | None = None
+        restoration_audit_error: Exception | None = None
+        evidence_error: Exception | None = None
+        restoration = None
+        try:
+            restoration_values = {
+                manifest.item(item_id).parameter_id: entry.value
+                for item_id, entry in phase_snapshot.entries.items()
+            }
+            if legacy_session:
+                assert isinstance(gate_contract, DynamicPhaseGateContract)
+                assert isinstance(proposals, HypothesisProposalsFile)
+                run = run_dynamic_phase(
+                    contract=contract,
+                    gate_contract=gate_contract,
+                    promotion_contract=promotion_contract,
+                    environment_digest=environment_digest,
+                    max_windows=max_windows,
+                    probe_top_k=probe_top_k,
+                    load_identity=FileLoadIdentity(layout, business_policy),
+                    o0_source=FileO0Source(layout, business_policy),
+                    hypothesis_source=FileHypothesisProposals(proposals),
+                    clock=lambda: datetime.now(UTC),
+                    o1_source=live_o1,
+                    component_probe=o2_callback,
+                    intervention=intervention,
+                    retest=FileRetestSource(planner, layout),
+                    verification_window_count=verification_window_count,
+                )
+            elif v3_session:
+                assert isinstance(gate_contract, DynamicPhaseGateContractV3)
+                assert isinstance(proposals, HypothesisProposalsFileV2)
+                run = run_dynamic_phase_v3(
+                    contract=contract,
+                    gate_contract=gate_contract,
+                    manifest=manifest,
+                    promotion_contract=promotion_contract,
+                    environment_digest=environment_digest,
+                    probe_top_k=probe_top_k,
+                    load_identity=FileLoadIdentity(layout, business_policy),
+                    o0_source=FileO0Source(layout, business_policy),
+                    hypothesis_source=(
+                        online_source
+                        if online_source is not None
+                        else FileHypothesisProposalsV2(proposals)
+                    ),
+                    prepare_intervention=durable_intervention.prepare_intervention,
+                    execute_intervention=durable_intervention.execute_intervention,
+                    clock=lambda: datetime.now(UTC),
+                    o1_source=live_o1,
+                    component_probe=o2_callback,
+                    retest=FileRetestSource(planner, layout),
+                    verification_window_count=verification_window_count,
+                    refutation_sink=(
+                        (
+                            lambda hypothesis, symptom, experiment: cache_runtime.record_refutation(
+                                hypothesis,
+                                symptom,
+                                experiment,
+                                recorded_at=datetime.now(UTC),
+                            )
+                        )
+                        if cache_runtime is not None
+                        else None
+                    ),
+                )
+            else:
+                assert isinstance(gate_contract, DynamicPhaseGateContractV2)
+                assert isinstance(proposals, HypothesisProposalsFileV2)
+                run = run_dynamic_phase_v2(
+                    contract=contract,
+                    gate_contract=gate_contract,
+                    manifest=manifest,
+                    promotion_contract=promotion_contract,
+                    environment_digest=environment_digest,
+                    max_windows=max_windows,
+                    probe_top_k=probe_top_k,
+                    load_identity=FileLoadIdentity(layout, business_policy),
+                    o0_source=FileO0Source(layout, business_policy),
+                    hypothesis_source=(
+                        online_source
+                        if online_source is not None
+                        else FileHypothesisProposalsV2(proposals)
+                    ),
+                    prepare_intervention=durable_intervention.prepare_intervention,
+                    execute_intervention=durable_intervention.execute_intervention,
+                    clock=lambda: datetime.now(UTC),
+                    o1_source=live_o1,
+                    component_probe=o2_callback,
+                    retest=FileRetestSource(planner, layout),
+                    verification_window_count=verification_window_count,
+                    refutation_sink=(
+                        (
+                            lambda hypothesis, symptom, experiment: cache_runtime.record_refutation(
+                                hypothesis,
+                                symptom,
+                                experiment,
+                                recorded_at=datetime.now(UTC),
+                            )
+                        )
+                        if cache_runtime is not None
+                        else None
+                    ),
+                )
+        except Exception as error:
+            run_error = error
+        finally:
+            if restoration_values is None:
+                restoration_error = RuntimeError(
+                    "phase restoration values could not be constructed from the complete "
+                    "phase-start snapshot"
+                )
+            else:
+                try:
+                    restoration = controller.execute(
+                        manifest,
+                        restoration_values,
+                        backend,
+                        fencing_token=lease.fencing_token,
+                        keep=True,
+                        keep_authorized=True,
+                    )
+                except Exception as error:
+                    restoration_error = error
+                else:
+                    if restoration.state is not SafetyState.KEPT:
+                        restoration_error = RuntimeError(
+                            f"phase restoration returned {restoration.state.value}: "
+                            f"{restoration.reason}"
+                        )
+                    try:
+                        layout.control.mkdir(parents=True, exist_ok=True)
+                        (layout.control / "phase-restoration.json").write_text(
+                            json.dumps(restoration.model_dump(mode="json"), indent=2),
+                            encoding="utf-8",
+                        )
+                    except Exception as error:
+                        restoration_audit_error = error
+
+            if restoration_error is not None:
+                evidence_digest = run.digest if run is not None else phase_snapshot.digest
+                original = (
+                    f"original dynamic phase error: {type(run_error).__name__}: {run_error}"
+                    if run_error is not None
+                    else "dynamic phase completed without an exception"
+                )
+                audit = (
+                    f"; phase restoration audit error: "
+                    f"{type(restoration_audit_error).__name__}: {restoration_audit_error}"
+                    if restoration_audit_error is not None
+                    else ""
+                )
+                guard.mark_needs_attention(
+                    target_id,
+                    reason=(
+                        f"dynamic phase restoration failed; {original}; "
+                        f"restoration error: {type(restoration_error).__name__}: "
+                        f"{restoration_error}{audit}"
+                    ),
+                    evidence_digest=evidence_digest,
+                    now=datetime.now(UTC),
+                )
+
+            evidence_errors: list[Exception] = []
+            try:
+                persist_dynamic_collection_evidence(
+                    layout.control,
+                    o1_source=live_o1,
+                    o2_probe=live_o2,
+                )
+            except Exception as error:
+                evidence_errors.append(error)
+            if online_source is not None:
+                try:
+                    persist_online_routing_evidence(layout.control, online_source)
+                except Exception as error:
+                    evidence_errors.append(error)
+            if evidence_errors:
+                evidence_error = RuntimeError(
+                    "; ".join(
+                        f"{type(error).__name__}: {error}" for error in evidence_errors
+                    )
+                )
+
+        if run_error is not None:
+            detail = f"dynamic phase failed: {type(run_error).__name__}: {run_error}"
+            if restoration_error is not None:
+                detail += (
+                    f"; phase restoration failed: "
+                    f"{type(restoration_error).__name__}: {restoration_error}"
+                )
+            if restoration_audit_error is not None:
+                detail += (
+                    f"; phase restoration audit failed: "
+                    f"{type(restoration_audit_error).__name__}: "
+                    f"{restoration_audit_error}"
+                )
+            if evidence_error is not None:
+                detail += (
+                    f"; evidence persistence failed: "
+                    f"{type(evidence_error).__name__}: {evidence_error}"
+                )
+            raise RuntimeError(detail) from run_error
+        if restoration_error is not None:
+            detail = (
+                f"phase restoration failed: {type(restoration_error).__name__}: "
+                f"{restoration_error}"
+            )
+            if restoration_audit_error is not None:
+                detail += (
+                    f"; phase restoration audit failed: "
+                    f"{type(restoration_audit_error).__name__}: "
+                    f"{restoration_audit_error}"
+                )
+            if evidence_error is not None:
+                detail += (
+                    f"; evidence persistence failed: "
+                    f"{type(evidence_error).__name__}: {evidence_error}"
+                )
+            raise typer.BadParameter(detail) from restoration_error
+        if restoration_audit_error is not None:
+            detail = (
+                f"phase restoration audit failed: "
+                f"{type(restoration_audit_error).__name__}: {restoration_audit_error}"
+            )
+            if evidence_error is not None:
+                detail += (
+                    f"; evidence persistence failed: "
+                    f"{type(evidence_error).__name__}: {evidence_error}"
+                )
+            raise RuntimeError(detail) from restoration_audit_error
+        if evidence_error is not None:
+            raise RuntimeError(
+                f"dynamic evidence persistence failed: "
+                f"{type(evidence_error).__name__}: {evidence_error}"
+            ) from evidence_error
+        assert run is not None
+        scenario_profile_index = None
+        if scenario_profile:
+            if not isinstance(run, DynamicPhaseRunV2):
+                raise RuntimeError("scenario Profile requires a v1alpha2 dynamic run")
+            if run.promotion is None or not run.promotion.promoted:
+                raise RuntimeError("scenario Profile requires a promoted candidate")
+            if not layout.general_profile_baseline.is_file():
+                raise RuntimeError("general Profile baseline evidence is missing")
+            assert isinstance(proposals, HypothesisProposalsFileV2)
+            assert routing_contract is not None
+            proposal = proposals.by_id()[run.promotion.candidate_id]
+            candidate_batch = planner.read_window_batch(
+                planner.retest_window_ids(f"retest-{proposal.hypothesis_id}")
+            )
+            original_improvement = planner.judge(candidate_batch)
+            general_profile_baseline = MeasurementBatch.model_validate_json(
+                layout.general_profile_baseline.read_text(encoding="utf-8")
+            )
+            general_planner = BusinessRetestPlanner(
+                contract=contract,
+                policy=business_policy,
+                baseline_batch=general_profile_baseline,
+                layout=layout,
+            )
+            general_improvement = general_planner.judge(candidate_batch)
+            report = build_scenario_profile_report(
+                run=run,
+                manifest=manifest,
+                proposal=proposal,
+                environment_digest=environment_digest,
+                workload_contract_digest=contract.digest,
+                formula_versions_digest=formula_versions_digest(
+                    routing_contract.formula_versions
+                ),
+                candidate_batch=candidate_batch,
+                original_baseline=baseline_batch,
+                general_profile_baseline=general_profile_baseline,
+                original_improvement=original_improvement,
+                general_profile_improvement=general_improvement,
+            )
+            scenario_profile_index = persist_scenario_profile(layout.control, report)
+        _write_json(output, run.model_dump(mode="json"))
+    finally:
+        guard.release(lease)
+    console.print_json(
+        json.dumps(
+            {
+                "windows": len(run.windows),
+                "stop": run.stop_gate_decision.stop,
+                "stop_class": (
+                    run.stop_gate_decision.stop_class.value
+                    if run.stop_gate_decision.stop_class
+                    else None
+                ),
+                "stop_reason": run.stop_gate_decision.reason,
+                "promotion": (
+                    {
+                        "candidate_id": run.promotion.candidate_id,
+                        "promoted": run.promotion.promoted,
+                    }
+                    if run.promotion
+                    else None
+                ),
+                "run_digest": run.digest,
+                "o1_live_collection": live_o1 is not None,
+                "o2_probe_source": "live" if live_o2 is not None else o2_source,
+                "online_routing": online_source is not None,
+                "hypothesis_negative_cache": (
+                    str(hypothesis_cache_path.resolve())
+                    if hypothesis_cache_path is not None
+                    else None
+                ),
+                "scenario_profile_report_digest": (
+                    scenario_profile_index.report_digest
+                    if scenario_profile_index is not None
+                    else None
+                ),
+                "output": str(output.resolve()),
+            }
+        )
+    )
+
+
+@system_opt_app.command("regression-recovery")
+def run_regression_recovery(
+    request_path: Path = typer.Option(..., "--request", exists=True, dir_okay=False),
+    manifest_path: Path = typer.Option(..., "--manifest", exists=True, dir_okay=False),
+    state_evidence_path: Path = typer.Option(..., "--state-evidence", exists=True, dir_okay=False),
+    backend_kind: str = typer.Option(..., "--backend"),
+    initial_state: Path | None = typer.Option(None, "--initial-state", exists=True, dir_okay=False),
+    target_id: str = typer.Option(..., "--target-id"),
+    owner_id: str = typer.Option(..., "--owner-id"),
+    lease_root: Path = typer.Option(..., "--lease-root", file_okay=False),
+    lease_ttl_seconds: float = typer.Option(..., "--lease-ttl-seconds", min=1),
+    allow_executable: list[str] | None = typer.Option(None, "--allow-executable"),
+    writable_root: list[Path] = typer.Option([], "--writable-root", file_okay=False),
+    enable_real: bool = typer.Option(False, "--enable-real"),
+    confirmation: str = typer.Option("", "--confirmation"),
+    evidence_dir: Path = typer.Option(..., "--evidence-dir", file_okay=False),
+    output: Path = typer.Option(..., "--output", dir_okay=False),
+) -> None:
+    """Run explicit L6c regression recovery from a versioned request."""
+    request = RegressionRecoveryRequest.model_validate(_read_json(request_path))
+    if request.checkpoint.target_id != target_id:
+        raise typer.BadParameter("request checkpoint target does not match --target-id")
+    if backend_kind == "local-linux":
+        _require_linux_confirmation(enable_real, confirmation)
+    elif backend_kind != "simulated":
+        raise typer.BadParameter("backend must be simulated or local-linux")
+    if backend_kind == "simulated" and initial_state is None:
+        raise typer.BadParameter("simulated backend requires --initial-state")
+    _ensure_distinct_paths(
+        {
+            "request": request_path,
+            "manifest": manifest_path,
+            "state-evidence": state_evidence_path,
+            **({"initial-state": initial_state} if initial_state else {}),
+            "output": output,
+            "evidence-root": evidence_dir,
+            "index": evidence_dir / "regression-recovery-evidence-index.json",
+        }
+    )
+    initial_payload: dict[str, Any] | None = None
+    if initial_state is not None:
+        payload = _read_json(initial_state)
+        if not isinstance(payload, dict):
+            raise typer.BadParameter("initial state must be a JSON object")
+        initial_payload = payload
+    manifest = parse_config_manifest_yaml(manifest_path.read_text(encoding="utf-8"))
+    state_evidence = _load_state_evidence(state_evidence_path)
+    pinned_items, ownership_unknown_items = state_evidence.safety_constraints(
+        manifest,
+        target_id=target_id,
+        actor_id=owner_id,
+        environment_digest=_current_environment_digest(),
+    )
+    backend = (
+        SimulatedBackend(initial_payload, target_id=target_id)
+        if backend_kind == "simulated"
+        else _local_backend(
+            manifest,
+            target_id=target_id,
+            allowed_executables=allow_executable or [],
+            writable_roots=list(writable_root),
+        )
+    )
+    controller = SafetyController(
+        SafetyPolicy(
+            allow_keep=True,
+            pinned_items=sorted(pinned_items),
+            ownership_unknown_items=sorted(ownership_unknown_items),
+        )
+    )
+    guard = FileTargetGuard(lease_root)
+    lease = guard.acquire(
+        target_id,
+        owner_id,
+        ttl_seconds=lease_ttl_seconds,
+        now=datetime.now(UTC),
+        reconciliation=None,
+    )
+    outcome: RegressionRecoveryOutcome | None = None
+    pending_error: BaseException | None = None
+    try:
+        try:
+            outcome = execute_regression_recovery(
+                request,
+                manifest=manifest,
+                controller=controller,
+                backend=backend,
+                fencing_token=lease.fencing_token,
+                recorded_at=datetime.now(UTC),
+            )
+        except Exception as error:
+            reason = (
+                f"L6c recovery execution failed for request {request.digest}: "
+                f"{type(error).__name__}: {error}"
+            )
+            _mark_regression_attention(
+                guard,
+                target_id=target_id,
+                reason=reason,
+                evidence_digest=request.digest,
+                primary_error=error,
+            )
+            raise RuntimeError(reason) from error
+
+        try:
+            graph = build_regression_recovery_evidence_graph(request, outcome)
+            _persist_regression_recovery_evidence_graph(evidence_dir, graph)
+        except Exception as error:
+            reason = (
+                f"L6c evidence publication failed for request {request.digest}; "
+                f"recovery={outcome.status.value}: {outcome.reason}; "
+                f"evidence={type(error).__name__}: {error}"
+            )
+            if outcome.status is not RegressionRecoveryStatus.NOT_TRIGGERED:
+                _mark_regression_attention(
+                    guard,
+                    target_id=target_id,
+                    reason=reason,
+                    evidence_digest=request.digest,
+                    primary_error=error,
+                )
+            raise RuntimeError(reason) from error
+
+        try:
+            _write_json_atomic(output, outcome)
+        except Exception as error:
+            reason = (
+                "L6c output convenience copy failed after complete evidence "
+                f"publication: {type(error).__name__}: {error}"
+            )
+            if outcome.status is RegressionRecoveryStatus.NEEDS_ATTENTION:
+                _mark_regression_attention(
+                    guard,
+                    target_id=target_id,
+                    reason=f"{outcome.reason}; {reason}",
+                    evidence_digest=outcome.digest,
+                    primary_error=error,
+                )
+            raise RuntimeError(reason) from error
+
+        if outcome.status is RegressionRecoveryStatus.NEEDS_ATTENTION:
+            _mark_regression_attention(
+                guard,
+                target_id=target_id,
+                reason=(
+                    f"L6c recovery needs attention for request {request.digest}: "
+                    f"{outcome.reason}"
+                ),
+                evidence_digest=outcome.digest,
+            )
+            raise typer.BadParameter(outcome.reason)
+    except BaseException as error:
+        pending_error = error
+        raise
+    finally:
+        try:
+            guard.release(lease)
+        except Exception as release_error:
+            if pending_error is not None:
+                raise RuntimeError(
+                    f"{type(pending_error).__name__}: {pending_error}; "
+                    f"lease release failed: {release_error}"
+                ) from pending_error
+            raise
+    console.print_json(
+        json.dumps(
+            {
+                "status": outcome.status.value,
+                "stop_required": outcome.stop_required,
+            }
+        )
+    )
+
+
+@system_opt_app.command("dynamic-reactivate")
+def evaluate_dynamic_reactivation(
+    run_path: Path = typer.Option(..., "--run", exists=True, dir_okay=False),
+    gate_contract_path: Path = typer.Option(
+        ..., "--gate-contract", exists=True, dir_okay=False
+    ),
+    max_reactivations: int = typer.Option(..., "--max-reactivations", min=0),
+    slo_violation_windows: int = typer.Option(..., "--slo-violation-windows", min=1),
+    reactivations_used: int = typer.Option(0, "--reactivations-used", min=0),
+    windows_since_stop: int = typer.Option(..., "--windows-since-stop", min=0),
+    consecutive_slo_violations: int | None = typer.Option(
+        None,
+        "--consecutive-slo-violations",
+        min=0,
+        help="observed violations since the stop; default derives the trailing violations",
+    ),
+    identity_drift_events_since_stop: int = typer.Option(
+        0, "--identity-drift-events-since-stop", min=0
+    ),
+    output: Path = typer.Option(..., "--output", dir_okay=False),
+) -> None:
+    """Judge between-phase reactivation eligibility for a stopped dynamic phase.
+
+    D5: eligibility never auto-restarts anything — whether to reopen the
+    phase is the task owner's decision. Windows observed after the stop are
+    operator-recorded facts (``--windows-since-stop`` etc.); the trailing
+    SLO violations of the phase itself seed ``consecutive_slo_violations``
+    unless the operator supplies an explicit count.
+    """
+
+    from looper_core.system_opt.dynamic_loop import DynamicPhaseRun
+    from looper_core.system_opt.reactivation import (
+        ReactivationPolicy,
+        ReactivationState,
+        evaluate_reactivation,
+    )
+
+    run = DynamicPhaseRun.model_validate(_read_json(run_path))
+    gate_contract = DynamicPhaseGateContract.model_validate_json(
+        gate_contract_path.read_text(encoding="utf-8")
+    )
+    if (
+        run.stop_gate_decision is None
+        or run.stop_gate_decision.contract_digest != gate_contract.digest
+    ):
+        raise typer.BadParameter(
+            "the run was not gated by this gate contract (digest mismatch)"
+        )
+    violations = consecutive_slo_violations
+    if violations is None:
+        violations = 0
+        for record in reversed(run.windows):
+            if record.slo_met is False:
+                violations += 1
+            else:
+                break
+    decision = evaluate_reactivation(
+        gate_contract,
+        ReactivationPolicy(
+            max_reactivations=max_reactivations,
+            slo_violation_windows=slo_violation_windows,
+        ),
+        ReactivationState(
+            reactivations_used=reactivations_used,
+            windows_since_stop=windows_since_stop,
+            consecutive_slo_violations=violations,
+            identity_drift_events_since_stop=identity_drift_events_since_stop,
+        ),
+        evidence_digest=run.digest,
+    )
+    _write_json(output, decision)
+    console.print_json(
+        json.dumps(
+            {
+                "eligible": decision.eligible,
+                "trigger": decision.trigger.value if decision.trigger else None,
+                "reason": decision.reason,
+                "note": "eligibility is not an auto-restart; the task owner decides",
+                "decision_digest": decision.digest,
                 "output": str(output.resolve()),
             }
         )
@@ -929,17 +2436,11 @@ def fetch_source_command(
 
 
 @demo_app.command("create")
-def create_demo(
-    target_id: str = typer.Option(..., "--target-id"),
-    name: str = "Compression Pareto study",
-    start: bool = False,
-) -> None:
+def create_demo(name: str = "Compression Pareto study", start: bool = False) -> None:
     init_database()
     with session_scope() as session:
         seed_system(session)
-        request = create_demo_request(name)
-        request.spec.target_ids = [target_id]
-        experiment = create_experiment(session, request)
+        experiment = create_experiment(session, create_demo_request(name))
         if start:
             start_experiment(session, experiment)
         console.print(experiment.id)
@@ -994,6 +2495,110 @@ def run_verified_demo(
     console.print_json(json.dumps(result))
     if result["decision"] == "failed":
         raise typer.Exit(code=2)
+
+
+@system_opt_app.command("engine-demo")
+def run_system_optimizer_engine_demo(
+    output: Path = typer.Option(..., "--output", dir_okay=False),
+    component: list[str] = typer.Option(["cpu", "memory"], "--component"),
+    max_rounds: int = typer.Option(10, "--max-rounds", min=1),
+    max_pool_size: int = typer.Option(64, "--max-pool-size", min=1),
+) -> None:
+    """Run the L8 engine loop over a synthetic multi-component demo.
+
+    Simulated backend only: no Linux writes, safe on the Windows dev host.
+    """
+
+    from looper_core.system_opt.tuning import SystemOptimizationEngine
+
+    manifest = build_demo_manifest()
+    backend = SimulatedBackend(
+        {item.id: item.default for item in manifest.items}, target_id="engine-demo"
+    )
+    optimizers = []
+    for name in component:
+        policy = build_demo_policy(OptimizationMode.GENERAL)
+        policy.authorized_components = [name]
+        policy.search.max_candidates = 2
+        policy.search.max_attempts = 4
+        policy.search.no_improvement_limit = 3
+        policy.search.target_improvement = None
+        optimizers.append(
+            ComponentOptimizer(
+                SystemOptimizationEngine(policy, manifest, resolve_demo_domains(manifest), backend)
+            )
+        )
+    defaults = {item.parameter_id: item.default for item in manifest.items}
+    result = run_engine_loop(
+        optimizers,
+        baseline_parameters={name: defaults for name in component},
+        measures={
+            name: SyntheticMeasurementAdapter(backend, mode=OptimizationMode.GENERAL)
+            for name in component
+        },
+        negative_cache=NegativeCache(),
+        config=EngineLoopConfig(
+            environment_digest=canonical_digest({"kind": "synthetic-engine-demo"}),
+            formula_versions={"F-DEMO-LOOP": "v0"},
+            pressure_protocol_digests={
+                name: canonical_digest({"component": name, "kind": "demo-protocol"})
+                for name in component
+            },
+            max_rounds=max_rounds,
+            max_pool_size=max_pool_size,
+        ),
+        fencing_token=1,
+    )
+    _write_json(output, result.model_dump(mode="json"))
+    console.print_json(
+        json.dumps(
+            {
+                "evidence_kind": "synthetic",
+                "warning": "not a Linux performance result",
+                "stop_reason": result.stop_reason.value,
+                "rounds": [
+                    {"component": record.component, "verdicts": len(record.verdicts)}
+                    for record in result.rounds
+                ],
+                "phase_restoration": (
+                    result.phase_restoration.status.value
+                    if result.phase_restoration is not None
+                    else None
+                ),
+                "phase_note": result.phase_verification_note,
+                "output": str(output.resolve()),
+            }
+        )
+    )
+
+
+@system_opt_app.command("cache-inspect")
+def inspect_negative_cache_command(
+    path: Path = typer.Option(..., "--path", exists=True, dir_okay=False),
+) -> None:
+    """Summarize an append-only negative result cache (L7)."""
+
+    cache = NegativeCache.load(path)
+    verdict_counts: dict[str, int] = {}
+    environments: set[str] = set()
+    metrics: set[str] = set()
+    for entry in cache.entries:
+        verdict_counts[entry.verdict.value] = (
+            verdict_counts.get(entry.verdict.value, 0) + 1
+        )
+        environments.add(entry.identity.environment_digest)
+        metrics.add(entry.metric_id)
+    console.print_json(
+        json.dumps(
+            {
+                "entries": len(cache),
+                "verdict_counts": verdict_counts,
+                "distinct_environments": len(environments),
+                "distinct_metrics": sorted(metrics),
+                "path": str(path.resolve()),
+            }
+        )
+    )
 
 
 if __name__ == "__main__":
