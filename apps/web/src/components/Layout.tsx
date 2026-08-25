@@ -1,4 +1,4 @@
-import { Activity, Boxes, Braces, ChevronLeft, ClipboardList, Cloud, Gauge, GitCompareArrows, Menu, Plus, Server, TestTubeDiagonal } from 'lucide-react';
+import { Activity, Boxes, Braces, ChevronLeft, ClipboardList, Cloud, Gauge, GitCompareArrows, Menu, Plus, Server, TestTubeDiagonal, WandSparkles } from 'lucide-react';
 import { useLayoutEffect, useState } from 'react';
 import { resolveApiUrl } from '../lib/api';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
@@ -12,6 +12,7 @@ const nav = [
   { to: '/targets', label: '候选资源', icon: Server },
   { to: '/interfaces', label: '动态接口发现', icon: Braces },
   { to: '/capacity', label: '容量测试', icon: TestTubeDiagonal },
+  { to: '/system-optimization', label: '系统配置优化', icon: WandSparkles },
   { to: '/cloud/market', label: '云资源市场', icon: Cloud },
   { to: '/cloud/orders', label: '云订单', icon: ClipboardList },
 ];

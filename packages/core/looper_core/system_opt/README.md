@@ -25,6 +25,7 @@
 | safety.py | preflight、snapshot、apply、verify、rollback 与补偿 | simulated 故障注入通过，真实写未测 |
 | lease.py | 单目标文件租约、fencing 和 needs-attention | 多节点协调不在当前范围 |
 | policy/scoring/tuning.py | 公式、门禁、诊断优先级、多轮搜索、周期基线与停止条件 | simulated 多轮已测；真实多参数压力/workload 未测 |
+| hypothesis.py | 代码/配置证据假设、动态域候选过滤、容量区间裁决 | core contract 已测；服务层编排与持久化未接入 |
 | measurement.py | argv measurement adapter | 工具能力必须逐目标 preflight |
 | demo.py | general/workload deterministic synthetic E2E | 只证明代码闭环，不证明性能收益 |
 | executor/simulated.py | 确定性模拟目标与故障注入基础 | 是当前唯一可安全作为默认测试基础的 backend |

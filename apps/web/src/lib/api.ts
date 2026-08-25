@@ -5,10 +5,10 @@ import type {
   InstanceNetworkResolution, InstanceNetworkResolveRequest,
   DashboardData, Experiment, GlobalSearchResult, ListResponse, PostOptimizationStatus, SelectionAdvisorRequest,
   SelectionAdvisorResponse, SourceDiscovery, SourceDiscoveryProviderConfig, SourceDiscoveryReadiness, CapacityDraft, CapacityStudy,
-  BenchmarkTargetOptions, Target, TargetDestroyPreview, TargetDestroyResult, VariabilityData,
+  BenchmarkTargetOptions, Target, TargetDestroyPreview, TargetDestroyResult, VariabilityData, SystemOptimizationStudy, SystemOptimizationAuthorizationProfile,
 } from './types';
 
-export const API_BASE = (import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000/api/v1').replace(/\/$/, '');
+export const API_BASE = (import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8001/api/v1').replace(/\/$/, '');
 
 export function resolveApiUrl(value = API_BASE, origin = window.location.origin) {
   return new URL(value, origin);
@@ -147,6 +147,32 @@ export const api = {
     `/benchmarks/${encodeURIComponent(benchmarkId)}/versions/${encodeURIComponent(version)}/smoke-runs`,
     { method: 'POST', body: JSON.stringify(payload) },
   ),
+  createSystemOptimizationAuthorizationProfile: (targetId: string, runtimeProfileDigest: string) => request<SystemOptimizationAuthorizationProfile>(
+    '/system-optimization-authorization-profiles', {
+      method: 'POST', body: JSON.stringify({ targetId, runtimeProfileDigest }),
+    },
+  ),
+  systemOptimizationBaselineContext: (baselineCapacityStudyId: string, targetId: string, network: 'internal' | 'external') => request<{
+    baselineCapacityStudyId: string; targetId: string; network: 'internal' | 'external'; experimentId: string; contextDigest: string;
+    frontier: { confirmed_pass: number; confirmed_fail: number };
+  }>(`/system-optimization-baseline-context?baselineCapacityStudyId=${encodeURIComponent(baselineCapacityStudyId)}&targetId=${encodeURIComponent(targetId)}&network=${network}`),
+  systemOptimizationRuntimeProfile: (experimentId: string) => request<{ experimentId: string; digest: string; name: string }>(
+    `/system-optimization-runtime-profiles/${encodeURIComponent(experimentId)}`,
+  ),
+  createSystemOptimizationStudy: (payload: {
+    baselineCapacityStudyId: string; targetId: string; network: 'internal' | 'external'; minimumEffect: number;
+    authorizationProfileDigest: string; runtimeProfileDigest: string;
+  }) => request<SystemOptimizationStudy>('/system-optimization-studies', {
+    method: 'POST', body: JSON.stringify({
+      baselineCapacityStudyId: payload.baselineCapacityStudyId,
+      targetId: payload.targetId,
+      network: payload.network,
+      minimumEffect: payload.minimumEffect,
+      authorizationProfileDigest: payload.authorizationProfileDigest,
+      runtimeProfileDigest: payload.runtimeProfileDigest,
+    }),
+  }),
+  systemOptimizationStudy: (id: string) => request<SystemOptimizationStudy>(`/system-optimization-studies/${encodeURIComponent(id)}`),
   targets: async (includeInactive = true) => {
     const response = list(await request<Target[] | ListResponse<Target> | { data?: Target[] }>('/targets'));
     return includeInactive ? response : {

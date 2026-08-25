@@ -4,15 +4,23 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures
+import contextlib
 import json
 import math
+import os
+import select
+import socketserver
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
+
+MANAGED_SSH_TUNNEL_PORT = 18002
+DEFAULT_REMOTE_SERVICE_PORT = 8001
 
 
 def _field(value: Any, path: str) -> Any:
@@ -128,8 +136,14 @@ def _iteration(
     steps: list[dict[str, Any]],
     timeout: float,
     secret_root: Path | None,
+    *,
+    attempt_id: str,
+    iteration: int,
 ) -> dict[str, Any]:
-    variables: dict[str, Any] = {}
+    variables: dict[str, Any] = {
+        "attempt_id": attempt_id,
+        "iteration": iteration,
+    }
     started = time.perf_counter()
     details = []
     semantic_ok = True
@@ -185,6 +199,131 @@ def _percentile(values: list[float], percentile: float) -> float:
     return ordered[index]
 
 
+def _requires_managed_ssh_tunnel(base_url: str, target_id: str) -> bool:
+    """Recognize the capacity contract's pinned, attempt-scoped SSH endpoint."""
+
+    try:
+        parsed = urllib.parse.urlsplit(base_url)
+        port = parsed.port
+    except ValueError:
+        return False
+    return (
+        target_id.startswith("cloud:")
+        and parsed.scheme == "http"
+        and parsed.hostname in {"127.0.0.1", "localhost"}
+        and port == MANAGED_SSH_TUNNEL_PORT
+        and not parsed.username
+        and not parsed.password
+        and not parsed.path.rstrip("/")
+        and not parsed.query
+        and not parsed.fragment
+    )
+
+
+class _SshForwardHandler(socketserver.BaseRequestHandler):
+    def handle(self) -> None:
+        transport = self.server.transport  # type: ignore[attr-defined]
+        remote_address = self.server.remote_address  # type: ignore[attr-defined]
+        channel = transport.open_channel(
+            "direct-tcpip", remote_address, self.request.getpeername()
+        )
+        if channel is None:
+            raise RuntimeError("pinned SSH transport refused the capacity channel")
+        try:
+            while True:
+                ready, _, _ = select.select([self.request, channel], [], [], 5)
+                if self.request in ready:
+                    data = self.request.recv(65536)
+                    if not data:
+                        break
+                    channel.sendall(data)
+                if channel in ready:
+                    data = channel.recv(65536)
+                    if not data:
+                        break
+                    self.request.sendall(data)
+        finally:
+            channel.close()
+
+
+class _SshForwardServer(socketserver.ThreadingTCPServer):
+    allow_reuse_address = True
+    daemon_threads = True
+
+
+def _credential_data_dir() -> Path:
+    configured = os.environ.get("LOOPER_DATA_DIR", "").strip()
+    if configured:
+        path = Path(configured)
+        if not path.is_absolute():
+            raise RuntimeError("managed SSH capacity tunnel requires absolute LOOPER_DATA_DIR")
+        return path
+    candidates: set[Path] = set()
+    for anchor in (Path.cwd().resolve(), Path(__file__).resolve()):
+        for parent in (anchor, *anchor.parents):
+            data_dir = parent / ".looper"
+            if (
+                (data_dir / "remote-worker-credentials.key").is_file()
+                and (data_dir / "remote-worker-credentials.json").is_file()
+            ):
+                candidates.add(data_dir)
+    if len(candidates) != 1:
+        raise RuntimeError(
+            "managed SSH capacity tunnel could not identify one encrypted credential store"
+        )
+    return candidates.pop()
+
+
+@contextlib.contextmanager
+def _attempt_base_url(
+    base_url: str,
+    target_id: str,
+    *,
+    remote_service_port: int,
+):
+    """Yield the direct endpoint or an ephemeral pinned SSH forward.
+
+    The forward is created and destroyed with a single attempt.  Credentials
+    are loaded from Looper's encrypted store; none are copied into the
+    experiment envelope or benchmark artifacts.
+    """
+
+    if not _requires_managed_ssh_tunnel(base_url, target_id):
+        yield base_url
+        return
+    data_dir = _credential_data_dir()
+    if not 1 <= remote_service_port <= 65535:
+        raise RuntimeError("managed SSH capacity tunnel received an invalid service port")
+    try:
+        from looper_api.config import Settings
+        from looper_api.external_targets import open_ssh_client
+        from looper_api.remote_credentials import EncryptedSshCredentialStore
+    except ImportError as error:
+        raise RuntimeError("managed SSH capacity tunnel dependencies are unavailable") from error
+
+    settings = Settings(data_dir=data_dir)
+    request = EncryptedSshCredentialStore(settings).load(target_id)
+    client = open_ssh_client(request)
+    transport = client.get_transport()
+    if transport is None or not transport.is_active():
+        client.close()
+        raise RuntimeError("pinned SSH capacity transport is not active")
+    transport.set_keepalive(15)
+    server = _SshForwardServer(("127.0.0.1", 0), _SshForwardHandler)
+    server.transport = transport  # type: ignore[attr-defined]
+    server.remote_address = ("127.0.0.1", remote_service_port)  # type: ignore[attr-defined]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        local_port = int(server.server_address[1])
+        yield f"http://127.0.0.1:{local_port}"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+        client.close()
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--envelope", required=True, type=Path)
@@ -193,13 +332,46 @@ def main() -> int:
     envelope = json.loads(args.envelope.read_text(encoding="utf-8"))
     config = envelope["inputs"]["capacity-config"]["metadata"]
     target_id = envelope["extensions"]["targetBinding"]["target_id"]
-    base_url = config["endpoints"][target_id]
+    configured_base_url = config["endpoints"][target_id]
     steps = list(config["scenario"]["steps"])
     offered_rps = float(envelope["extensions"]["offeredLoad"])
     duration = float(config["measurementSeconds"])
     timeout = float(config.get("requestTimeoutSeconds", 10))
+    attempt_id = str(envelope.get("attemptId") or "unidentified-attempt")
     secret_value = envelope.get("paths", {}).get("secrets")
     secret_root = Path(secret_value) if secret_value else None
+    remote_service_port = int(
+        config.get("servicePort") or DEFAULT_REMOTE_SERVICE_PORT
+    )
+    with _attempt_base_url(
+        configured_base_url,
+        target_id,
+        remote_service_port=remote_service_port,
+    ) as base_url:
+        return _run_capacity(
+            args.output,
+            target_id,
+            base_url,
+            steps,
+            offered_rps,
+            duration,
+            timeout,
+            attempt_id,
+            secret_root,
+        )
+
+
+def _run_capacity(
+    output_dir: Path,
+    target_id: str,
+    base_url: str,
+    steps: list[dict[str, Any]],
+    offered_rps: float,
+    duration: float,
+    timeout: float,
+    attempt_id: str,
+    secret_root: Path | None,
+) -> int:
     offered = max(1, int(offered_rps * duration))
     max_workers = min(512, max(8, int(math.ceil(offered_rps * min(timeout, 2) * 1.5))))
     futures: set[concurrent.futures.Future[dict[str, Any]]] = set()
@@ -232,7 +404,17 @@ def main() -> int:
             if len(futures) >= max_workers:
                 skipped += 1
                 continue
-            futures.add(executor.submit(_iteration, base_url, steps, timeout, secret_root))
+            futures.add(
+                executor.submit(
+                    _iteration,
+                    base_url,
+                    steps,
+                    timeout,
+                    secret_root,
+                    attempt_id=attempt_id,
+                    iteration=index,
+                )
+            )
             peak_pending = max(peak_pending, len(futures))
         done, _pending = concurrent.futures.wait(futures)
         collect(done)
@@ -286,8 +468,8 @@ def main() -> int:
             for step_id, values in per_step.items()
         },
     }
-    args.output.mkdir(parents=True, exist_ok=True)
-    (args.output / "capacity-native.json").write_text(
+    output_dir.mkdir(parents=True, exist_ok=True)
+    (output_dir / "capacity-native.json").write_text(
         json.dumps(output, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
     return 0

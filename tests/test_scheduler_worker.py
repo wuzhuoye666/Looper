@@ -8,6 +8,7 @@ from looper_api.models import AttemptRecord, BenchmarkRecord, CheckRecord, Evalu
 from looper_api.scheduler import (
     SchedulerError,
     _reconcile_evaluation,
+    cancel_experiment,
     create_demo_request,
     create_experiment,
     start_experiment,
@@ -138,6 +139,70 @@ def test_worker_does_not_claim_above_its_concurrency(
 
     assert first_claim is not None
     assert claim_attempt(session, settings, worker) is None
+
+
+def test_cancelling_experiment_fences_running_attempt_and_releases_worker_slot(
+    db_session: object, tmp_path: Path
+) -> None:
+    session = db_session
+    settings = Settings(
+        data_dir=tmp_path,
+        database_url="sqlite://",
+        local_worker_token="secret",
+        lease_seconds=30,
+    )
+    first_experiment = create_experiment(session, create_demo_request())
+    start_experiment(session, first_experiment)
+    second_experiment = create_experiment(session, create_demo_request())
+    start_experiment(session, second_experiment)
+    worker = register_worker(
+        session,
+        settings,
+        WorkerRegister(
+            workerId="worker-cancel-fence",
+            name="cancel fence worker",
+            token="secret",
+            capabilities=["python", "local-process"],
+            fingerprint={},
+            maxConcurrency=1,
+        ),
+    )
+    first_claim = claim_attempt(session, settings, worker)
+    assert first_claim is not None
+    start_attempt(
+        session,
+        first_claim["attemptId"],
+        AttemptStart(
+            workerId=worker.id,
+            fencingToken=first_claim["fencingToken"],
+            envelope=first_claim["envelope"],
+        ),
+    )
+
+    cancel_experiment(session, first_experiment)
+
+    cancelled = session.get(AttemptRecord, first_claim["attemptId"])
+    assert cancelled is not None
+    assert cancelled.status == AttemptStatus.CANCELLED
+    assert cancelled.fencing_token == first_claim["fencingToken"] + 1
+    assert cancelled.lease_expires_at is None
+    cancelled_revision = first_experiment.revision
+    assert cancel_experiment(session, first_experiment) is first_experiment
+    assert first_experiment.revision == cancelled_revision
+    assert cancelled.fencing_token == first_claim["fencingToken"] + 1
+    second_claim = claim_attempt(session, settings, worker)
+    assert second_claim is not None
+    assert second_claim["envelope"]["experimentId"] == second_experiment.id
+    with pytest.raises(WorkerError, match="not active|stale"):
+        heartbeat_attempt(
+            session,
+            settings,
+            cancelled.id,
+            AttemptHeartbeat(
+                workerId=worker.id,
+                fencingToken=first_claim["fencingToken"],
+            ),
+        )
 
 
 def test_worker_reregistration_requeues_its_interrupted_attempt(

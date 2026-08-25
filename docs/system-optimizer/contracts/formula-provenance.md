@@ -546,6 +546,27 @@ U_{workload}(x)=(U_{primary},U_{secondary},Cost,Risk,EvidenceCoverage)
 
 比较必须分别保存：相对 frozen baseline、相对 incumbent、相对 general profile。
 
+### F-CAPACITY-FRONTIER-001/v1alpha1：SLO 容量区间收益
+
+来源类型：PROJECT-IMPLEMENTED。输入语义来自当前容量合同的 resolved frontier：真实容量位于
+`[confirmed_pass, confirmed_fail]`。实现位于
+`packages/core/looper_core/system_opt/hypothesis.py`，服务层适配尚未接入。
+
+令基线区间为 `[Bpass,Bfail]`，候选区间为 `[Cpass,Cfail]`：
+
+\[
+\hat{I}=\frac{(Cpass+Cfail)/2}{(Bpass+Bfail)/2}-1
+\]
+
+\[
+I_{lower}=\frac{Cpass}{Bfail}-1,\qquad
+I_{upper}=\frac{Cfail}{Bpass}-1
+\]
+
+`I_lower` 是区间语义下的最坏情况收益，不冒充额外的统计置信下界。只有两个 frontier
+均 resolved、强制身份完全一致、`I_lower` 越过任务显式最小收益且 rollback 已验证时才接受。
+区间跨越阈值时结论为 inconclusive；不得用中点估计强行排名。
+
 ## 7. 来源纠错与禁止表述
 
 | 禁止表述 | 正确表述 |

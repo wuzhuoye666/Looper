@@ -34,6 +34,19 @@ export interface CapacityStudy {
   error?: { code: string; message: string } | null; createdAt: string; updatedAt: string; startedAt?: string; completedAt?: string;
 }
 
+export interface SystemOptimizationStudy {
+  id: string; baselineCapacityStudyId: string; targetId: string; network: 'internal' | 'external';
+  minimumEffect: number; authorizationProfileDigest: string; status: string; revision: number;
+  hypothesisDigest?: string | null; decisionDigest?: string | null; problem?: { code?: string; message?: string; suggestedAction?: string } | null;
+  artifacts: Array<{ digest: string; role: string; name: string; mediaType?: string }>;
+  orchestration?: Record<string, unknown>; activation?: Record<string, unknown>;
+  createdAt?: string; updatedAt?: string; approvedAt?: string | null; completedAt?: string | null;
+}
+
+export interface SystemOptimizationAuthorizationProfile {
+  digest: string; targetId: string; runtimeProfileDigest: string; manifestDigest: string; activation: 'approval-required';
+}
+
 export interface Artifact { name: string; url: string; type?: string }
 export interface Metric { name: string; value: number; unit?: string; baseline?: number; direction?: 'min' | 'max' }
 export interface Evaluation { id: string; attemptId?: string; candidate: string; workload?: string; status: ExperimentStatus; phase?: string; phaseDetail?: string; score?: number; duration?: number; cost?: number; createdAt?: string; metrics?: Metric[]; artifacts?: Artifact[]; error?: string }
