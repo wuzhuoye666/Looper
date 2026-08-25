@@ -263,6 +263,7 @@ def test_experiment_view_keeps_completed_repeat_metrics_while_later_repeats_are_
         )
     )
     first = attempts[0]
+    first.status = AttemptStatus.SUCCEEDED
     assert first.repeat_index == 0
     same_evaluation = [item for item in attempts if item.evaluation_id == first.evaluation_id]
     assert [item.repeat_index for item in same_evaluation] == [0, 1, 2]
@@ -297,7 +298,7 @@ def test_experiment_view_keeps_completed_repeat_metrics_while_later_repeats_are_
     )
 
 
-def test_experiment_view_keeps_all_declared_sample_metrics(db_session: object) -> None:
+def test_experiment_view_averages_successful_repeat_metrics(db_session: object) -> None:
     session = db_session
     benchmark = session.scalar(
         select(BenchmarkRecord).where(
@@ -318,26 +319,29 @@ def test_experiment_view_keeps_all_declared_sample_metrics(db_session: object) -
     )
     experiment = create_experiment(session, request)
     start_experiment(session, experiment)
-    attempt = session.scalar(
-        select(AttemptRecord)
-        .where(AttemptRecord.experiment_id == experiment.id)
-        .order_by(AttemptRecord.repeat_index)
+    attempts = list(
+        session.scalars(
+            select(AttemptRecord)
+            .where(AttemptRecord.experiment_id == experiment.id)
+            .order_by(AttemptRecord.repeat_index)
+        )
     )
-    assert attempt is not None
-    for index, value in enumerate((517432.0, 528171.0, 525322.0)):
+    assert len(attempts) == 3
+    for attempt, value in zip(attempts, (517432.0, 528171.0, 525322.0), strict=True):
+        attempt.status = AttemptStatus.SUCCEEDED
         session.add(
             ObservationRecord(
                 id=new_id("obs"),
                 attempt_id=attempt.id,
-                metric="phpbench_score_sample",
+                metric="phpbench_score",
                 value_number=value,
                 value_boolean=None,
                 unit="Score",
                 phase="measurement",
                 workload="phpbench",
-                sample_index=index,
-                sample_count=3,
-                statistic="sample",
+                sample_index=None,
+                sample_count=None,
+                statistic="median",
                 timestamp_text=None,
                 attributes_json={},
                 created_at=utc_now(),
@@ -346,14 +350,16 @@ def test_experiment_view_keeps_all_declared_sample_metrics(db_session: object) -
     session.flush()
 
     view = experiment_view(session, experiment, detail=True)
-    samples = [
+    scores = [
         metric
         for metric in view["evaluations"][0]["metrics"]
-        if metric["name"] == "phpbench_score_sample"
+        if metric["name"] == "phpbench_score"
     ]
-    assert [sample["value"] for sample in samples] == [517432.0, 528171.0, 525322.0]
-    assert [sample["sampleIndex"] for sample in samples] == [0, 1, 2]
-    assert all(sample["sampleCount"] == 3 for sample in samples)
+    assert len(scores) == 1
+    assert scores[0]["value"] == pytest.approx(523641.6666666667)
+    assert scores[0]["sampleIndex"] is None
+    assert scores[0]["sampleCount"] == 3
+    assert scores[0]["statistic"] == "mean"
 
 
 def test_stage0_adapter_cannot_be_selected_for_a_new_study(

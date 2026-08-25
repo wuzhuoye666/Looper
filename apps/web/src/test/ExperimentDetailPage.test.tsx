@@ -42,8 +42,8 @@ describe('experiment result navigation', () => {
         workload: 'memory',
         status: 'completed',
         metrics: [
-          { name: 'events_per_sec', value: 4576065.04, unit: 'events/s' },
-          { name: 'throughput_mib_s', value: 4467.92, unit: 'MiB/s' },
+          { name: 'events_per_sec', value: 4576065.04, unit: 'events/s', sampleCount: 3, statistic: 'mean' },
+          { name: 'throughput_mib_s', value: 4467.92, unit: 'MiB/s', sampleCount: 3, statistic: 'mean' },
         ],
       }]}
     />);
@@ -51,10 +51,12 @@ describe('experiment result navigation', () => {
     expect(screen.getByRole('heading', { name: 'Sysbench workload 数据' })).toBeInTheDocument();
     expect(screen.getByText('内存吞吐')).toBeInTheDocument();
     expect(screen.getByText('4,467.92 MiB/s')).toBeInTheDocument();
-    expect(screen.getByText('已回传指标与原始证据')).toBeInTheDocument();
+    expect(screen.getByText('内存吞吐量（平均值）')).toBeInTheDocument();
+    expect(screen.getByText('成功采集 3 次的算术平均')).toBeInTheDocument();
+    expect(screen.getByText('界面显示平均值；逐次数据已写入证据')).toBeInTheDocument();
   });
 
-  it('renders PHPBench score, samples, parameters, gates, and evidence in its dedicated panel', () => {
+  it('renders the PHPBench mean, parameters, gates, and evidence without per-run samples', () => {
     render(<PhpBenchResultSection
       section={{ id: 'phpbench-results', label: 'PHPBench 数据', view: 'phpbench-results', metrics: ['phpbench_score', 'phpbench_score_sample'] }}
       definitions={{ phpbench_score: { unit: 'Score', presentation: { userLabel: 'PHPBench 综合分数' } } }}
@@ -62,10 +64,7 @@ describe('experiment result navigation', () => {
         id: 'eval-phpbench', candidate: '测试机3', workload: 'phpbench', status: 'completed',
         parameters: { times_to_run: 3, test_timeout_minutes: 10 },
         metrics: [
-          { name: 'phpbench_score', value: 523642, unit: 'Score' },
-          { name: 'phpbench_score_sample', value: 517432, unit: 'Score', sampleIndex: 0 },
-          { name: 'phpbench_score_sample', value: 528171, unit: 'Score', sampleIndex: 1 },
-          { name: 'phpbench_score_sample', value: 525322, unit: 'Score', sampleIndex: 2 },
+          { name: 'phpbench_score', value: 523642, unit: 'Score', sampleCount: 3, statistic: 'mean' },
           { name: 'sample_count', value: 3, unit: 'count' },
           { name: 'pts_run_ok', value: true, unit: 'flag' },
           { name: 'profile_version_match', value: true, unit: 'flag' },
@@ -76,7 +75,9 @@ describe('experiment result navigation', () => {
 
     expect(screen.getByRole('heading', { name: 'PHPBench 数据' })).toBeInTheDocument();
     expect(screen.getByText('523,642 Score')).toBeInTheDocument();
-    expect(screen.getByText('517,432')).toBeInTheDocument();
+    expect(screen.getByText('PHPBench 综合分数（平均值）')).toBeInTheDocument();
+    expect(screen.getByText('3 次成功采集')).toBeInTheDocument();
+    expect(screen.queryByText('517,432')).not.toBeInTheDocument();
     expect(screen.getByText('每轮重复').nextSibling).toHaveTextContent('3 次');
     expect(screen.getByText('单项超时').nextSibling).toHaveTextContent('10 分钟');
     expect(screen.getByText('PTS 执行通过')).toBeInTheDocument();

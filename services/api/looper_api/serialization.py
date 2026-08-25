@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections import Counter
+from collections import Counter, defaultdict
 from datetime import UTC, datetime
 from typing import Any
 
@@ -389,29 +389,64 @@ def _best_primary_score(
     return max(scores) if direction == Direction.MAXIMIZE else min(scores)
 
 
-def _observation_metric_view(
-    item: ObservationRecord, declaration: dict[str, Any]
-) -> dict[str, Any] | None:
-    value: float | bool | None = (
-        item.value_boolean if item.value_boolean is not None else item.value_number
-    )
-    if value is None:
-        return None
-    direction = declaration.get("direction")
-    return {
-        "name": item.metric,
-        "value": value,
-        "unit": item.unit,
-        "sampleIndex": item.sample_index,
-        "sampleCount": item.sample_count,
-        "statistic": item.statistic,
-        "baseline": None,
-        "direction": "max"
-        if direction == "maximize"
-        else "min"
-        if direction == "minimize"
-        else "none",
-    }
+def _mean_observation_metric_views(
+    observations: list[ObservationRecord], declarations: dict[str, Any]
+) -> list[dict[str, Any]]:
+    """Return one display value per metric across successful repeat collections.
+
+    Raw observations remain immutable evidence. The experiment detail response is
+    intentionally a compact presentation projection: numeric observations use an
+    arithmetic mean and boolean gates pass only when every contributing collection
+    passed. ``sampleCount`` tells the UI how many raw observations contributed.
+    """
+
+    grouped: dict[str, list[ObservationRecord]] = defaultdict(list)
+    order: list[str] = []
+    for observation in observations:
+        if observation.phase == "warmup":
+            continue
+        if observation.metric not in grouped:
+            order.append(observation.metric)
+        grouped[observation.metric].append(observation)
+
+    views: list[dict[str, Any]] = []
+    for metric in order:
+        items = grouped[metric]
+        numeric_values = [
+            float(item.value_number) for item in items if item.value_number is not None
+        ]
+        boolean_values = [
+            bool(item.value_boolean) for item in items if item.value_boolean is not None
+        ]
+        if numeric_values:
+            value: float | bool = sum(numeric_values) / len(numeric_values)
+            sample_count = len(numeric_values)
+            statistic = "mean"
+        elif boolean_values:
+            value = all(boolean_values)
+            sample_count = len(boolean_values)
+            statistic = "all"
+        else:
+            continue
+        declaration = declarations.get(metric, {})
+        direction = declaration.get("direction")
+        views.append(
+            {
+                "name": metric,
+                "value": value,
+                "unit": items[0].unit,
+                "sampleIndex": None,
+                "sampleCount": sample_count,
+                "statistic": statistic,
+                "baseline": None,
+                "direction": "max"
+                if direction == "maximize"
+                else "min"
+                if direction == "minimize"
+                else "none",
+            }
+        )
+    return views
 
 
 def experiment_view(
@@ -623,17 +658,32 @@ def experiment_view(
             for item in objective_rows
             if item.get("raw") is not None
         ]
-        # Analysis intentionally excludes failed attempts, but the experiment
-        # page must still expose measurements that the Worker successfully
-        # uploaded. Otherwise a later validation failure makes real collection
-        # data appear to have vanished. Prefer the latest attempt's raw
-        # observations for the per-run table and Benchmark-specific sections.
-        if latest_result:
-            latest_observations = list(
+        # Result cards show one arithmetic mean across successful repeat
+        # collections. Individual observations remain available only through
+        # the immutable evidence bundle, in collection order.
+        successful_result_attempts = [
+            item
+            for item in evaluation_attempts
+            if item.id in attempts_with_observations
+            and AttemptStatus(item.status) == AttemptStatus.SUCCEEDED
+        ]
+        if successful_result_attempts:
+            successful_observations = list(
                 session.scalars(
                     select(ObservationRecord)
-                    .where(ObservationRecord.attempt_id == latest_result.id)
-                    .order_by(ObservationRecord.created_at)
+                    .join(AttemptRecord, AttemptRecord.id == ObservationRecord.attempt_id)
+                    .where(
+                        ObservationRecord.attempt_id.in_(
+                            [item.id for item in successful_result_attempts]
+                        )
+                    )
+                    .order_by(
+                        AttemptRecord.queue_sequence,
+                        AttemptRecord.repeat_index,
+                        AttemptRecord.retry_index,
+                        ObservationRecord.created_at,
+                        ObservationRecord.id,
+                    )
                 )
             )
             metric_specs = (
@@ -641,25 +691,11 @@ def experiment_view(
                 if benchmark
                 else {}
             )
-            latest_by_metric = {item.metric: item for item in latest_observations}
-            display_observations = [
-                item
-                for item in latest_observations
-                if metric_specs.get(item.metric, {}).get("kind") == "sample"
-                or latest_by_metric[item.metric] is item
-            ]
-            raw_metrics = [
-                view
-                for item in display_observations
-                if (
-                    view := _observation_metric_view(
-                        item, metric_specs.get(item.metric, {})
-                    )
-                )
-                is not None
-            ]
-            if raw_metrics:
-                metrics = raw_metrics
+            mean_metrics = _mean_observation_metric_views(
+                successful_observations, metric_specs
+            )
+            if mean_metrics:
+                metrics = mean_metrics
         failed_check_ids: list[str] = []
         if latest and AttemptStatus(latest.status) == AttemptStatus.FAILED:
             failed_check_ids = list(
@@ -753,12 +789,13 @@ def analysis_view(result: dict[str, Any]) -> dict[str, Any]:
     evidence = [
         {
             "id": "evidence-summary",
-            "title": "Immutable experiment evidence",
+            "title": "完整逐次采集证据",
             "kind": "content-addressed",
             "summary": (
-                f"{evidence_summary.get('attempt_count', 0)} attempts, "
-                f"{evidence_summary.get('observation_count', 0)} observations, "
-                f"{evidence_summary.get('artifact_count', 0)} artifacts"
+                f"共 {evidence_summary.get('attempt_count', 0)} 次采集、"
+                f"{evidence_summary.get('observation_count', 0)} 条观测、"
+                f"{evidence_summary.get('artifact_count', 0)} 个原始文件；"
+                "manifest 按实际采集顺序保留每次数据。"
             ),
             "createdAt": None,
             "artifacts": [

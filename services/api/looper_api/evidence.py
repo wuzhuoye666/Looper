@@ -59,20 +59,72 @@ def build_evidence_bundle(
     evaluations = _ordered(
         session, EvaluationRecord, EvaluationRecord.experiment_id == experiment_id
     )
-    attempts = _ordered(session, AttemptRecord, AttemptRecord.experiment_id == experiment_id)
+    attempts = list(
+        session.scalars(
+            select(AttemptRecord)
+            .where(AttemptRecord.experiment_id == experiment_id)
+            .order_by(
+                AttemptRecord.queue_sequence,
+                AttemptRecord.repeat_index,
+                AttemptRecord.retry_index,
+                AttemptRecord.created_at,
+                AttemptRecord.id,
+            )
+        )
+    )
     attempt_ids = [item.id for item in attempts]
     observations = (
-        _ordered(session, ObservationRecord, ObservationRecord.attempt_id.in_(attempt_ids))
+        list(
+            session.scalars(
+                select(ObservationRecord)
+                .join(AttemptRecord, AttemptRecord.id == ObservationRecord.attempt_id)
+                .where(ObservationRecord.attempt_id.in_(attempt_ids))
+                .order_by(
+                    AttemptRecord.queue_sequence,
+                    AttemptRecord.repeat_index,
+                    AttemptRecord.retry_index,
+                    ObservationRecord.created_at,
+                    ObservationRecord.sample_index,
+                    ObservationRecord.id,
+                )
+            )
+        )
         if attempt_ids
         else []
     )
     checks = (
-        _ordered(session, CheckRecord, CheckRecord.attempt_id.in_(attempt_ids))
+        list(
+            session.scalars(
+                select(CheckRecord)
+                .join(AttemptRecord, AttemptRecord.id == CheckRecord.attempt_id)
+                .where(CheckRecord.attempt_id.in_(attempt_ids))
+                .order_by(
+                    AttemptRecord.queue_sequence,
+                    AttemptRecord.repeat_index,
+                    AttemptRecord.retry_index,
+                    CheckRecord.created_at,
+                    CheckRecord.id,
+                )
+            )
+        )
         if attempt_ids
         else []
     )
     links = (
-        _ordered(session, ArtifactLinkRecord, ArtifactLinkRecord.attempt_id.in_(attempt_ids))
+        list(
+            session.scalars(
+                select(ArtifactLinkRecord)
+                .join(AttemptRecord, AttemptRecord.id == ArtifactLinkRecord.attempt_id)
+                .where(ArtifactLinkRecord.attempt_id.in_(attempt_ids))
+                .order_by(
+                    AttemptRecord.queue_sequence,
+                    AttemptRecord.repeat_index,
+                    AttemptRecord.retry_index,
+                    ArtifactLinkRecord.created_at,
+                    ArtifactLinkRecord.id,
+                )
+            )
+        )
         if attempt_ids
         else []
     )

@@ -233,6 +233,8 @@ export function SysbenchWorkloadSection({ section, definitions, evaluations }: {
     const precision = definitions?.[name]?.presentation?.displayPrecision ?? 2;
     return `${formatMetricValue(metric.value, precision)} ${metric.unit || definitions?.[name]?.unit || ''}`.trim();
   };
+  const averageCount = (evaluation: Evaluation, name: string) =>
+    evaluation.metrics?.find(item => item.name === name)?.sampleCount;
   const workloadNames: Record<string, string> = { cpu: 'CPU 素数计算', memory: '内存吞吐', thread: '线程调度', mutex: '互斥锁竞争' };
   return <section className="panel metric-definitions sysbench-results">
     <div className="panel-heading"><div><h2>{section.label}</h2><p>{section.description || '由 Benchmark manifest 声明的专属结果。'}</p></div></div>
@@ -244,13 +246,13 @@ export function SysbenchWorkloadSection({ section, definitions, evaluations }: {
       return <article key={item.id}>
         <div className="metric-definition-title"><strong>{workloadNames[item.workload || ''] || item.workload || '未命名 workload'}</strong><StatusBadge status={item.status} /></div>
         <span className="cell-meta">{item.candidate}</span>
-        <div className="sysbench-primary-metric"><span>{primaryDefinition?.presentation?.userLabel || (primaryMetric === 'throughput_mib_s' ? '内存吞吐量' : '每秒事件数')}</span><strong className="metric-cell">{value(item, primaryMetric)}</strong></div>
+        <div className="sysbench-primary-metric"><span>{primaryDefinition?.presentation?.userLabel || (primaryMetric === 'throughput_mib_s' ? '内存吞吐量' : '每秒事件数')}（平均值）</span><strong className="metric-cell">{value(item, primaryMetric)}</strong><small>{averageCount(item, primaryMetric) ? `成功采集 ${averageCount(item, primaryMetric)} 次的算术平均` : '等待成功采集'}</small></div>
         {secondaryMetrics.length > 0 && <dl className="sysbench-secondary-metrics">{secondaryMetrics.map(([name, fallback]) => <div key={name}><dt>{definitions?.[name]?.presentation?.userLabel || fallback}</dt><dd>{value(item, name)}</dd></div>)}</dl>}
         <p>{item.phaseDetail || (measured ? '已完成指标回传。' : '本次运行未形成有效指标。')}</p>
-        <span className={measured ? 'cell-meta' : 'cell-error'}>{measured ? '已回传指标与原始证据' : '未形成有效指标'}</span>
+        <span className={measured ? 'cell-meta' : 'cell-error'}>{measured ? '界面显示平均值；逐次数据已写入证据' : '未形成有效指标'}</span>
       </article>;
     })}</div> : <EmptyState title="暂无 Sysbench workload 数据" description="完成至少一个 workload 后，这里会显示专属指标。" />}
-    <div className="sysbench-result-note"><strong>数据口径</strong><span>每张卡展示该 workload 最新一次带观测值的结果；原始 stdout、raw-result.json 和系统指纹仍在“证据”与“原始终端”中保留。</span></div>
+    <div className="sysbench-result-note"><strong>数据口径</strong><span>每张卡展示该 workload 所有成功采集结果的算术平均值；每次采集的 stdout、raw-result.json、指标和系统指纹按采集顺序保留在“证据”与“原始终端”。</span></div>
   </section>;
 }
 
@@ -259,16 +261,16 @@ export function PhpBenchResultSection({ section, definitions, evaluations }: {
   definitions?: Record<string, MetricDefinition>;
   evaluations: Evaluation[];
 }) {
-  const metricValue = (evaluation: Evaluation, name: string) =>
-    evaluation.metrics?.find(item => item.name === name)?.value;
+  const metric = (evaluation: Evaluation, name: string) =>
+    evaluation.metrics?.find(item => item.name === name);
+  const metricValue = (evaluation: Evaluation, name: string) => metric(evaluation, name)?.value;
   const completed = evaluations.filter(item => item.metrics?.some(metric => metric.name === 'phpbench_score'));
   const shown = completed.length ? completed : evaluations;
   return <section className="panel metric-definitions phpbench-results">
     <div className="panel-heading"><div><h2>{section.label}</h2><p>{section.description || '由 Benchmark manifest 声明的专属结果。'}</p></div></div>
     {shown.length ? <div className="phpbench-result-list">{shown.map(item => {
       const score = metricValue(item, 'phpbench_score');
-      const samples = (item.metrics || []).filter(metric => metric.name === 'phpbench_score_sample');
-      const sampleCount = metricValue(item, 'sample_count');
+      const averageCount = metric(item, 'phpbench_score')?.sampleCount;
       const ptsOk = metricValue(item, 'pts_run_ok') === true;
       const profileOk = metricValue(item, 'profile_version_match') === true;
       const timesToRun = item.parameters?.times_to_run;
@@ -276,11 +278,10 @@ export function PhpBenchResultSection({ section, definitions, evaluations }: {
       const evidenceNames = new Set((item.artifacts || []).map(artifact => artifact.name));
       return <article className="phpbench-result" key={item.id}>
         <div className="phpbench-result-heading"><div><span className="cell-meta">{item.candidate}</span><strong>PHPBench 0.8.1</strong></div><StatusBadge status={item.status} /></div>
-        <div className="phpbench-score"><span>{definitions?.phpbench_score?.presentation?.userLabel || 'PHPBench 综合分数'}</span><strong>{typeof score === 'number' ? `${formatNumber(score, 0)} Score` : '待测试'}</strong><small>Higher Is Better</small></div>
-        <div className="phpbench-samples"><strong>重复样本</strong><div>{samples.length ? samples.map((sample, index) => <span key={`${sample.sampleIndex ?? index}-${sample.value}`}><small>第 {typeof sample.sampleIndex === 'number' ? sample.sampleIndex + 1 : index + 1} 次</small><b>{typeof sample.value === 'number' ? formatNumber(sample.value, 0) : '—'}</b></span>) : <span><small>尚未回传</small><b>—</b></span>}</div></div>
+        <div className="phpbench-score"><span>{definitions?.phpbench_score?.presentation?.userLabel || 'PHPBench 综合分数'}（平均值）</span><strong>{typeof score === 'number' ? `${formatNumber(score, 0)} Score` : '待测试'}</strong><small>{averageCount ? `成功采集 ${averageCount} 次的算术平均 · ` : ''}Higher Is Better</small></div>
         <dl className="phpbench-parameters">
           <div><dt>PTS Profile</dt><dd>pts/phpbench-1.1.6</dd></div>
-          <div><dt>有效样本</dt><dd>{typeof sampleCount === 'number' ? sampleCount : samples.length || '—'}</dd></div>
+          <div><dt>参与平均</dt><dd>{averageCount ? `${averageCount} 次成功采集` : '—'}</dd></div>
           <div><dt>每轮重复</dt><dd>{typeof timesToRun === 'number' ? `${timesToRun} 次` : '—'}</dd></div>
           <div><dt>单项超时</dt><dd>{typeof timeout === 'number' ? `${timeout} 分钟` : '—'}</dd></div>
           <div><dt>结果单位</dt><dd>Score</dd></div>
@@ -289,7 +290,7 @@ export function PhpBenchResultSection({ section, definitions, evaluations }: {
         <div className="phpbench-gates"><span className={ptsOk ? 'pass' : ''}>{ptsOk ? 'PTS 执行通过' : 'PTS 执行待确认'}</span><span className={profileOk ? 'pass' : ''}>{profileOk ? 'Profile 版本匹配' : 'Profile 版本待确认'}</span><span className={evidenceNames.has('pts-result.json') ? 'pass' : ''}>{evidenceNames.has('pts-result.json') ? 'PTS 原始结果已回传' : 'PTS 原始结果待回传'}</span><span className={evidenceNames.has('run-metadata.json') ? 'pass' : ''}>{evidenceNames.has('run-metadata.json') ? '运行元数据已回传' : '运行元数据待回传'}</span></div>
       </article>;
     })}</div> : <EmptyState title="暂无 PHPBench 数据" description="完成至少一轮 PHPBench 后，这里会显示分数、样本、参数和门禁。" />}
-    <div className="sysbench-result-note"><strong>数据口径</strong><span>综合分数与重复样本来自固定的 pts/phpbench-1.1.6；完整 pts-result.json、run-metadata.json、日志和系统指纹继续保留在“证据”与“原始终端”。</span></div>
+    <div className="sysbench-result-note"><strong>数据口径</strong><span>界面仅显示所有成功采集所得 PHPBench 综合分数的算术平均值；每次 pts-result.json、run-metadata.json、日志、指标和系统指纹按采集顺序保留在“证据”与“原始终端”。</span></div>
   </section>;
 }
 
