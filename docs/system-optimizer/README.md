@@ -41,6 +41,7 @@ System Optimizer 是一个操作系统配置采集、人工管理和有限闭环
 - contracts/metric-contract.md：指标方向、作用域、阶段、采集成本和计算输入。
 - contracts/scoring-contract.md：组件内优先级、假设可信度、业务收益和门禁分离。
 - contracts/formula-provenance.md：导师综合式、论文原式和项目扩展公式的来源、适用范围与禁止外推。
+- contracts/code-driven-hypothesis.md：代码/配置来源、运行时证据、授权候选与容量区间裁决的绑定合同。
 
 ### 安全与执行
 

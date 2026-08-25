@@ -9,6 +9,16 @@ from looper_core.system_opt.config_manifest import (
     SystemTuningBinding,
     ValueDomain,
 )
+from looper_core.system_opt.hypothesis import (
+    CapacityDecisionStatus,
+    CapacityFrontierDecision,
+    HypothesisEvidence,
+    HypothesisState,
+    OptimizationHypothesis,
+    evaluate_capacity_frontiers,
+    hypothesis_context_digest,
+    rank_authorized_hypotheses,
+)
 from looper_core.system_opt.profiles import (
     ExpandedProfile,
     ProfileExpansionError,
@@ -29,7 +39,12 @@ __all__ = [
     "ConfigItem",
     "ConfigManifest",
     "ConfigValueType",
+    "CapacityDecisionStatus",
+    "CapacityFrontierDecision",
     "ExpandedProfile",
+    "HypothesisEvidence",
+    "HypothesisState",
+    "OptimizationHypothesis",
     "ProfileExpansionError",
     "ProfileRepository",
     "RiskLevel",
@@ -40,4 +55,7 @@ __all__ = [
     "SystemTuningBinding",
     "TuningProfile",
     "ValueDomain",
+    "evaluate_capacity_frontiers",
+    "hypothesis_context_digest",
+    "rank_authorized_hypotheses",
 ]

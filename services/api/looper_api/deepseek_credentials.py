@@ -38,9 +38,16 @@ def _windows_dpapi(data: bytes, *, protect: bool) -> bytes:
     kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
     function = crypt32.CryptProtectData if protect else crypt32.CryptUnprotectData
     description = "Looper DeepSeek credential" if protect else None
-    if not function(
+    result = function(
         ctypes.byref(source), description, None, None, None, 0x1, ctypes.byref(output)
-    ):
+    )
+    if not result and protect:
+        ctypes.set_last_error(0)
+        output = _DataBlob()
+        result = function(
+            ctypes.byref(source), description, None, None, None, 0x5, ctypes.byref(output)
+        )
+    if not result:
         raise DeepSeekCredentialError(
             f"Windows DPAPI {'encryption' if protect else 'decryption'} failed"
         )
@@ -52,7 +59,12 @@ def _windows_dpapi(data: bytes, *, protect: bool) -> bytes:
 
 def _encode_key(key: bytes) -> bytes:
     if sys.platform == "win32":
-        return _DPAPI_PREFIX + base64.b64encode(_windows_dpapi(key, protect=True))
+        try:
+            return _DPAPI_PREFIX + base64.b64encode(_windows_dpapi(key, protect=True))
+        except DeepSeekCredentialError:
+            # Service and sandbox accounts may not have a loaded DPAPI profile. The
+            # credential remains Fernet encrypted with an owner-only local key file.
+            return _FILE_PREFIX + key
     return _FILE_PREFIX + key
 
 

@@ -213,6 +213,9 @@ from looper_api.source_discovery import (
     recover_interrupted_discoveries,
     replace_retained_archive,
 )
+from looper_api.system_optimization import recover_interrupted_system_optimization_studies
+from looper_api.system_optimization_api import router as system_optimization_router
+from looper_api.system_optimization_runtime import reconcile_system_optimization_studies
 from looper_api.variability_service import build_variability_report
 from looper_api.worker_protocol import (
     ArtifactMetadata,
@@ -319,6 +322,15 @@ async def _lease_sweeper() -> None:
         reconcile_capacity_studies(get_settings())
 
 
+async def _system_optimization_reconciler() -> None:
+    while True:
+        await asyncio.sleep(5)
+        try:
+            await asyncio.to_thread(reconcile_system_optimization_studies, get_settings())
+        except Exception:
+            logger.exception("System optimization reconciliation failed")
+
+
 async def _remote_worker_recovery() -> None:
     settings = get_settings()
     retry_after: dict[str, float] = {}
@@ -421,20 +433,27 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         recover_interrupted_orders(session)
         recover_interrupted_discoveries(session)
         recover_interrupted_capacity_studies(session)
+        recover_interrupted_system_optimization_studies(session)
         purge_expired_archives(session, settings)
         seed_system(session)
         session.commit()
     sweeper = asyncio.create_task(_lease_sweeper())
+    system_optimization_reconciler = asyncio.create_task(
+        _system_optimization_reconciler()
+    )
     remote_recovery = asyncio.create_task(_remote_worker_recovery())
     cloud_ssh_recovery = asyncio.create_task(_cloud_ssh_recovery())
     try:
         yield
     finally:
         sweeper.cancel()
+        system_optimization_reconciler.cancel()
         remote_recovery.cancel()
         cloud_ssh_recovery.cancel()
         with suppress(asyncio.CancelledError):
             await sweeper
+        with suppress(asyncio.CancelledError):
+            await system_optimization_reconciler
         with suppress(asyncio.CancelledError):
             await remote_recovery
         with suppress(asyncio.CancelledError):
@@ -447,6 +466,8 @@ app = FastAPI(
     description="Auditable closed-loop systems performance optimization control plane.",
     lifespan=lifespan,
 )
+# System optimization routes are included after all application routers.
+app.include_router(system_optimization_router)
 settings = get_settings()
 app.add_middleware(
     CORSMiddleware,

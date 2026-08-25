@@ -203,11 +203,26 @@ class SloPlan(CapacityModel):
 
 
 class TargetPlan(CapacityModel):
+    enabled_networks: list[Literal["internal", "external"]] = Field(
+        default_factory=lambda: ["internal", "external"],
+        alias="enabledNetworks",
+        min_length=1,
+        max_length=2,
+    )
     sut_ids: list[str] = Field(default_factory=list, alias="sutIds", max_length=100)
     internal_load_generator_id: str = Field(default="", alias="internalLoadGeneratorId")
     external_load_generator_id: str = Field(default="", alias="externalLoadGeneratorId")
     internal_base_urls: dict[str, str] = Field(default_factory=dict, alias="internalBaseUrls")
     external_base_urls: dict[str, str] = Field(default_factory=dict, alias="externalBaseUrls")
+
+    @field_validator("enabled_networks")
+    @classmethod
+    def unique_enabled_networks(
+        cls, value: list[Literal["internal", "external"]]
+    ) -> list[Literal["internal", "external"]]:
+        if len(set(value)) != len(value):
+            raise ValueError("enabled networks must be unique")
+        return value
 
 
 class BudgetPlan(CapacityModel):
@@ -1048,26 +1063,31 @@ def draft_constraints(draft: CapacityDraft) -> list[dict[str, Any]]:
         f"{len(draft.targets.sut_ids)} 台",
         group="服务器",
     )
-    generators = [
-        draft.targets.internal_load_generator_id,
-        draft.targets.external_load_generator_id,
-    ]
+    generator_by_network = {
+        "internal": draft.targets.internal_load_generator_id,
+        "external": draft.targets.external_load_generator_id,
+    }
+    generators = [generator_by_network[network] for network in draft.targets.enabled_networks]
     generator_ready = all(generators) and not set(generators) & set(draft.targets.sut_ids)
     add(
         "targets.generators",
         "施压机与被测机分离",
         generator_ready,
         (
-            "内网和公网施压机已选择"
+            f"{', '.join(draft.targets.enabled_networks)} 施压机已选择"
             if generator_ready
-            else "必须选择两台（可相同）非被测机作为内网和公网施压机"
+            else "必须为每个启用网络选择非被测机作为施压机"
         ),
         group="服务器",
     )
+    urls_by_network = {
+        "internal": draft.targets.internal_base_urls,
+        "external": draft.targets.external_base_urls,
+    }
     urls_ready = (
         all(
-            _valid_http_url(mapping.get(target_id, ""))
-            for mapping in (draft.targets.internal_base_urls, draft.targets.external_base_urls)
+            _valid_http_url(urls_by_network[network].get(target_id, ""))
+            for network in draft.targets.enabled_networks
             for target_id in draft.targets.sut_ids
         )
         if draft.targets.sut_ids
@@ -1075,19 +1095,33 @@ def draft_constraints(draft: CapacityDraft) -> list[dict[str, Any]]:
     )
     add(
         "targets.urls",
-        "内外网地址完整",
+        "启用网络地址完整",
         urls_ready,
-        "地址完整且格式有效" if urls_ready else "每台被测机都必须填写内网和公网 HTTP(S) 地址",
+        "地址完整且格式有效" if urls_ready else "每台被测机都必须填写启用网络的 HTTP(S) 地址",
         group="服务器",
     )
-    enough_samples = (
-        draft.budget.reference_rps * draft.budget.measurement_seconds >= draft.slo.minimum_samples
+    # Frontier calibration starts at 0.5x reference load. Validating only the
+    # reference point admits a contract whose very first attempt can never
+    # satisfy the per-attempt tail-evidence requirement.
+    initial_load_fraction = 0.5
+    initial_expected_samples = (
+        draft.budget.reference_rps
+        * initial_load_fraction
+        * draft.budget.measurement_seconds
     )
+    enough_samples = initial_expected_samples >= draft.slo.minimum_samples
     add(
         "slo.samples",
         "初始负载具备尾延迟样本",
         enough_samples,
-        "初始负载预计满足样本量" if enough_samples else "提高参考 RPS、测量时间或降低最小样本数",
+        (
+            f"0.5×参考负载预计 {initial_expected_samples:g} 个样本"
+            if enough_samples
+            else (
+                f"0.5×参考负载仅预计 {initial_expected_samples:g} 个样本；"
+                "提高参考 RPS、测量时间或降低最小样本数"
+            )
+        ),
         group="SLO",
     )
     return constraints
@@ -1144,10 +1178,12 @@ def preflight_capacity_study(
         if not passed:
             failed_suts.append(target_id)
     generator_failures: list[str] = []
-    for network, target_id in (
-        ("internal", draft.targets.internal_load_generator_id),
-        ("external", draft.targets.external_load_generator_id),
-    ):
+    generator_by_network = {
+        "internal": draft.targets.internal_load_generator_id,
+        "external": draft.targets.external_load_generator_id,
+    }
+    for network in draft.targets.enabled_networks:
+        target_id = generator_by_network[network]
         target = session.get(TargetRecord, target_id) if target_id else None
         passed = bool(
             target
@@ -1234,7 +1270,7 @@ def start_capacity_study(
             ),
         },
         "runs": [],
-        "currentNetwork": "internal",
+        "currentNetwork": draft.targets.enabled_networks[0],
     }
     return _commit_revisioned_draft(
         session,
@@ -1452,7 +1488,7 @@ def _scenario_contract(record: CapacityStudyRecord) -> ScenarioBenchmarkSpec:
     )
 
 
-def _capacity_manifest(record: CapacityStudyRecord) -> dict[str, Any]:
+def _capacity_manifest(record: CapacityStudyRecord, settings: Settings) -> dict[str, Any]:
     scenario = _scenario_contract(record)
     digest = canonical_digest({"dependencies": []})
     metrics = {
@@ -1609,6 +1645,9 @@ def _capacity_manifest(record: CapacityStudyRecord) -> dict[str, Any]:
                             "--output",
                             "{output}",
                         ],
+                        "environment": {
+                            "LOOPER_DATA_DIR": str(settings.data_dir.resolve()),
+                        },
                         "timeoutSeconds": 86400,
                         "allowedExitCodes": [0],
                     },
@@ -1664,7 +1703,7 @@ def _capacity_manifest(record: CapacityStudyRecord) -> dict[str, Any]:
 def ensure_capacity_benchmark(
     session: Session, record: CapacityStudyRecord, settings: Settings
 ) -> BenchmarkRecord:
-    manifest_document = _capacity_manifest(record)
+    manifest_document = _capacity_manifest(record, settings)
     metadata = manifest_document["metadata"]
     key = f"{metadata['id']}@{metadata['version']}"
     existing = session.get(BenchmarkRecord, key)
@@ -1725,6 +1764,7 @@ def _network_experiment_request(
         "scenario": draft.scenario.model_dump(mode="json", by_alias=True),
         "endpoints": {target_id: endpoints[target_id] for target_id in active_targets},
         "measurementSeconds": draft.budget.measurement_seconds,
+        "servicePort": draft.build.service_port,
         "requestTimeoutSeconds": max(1, min(30, draft.slo.p999_ms / 1000 * 2)),
         "sourceDigest": session.get(SourceDiscoveryRecord, record.discovery_id).source_digest,
     }
@@ -1747,7 +1787,9 @@ def _network_experiment_request(
                 placement_pair_id=f"{record.id}:{network}",
             )
         )
-    per_network_attempts = max(1, draft.budget.max_attempts // 2)
+    per_network_attempts = max(
+        1, draft.budget.max_attempts // len(draft.targets.enabled_networks)
+    )
     spec = ExperimentSpec(
         mode=ExperimentMode.SELECTION,
         benchmark_id=benchmark.benchmark_id,
@@ -2111,8 +2153,15 @@ def _prepare_capacity_job(study_id: str, settings: Settings) -> None:
             execution["deployments"] = deployed
             record.execution_json = execution
             _phase(record, "deploying", "completed", "所有被测环境健康检查通过")
-            create_capacity_experiment(session, record, settings, "internal")
-            _phase(record, "internal", "running", "正在执行内网容量边界搜索")
+            draft = CapacityDraft.model_validate(record.draft_json)
+            first_network = draft.targets.enabled_networks[0]
+            create_capacity_experiment(session, record, settings, first_network)
+            _phase(
+                record,
+                first_network,
+                "running",
+                f"正在执行 {first_network} 容量边界搜索",
+            )
             session.commit()
     except Exception as error:
         with SessionLocal() as session:
@@ -2281,9 +2330,18 @@ def _advance_capacity_job(study_id: str, settings: Settings) -> None:
             record.completed_at = utc_now()
             session.commit()
             return
-        if network == "internal":
+        draft = CapacityDraft.model_validate(record.draft_json)
+        enabled_networks = list(draft.targets.enabled_networks)
+        try:
+            network_index = enabled_networks.index(network)
+        except ValueError as error:
+            raise CapacityError(
+                f"completed network {network!r} is absent from the frozen capacity contract"
+            ) from error
+        _phase(record, network, "completed", f"{network} 容量搜索完成")
+        if network_index + 1 < len(enabled_networks):
+            next_network = enabled_networks[network_index + 1]
             record.status = "resetting"
-            _phase(record, "internal", "completed", "内网容量搜索完成")
             session.commit()
             try:
                 reset_capacity_targets(record, settings)
@@ -2304,9 +2362,14 @@ def _advance_capacity_job(study_id: str, settings: Settings) -> None:
                     )
                     session.commit()
                     return
-                create_capacity_experiment(session, record, settings, "external")
+                create_capacity_experiment(session, record, settings, next_network)
                 _phase(record, "reset", "completed", "环境已重置")
-                _phase(record, "external", "running", "正在执行公网容量边界搜索")
+                _phase(
+                    record,
+                    next_network,
+                    "running",
+                    f"正在执行 {next_network} 容量边界搜索",
+                )
                 session.commit()
             except Exception as error:
                 session.rollback()
@@ -2325,7 +2388,6 @@ def _advance_capacity_job(study_id: str, settings: Settings) -> None:
                 record.completed_at = utc_now()
                 session.commit()
             return
-        _phase(record, "external", "completed", "公网容量搜索完成")
         record.status = "cleaning"
         session.commit()
         cleanup = _cleanup_all(record, settings)

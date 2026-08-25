@@ -7,7 +7,14 @@ from pathlib import Path
 from typing import Any
 
 
-def _metric(name: str, value: float, unit: str, samples: int = 1) -> dict[str, Any]:
+def _metric(
+    name: str,
+    value: float,
+    unit: str,
+    *,
+    statistic: str,
+    samples: int = 1,
+) -> dict[str, Any]:
     return {
         "schemaVersion": "v1alpha1",
         "metric": name,
@@ -15,7 +22,7 @@ def _metric(name: str, value: float, unit: str, samples: int = 1) -> dict[str, A
         "unit": unit,
         "phase": "measurement",
         "workload": "business-iteration",
-        "statistic": "aggregate",
+        "statistic": statistic,
         "sampleCount": samples,
         "attributes": {},
     }
@@ -62,24 +69,74 @@ def main() -> int:
         error_ratio = errors / started if started else 1.0
         timeout_ratio = timeouts / started if started else 1.0
         values = [
-            _metric("offered_tps", float(native["offeredRps"]), "iterations/second"),
-            _metric("attempted_tps", started / elapsed, "iterations/second"),
-            _metric("committed_tps", success / elapsed, "iterations/second"),
-            _metric("offered_requests", offered, "iterations"),
-            _metric("started_requests", started, "iterations"),
-            _metric("completed_requests", completed, "iterations"),
-            _metric("success_rate", success_rate, "ratio"),
-            _metric("error_ratio", error_ratio, "ratio"),
-            _metric("abort_ratio", 0.0, "ratio"),
-            _metric("timeout_ratio", timeout_ratio, "ratio"),
-            _metric("offered_load_achieved_ratio", started / offered, "ratio"),
-            _metric("rate_limiter_lag_ratio", float(native["rateLimiterLagRatio"]), "ratio"),
-            _metric("client_headroom_ratio", float(native["clientHeadroomRatio"]), "ratio"),
-            _metric("latency_p50_ms", float(native["latency"]["p50Ms"]), "ms", samples),
-            _metric("latency_p95_ms", float(native["latency"]["p95Ms"]), "ms", samples),
-            _metric("latency_p99_ms", float(native["latency"]["p99Ms"]), "ms", samples),
-            _metric("latency_p999_ms", float(native["latency"]["p999Ms"]), "ms", samples),
-            _metric("latency_max_ms", float(native["latency"]["maxMs"]), "ms", samples),
+            _metric(
+                "offered_tps",
+                float(native["offeredRps"]),
+                "iterations/second",
+                statistic="rate",
+            ),
+            _metric("attempted_tps", started / elapsed, "iterations/second", statistic="rate"),
+            _metric("committed_tps", success / elapsed, "iterations/second", statistic="rate"),
+            _metric("offered_requests", offered, "iterations", statistic="count"),
+            _metric("started_requests", started, "iterations", statistic="count"),
+            _metric("completed_requests", completed, "iterations", statistic="count"),
+            _metric("success_rate", success_rate, "ratio", statistic="rate"),
+            _metric("error_ratio", error_ratio, "ratio", statistic="rate"),
+            _metric("abort_ratio", 0.0, "ratio", statistic="rate"),
+            _metric("timeout_ratio", timeout_ratio, "ratio", statistic="rate"),
+            _metric(
+                "offered_load_achieved_ratio",
+                started / offered,
+                "ratio",
+                statistic="rate",
+            ),
+            _metric(
+                "rate_limiter_lag_ratio",
+                float(native["rateLimiterLagRatio"]),
+                "ratio",
+                statistic="rate",
+            ),
+            _metric(
+                "client_headroom_ratio",
+                float(native["clientHeadroomRatio"]),
+                "ratio",
+                statistic="rate",
+            ),
+            _metric(
+                "latency_p50_ms",
+                float(native["latency"]["p50Ms"]),
+                "ms",
+                statistic="p50",
+                samples=samples,
+            ),
+            _metric(
+                "latency_p95_ms",
+                float(native["latency"]["p95Ms"]),
+                "ms",
+                statistic="p95",
+                samples=samples,
+            ),
+            _metric(
+                "latency_p99_ms",
+                float(native["latency"]["p99Ms"]),
+                "ms",
+                statistic="p99",
+                samples=samples,
+            ),
+            _metric(
+                "latency_p999_ms",
+                float(native["latency"]["p999Ms"]),
+                "ms",
+                statistic="p99.9",
+                samples=samples,
+            ),
+            _metric(
+                "latency_max_ms",
+                float(native["latency"]["maxMs"]),
+                "ms",
+                statistic="maximum",
+                samples=samples,
+            ),
         ]
         if not all(math.isfinite(float(item["value"])) for item in values):
             valid = False

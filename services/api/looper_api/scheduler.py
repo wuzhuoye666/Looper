@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from collections import defaultdict
+from datetime import datetime
 from decimal import ROUND_HALF_EVEN, Decimal
 from random import Random
 from typing import Any
@@ -873,23 +874,19 @@ def resume_experiment(session: Session, experiment: ExperimentRecord) -> Experim
 
 
 def cancel_experiment(session: Session, experiment: ExperimentRecord) -> ExperimentRecord:
+    if experiment.status == ExperimentStatus.CANCELLED:
+        # Cancellation is a recovery boundary: an older control-plane version
+        # may have persisted the terminal experiment before fencing an active
+        # Worker lease. Replaying cancel must repair that split state.
+        _cancel_active_attempts(session, experiment, utc_now())
+        return experiment
     require_experiment_transition(experiment.status, ExperimentStatus.CANCELLED)
     now = utc_now()
     experiment.status = ExperimentStatus.CANCELLED
     experiment.revision += 1
     experiment.updated_at = now
     experiment.finished_at = now
-    queued = list(
-        session.scalars(
-            select(AttemptRecord).where(
-                AttemptRecord.experiment_id == experiment.id,
-                AttemptRecord.status == AttemptStatus.QUEUED,
-            )
-        )
-    )
-    for attempt in queued:
-        attempt.status = AttemptStatus.CANCELLED
-        attempt.completed_at = now
+    _cancel_active_attempts(session, experiment, now)
     append_event(
         session,
         experiment_id=experiment.id,
@@ -899,6 +896,36 @@ def cancel_experiment(session: Session, experiment: ExperimentRecord) -> Experim
         idempotency_key=f"experiment.cancelled:{experiment.id}:{experiment.revision}",
     )
     return experiment
+
+
+def _cancel_active_attempts(
+    session: Session, experiment: ExperimentRecord, now: datetime
+) -> None:
+    active_attempts = list(
+        session.scalars(
+            select(AttemptRecord).where(
+                AttemptRecord.experiment_id == experiment.id,
+                AttemptRecord.status.in_(
+                    [
+                        AttemptStatus.QUEUED,
+                        AttemptStatus.LEASED,
+                        AttemptStatus.RUNNING,
+                        AttemptStatus.UPLOADING,
+                    ]
+                ),
+            )
+        )
+    )
+    for attempt in active_attempts:
+        attempt.status = AttemptStatus.CANCELLED
+        # Invalidate any in-flight completion before releasing the worker slot.
+        # The worker keeps its identity for audit, while the fencing token makes
+        # a late heartbeat/upload deterministically stale.
+        attempt.fencing_token += 1
+        attempt.lease_expires_at = None
+        attempt.phase = "cancelled"
+        attempt.phase_detail = "experiment cancelled by operator"
+        attempt.completed_at = now
 
 
 def retry_attempt(session: Session, attempt: AttemptRecord) -> AttemptRecord:

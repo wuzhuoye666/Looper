@@ -61,13 +61,13 @@ class GateEvidence(StrictModel):
 
 
 class DiagnosticPriority(StrictModel):
-    metric_id: str
+    metric_id: str = Field(alias="metricId")
     component: str
     pressure: float
-    adverse_change: float
+    adverse_change: float = Field(alias="adverseChange")
     persistence: float = Field(ge=0, le=1)
     confidence: float = Field(ge=0, le=1)
-    pareto_rank: int | None = None
+    pareto_rank: int | None = Field(default=None, alias="paretoRank")
 
 
 def comparable(

@@ -54,6 +54,18 @@ def _windows_dpapi(data: bytes, *, protect: bool) -> bytes:
         0x1,  # CRYPTPROTECT_UI_FORBIDDEN
         ctypes.byref(output),
     )
+    if not result and protect:
+        ctypes.set_last_error(0)
+        output = _DataBlob()
+        result = function(
+            ctypes.byref(source),
+            description,
+            None,
+            None,
+            None,
+            0x5,  # UI forbidden + machine scope for service accounts without a profile
+            ctypes.byref(output),
+        )
     if not result:
         raise RemoteCredentialError(
             f"Windows DPAPI {'encryption' if protect else 'decryption'} failed"
@@ -66,7 +78,12 @@ def _windows_dpapi(data: bytes, *, protect: bool) -> bytes:
 
 def _encode_key(key: bytes) -> bytes:
     if sys.platform == "win32":
-        return _DPAPI_PREFIX + base64.b64encode(_windows_dpapi(key, protect=True))
+        try:
+            return _DPAPI_PREFIX + base64.b64encode(_windows_dpapi(key, protect=True))
+        except RemoteCredentialError:
+            # Service and sandbox accounts may not have a loaded DPAPI profile. The SSH
+            # credential remains Fernet encrypted with an owner-only local key file.
+            return _PLAIN_PREFIX + key
     return _PLAIN_PREFIX + key
 
 

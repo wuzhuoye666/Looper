@@ -16,6 +16,7 @@ from looper_api.capacity import (
     CapacityDraftUpdate,
     CapacityError,
     CapacityStartRequest,
+    ScenarioPlan,
     create_capacity_study,
     draft_constraints,
     ensure_capacity_benchmark,
@@ -353,6 +354,26 @@ def test_build_plan_rejects_global_or_privileged_compose_names() -> None:
     failures = capacity._build_plan_constraints(plan)
     assert any("global container name" in item for item in failures)
     assert any("privileged" in item for item in failures)
+
+
+def test_capacity_sample_constraint_covers_first_half_reference_load() -> None:
+    draft = CapacityDraft(build=_build_plan(), scenario=ScenarioPlan())
+    draft.budget.reference_rps = 20
+    draft.budget.measurement_seconds = 5
+    draft.slo.minimum_samples = 100
+
+    short_window = next(
+        item for item in draft_constraints(draft) if item["code"] == "slo.samples"
+    )
+    assert short_window["status"] == "fail"
+    assert "50" in short_window["detail"]
+
+    draft.budget.measurement_seconds = 10
+    sufficient_window = next(
+        item for item in draft_constraints(draft) if item["code"] == "slo.samples"
+    )
+    assert sufficient_window["status"] == "pass"
+    assert "100" in sufficient_window["detail"]
 
 
 @pytest.mark.parametrize(
