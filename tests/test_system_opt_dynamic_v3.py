@@ -8,23 +8,31 @@ digest. v1/v2 models and digests are untouched.
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import pytest
-from looper_core.system_opt.dynamic_loop import run_dynamic_phase_v3
+from looper_core.system_opt.dynamic_loop import (
+    load_dynamic_phase_run,
+    run_dynamic_phase_v3,
+)
 from looper_core.system_opt.observation import parse_o0_metrics
 from looper_core.system_opt.phase_gate import (
     DYNAMIC_PHASE_GATE_SCHEMA,
+    DYNAMIC_PHASE_GATE_V2_SCHEMA,
     DYNAMIC_PHASE_GATE_V3_SCHEMA,
     ConvergencePolicy,
     DegradationGate,
     DynamicPhaseGateContract,
+    DynamicPhaseGateContractV2,
     DynamicPhaseGateContractV3,
     GateStopClass,
     PhaseBudget,
     PhaseBudgetV3,
     PhaseGateState,
     SloTarget,
+    evaluate_phase_gate_v2,
     evaluate_phase_gate_v3,
     load_dynamic_phase_gate,
 )
@@ -44,6 +52,9 @@ from pydantic import ValidationError
 EVIDENCE = "sha256:" + "e" * 64
 CONTRACT = "sha256:" + "c" * 64
 BUSINESS = "stress-ng.bogo-ops-per-second-usr-sys-time"
+FIXTURES = Path(__file__).parent / "fixtures" / "real-demo-2026-08-25"
+REAL_GATE_DIGEST = "sha256:c39720e7d9ba817ab1d363c12b8085c6e04afbb511da8605935735787f735dc0"
+REAL_WORKLOAD_DIGEST = "sha256:beb2a9e6a25c82597b0d30576f444632defe07810e7a0f9665de144ad9c1ecb1"
 
 
 def _v3_gate(
@@ -294,3 +305,73 @@ class TestV3Loop:
         _, run = _run_v3(contract, max_windows=3)
         assert all(window.observation_window_digest for window in run.windows)
         assert all(window.action.value == "observe" for window in run.windows)
+
+
+class TestRealArtifactRegression:
+    """N15: load REAL-M3-01 v2 payloads and prove zero digest drift."""
+
+    def _gate_payload(self) -> dict:
+        return json.loads((FIXTURES / "gate-contract.json").read_text(encoding="utf-8"))
+
+    def _run_payload(self) -> dict:
+        return json.loads((FIXTURES / "dynamic-run.json").read_text(encoding="utf-8"))
+
+    def test_real_v2_gate_recomputes_the_pinned_digest(self):
+        gate = load_dynamic_phase_gate(self._gate_payload())
+        assert isinstance(gate, DynamicPhaseGateContractV2)
+        assert gate.schema_version == DYNAMIC_PHASE_GATE_V2_SCHEMA
+        assert gate.digest == REAL_GATE_DIGEST
+        assert gate.workload_contract_digest == REAL_WORKLOAD_DIGEST
+
+    def test_real_v2_run_loads_and_binds_the_pinned_gate(self):
+        run = load_dynamic_phase_run(self._run_payload())
+        assert run.schema_version == "looper.dynamic-phase-run/v1alpha2"
+        assert run.gate_contract_digest == REAL_GATE_DIGEST
+        assert run.workload_contract_digest == REAL_WORKLOAD_DIGEST
+        # The legacy v2 run ended with stop=false and six windows: preserved verbatim.
+        assert run.stop_gate_decision is not None
+        assert run.stop_gate_decision.stop is False
+        assert run.stop_gate_decision.contract_digest == REAL_GATE_DIGEST
+        assert len(run.windows) == 6
+
+    def test_real_v2_decision_evidence_is_workload_digest(self):
+        run = load_dynamic_phase_run(self._run_payload())
+        # The old weak binding: the final decision pointed at the workload contract
+        # digest, not the last window. v3 fixes this; the legacy artifact stays intact.
+        assert run.stop_gate_decision.evidence_digest == REAL_WORKLOAD_DIGEST
+        assert run.stop_gate_decision.evidence_digest != run.windows[-1].observation_window_digest
+
+
+class TestForgedCrossVersion:
+    """N17: a max_windows decision cannot come from a v2 contract."""
+
+    def test_v2_evaluator_never_emits_window_budget_field(self):
+        v2 = DynamicPhaseGateContractV2(
+            workload_contract_digest=CONTRACT,
+            slo=SloTarget(metric_id=BUSINESS, comparator="at-least", bound=1.0, hold_windows=1),
+            convergence=ConvergencePolicy(rounds=4, lcb_threshold=0.0),
+            budget=PhaseBudget(max_interventions=5, wall_clock_seconds=3600.0, risk_quota=1),
+            degradation=DegradationGate(metric_id="stress-ng.bogo-ops", relative_limit=0.05),
+            reactivation_holdout_windows=2,
+        )
+        decision = evaluate_phase_gate_v2(v2, _state(windows_observed=9999))
+        assert not decision.stop
+        assert decision.triggered_field is None
+
+    def test_v3_evaluator_is_the_only_window_budget_source(self):
+        decision = evaluate_phase_gate_v3(_v3_gate(max_windows=3), _state(windows_observed=9999))
+        assert decision.stop
+        assert decision.triggered_field == "budget.max_windows"
+
+
+class TestHoldoutSemantics:
+    """N18: a window-budget stop is a regular BUDGET_EXHAUSTED stop."""
+
+    def test_window_budget_stop_uses_budget_exhausted_class(self):
+        decision = evaluate_phase_gate_v3(_v3_gate(max_windows=3), _state(windows_observed=3))
+        assert decision.stop_class is GateStopClass.BUDGET_EXHAUSTED
+
+    def test_reactivation_holdout_field_is_unchanged_in_v3_contract(self):
+        gate = _v3_gate(max_windows=3)
+        assert gate.reactivation_holdout_windows == 2
+        assert "reactivation_holdout_windows" in gate.model_dump(mode="json")
