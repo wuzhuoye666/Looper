@@ -389,6 +389,31 @@ def _best_primary_score(
     return max(scores) if direction == Direction.MAXIMIZE else min(scores)
 
 
+def _observation_metric_view(
+    item: ObservationRecord, declaration: dict[str, Any]
+) -> dict[str, Any] | None:
+    value: float | bool | None = (
+        item.value_boolean if item.value_boolean is not None else item.value_number
+    )
+    if value is None:
+        return None
+    direction = declaration.get("direction")
+    return {
+        "name": item.metric,
+        "value": value,
+        "unit": item.unit,
+        "sampleIndex": item.sample_index,
+        "sampleCount": item.sample_count,
+        "statistic": item.statistic,
+        "baseline": None,
+        "direction": "max"
+        if direction == "maximize"
+        else "min"
+        if direction == "minimize"
+        else "none",
+    }
+
+
 def _mean_observation_metric_views(
     observations: list[ObservationRecord], declarations: dict[str, Any]
 ) -> list[dict[str, Any]]:
@@ -447,6 +472,55 @@ def _mean_observation_metric_views(
             }
         )
     return views
+
+
+def _attempt_metric_views(
+    observations: list[ObservationRecord], metric_specs: dict[str, Any]
+) -> list[dict[str, Any]]:
+    """Return the bounded metric view for one attempt.
+
+    Streaming observations can contain many samples for the same metric. The
+    detail page needs the declared sample metrics, while scalar metrics use
+    the newest observation just as the historical view did.
+    """
+    latest_by_metric = {item.metric: item for item in observations}
+    display = [
+        item
+        for item in observations
+        if metric_specs.get(item.metric, {}).get("kind") == "sample"
+        or latest_by_metric[item.metric] is item
+    ]
+    return [
+        view
+        for item in display
+        if (view := _observation_metric_view(item, metric_specs.get(item.metric, {})))
+        is not None
+    ]
+
+
+def _average_metric_views(runs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Average numeric scalar metrics across all measured rounds."""
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for run in runs:
+        for metric in run.get("metrics", []):
+            grouped.setdefault(metric["name"], []).append(metric)
+    result: list[dict[str, Any]] = []
+    for _name, values in grouped.items():
+        numeric = [
+            item["value"]
+            for item in values
+            if isinstance(item.get("value"), (int, float))
+            and not isinstance(item.get("value"), bool)
+        ]
+        if numeric:
+            sample = values[-1].copy()
+            sample["value"] = sum(float(item) for item in numeric) / len(numeric)
+            sample["sampleCount"] = len(numeric)
+            sample["statistic"] = "mean"
+            result.append(sample)
+        else:
+            result.append(values[-1])
+    return result
 
 
 def experiment_view(
@@ -658,9 +732,61 @@ def experiment_view(
             for item in objective_rows
             if item.get("raw") is not None
         ]
+        # Preserve every attempt for the per-round view, including failed
+        # retries that still uploaded partial evidence.
+        metric_specs = (
+            benchmark.manifest_json.get("spec", {}).get("metrics", {})
+            if benchmark
+            else {}
+        )
+        run_views: list[dict[str, Any]] = []
+        for attempt in sorted(
+            evaluation_attempts,
+            key=lambda item: (item.repeat_index, item.retry_index, item.created_at),
+        ):
+            observations = list(
+                session.scalars(
+                    select(ObservationRecord)
+                    .where(ObservationRecord.attempt_id == attempt.id)
+                    .order_by(ObservationRecord.created_at)
+                )
+            )
+            checks = list(
+                session.scalars(
+                    select(CheckRecord)
+                    .where(CheckRecord.attempt_id == attempt.id)
+                    .order_by(CheckRecord.check_id)
+                )
+            )
+            run_metrics = _attempt_metric_views(observations, metric_specs)
+            run_views.append(
+                {
+                    "attemptId": attempt.id,
+                    "round": attempt.repeat_index + 1,
+                    "retry": attempt.retry_index,
+                    "status": "completed" if run_metrics else "failed",
+                    "measured": bool(run_metrics),
+                    "startedAt": _iso(attempt.started_at),
+                    "completedAt": _iso(attempt.completed_at),
+                    "metrics": run_metrics,
+                    "gateResults": [
+                        {
+                            "id": check.check_id,
+                            "passed": check.passed,
+                            "kind": check.kind,
+                            "message": check.message,
+                            "details": check.details_json,
+                        }
+                        for check in checks
+                    ],
+                    "artifacts": artifacts_by_attempt.get(attempt.id, []),
+                    "error": attempt.error_message,
+                }
+            )
+
         # Result cards show one arithmetic mean across successful repeat
-        # collections. Individual observations remain available only through
-        # the immutable evidence bundle, in collection order.
+        # collections. Raw and failed attempts remain visible in ``runs`` and
+        # in the immutable evidence bundle.
         successful_result_attempts = [
             item
             for item in evaluation_attempts
@@ -685,11 +811,6 @@ def experiment_view(
                         ObservationRecord.id,
                     )
                 )
-            )
-            metric_specs = (
-                benchmark.manifest_json.get("spec", {}).get("metrics", {})
-                if benchmark
-                else {}
             )
             mean_metrics = _mean_observation_metric_views(
                 successful_observations, metric_specs
@@ -734,6 +855,7 @@ def experiment_view(
                 "duration": duration,
                 "createdAt": _iso(evaluation.created_at),
                 "metrics": metrics,
+                "runs": run_views,
                 "artifacts": [
                     artifact
                     for attempt in evaluation_attempts

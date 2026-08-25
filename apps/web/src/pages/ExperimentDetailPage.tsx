@@ -90,7 +90,7 @@ export function ExperimentDetailPage() {
       definitions={experiment.metricDefinitions}
       evaluations={experiment.evaluations || []}
     />}
-    {tab === 'evidence' && <AsyncPanel query={analysis}><Evidence items={analysis.data?.evidence || []} /></AsyncPanel>}
+    {tab === 'evidence' && <AsyncPanel query={analysis}><Evidence items={analysis.data?.evidence || []} evaluations={experiment.evaluations || []} /></AsyncPanel>}
     {tab === 'config' && <Config value={experiment.config || {}} />}
      {tab === 'terminal' && <ExperimentTerminal experimentId={experiment.id} />}
   </div>;
@@ -197,6 +197,9 @@ function BenchmarkMetricSection({ section, definitions, evaluations }: {
   if (section.view === 'phpbench-results') {
     return <PhpBenchResultSection section={section} definitions={definitions} evaluations={evaluations} />;
   }
+  if (section.id === 'validity-gates' || section.view === 'validity-gates' || section.label === '有效性门禁') {
+    return <ValidityGatesSection section={section} evaluations={evaluations} />;
+  }
   return <section className="panel metric-definitions">
     <div className="panel-heading"><div><h2>{section.label}</h2><p>{section.description || '由 Benchmark manifest 声明的专属结果。'}</p></div></div>
     <div className="metric-definition-grid">{section.metrics.map(name => {
@@ -204,13 +207,30 @@ function BenchmarkMetricSection({ section, definitions, evaluations }: {
       const presentation = definition?.presentation;
       const samples = evaluations.flatMap(item => item.metrics || []).filter(metric => metric.name === name);
       const latest = samples[0];
+      const sampleCount = latest?.sampleCount || samples.length;
       return <article key={name}>
         <div className="metric-definition-title"><strong>{presentation?.userLabel || name}</strong><span className="tag">{name}</span></div>
         <strong className="metric-cell">{latest ? `${formatMetricValue(latest.value)} ${latest.unit || definition?.unit || ''}`.trim() : '待测试'}</strong>
         <p>{presentation?.userDescription || definition?.description || '暂无指标说明。'}</p>
-        <span className="cell-meta">{samples.length ? `${samples.length} 个已采集样本` : '尚未采集该指标'}</span>
+        <span className="cell-meta">{samples.length ? `${sampleCount} 个已采集样本（跨轮平均）` : '尚未采集该指标'}</span>
       </article>;
     })}</div>
+  </section>;
+}
+
+export function ValidityGatesSection({ section, evaluations }: {
+  section: BenchmarkResultSection;
+  evaluations: Evaluation[];
+}) {
+  const runs = evaluations.flatMap(item => (item.runs || []).filter(run => run.measured !== false && run.metrics?.length).map(run => ({ ...run, candidate: item.candidate })));
+  if (!runs.length) return <EmptyState title="暂无有效性门禁数据" description="完成至少一轮测试后，这里会按轮次显示门禁结果。" />;
+  return <section className="panel metric-definitions validity-gates-results">
+    <div className="panel-heading"><div><h2>{section.label}</h2><p>{section.description || '按已测轮次查看失败、超时和资源饱和门禁。'}</p></div></div>
+    <div className="validity-run-list">{runs.map((run, index) => <details key={`${run.attemptId}-${index}`} className="validity-run">
+      <summary><strong>第 {run.round} 轮</strong><span className="cell-meta">{run.candidate}{run.retry ? ` · 重试 ${run.retry}` : ''}</span><StatusBadge status={run.status === 'completed' ? 'completed' : 'failed'} /><span className="cell-meta">{run.gateResults?.filter(item => item.passed).length || 0} / {run.gateResults?.length || 0} 通过</span></summary>
+      <div className="validity-gate-grid">{(run.gateResults || []).map(gate => <article key={gate.id} className={gate.passed ? 'gate-pass' : 'gate-fail'}><div><strong>{gate.id || '未命名门禁'}</strong><span className="tag">{gate.passed ? '通过' : '未通过'}</span></div>{gate.message && <p>{gate.message}</p>}{gate.details && <pre>{JSON.stringify(gate.details, null, 2)}</pre>}</article>)}</div>
+      {run.error && <p className="cell-error">{run.error}</p>}
+    </details>)}</div>
   </section>;
 }
 
@@ -335,9 +355,10 @@ function Pareto({ data }: { data: AnalysisData['pareto'] }) {
   return <section className="panel table-panel"><div className="table-wrap"><table><thead><tr><th>候选</th><th>Pareto 排名</th><th>得分</th><th>成本</th><th>延迟</th>{stabilityKeys.map(key => <th key={key}>{stabilityLabel(key)}</th>)}</tr></thead><tbody>{data.map((item, index) => <tr key={item.id || index}><td>{item.candidate}</td><td>{item.rank ?? '—'}</td><td>{formatNumber(item.score)}</td><td>{formatNumber(item.cost)}</td><td>{formatNumber(item.latency)}</td>{stabilityKeys.map(key => <td key={key} className="metric-cell">{item.objectives?.[key] == null ? '—' : formatNumber(item.objectives[key], 4)}</td>)}</tr>)}</tbody></table></div></section>;
 }
 
-function Evidence({ items }: { items: NonNullable<AnalysisData['evidence']> }) {
+function Evidence({ items, evaluations }: { items: NonNullable<AnalysisData['evidence']>; evaluations: Evaluation[] }) {
   if (!items.length) return <EmptyState title="暂无证据" />;
-  return <div className="evidence-list">{items.map(item => <article key={item.id}><div className="evidence-icon">{item.kind === 'config' ? <FileCode2 size={19} /> : <FileText size={19} />}</div><div><div className="catalog-title"><h2>{item.title}</h2>{item.kind && <span className="tag">{item.kind}</span>}</div><p>{item.summary || '无摘要'}</p><span className="cell-meta">{formatDate(item.createdAt)}</span></div><ArtifactLinks items={item.artifacts || []} /></article>)}</div>;
+  const runs = evaluations.flatMap(item => (item.runs || []).map(run => ({ ...run, candidate: item.candidate })));
+  return <div className="evidence-list">{items.map(item => <article key={item.id}><div className="evidence-icon">{item.kind === 'config' ? <FileCode2 size={19} /> : <FileText size={19} />}</div><div><div className="catalog-title"><h2>{item.title}</h2>{item.kind && <span className="tag">{item.kind}</span>}</div><p>{item.summary || '无摘要'}</p><span className="cell-meta">汇总全部轮次 · {formatDate(item.createdAt)}</span></div><ArtifactLinks items={item.artifacts || []} /></article>)}{runs.map((run, index) => <article key={`evidence-${run.attemptId}-${index}`}><div className="evidence-icon"><FileText size={19} /></div><div><div className="catalog-title"><h2>第 {run.round} 轮证据</h2><span className="tag">{run.candidate}</span></div><p>该轮测试的原始日志、结果、系统指纹和校验文件。</p><span className="cell-meta">{run.artifacts?.length || 0} 个文件</span></div><ArtifactLinks items={run.artifacts || []} /></article>)}</div>;
 }
 
 function ArtifactLinks({ items }: { items: Array<{ name: string; url: string }> }) {

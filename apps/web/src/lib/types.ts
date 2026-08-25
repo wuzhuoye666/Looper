@@ -49,7 +49,14 @@ export interface SystemOptimizationAuthorizationProfile {
 
 export interface Artifact { name: string; url: string; type?: string }
 export interface Metric { name: string; value: number | boolean; unit?: string; baseline?: number; direction?: 'min' | 'max' | 'none'; sampleIndex?: number; sampleCount?: number; statistic?: string }
-export interface Evaluation { id: string; attemptId?: string; resultAttemptId?: string; candidateId?: string; candidate: string; parameters?: Record<string, unknown>; workload?: string; status: ExperimentStatus; phase?: string; phaseDetail?: string; score?: number; duration?: number; cost?: number; createdAt?: string; metrics?: Metric[]; artifacts?: Artifact[]; error?: string; gateResults?: Array<{ id?: string; passed?: boolean; value?: number | boolean }> }
+export interface EvaluationRun {
+  attemptId: string; round: number; retry?: number; status?: string; measured?: boolean;
+  startedAt?: string | null; completedAt?: string | null;
+  metrics?: Metric[];
+  gateResults?: Array<{ id?: string; passed?: boolean; kind?: string; message?: string | null; details?: Record<string, unknown> }>;
+  artifacts?: Artifact[]; error?: string | null;
+}
+export interface Evaluation { id: string; attemptId?: string; resultAttemptId?: string; candidateId?: string; candidate: string; parameters?: Record<string, unknown>; workload?: string; status: ExperimentStatus; phase?: string; phaseDetail?: string; score?: number; duration?: number; cost?: number; createdAt?: string; metrics?: Metric[]; runs?: EvaluationRun[]; artifacts?: Artifact[]; error?: string; gateResults?: Array<{ id?: string; passed?: boolean; value?: number | boolean }> }
 export interface ScenarioContract {
   id: string; name: string; decision_question: string; user_value: string; workload_class: string;
   topology: 'single-node' | 'client-server' | 'multi-node' | 'closed-loop'; primary_metric: string;

@@ -1,6 +1,6 @@
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
-import { experimentTabs, PhpBenchResultSection, SysbenchWorkloadSection } from '../pages/ExperimentDetailPage';
+import { experimentTabs, PhpBenchResultSection, SysbenchWorkloadSection, ValidityGatesSection } from '../pages/ExperimentDetailPage';
 import type { Experiment } from '../lib/types';
 
 describe('experiment result navigation', () => {
@@ -82,5 +82,24 @@ describe('experiment result navigation', () => {
     expect(screen.getByText('单项超时').nextSibling).toHaveTextContent('10 分钟');
     expect(screen.getByText('PTS 执行通过')).toBeInTheDocument();
     expect(screen.getByText('PTS 原始结果已回传')).toBeInTheDocument();
+  });
+
+  it('renders validity gates grouped by measured round and keeps details collapsed', () => {
+    render(<ValidityGatesSection
+      section={{ id: 'validity-gates', label: '有效性门禁', metrics: ['failed_request_ratio'] }}
+      evaluations={[{
+        id: 'eval-dcperf', candidate: '测试机3', status: 'completed',
+        runs: [{
+          attemptId: 'att-1', round: 1, measured: true, status: 'completed',
+          metrics: [{ name: 'closed_loop_successful_rps', value: 155, unit: 'requests/second' }],
+          gateResults: [{ id: 'timeout-budget', passed: true, message: 'timeout request ratio is within the closed-loop budget', details: { timeoutRatio: 0 } }],
+        }],
+      }]}
+    />);
+
+    expect(screen.getByText('第 1 轮')).toBeInTheDocument();
+    expect(screen.getByText('1 / 1 通过')).toBeInTheDocument();
+    expect(screen.getByText('timeout-budget')).toBeInTheDocument();
+    expect(screen.getByText('timeoutRatio')).toBeInTheDocument();
   });
 });
