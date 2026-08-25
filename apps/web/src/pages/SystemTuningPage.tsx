@@ -20,6 +20,7 @@ import {
   DEMO_FRAMES,
   DEMO_TARGETS,
   EMPTY_METRICS,
+  KEEP_FRAMES,
   RESTORE_FRAMES,
   TUNING_STAGES,
   formatOps,
@@ -28,8 +29,8 @@ import {
   type TuningMetrics,
 } from '../lib/tuningDemo';
 
-type RunStatus = 'idle' | 'running' | 'needs-approval' | 'restoring' | 'completed';
-type Decision = 'approved' | 'rejected' | 'stopped' | null;
+type RunStatus = 'idle' | 'running' | 'needs-approval' | 'restoring' | 'keeping' | 'completed';
+type Decision = 'approved' | 'approved-keep' | 'rejected' | 'stopped' | null;
 
 const STAGE_ICONS = [Gauge, CircleDashed, ShieldCheck, Gauge, CheckCircle2, RotateCcw];
 
@@ -38,6 +39,7 @@ const STATUS_LABELS: Record<RunStatus, string> = {
   running: '运行中',
   'needs-approval': '待批准',
   restoring: '还原现场',
+  keeping: '保留生效',
   completed: '已完成',
 };
 
@@ -213,12 +215,30 @@ export function SystemTuningPage() {
     return () => window.clearInterval(timer);
   }, [status]);
 
-  // 还原阶段循环：批准/拒绝/停止后播放恢复帧
+  // 还原阶段循环：批准（恢复）/拒绝/停止后播放恢复帧
   useEffect(() => {
     if (status !== 'restoring') return;
     let index = 0;
     const timer = window.setInterval(() => {
       const frame = RESTORE_FRAMES[index];
+      if (!frame) {
+        window.clearInterval(timer);
+        setStatus('completed');
+        return;
+      }
+      setStageIndex(frame.stageIndex);
+      appendLogs(frame.logs);
+      index += 1;
+    }, 900);
+    return () => window.clearInterval(timer);
+  }, [status]);
+
+  // 保留阶段循环：用户显式授权保留候选配置时播放保留帧
+  useEffect(() => {
+    if (status !== 'keeping') return;
+    let index = 0;
+    const timer = window.setInterval(() => {
+      const frame = KEEP_FRAMES[index];
       if (!frame) {
         window.clearInterval(timer);
         setStatus('completed');
@@ -259,7 +279,12 @@ export function SystemTuningPage() {
     if (status !== 'running' && status !== 'needs-approval') return;
     setDecision(choice);
     if (choice === 'approved') {
-      appendLogs([{ stage: 'verdict', level: 'success', text: '用户批准：候选生成推荐配置（推荐与持久变更分离，现场仍恢复原状）' }]);
+      appendLogs([{ stage: 'verdict', level: 'success', text: '用户批准并选择恢复现场：候选进入推荐档案（证据可回放），机器还原到相位起点' }]);
+    } else if (choice === 'approved-keep') {
+      appendLogs([{ stage: 'verdict', level: 'success', text: '用户批准并显式授权保留：候选配置在本机继续生效（以批准时刻为新基线，后续任务以此为参照）' }]);
+      setHypotheses((prev) =>
+        prev.map((hyp) => (hyp.outcome === 'accepted' ? { ...hyp, detail: '已批准保留生效（+15.59%）' } : hyp)),
+      );
     } else if (choice === 'rejected') {
       appendLogs([{ stage: 'verdict', level: 'warn', text: '用户拒绝：候选不进入推荐' }]);
       setHypotheses((prev) =>
@@ -268,7 +293,7 @@ export function SystemTuningPage() {
     } else {
       appendLogs([{ stage: 'restore', level: 'warn', text: '用户停止：按安全纪律先还原现场再结束' }]);
     }
-    setStatus('restoring');
+    setStatus(choice === 'approved-keep' ? 'keeping' : 'restoring');
   };
 
   const resetAll = () => {
@@ -282,7 +307,7 @@ export function SystemTuningPage() {
     setDecision(null);
   };
 
-  const busy = status === 'running' || status === 'restoring';
+  const busy = status === 'running' || status === 'restoring' || status === 'keeping';
   const target = DEMO_TARGETS.find((item) => item.id === targetId);
 
   return (
@@ -501,11 +526,12 @@ export function SystemTuningPage() {
                 <AlertTriangle size={16} />
                 <div>
                   <strong>候选等待你的批准</strong>
-                  <p>批准 = 生成推荐配置（现场仍恢复原状，推荐与持久变更分离）；拒绝 = 候选不进入推荐。两者都会还原现场。</p>
+                  <p>两种批准方式：仅生成推荐（机器还原起点，零残留）或显式授权候选在本机继续生效（批准时刻成为新基线）；拒绝则不进入推荐。</p>
                 </div>
               </div>
               <div className="tuning-approval-actions">
-                <button type="button" className="button tuning-approve-btn" onClick={() => finishWithDecision('approved')}>批准并生成推荐</button>
+                <button type="button" className="button tuning-approve-btn" onClick={() => finishWithDecision('approved-keep')}>批准并保留生效</button>
+                <button type="button" className="button" onClick={() => finishWithDecision('approved')}>仅生成推荐（还原现场）</button>
                 <button type="button" className="button" onClick={() => finishWithDecision('rejected')}>拒绝</button>
               </div>
             </div>
@@ -513,6 +539,9 @@ export function SystemTuningPage() {
 
           {status === 'completed' && (
             <div className="tuning-result">
+              {decision === 'approved-keep' && (
+                <p className="tuning-result-line ok"><CheckCircle2 size={15} />调优完成：假设①（+15.59%）经你授权保留生效，THP = always 已成为该配置项的新基线；证据链已封存可回放。</p>
+              )}
               {decision === 'approved' && (
                 <p className="tuning-result-line ok"><CheckCircle2 size={15} />调优完成：假设①已生成推荐配置（+15.59%），现场已恢复起点，零残留。</p>
               )}

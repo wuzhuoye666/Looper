@@ -231,6 +231,24 @@ export const RESTORE_FRAMES: DemoFrame[] = [
   },
 ];
 
+// 用户显式授权"保留候选配置生效"时的收尾帧：不再写回起点，改为确认当前值并封存证据。
+export const KEEP_FRAMES: DemoFrame[] = [
+  {
+    stageIndex: 5,
+    logs: [
+      { stage: 'restore', level: 'info', text: '相位收尾（用户已授权保留）：不写回相位起点' },
+      { stage: 'restore', level: 'info', text: '读回确认当前生效值：THP = always（与批准的候选一致）' },
+    ],
+  },
+  {
+    stageIndex: 5,
+    logs: [
+      { stage: 'restore', level: 'success', text: '保留生效已登记：批准时刻成为该配置项的新基线，后续任务以此为参照' },
+      { stage: 'restore', level: 'success', text: '租约释放，证据链封存：本相位全部窗口、快照与裁决可离线回放' },
+    ],
+  },
+];
+
 export function formatOps(value: number | null): string {
   if (value === null) return '—';
   return value.toLocaleString('zh-CN', { maximumFractionDigits: 0 });
