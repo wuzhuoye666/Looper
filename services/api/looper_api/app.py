@@ -187,7 +187,6 @@ from looper_api.remote_worker import deploy_remote_worker, deployment_status
 from looper_api.scheduler import (
     SchedulerError,
     cancel_experiment,
-    create_demo_request,
     create_experiment,
     pause_experiment,
     resume_experiment,
@@ -1995,66 +1994,12 @@ def create_experiment_endpoint(
     return experiment_view(session, record, detail=True)
 
 
-@app.post("/api/v1/demo/experiments", status_code=201)
-def create_demo_experiment_endpoint(
-    session: SessionDependency,
-    target_id: str,
-    name: str = "Compression Pareto study",
-) -> dict[str, Any]:
-    request = create_demo_request(name)
-    request.spec.target_ids = [target_id]
-    record = create_experiment(session, request)
-    session.commit()
-    return experiment_view(session, record, detail=True)
-
-
 def _normalize_create_request(payload: dict[str, Any], session: Session) -> ExperimentCreate:
     if "spec" in payload:
         return ExperimentCreate.model_validate(payload)
     if payload.get("mode") == ExperimentMode.SELECTION:
         return _selection_create_request(payload, session)
-
-    request = create_demo_request(str(payload.get("name") or "Compression Pareto study"))
-    request.description = str(payload.get("description") or request.description)
-    target_id = payload.get("targetId")
-    if not target_id:
-        raise SchedulerError("targetId is required; select an active runnable server")
-    if str(target_id) == "local":
-        raise SchedulerError("local execution is disabled; select an external server")
-    request.spec.target_ids = [str(target_id)]
-    benchmark_id = payload.get("benchmarkId")
-    if benchmark_id and benchmark_id not in {
-        "looper.demo.compression",
-        "looper.demo.compression@1.1.0",
-    }:
-        raise SchedulerError("the selected benchmark has no executable adapter installed")
-    objective = payload.get("objective")
-    if objective == "minimize_latency":
-        request.spec.objectives = [
-            ObjectiveSpec(
-                metric="latency_ms",
-                unit="ms",
-                direction=Direction.MINIMIZE,
-                aggregation="median",
-                comparison="relative",
-                minimum_samples=3,
-            )
-        ]
-    elif objective == "maximize_throughput":
-        request.spec.objectives = [request.spec.objectives[0]]
-    config = payload.get("config") if isinstance(payload.get("config"), dict) else {}
-    requested_attempts = int(config.get("maxAttempts", payload.get("maxAttempts", 20)))
-    repeats_per_candidate = request.spec.design.min_repeats * max(1, len(request.spec.workload_ids))
-    request.spec.budget.max_attempts = max(repeats_per_candidate, requested_attempts)
-    request.spec.budget.max_candidates = max(
-        1, min(12, request.spec.budget.max_attempts // repeats_per_candidate)
-    )
-    request.spec.optimizer.seed = int(config.get("seed", payload.get("seed", 42)))
-    request.spec.design.random_seed = request.spec.optimizer.seed
-    request.spec.budget.wall_time_seconds = int(
-        config.get("timeout", payload.get("timeout", request.spec.budget.wall_time_seconds))
-    )
-    return request
+    raise SchedulerError("only selection-mode experiments can be created through this endpoint")
 
 
 def _selection_create_request(payload: dict[str, Any], session: Session) -> ExperimentCreate:

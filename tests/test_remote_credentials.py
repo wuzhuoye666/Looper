@@ -14,6 +14,7 @@ from looper_api.remote_credentials import (
     EncryptedSshCredentialStore,
     RemoteCredentialError,
 )
+from looper_api.scheduler import create_demo_request
 
 
 def _request(**overrides) -> ConnectExternalTargetRequest:
@@ -245,7 +246,7 @@ def test_start_preflight_recovers_remote_execution_target(
 ) -> None:
     target = db_session.get(app_module.TargetRecord, "local")
     target.provider = "alibaba"
-    request = app_module.create_demo_request()
+    request = create_demo_request()
     experiment = SimpleNamespace(spec_json=request.spec.model_dump(mode="json"))
     recovered = []
     monkeypatch.setattr(
@@ -282,7 +283,7 @@ def test_start_preflight_automatically_probes_pending_cloud_ssh(
     )
     store = EncryptedSshCredentialStore(settings)
     assert store.save_pending(target.id, credentials) is True
-    request = app_module.create_demo_request()
+    request = create_demo_request()
     experiment = SimpleNamespace(spec_json=request.spec.model_dump(mode="json"))
     observed_requests = []
     recovery_calls = []

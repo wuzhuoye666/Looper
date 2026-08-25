@@ -432,7 +432,6 @@ spec:
     environmentAxes: [machine, day, placement]
     requiredEvidence: [system-fingerprint, raw-result, histogram, topology, log]
   x-extensions:
-    bootstrapCatalog: true
     executionStatus: stage0-adapter-only
     selectionDefaults: {repeats: 5, timeoutSeconds: 172800, seed: 20260303}
     registrationStatus: blocked

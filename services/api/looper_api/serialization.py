@@ -147,7 +147,7 @@ def benchmark_view(
     execution_blocker_reason = extensions.get("executionBlockerReason")
     metadata_extensions = metadata.get("x-extensions") or {}
     explicit_category = metadata_extensions.get("category") or extensions.get("category")
-    return {
+    view = {
         "id": record.benchmark_id,
         "key": record.key,
         "name": record.name,
@@ -189,13 +189,15 @@ def benchmark_view(
         "executionBlockerReason": execution_blocker_reason,
         "registrationId": registration.id if registration else None,
         "registrationStatus": registration.status if registration else None,
-        "auditStatus": "registered-not-admitted" if registration else "legacy-unreviewed",
         "scenario": scenario,
         "decisionQuestion": scenario.get("decision_question") if scenario else None,
         "primaryMetric": (
             scenario.get("primary_metric") if scenario else adapter.get("primaryMetric")
         ),
     }
+    if registration is not None:
+        view["auditStatus"] = "registered-not-admitted"
+    return view
 
 
 def target_view(record: TargetRecord) -> dict[str, Any]:

@@ -95,7 +95,7 @@ export function ExperimentDetailPage() {
     <nav className="tabs" aria-label="研究详情">{tabs.map(([key, label]) => <button key={key} className={tab === key ? 'active' : ''} onClick={() => setTab(key)}>{label}</button>)}</nav>
     {tab === 'overview' && <Overview experiment={experiment} evaluations={experiment.evaluations || []} delta={delta} />}
     {tab === 'results' && (selectionMode
-      ? <AsyncPanel query={variability}>{variability.data && <VariabilityPanel data={variability.data} />}</AsyncPanel>
+      ? <AsyncPanel query={variability}>{variability.data && <VariabilityPanel data={variability.data} evaluations={experiment.evaluations || []} />}</AsyncPanel>
       : <Evaluations items={experiment.evaluations || []} retrying={retry.isPending} onRetry={attemptId => retry.mutate(attemptId)} />)}
     {tab.startsWith('benchmark:') && <BenchmarkMetricSection
       section={(experiment.resultSections || []).find(item => `benchmark:${item.id}` === tab)}

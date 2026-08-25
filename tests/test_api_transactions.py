@@ -8,11 +8,12 @@ from looper_api.app import (
     start_worker_attempt_endpoint,
 )
 from looper_api.config import Settings
-from looper_api.models import AttemptRecord, Base, TargetRecord
+from looper_api.models import AttemptRecord, Base, BenchmarkRecord, TargetRecord
 from looper_api.scheduler import create_demo_request, create_experiment, start_experiment
 from looper_api.seed import seed_system
 from looper_api.worker_protocol import AttemptStart, WorkerClaim, WorkerRegister
 from looper_core.canonical import canonical_digest, utc_now
+from looper_core.manifest import load_and_validate_manifest
 from looper_core.state import AttemptStatus
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -32,6 +33,23 @@ def test_claim_is_committed_before_start_response(tmp_path: Path) -> None:
     )
     with factory() as setup:
         seed_system(setup)
+        manifest_path = Path("benchmarks/demo/benchmark.yaml").resolve()
+        manifest, digest = load_and_validate_manifest(manifest_path)
+        metadata = manifest["metadata"]
+        setup.add(BenchmarkRecord(
+            key=f"{metadata['id']}@{metadata['version']}",
+            benchmark_id=metadata["id"],
+            version=metadata["version"],
+            name=metadata["name"],
+            description=metadata.get("description", ""),
+            license=metadata["license"],
+            manifest_digest=digest,
+            manifest_json=manifest,
+            manifest_path=str(manifest_path),
+            package_digest=None,
+            trusted=True,
+            installed_at=utc_now(),
+        ))
         fingerprint = {
             "system": "Linux",
             "architecture": "x86_64",

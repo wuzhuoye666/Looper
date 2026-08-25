@@ -141,6 +141,33 @@ describe('experiment result navigation', () => {
     expect(screen.getByText('4,467.92 MiB/s')).toBeInTheDocument();
     expect(screen.getByText(/不形成性能优劣、领先或采购结论/)).toBeInTheDocument();
     expect(screen.getByText('保持配置复测')).toBeInTheDocument();
+    expect(screen.queryByText('数据事实与诊断原因')).not.toBeInTheDocument();
+    expect(screen.queryByText('CV=0.004，原始结果稳定')).not.toBeInTheDocument();
     expect(screen.queryByText('单位价格容量')).not.toBeInTheDocument();
+  });
+
+  it('shows the concrete round and value for an anomalous run', () => {
+    render(<VariabilityPanel data={{
+      experiment_id: 'exp-1', mode: 'selection', metric: 'workload-specific', unit: 'varies', direction: 'varies',
+      status: 'available', groups: [{
+        groupLabel: '发布页 · mutex', targetId: 'target-3', workloadId: 'mutex', metric: 'events_per_sec',
+        unit: 'events/s', direction: 'maximize', status: 'warning', invalidAttemptCount: 0,
+        distribution: { count: 5, mean: 3.0187, median: 3.021148, standardDeviation: 0.0163, coefficientOfVariation: 0.0054, minimum: 2.9893, maximum: 3.0351 },
+        stability: { verdict: 'warning', reasons: ['检测到 1 个 IQR 异常运行'] }, modes: null,
+        runs: [
+          { runId: 'attempt-slow', value: 2.989313, label: 'slow_outlier', slow: true },
+          { runId: 'attempt-normal', value: 3.021148, label: 'normal', slow: false },
+        ],
+        outliers: { slow: ['attempt-slow'], fast: [] }, associationClues: [], attribution: [],
+        selectionImpact: { summary: '', confidence: 'medium' }, evidence: { sampleCount: 5 }, recommendations: [],
+      }], comparisons: [],
+    }} evaluations={[{
+      id: 'eval-1', candidate: '发布页', workload: 'mutex', status: 'completed',
+      runs: [{ attemptId: 'attempt-slow', round: 3 }],
+    }]} />);
+
+    expect(screen.getByText('异常原因')).toBeInTheDocument();
+    expect(screen.getByText('第 3 轮的主指标吞吐偏低（2.99 events/s，比中位数低 1.05%）')).toBeInTheDocument();
+    expect(screen.queryByText('检测到 1 个 IQR 异常运行')).not.toBeInTheDocument();
   });
 });

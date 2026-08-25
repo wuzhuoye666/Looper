@@ -125,7 +125,6 @@ spec:
     environmentAxes: [machine]
     requiredEvidence: [system-fingerprint, raw-result, log]
   x-extensions:
-    bootstrapCatalog: true
     executionStatus: executable
     selectionDefaults: {repeats: 3, timeoutSeconds: 900, seed: 20260304}
     fixtureOnly: true
