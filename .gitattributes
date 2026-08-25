@@ -1,0 +1,4 @@
+benchmarks/dcperf-mediawiki/*.py text eol=lf
+benchmarks/dcperf-mediawiki/*.json text eol=lf
+benchmarks/dcperf-mediawiki/*.yaml text eol=lf
+benchmarks/dcperf-mediawiki/evidence/*.md text eol=lf
