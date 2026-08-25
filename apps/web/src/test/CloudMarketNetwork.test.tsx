@@ -294,7 +294,7 @@ describe('腾讯云购买网络选择', () => {
     expect(within(firstRow!).getByText('规格')).toHaveClass('instance-mobile-label');
     expect(within(firstRow!).getByText('架构')).toHaveClass('instance-mobile-label');
     expect(within(firstRow!).getByText('库存')).toHaveClass('instance-mobile-label');
-    expect(within(firstRow!).getByLabelText(/预估价格约 0\.248 元每小时，月约 181 元/)).toBeInTheDocument();
+    expect(within(firstRow!).getByLabelText(/预估价格约 0\.781 元每小时，月约 570 元，已包含 50 GiB 系统盘、1 Mbps 公网 IP/)).toBeInTheDocument();
     expect(within(firstRow!).getAllByRole('button')).toHaveLength(1);
     const search = screen.getByLabelText('搜索机型');
     const instanceRequests = () => vi.mocked(fetch).mock.calls
@@ -335,16 +335,17 @@ describe('腾讯云购买网络选择', () => {
     expect(screen.queryByRole('region', { name: '腾讯云 CVM 选型助手' })).not.toBeInTheDocument();
   });
 
-  it('配置页内联镜像选择器将常用系统置顶，其余收进更多镜像', async () => {
+  it('配置页默认选择 Ubuntu 22.04，并将常用系统置顶', async () => {
     renderMarket();
     await chooseFirstMachine();
     const image = screen.getByLabelText('操作系统镜像');
     expect(image).toBeInTheDocument();
     await waitFor(() => expect(image).not.toBeDisabled());
+    await waitFor(() => expect(image).toHaveValue('img-tencentos-test-4'));
     const options = within(image).getAllByRole('option');
     expect(options).toHaveLength(8);
-    expect(options[1]).toHaveTextContent('Ubuntu Server 24.04 LTS 64位');
-    expect(options[2]).toHaveTextContent('Ubuntu Server 22.04 LTS 64位');
+    expect(options[1]).toHaveTextContent('Ubuntu Server 22.04 LTS 64位');
+    expect(options[2]).toHaveTextContent('Ubuntu Server 24.04 LTS 64位');
     expect(options[3]).toHaveTextContent('Debian 12.0 64位');
     expect(options[4]).toHaveTextContent('CentOS Stream 9 64位');
     expect(options[5]).toHaveTextContent('TencentOS Server 4 for x86_64');

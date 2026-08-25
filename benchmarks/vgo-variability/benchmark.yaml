@@ -1,0 +1,335 @@
+apiVersion: looper.dev/v1alpha1
+kind: Benchmark
+metadata:
+  id: looper.vgo.variability
+  name: VGO 性能波动与稳定性测试
+  version: 1.0.2
+  description: "使用现有 VGO 论文复现包的原始 run_case.sh/run_case.py，在真实 Ubuntu 候选服务器上运行 Matmul、7-Zip、LBM 和 SAD 基线测试；比较运行时间 CV、中位数、P95、正确率和 CPU steal，不使用模拟结果。"
+  license: INTERNAL
+  source:
+    url: looper://workspace/01_论文复现/刘桂宏_论文复现包/papers/01_VGO性能波动优化
+    digest: sha256:9ee834d8a824bbe4af6edcd3ae11230caa4c01ffea9ef77360328d615e289237
+  x-extensions:
+    category: performance-stability
+spec:
+  trust: trusted
+  capabilities:
+    [python, local-process, linux, ubuntu-22.04, perf, root, vgo-runtime, parboil-2.5, sharp, sharp-3.0.0, p7zip, tcmalloc]
+  parameters:
+    samples_per_attempt:
+      type: integer
+      minimum: 3
+      maximum: 30
+      step: 1
+      default: 10
+      description: 每个 Looper attempt 内由原始 VGO run_case.sh 采集的独立 baseline 样本数。
+    warmups:
+      type: integer
+      minimum: 0
+      maximum: 5
+      step: 1
+      default: 1
+      description: 每个 attempt 正式采样前的 VGO 预热次数。
+    per_run_timeout_seconds:
+      type: integer
+      minimum: 60
+      maximum: 900
+      step: 30
+      default: 300
+      description: 原始 VGO 单次 workload 的超时上限。
+  workloads:
+    - id: matmul
+      name: Matmul 内存分配波动
+      weight: 1
+      metadata:
+        originalBenchmark: matmul
+        originalPhase: baseline
+        paperCase: Figure 2
+        expectedFactor: dTLB / page allocation
+    - id: 7z
+      name: 7-Zip 单线程波动
+      weight: 1
+      metadata:
+        originalBenchmark: 7z
+        originalPhase: baseline
+        expectedFactor: context switches
+    - id: lbm
+      name: Parboil LBM 调度波动
+      weight: 1
+      metadata:
+        originalBenchmark: lbm
+        originalPhase: baseline
+        expectedFactor: CPU placement / context switches
+    - id: sad
+      name: Parboil SAD 内存局部性波动
+      weight: 1
+      metadata:
+        originalBenchmark: sad
+        originalPhase: baseline
+        expectedFactor: THP / dTLB misses
+  scenario:
+    id: stability.vgo.cpu-variability
+    name: VGO CPU workload stability comparison
+    decision_question: 哪台候选服务器在相同 VGO workload 下具有更低的运行时间波动，同时保持正确性、较低尾部耗时和可接受的 CPU steal？
+    user_value: 用论文复现过的重复运行方法识别“平均性能接近但偶尔变慢”的候选服务器，并保留每个原始样本作为选型证据。
+    workload_class: cpu-performance-variability
+    topology: single-node
+    roles:
+      - id: target
+        kind: target
+        included_in_score: true
+        description: 被比较的 Ubuntu 云服务器或外部 SSH 服务器。
+      - id: benchmark-runner
+        kind: load-generator
+        co_located_with: target
+        included_in_score: true
+        description: Looper Worker 下发并调用原始 VGO run_case.sh。
+    primary_metric: runtime_cv
+    slo_gates:
+      - id: original-script-execution
+        kind: execution
+        scope: attempt
+        metric: run_ok
+        operator: eq
+        threshold: 1
+        hard: true
+      - id: all-samples-correct
+        kind: correctness
+        scope: attempt
+        metric: correctness_rate
+        operator: eq
+        threshold: 1
+        hard: true
+  infrastructure:
+    orchestration: adapter
+    primaryNodeGroup: target
+    nodeGroups:
+      - id: target
+        role: target
+        count: {minimum: 1, default: 1, maximum: 1}
+        includedInScore: true
+        requirements:
+          osFamilies: [linux]
+          architectures: [x86_64]
+          capabilities: [python, local-process, linux, ubuntu-22.04, root]
+          cpu: {minimumLogicalCpus: 8}
+          memory: {minimumGiB: 12}
+          privileges: [root]
+          software:
+            - {name: VGO runtime, versionConstraint: managed}
+            - {name: Parboil 2.5, versionConstraint: "==2.5"}
+            - {name: SHARP, versionConstraint: "==3.0.0"}
+            - {name: p7zip, versionConstraint: "==16.02"}
+            - {name: tcmalloc, versionConstraint: available}
+        placement:
+          sameZone: true
+          dedicated: true
+    notes: "原始复现协议面向 Ubuntu 22.04 x86_64 8C16G；SAD 还会在运行时检查 THP 可逆写入能力并在结束后恢复原状态。"
+  adapter:
+    protocol: looper-adapter/v1
+    executionModel: batch-suite
+    primaryMetric: runtime_cv
+    requiredChecks: [original-vgo-script, vgo-sample-contract]
+    inputs: []
+    canonicalOutputs:
+      metrics: metrics.jsonl
+      result: result.json
+  runtime:
+    type: local-process
+    workingDirectory: .
+    dependencyLockDigest: sha256:2d2d68bcab3708c6d7555de3d5be7a4786061afed7e9c905f4cf68da9f64b35f
+    dependencies:
+      - id: vgo-source-snapshot
+        source: bundled:vgo-source.tar.gz
+        digest: sha256:9ee834d8a824bbe4af6edcd3ae11230caa4c01ffea9ef77360328d615e289237
+        license: INTERNAL
+      - id: parboil-driver
+        source: https://www.phoronix-test-suite.com/benchmark-files/pb2.5driver.tgz
+        digest: sha256:32f6eedc30faa0e724af4546060dc1f291e36f224530836961510028f1555bde
+        license: upstream-Free
+      - id: parboil-benchmarks
+        source: https://www.phoronix-test-suite.com/benchmark-files/pb2.5benchmarks.tgz
+        digest: sha256:1b862fd8cc9a1e291dab3491ba84e4e8dd34f6b59d2913a633a0bb15ff5634cc
+        license: upstream-Free
+      - id: parboil-datasets
+        source: https://www.phoronix-test-suite.com/benchmark-files/pb2.5datasets_standard.tgz
+        digest: sha256:449916452aa75e440d1a4b2b8aa42f6d9e5d70591f2890544f6f0a830e81bea0
+        license: upstream-Free
+    provisioning:
+      mode: managed
+      hostCapabilities: [python, local-process, linux, ubuntu-22.04, root]
+      provides: [perf, vgo-runtime, parboil-2.5, sharp, sharp-3.0.0, p7zip, tcmalloc]
+      cacheKey: sha256:2d2d68bcab3708c6d7555de3d5be7a4786061afed7e9c905f4cf68da9f64b35f
+      requiresNetwork: true
+      privilege: sudo
+    commands:
+      prepare:
+        argv: ["{python}", "{benchmarkRoot}/prepare.py", "--benchmark-root", "{benchmarkRoot}", "--cache", "{cache}"]
+        timeoutSeconds: 10800
+        allowedExitCodes: [0]
+      run:
+        argv: ["{python}", "{benchmarkRoot}/producer.py", "--envelope", "{envelope}", "--output", "{output}"]
+        timeoutSeconds: 28800
+        allowedExitCodes: [0]
+        environment:
+          LOOPER_VGO_ROOT: "{cache}/vgo-source"
+          LOOPER_VGO_SOURCE_DIGEST: sha256:9ee834d8a824bbe4af6edcd3ae11230caa4c01ffea9ef77360328d615e289237
+      normalize:
+        argv: ["{python}", "{benchmarkRoot}/normalizer.py", "--envelope", "{envelope}", "--output", "{output}"]
+        timeoutSeconds: 60
+        allowedExitCodes: [0]
+  metrics:
+    runtime_cv:
+      unit: ratio
+      direction: minimize
+      kind: aggregate
+      required: true
+      minimumSamples: 1
+      description: 同一 attempt 内原始 VGO 有效运行时间的样本标准差除以均值。
+      presentation:
+        userLabel: 运行时间波动系数（CV）
+        userDescription: 衡量同一 workload 多次执行的相对波动，越低越稳定，是本套件的主选型指标。
+        roles: [primary_outcome, stability]
+        defaultVisibility: summary
+        displayFormat: percent
+        displayPrecision: 2
+    median_runtime_seconds:
+      unit: s
+      direction: minimize
+      kind: aggregate
+      required: true
+      minimumSamples: 1
+      description: 原始 VGO baseline 有效样本的中位运行时间。
+      presentation:
+        userLabel: 中位运行时间
+        userDescription: 典型执行耗时，避免只追求稳定却明显牺牲平均性能。
+        roles: [guardrail]
+        defaultVisibility: summary
+        displayFormat: duration
+        displayPrecision: 3
+    p95_runtime_seconds:
+      unit: s
+      direction: minimize
+      kind: aggregate
+      required: true
+      minimumSamples: 1
+      description: 原始 VGO baseline 有效样本的 P95 运行时间。
+      presentation:
+        userLabel: P95 运行时间
+        userDescription: 较慢一侧的尾部执行耗时，用于识别偶发慢运行。
+        roles: [guardrail, stability]
+        defaultVisibility: summary
+        displayFormat: duration
+        displayPrecision: 3
+    runtime_seconds:
+      unit: s
+      direction: minimize
+      kind: sample
+      required: true
+      minimumSamples: 3
+      description: 原始 VGO CSV 中逐次保留的 app_metric 秒数。
+      presentation:
+        userLabel: 单次运行时间
+        roles: [stability, diagnostic]
+        defaultVisibility: detail
+        displayFormat: duration
+        displayPrecision: 4
+    correctness_rate:
+      unit: ratio
+      direction: maximize
+      kind: aggregate
+      required: true
+      minimumSamples: 1
+      description: 通过原始 VGO 正确性、退出码和超时门禁的样本比例。
+      presentation:
+        userLabel: 正确样本率
+        roles: [hard_gate]
+        defaultVisibility: summary
+        displayFormat: percent
+        displayPrecision: 1
+    cpu_steal_p95_percent:
+      unit: "%"
+      direction: minimize
+      kind: aggregate
+      required: false
+      minimumSamples: 1
+      description: 原始 VGO 从 /proc/stat 采集的 CPU steal 百分比 P95。
+      presentation:
+        userLabel: CPU steal P95
+        roles: [diagnostic, context]
+        defaultVisibility: detail
+        displayFormat: percent
+        displayPrecision: 2
+    sample_count:
+      unit: count
+      direction: none
+      kind: counter
+      required: true
+      minimumSamples: 1
+      description: 本次 attempt 通过门禁的原始 VGO 样本数。
+      presentation:
+        userLabel: 有效样本数
+        roles: [context]
+        defaultVisibility: detail
+        displayFormat: number
+        displayPrecision: 0
+    run_ok:
+      unit: bool
+      direction: none
+      kind: boolean
+      required: true
+      minimumSamples: 1
+      description: 原始 VGO run_case.sh 与结果标准化是否完整成功。
+      presentation:
+        userLabel: 原始 VGO 脚本执行成功
+        roles: [hard_gate]
+        defaultVisibility: summary
+        displayFormat: boolean
+  outputs:
+    maxBytes: 8388608
+    maxMetricLines: 256
+    artifacts:
+      - path: vgo-raw.csv
+        role: raw-result
+        mediaType: text/csv
+        required: true
+      - path: vgo-native.json
+        role: profile
+        mediaType: application/json
+        required: true
+      - path: vgo-metadata.json
+        role: profile
+        mediaType: application/json
+        required: true
+      - path: vgo-run.log
+        role: log
+        mediaType: text/plain
+        required: true
+      - path: result.json
+        role: result
+        mediaType: application/json
+        required: true
+  audit:
+    minimumRepeats: 3
+    referencePolicy: required
+    environmentAxes: [machine, day, placement]
+    requiredEvidence: [system-fingerprint, raw-result, profile, log]
+  x-extensions:
+    bootstrapCatalog: true
+    executionStatus: executable
+    selectable: true
+    category: performance-stability
+    selectionDefaults: {repeats: 3, timeoutSeconds: 86400, seed: 20260825}
+    sourceLock: source-lock.json
+    resultPresentation:
+      sections:
+        - id: vgo-stability
+          label: VGO 稳定性结果
+          view: vgo-stability
+          description: 展示运行时间 CV、中位数、P95、逐次样本与原始脚本执行门禁。
+          metrics: [runtime_cv, median_runtime_seconds, p95_runtime_seconds, runtime_seconds, run_ok]
+        - id: vgo-quality
+          label: VGO 质量与环境
+          view: vgo-quality
+          description: 展示正确率、有效样本数和 CPU steal，辅助判断结果是否受云宿主机争用影响。
+          metrics: [correctness_rate, sample_count, cpu_steal_p95_percent]

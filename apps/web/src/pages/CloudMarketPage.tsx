@@ -59,7 +59,7 @@ const MAX_PUBLIC_BANDWIDTH_MBPS = 200;
 const COMMON_IMAGE_FAMILIES = ['Ubuntu', 'Debian', 'CentOS', 'Alibaba Cloud Linux', 'TencentOS', 'Windows'] as const;
 type CommonImageFamily = typeof COMMON_IMAGE_FAMILIES[number];
 const COMMON_IMAGE_VERSION_PREFERENCES: Record<CommonImageFamily, RegExp[]> = {
-  Ubuntu: [/^ubuntu(?:\s+server)?\s+24\.04\b/i, /^ubuntu(?:\s+server)?\s+22\.04\b/i, /^ubuntu(?:\s+server)?\s+20\.04\b/i],
+  Ubuntu: [/^ubuntu(?:\s+server)?\s+22\.04\b/i, /^ubuntu(?:\s+server)?\s+24\.04\b/i, /^ubuntu(?:\s+server)?\s+20\.04\b/i],
   Debian: [/^debian\s+12(?:\.|\s|$)/i, /^debian\s+11(?:\.|\s|$)/i, /^debian\s+10(?:\.|\s|$)/i],
   CentOS: [/^centos(?:\s+stream)?\s+9(?:\.|\s|$)/i, /^centos(?:\s+stream)?\s+8(?:\.|\s|$)/i, /^centos\s+7(?:\.|\s|$)/i],
   'Alibaba Cloud Linux': [/^(?:alibaba\s+cloud\s+linux|alinux)\s+3(?:\.|\s|$)/i, /^(?:alibaba\s+cloud\s+linux|alinux)\s+2(?:\.|\s|$)/i],

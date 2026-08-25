@@ -69,6 +69,15 @@ def test_scenario_catalog_exposes_execution_boundary(db_session: object) -> None
     assert benchbase["primaryMetric"] == "committed_tps"
 
 
+def test_public_catalog_hides_internal_validation_suites(db_session: object) -> None:
+    catalog = list_benchmarks(db_session)
+    visible_ids = {item["id"] for item in catalog["items"]}
+
+    assert "looper.fixture.config-driven" not in visible_ids
+    assert "looper.demo.compression" not in visible_ids
+    assert "looper.vgo.variability" in visible_ids
+
+
 def test_selection_defaults_are_benchmark_specific_and_used_by_create_request(
     db_session: object,
 ) -> None:

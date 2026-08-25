@@ -159,8 +159,8 @@ describe('阿里云 ECS 选型助手', () => {
     expect(view.container.querySelector('.advisor-results')).toBeInTheDocument();
     expect(view.container.querySelector('.advisor-market-layout')).not.toHaveClass('questionnaire');
     expect(screen.getByText('ecs.i9i.xlarge')).toBeInTheDocument();
-    expect(screen.getByLabelText(/预估价格约 0\.991 元每小时，月约 723 元/)).toBeInTheDocument();
-    expect(screen.getByText('月约 ¥723 · 仅计算规格')).toBeInTheDocument();
+    expect(screen.getByLabelText(/预估价格约 3\.04 元每小时，月约 2,219 元，已包含 50 GiB 系统盘、1 Mbps 公网 IP/)).toBeInTheDocument();
+    expect(screen.getByText('月约 ¥2,219 · 含 50 GiB 系统盘、1 Mbps 公网 IP')).toBeInTheDocument();
     expect(screen.getByText(/本地存储型 · 本地 SSD 型 i9i/)).toBeInTheDocument();
     expect(requests[0]).toMatchObject({
       primaryScenario: 'database', sizingMode: 'exact', exactCpu: 8, exactMemoryGib: 32,

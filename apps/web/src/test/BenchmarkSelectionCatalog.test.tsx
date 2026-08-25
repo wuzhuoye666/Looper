@@ -43,9 +43,24 @@ describe('选型研究 Benchmark 目录', () => {
           },
         },
         {
+          id: 'dcperf.mediawiki.closed-loop', key: 'dcperf.mediawiki.closed-loop@1.0.0',
+          name: 'DCPerf MediaWiki Closed-Loop', version: '1.0.0', category: 'web',
+          selectionReady: true, singleNodeReady: true, runnable: true, packageReady: true,
+          scenario: {
+            id: 'dcperf', name: 'DCPerf', decision_question: 'Which server handles more requests?',
+            user_value: 'Web capacity', workload_class: 'web-full-stack', topology: 'single-node',
+            roles: [], primary_metric: 'closed_loop_successful_rps', slo_gates: [],
+          },
+        },
+        {
           id: 'incomplete.adapter', key: 'incomplete.adapter@1.0.0',
           name: 'Incomplete Adapter', version: '1.0.0', category: 'unclassified',
           selectionReady: false, runnable: false,
+        },
+        {
+          id: 'looper.demo.compression', key: 'looper.demo.compression@1.1.0',
+          name: 'Deterministic compression loop', version: '1.1.0', category: 'development-test',
+          selectionReady: true, singleNodeReady: true, runnable: true, packageReady: true,
         },
       ] } : url.includes('/target-options') ? {
         benchmarkId: url.includes('alternate.adapter') ? 'alternate.adapter' : 'registered.adapter',
@@ -66,8 +81,11 @@ describe('选型研究 Benchmark 目录', () => {
     fireEvent.change(screen.getByLabelText('研究名称 *'), { target: { value: '新套件选型' } });
     fireEvent.click(screen.getByRole('button', { name: /下一步/ }));
 
-    expect(await screen.findByRole('option', { name: 'Registered Adapter · 1.0.0' })).toBeEnabled();
+    expect(await screen.findByRole('option', { name: '数据库：Registered Adapter' })).toBeEnabled();
+    expect(screen.getByRole('option', { name: '网站承载能力（DCPerf）' })).toBeEnabled();
     expect(screen.queryByRole('option', { name: /Incomplete Adapter/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: /compression/i })).not.toBeInTheDocument();
+    expect(screen.getAllByRole('option').every(option => (option.textContent?.length || 0) <= 22)).toBe(true);
     expect(screen.queryByRole('option', { name: '选择场景' })).not.toBeInTheDocument();
   });
 
@@ -76,7 +94,7 @@ describe('选型研究 Benchmark 目录', () => {
     fireEvent.change(screen.getByLabelText('研究名称 *'), { target: { value: '默认值切换' } });
     fireEvent.click(screen.getByRole('button', { name: /下一步/ }));
 
-    const scenario = await screen.findByLabelText('套件名字 *');
+    const scenario = await screen.findByLabelText(/想模拟的业务场景/);
     await waitFor(() => expect(scenario).toHaveValue('registered.adapter@1.0.0'));
     fireEvent.change(scenario, { target: { value: 'alternate.adapter@2.0.0' } });
     await waitFor(() => expect(scenario).toHaveValue('alternate.adapter@2.0.0'));

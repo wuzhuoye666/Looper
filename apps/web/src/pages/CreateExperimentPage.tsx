@@ -8,7 +8,8 @@ import { ErrorState } from '../components/States';
 import { TargetSshButton } from '../components/TargetSshButton';
 import { api } from '../lib/api';
 import {
-  benchmarkDecisionQuestion, benchmarkMetricLabel, benchmarkName, benchmarkScenario,
+  benchmarkDecisionQuestion, benchmarkDescription, benchmarkMetricLabel, benchmarkName, benchmarkScenario,
+  benchmarkSelectionLabel,
   capabilityLabel, inputKindLabel, topologyLabel,
 } from '../lib/benchmarkPresentation';
 import type { Benchmark, BenchmarkTargetRequirementSummary, CloudInstanceType, CloudProviderId } from '../lib/types';
@@ -20,7 +21,9 @@ const steps = [
 ];
 
 const FALLBACK_SELECTION_DEFAULTS = { repeats: 5, timeout: 86400, seed: 20260301 };
+const INTERNAL_BENCHMARK_IDS = new Set(['looper.fixture.config-driven', 'looper.demo.compression']);
 type AdvisorProvider = Extract<CloudProviderId, 'tencent' | 'alibaba'>;
+type AdvisorProviderState = { region: string; zone: string; selection: CloudInstanceType | null };
 const ADVISOR_PROVIDERS: Array<{ id: AdvisorProvider; label: string }> = [
   { id: 'tencent', label: '腾讯云 CVM' },
   { id: 'alibaba', label: '阿里云 ECS' },
@@ -50,9 +53,17 @@ export function CreateExperimentPage() {
   const [environmentFilter, setEnvironmentFilter] = useState('');
   const [advisorOpen, setAdvisorOpen] = useState(false);
   const [advisorProvider, setAdvisorProvider] = useState<AdvisorProvider>('tencent');
-  const [advisorRegion, setAdvisorRegion] = useState('');
-  const [advisorZone, setAdvisorZone] = useState('');
-  const [advisorSelection, setAdvisorSelection] = useState<CloudInstanceType | null>(null);
+  const [advisorStates, setAdvisorStates] = useState<Record<AdvisorProvider, AdvisorProviderState>>({
+    tencent: { region: '', zone: '', selection: null },
+    alibaba: { region: '', zone: '', selection: null },
+  });
+  const { region: advisorRegion, zone: advisorZone, selection: advisorSelection } = advisorStates[advisorProvider];
+  const updateAdvisorState = (patch: Partial<AdvisorProviderState>) => {
+    setAdvisorStates(current => ({
+      ...current,
+      [advisorProvider]: { ...current[advisorProvider], ...patch },
+    }));
+  };
   const [form, setForm] = useState({
     name: '',
     description: '',
@@ -88,7 +99,8 @@ export function CreateExperimentPage() {
     [benchmarks.data],
   );
   const selectableBenchmarks = useMemo(
-    () => benchmarkOptions.filter(item => item.singleNodeReady && item.runnable && item.packageReady),
+    () => benchmarkOptions.filter(item =>
+      !INTERNAL_BENCHMARK_IDS.has(item.id) && item.singleNodeReady && item.runnable && item.packageReady),
     [benchmarkOptions],
   );
   useEffect(() => {
@@ -119,20 +131,15 @@ export function CreateExperimentPage() {
   const requirements = requirementLabels(targetOptions.data?.nodeGroup.summary);
   useEffect(() => { setEnvironmentFilter(''); }, [form.benchmarkKey]);
   useEffect(() => {
-    setAdvisorRegion('');
-    setAdvisorZone('');
-    setAdvisorSelection(null);
-  }, [advisorProvider]);
-  useEffect(() => {
     if (advisorRegion || !advisorRegions.data?.items.length) return;
     const preferred = advisorRegions.data.items.find(item => item.available !== false) || advisorRegions.data.items[0];
-    setAdvisorRegion(preferred.id);
-  }, [advisorRegion, advisorRegions.data?.items]);
+    updateAdvisorState({ region: preferred.id });
+  }, [advisorProvider, advisorRegion, advisorRegions.data?.items]);
   useEffect(() => {
     if (advisorZone || !advisorZones.data?.items.length) return;
     const preferred = advisorZones.data.items.find(item => item.available !== false) || advisorZones.data.items[0];
-    setAdvisorZone(preferred.id);
-  }, [advisorZone, advisorZones.data?.items]);
+    updateAdvisorState({ zone: preferred.id });
+  }, [advisorProvider, advisorZone, advisorZones.data?.items]);
   useEffect(() => {
     if (!targetOptions.data || form.targetIds.length === 0) return;
     const targetStillCompatible = targetOptions.data.environments.some(environment =>
@@ -201,9 +208,7 @@ export function CreateExperimentPage() {
     else mutation.mutate();
   };
   const changeAdvisorRegion = (value: string) => {
-    setAdvisorRegion(value);
-    setAdvisorZone('');
-    setAdvisorSelection(null);
+    updateAdvisorState({ region: value, zone: '', selection: null });
   };
   const openPurchaseMarket = (instance = advisorSelection) => {
     if (!instance || !advisorRegion) return;
@@ -218,8 +223,7 @@ export function CreateExperimentPage() {
     });
   };
   const selectAdvisorInstance = (instance: CloudInstanceType | null) => {
-    setAdvisorSelection(instance);
-    if (instance) openPurchaseMarket(instance);
+    updateAdvisorState({ selection: instance });
   };
 
   return <div className="page narrow-page">
@@ -248,7 +252,7 @@ export function CreateExperimentPage() {
         region={advisorRegion}
         zone={advisorZone}
         onRegionChange={changeAdvisorRegion}
-        onZoneChange={value => { setAdvisorZone(value); setAdvisorSelection(null); }}
+        onZoneChange={value => updateAdvisorState({ zone: value, selection: null })}
         selected={advisorSelection}
         onSelect={selectAdvisorInstance}
       />}
@@ -272,7 +276,7 @@ export function CreateExperimentPage() {
       {step === 1 && <fieldset>
         <legend>测试场景与候选资源</legend>
         <div className="form-grid form-section-gap">
-          <label className="full"><span>套件名字 *</span>
+          <label className="full benchmark-selector"><span>想模拟的业务场景 *</span>
             <select required value={form.benchmarkKey} onChange={event => {
               const benchmarkKey = event.currentTarget.value;
               const benchmark = selectableBenchmarks.find(item => (item.key || item.id) === benchmarkKey);
@@ -287,8 +291,9 @@ export function CreateExperimentPage() {
               }));
             }}>
               {!selectableBenchmarks.length && <option value="">暂无可直接运行的测试套件</option>}
-              {selectableBenchmarks.map(item => <option key={item.key || `${item.id}-${item.version}`} value={item.key || item.id}>{benchmarkName(item)}{item.version ? ` · ${item.version}` : ''}</option>)}
+              {selectableBenchmarks.map(item => <option key={item.key || `${item.id}-${item.version}`} value={item.key || item.id}>{benchmarkSelectionLabel(item)}</option>)}
             </select>
+            <small>选择最接近真实业务的场景，Looper 会用对应负载比较候选服务器。</small>
           </label>
           {selectedBenchmark?.scenario && <div className="scenario-facts full">
             <div><span>测试场景</span><strong>{benchmarkScenario(selectedBenchmark).label} · {benchmarkScenario(selectedBenchmark).detail}</strong></div>
@@ -296,6 +301,7 @@ export function CreateExperimentPage() {
             <div><span>主要参数</span><strong>{benchmarkMetricLabel(selectedBenchmark, selectedBenchmark.primaryMetric)}</strong></div>
             <div><span>部署方式</span><strong>{topologyLabel(selectedBenchmark.scenario.topology)} · {targetOptions.data?.machineCount ?? 1} 台机器</strong></div>
           </div>}
+          {selectedBenchmark && <div className="benchmark-suite-content full"><strong>这个测试会做什么</strong><p>{benchmarkDescription(selectedBenchmark)}</p><small>选型时用来回答：{benchmarkDecisionQuestion(selectedBenchmark)}</small></div>}
           {requirements.length > 0 && <div className="benchmark-requirements full"><strong>测试机器要求</strong><div className="tags">{requirements.map(label => <span key={label}>{label}</span>)}</div></div>}
           <div className="full">
             <div className="candidate-toolbar">

@@ -3,6 +3,7 @@ import { SELECTION_SCENARIOS, type SelectionScenarioOption } from './selectionSc
 
 interface BenchmarkCopy {
   name: string;
+  selectionLabel?: string;
   description: string;
   decisionQuestion: string;
   scenario?: SelectionScenario;
@@ -11,6 +12,7 @@ interface BenchmarkCopy {
 const BENCHMARK_COPY: Record<string, BenchmarkCopy> = {
   'benchbase.smallbank.postgres': {
     name: 'BenchBase SmallBank（PostgreSQL）',
+    selectionLabel: '数据库性能（SmallBank）',
     description: '使用 BenchBase SmallBank 事务负载，对比 PostgreSQL 数据库服务器在延迟目标内的有效事务处理能力。',
     decisionQuestion: '在满足 P99 延迟目标的前提下，哪种服务器规格能以更低的小时成本完成更多银行事务？',
     scenario: 'database',
@@ -23,6 +25,7 @@ const BENCHMARK_COPY: Record<string, BenchmarkCopy> = {
   },
   'dcperf.mediawiki.closed-loop': {
     name: 'DCPerf MediaWiki 单机闭环测试',
+    selectionLabel: '网站承载能力（DCPerf）',
     description: '在同一台云服务器上运行 MediaWiki 全栈服务和负载生成器，测试生产型网站场景的请求处理能力。',
     decisionQuestion: '当 MediaWiki 全部组件共享一台云服务器时，各服务器规格每秒能完成多少个成功请求？',
     scenario: 'web-api',
@@ -35,14 +38,23 @@ const BENCHMARK_COPY: Record<string, BenchmarkCopy> = {
   },
   'looper.phoronix-phpbench': {
     name: 'Phoronix 测试套件 / PHPBench',
+    selectionLabel: 'PHP 应用性能（PHPBench）',
     description: '自动部署固定版本的 Phoronix 测试套件和 PHPBench，用于对比 PHP 解释器及单机 CPU 执行性能。',
     decisionQuestion: '在固定的 PHPBench 配置和重复策略下，哪台目标机器能获得更高的测试得分？',
     scenario: 'development-test',
   },
   'looper.sysbench': {
     name: 'Sysbench 系统性能测试',
+    selectionLabel: '服务器基础性能（Sysbench）',
     description: '自动部署 Sysbench，测试 CPU、内存、线程调度和互斥锁竞争等基础系统性能。',
     decisionQuestion: '在受控测试条件下，哪种服务器规格具有更好的 CPU 吞吐、内存带宽、线程调度和互斥锁性能？',
+    scenario: 'development-test',
+  },
+  'looper.vgo.variability': {
+    name: 'VGO 性能波动与稳定性测试',
+    selectionLabel: '长时运行稳定性（VGO）',
+    description: '在真实 Ubuntu 服务器上重复运行矩阵计算、压缩和媒体负载，观察同一台机器多次运行时是否稳定。',
+    decisionQuestion: '哪种服务器在长时运行中的性能波动更小、尾延迟更低且结果更可靠？',
     scenario: 'development-test',
   },
 };
@@ -98,6 +110,15 @@ const METRIC_LABELS: Record<string, string> = {
 
 export function benchmarkName(benchmark: Pick<Benchmark, 'id' | 'name'>): string {
   return BENCHMARK_COPY[benchmark.id]?.name || benchmark.name;
+}
+
+export function benchmarkSelectionLabel(benchmark: Pick<Benchmark, 'id' | 'name' | 'scenario'>): string {
+  const copy = BENCHMARK_COPY[benchmark.id];
+  if (copy?.selectionLabel) return copy.selectionLabel;
+  const scenario = benchmarkScenario(benchmark);
+  const label = `${scenario.label}：${copy?.name || benchmark.name}`;
+  const characters = Array.from(label);
+  return characters.length > 22 ? `${characters.slice(0, 21).join('')}…` : label;
 }
 
 export function benchmarkDescription(benchmark: Pick<Benchmark, 'id' | 'description'>): string {

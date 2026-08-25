@@ -1,0 +1,22 @@
+{
+  "schemaVersion": "looper.vgo-source-lock/v1",
+  "origin": "../刘桂宏_论文复现包/papers/01_VGO性能波动优化",
+  "archive": {
+    "path": "vgo-source.tar.gz",
+    "digest": "sha256:9ee834d8a824bbe4af6edcd3ae11230caa4c01ffea9ef77360328d615e289237"
+  },
+  "files": {
+    "benchmarks/matmul/benchmark.py": "sha256:91c51671e9e5e606fba7f11e99f3d3169168c3728a2740fa798dd4c3c790d096",
+    "benchmarks/matmul/calibrate.py": "sha256:31427fbc10488d828e507f5855aeb4725b2a1a3cb1a268683f16e3a643a1e2e3",
+    "config/experiment.env": "sha256:e2b990d6660bacd7853c06aaab90a972f12bce2f1b4150d86a13311c312cce1f",
+    "config/sharp_benchmark_metrics.yaml": "sha256:63c0945c34d112737f5768e03c31e2b626b520de55fd30e7fff60f77fa84cd2e",
+    "requirements-analysis.txt": "sha256:dad31115fd73a07855ce077e1959336cd84c03088c64d4e2d186fd253323dc69",
+    "scripts/check_environment.py": "sha256:8a34762e8088c03ac6de7b3bc6d08a8e40080b67a5c285c6ba4d7714502e4d7a",
+    "scripts/check_environment.sh": "sha256:a07e954ae64eaa36664556d3810e44a137057706fb781fcdab5c0820cb3a5a20",
+    "scripts/run_case.py": "sha256:070070e26159c99657f9b798ad03dee364f86505d91e3688af4015116db2d7fc",
+    "scripts/run_case.sh": "sha256:3844a0bf90f774290c958773c93495b7f3a86014a032f3cf6e0ea0bdac990f86",
+    "scripts/setup_ubuntu.sh": "sha256:f1bcf8d79dd41bc78a19a8109a82261ade12abbc058c60500c17f9501987fe12",
+    "scripts/validate_machine.sh": "sha256:95a4153047b1cbbef01785db932f00049fb7a587f8f3d014f50a448a19367e79",
+    "vendor/parboil-python3-compat.patch": "sha256:8c3045d987401d104446186b2c1882292937b8503832216fa96785943633aaeb"
+  }
+}

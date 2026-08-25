@@ -71,7 +71,7 @@ describe('选型研究页的云选型助手', () => {
     expect(screen.getByLabelText('研究名称 *')).toBeInTheDocument();
   });
 
-  it('选择推荐机型后立即跳转并携带完整购买配置定位', async () => {
+  it('选择推荐机型后先保存，用户确认后再携带完整购买配置跳转', async () => {
     renderCreate();
     fireEvent.click(screen.getByRole('button', { name: '打开选型助手' }));
     fireEvent.click(await screen.findByRole('button', { name: /Web \/ API/ }));
@@ -81,6 +81,13 @@ describe('选型研究页的云选型助手', () => {
     fireEvent.click(screen.getByRole('button', { name: /查看推荐结果/ }));
     fireEvent.click(await screen.findByRole('button', { name: '选择此机型' }));
 
+    expect(screen.getByTestId('location')).toHaveTextContent('/');
+    expect(screen.getByText(/S9\.ADVISOR · 4 vCPU \/ 8 GiB/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /阿里云 ECS/ }));
+    expect(screen.queryByText(/S9\.ADVISOR · 4 vCPU \/ 8 GiB/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '腾讯云 CVM' }));
+    expect(screen.getByText(/S9\.ADVISOR · 4 vCPU \/ 8 GiB/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /打开购买配置/ }));
     expect(screen.getByTestId('location')).toHaveTextContent(
       '/cloud/market?provider=tencent&region=ap-test&instanceType=S9.ADVISOR&zone=ap-test-1',
     );

@@ -1264,9 +1264,15 @@ def cloud_order_resolve(
 
 @app.get("/api/v1/benchmarks")
 def list_benchmarks(session: SessionDependency) -> dict[str, Any]:
+    internal_benchmark_ids = {
+        "looper.fixture.config-driven",
+        "looper.demo.compression",
+    }
     records = list(
         session.scalars(
-            select(BenchmarkRecord).order_by(
+            select(BenchmarkRecord).where(
+                BenchmarkRecord.benchmark_id.not_in(internal_benchmark_ids)
+            ).order_by(
                 BenchmarkRecord.benchmark_id,
                 BenchmarkRecord.installed_at.desc(),
                 BenchmarkRecord.key.desc(),
