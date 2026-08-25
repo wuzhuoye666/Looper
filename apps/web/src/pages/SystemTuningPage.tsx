@@ -5,11 +5,15 @@ import {
   ChevronDown,
   ChevronRight,
   CircleDashed,
+  Compass,
   FileCheck2,
   Gauge,
+  ListChecks,
+  PlayCircle,
   RotateCcw,
   ShieldCheck,
   Square,
+  X,
 } from 'lucide-react';
 import {
   DEMO_CONFIG_ITEMS,
@@ -59,6 +63,65 @@ const OUTCOME_BADGE: Record<TuningHypothesisView['outcome'], { label: string; cl
 
 const RISK_CLASS: Record<string, string> = { 低: 'low', 中: 'mid', 高: 'high' };
 
+const GUIDE_STORAGE_KEY = 'looper.tuning-guide.dismissed.v1';
+
+const GUIDE_SECTIONS = [
+  {
+    icon: Compass,
+    title: '这是什么',
+    text: '在你的业务负载下实测调优：只修改系统配置（THP、swappiness、governor 等），不碰业务代码；基线由业务负载在目标机上自测产生，不依赖任何外部基准。',
+  },
+  {
+    icon: ListChecks,
+    title: '怎么授权',
+    text: '选择目标机器与业务负载后，在「高级选项」里勾选允许修改的配置项——未勾选的绝不触碰；懂行的用户还能调整 MDE、退化红线等实验参数。',
+  },
+  {
+    icon: PlayCircle,
+    title: '怎么运行',
+    text: '打开「启动调优」开关由你启动（不会自动开始）。引擎依次执行：基线采集 → 观测假设 → 配置干预 → 复测对比 → 统计裁决 → 还原现场；候选是否采纳由你批准。',
+  },
+  {
+    icon: FileCheck2,
+    title: '安全边界',
+    text: '每个相位只做一次配置变更；结束无条件把机器恢复到起点（零残留）；每一步都留下可回放证据。拒绝候选也是有效结论——保持默认配置同样是答案。',
+  },
+];
+
+function TuningGuideDialog({ onClose }: { onClose: () => void }) {
+  return (
+    <div className="tuning-guide-overlay" role="dialog" aria-modal="true" aria-label="实负载调优使用指引">
+      <div className="tuning-guide">
+        <div className="tuning-guide-heading">
+          <div>
+            <h2>实负载调优 · 使用指引</h2>
+            <p>第一次来？30 秒了解这个页面怎么用。</p>
+          </div>
+          <button type="button" className="icon-button" aria-label="关闭指引" onClick={onClose}>
+            <X size={16} />
+          </button>
+        </div>
+        <div className="tuning-guide-body">
+          {GUIDE_SECTIONS.map(({ icon: Icon, title, text }) => (
+            <div key={title} className="tuning-guide-item">
+              <span className="tuning-guide-icon"><Icon size={16} /></span>
+              <div>
+                <strong>{title}</strong>
+                <p>{text}</p>
+              </div>
+            </div>
+          ))}
+        </div>
+        <div className="tuning-guide-footer">
+          <button type="button" className="button tuning-guide-start" onClick={onClose}>
+            开始使用
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function SystemTuningPage() {
   // ②区：调优对象
   const [targetId, setTargetId] = useState('');
@@ -84,7 +147,26 @@ export function SystemTuningPage() {
   const [metrics, setMetrics] = useState<TuningMetrics>(EMPTY_METRICS);
   const [hypotheses, setHypotheses] = useState<TuningHypothesisView[]>([]);
   const [decision, setDecision] = useState<Decision>(null);
+  const [guideOpen, setGuideOpen] = useState(() => {
+    try {
+      return window.localStorage.getItem(GUIDE_STORAGE_KEY) !== '1';
+    } catch {
+      return true;
+    }
+  });
   const logEndRef = useRef<HTMLDivElement | null>(null);
+  const frameIndexRef = useRef(0);
+  const enabledItemsRef = useRef(enabledItems);
+  enabledItemsRef.current = enabledItems;
+
+  const dismissGuide = () => {
+    setGuideOpen(false);
+    try {
+      window.localStorage.setItem(GUIDE_STORAGE_KEY, '1');
+    } catch {
+      // localStorage 不可用（隐私模式等）时仅本会话内关闭
+    }
+  };
 
   const enabledCount = useMemo(
     () => Object.values(enabledItems).filter(Boolean).length,
@@ -106,24 +188,27 @@ export function SystemTuningPage() {
     setLogs((prev) => [...prev, ...events.map((event) => ({ ...event, at }))]);
   };
 
-  // 演示运行主循环：按帧推进阶段、追加日志、更新指标
+  // 演示运行主循环：按帧推进阶段、追加日志、更新指标。
+  // 副作用必须在 interval 回调主体执行——不能放进 setState 的 updater
+  // （updater 必须是纯函数，React StrictMode 会 double-invoke 它导致日志双份）。
   useEffect(() => {
     if (status !== 'running') return;
     const timer = window.setInterval(() => {
-      setFrameIndex((index) => {
-        const frame = DEMO_FRAMES[index];
-        if (!frame) return index;
-        setStageIndex(frame.stageIndex);
-        appendLogs(frame.logs);
-        if (frame.metrics) setMetrics((prev) => ({ ...prev, ...frame.metrics }));
-        if (frame.hypotheses) setHypotheses(frame.hypotheses);
-        const next = index + 1;
-        if (next >= DEMO_FRAMES.length) {
-          window.clearInterval(timer);
-          setStatus('needs-approval');
-        }
-        return next;
-      });
+      const frame = DEMO_FRAMES[frameIndexRef.current];
+      if (!frame) {
+        window.clearInterval(timer);
+        setStatus('needs-approval');
+        return;
+      }
+      setStageIndex(frame.stageIndex);
+      appendLogs(frame.logs);
+      if (frame.metrics) setMetrics((prev) => ({ ...prev, ...frame.metrics }));
+      if (frame.hypotheses) setHypotheses(frame.hypotheses);
+      frameIndexRef.current += 1;
+      if (frameIndexRef.current >= DEMO_FRAMES.length) {
+        window.clearInterval(timer);
+        setStatus('needs-approval');
+      }
     }, 1200);
     return () => window.clearInterval(timer);
   }, [status]);
@@ -152,16 +237,21 @@ export function SystemTuningPage() {
 
   const launch = () => {
     if (!requirementsMet || status !== 'idle') return;
+    // onChange 里调用时 state 还是旧值，授权项名称实时读取 ref
+    const authorizedNames = DEMO_CONFIG_ITEMS
+      .filter((item) => enabledItemsRef.current[item.id])
+      .map((item) => item.name);
     setStatus('running');
     setStageIndex(0);
     setFrameIndex(0);
+    frameIndexRef.current = 0;
     setLogs([]);
     setMetrics(EMPTY_METRICS);
     setHypotheses([]);
     setDecision(null);
     appendLogs([
       { stage: 'baseline', level: 'info', text: `调优任务启动：目标 ${targetId}，主指标 ${metricName}（${metricDir === 'maximize' ? '越大越好' : '越小越好'}）` },
-      { stage: 'baseline', level: 'info', text: `授权可改配置项 ${enabledCount} 个；MDE ${mdePct}%，退化红线 ${degradationPct}%，最大干预 ${maxInterventions} 次，预算 ${budgetMinutes} 分钟` },
+      { stage: 'baseline', level: 'info', text: `授权可改配置项 ${authorizedNames.length} 个（${authorizedNames.join('、')}）；MDE ${mdePct}%，退化红线 ${degradationPct}%，最大干预 ${maxInterventions} 次，预算 ${budgetMinutes} 分钟` },
     ]);
   };
 
@@ -185,6 +275,7 @@ export function SystemTuningPage() {
     setStatus('idle');
     setStageIndex(-1);
     setFrameIndex(0);
+    frameIndexRef.current = 0;
     setLogs([]);
     setMetrics(EMPTY_METRICS);
     setHypotheses([]);
@@ -196,6 +287,7 @@ export function SystemTuningPage() {
 
   return (
     <div className="page">
+      {guideOpen && <TuningGuideDialog onClose={dismissGuide} />}
       {/* ① 定位区 */}
       <div className="tuning-hero panel">
         <div className="tuning-hero-copy">
@@ -442,6 +534,9 @@ export function SystemTuningPage() {
             <h2>运行日志</h2>
             <p>按记录输出，每条带阶段标签；证据链封存后可离线回放。</p>
           </div>
+          <button type="button" className="button" onClick={() => setGuideOpen(true)}>
+            <Compass size={14} />使用指引
+          </button>
         </div>
         <div className="tuning-log">
           {logs.length === 0 && <div className="tuning-log-empty">尚无日志。配置调优对象并打开「启动调优」后，这里按时间线输出每一步。</div>}
