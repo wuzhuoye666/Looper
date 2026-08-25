@@ -1,0 +1,26 @@
+{
+  "schema_version": "looper.dynamic-phase-gate/v1alpha2",
+  "workload_contract_digest": "sha256:beb2a9e6a25c82597b0d30576f444632defe07810e7a0f9665de144ad9c1ecb1",
+  "slo": {
+    "metric_id": "sysbench.throughput-mib-per-sec",
+    "comparator": "at-least",
+    "bound": 24818.63,
+    "hold_windows": 2
+  },
+  "convergence": {
+    "rounds": 2,
+    "lcb_threshold": 0.26698
+  },
+  "budget": {
+    "max_interventions": 2,
+    "wall_clock_seconds": 600.0,
+    "risk_quota": 2
+  },
+  "degradation": {
+    "metric_id": "sysbench.throughput-mib-per-sec",
+    "relative_limit": 0.26698
+  },
+  "identity_drift_action": "stop-phase",
+  "reactivation_holdout_windows": 3,
+  "single_change_per_window": true
+}

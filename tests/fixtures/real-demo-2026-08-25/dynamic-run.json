@@ -1,0 +1,97 @@
+{
+  "execution_receipts": [
+    "sha256:57324c2abbb4119e9993939a01090f15f9e3ee5ecd108a5881ee19b3cadc742e",
+    "sha256:2fb8bfe9a8bbeb0a8c5c239055b243fe16de0fd8e1533fc2d65889250d0c8efe"
+  ],
+  "gate_contract_digest": "sha256:c39720e7d9ba817ab1d363c12b8085c6e04afbb511da8605935735787f735dc0",
+  "hypothesis_ledger_digest": "sha256:dd5129a1252123aaeb451dd538eed82d3d5fd1eaea1cd1b58491ebb0add492d9",
+  "note": "window budget reached; the final gate decision is recorded as-is",
+  "promotion": null,
+  "risky_interventions": 1,
+  "schema_version": "looper.dynamic-phase-run/v1alpha2",
+  "stop_gate_decision": {
+    "contract_digest": "sha256:c39720e7d9ba817ab1d363c12b8085c6e04afbb511da8605935735787f735dc0",
+    "evidence_digest": "sha256:beb2a9e6a25c82597b0d30576f444632defe07810e7a0f9665de144ad9c1ecb1",
+    "reason": "no stop class triggered; the dynamic phase continues",
+    "schema_version": "looper.phase-gate-decision/v1alpha1",
+    "stop": false,
+    "stop_class": null,
+    "triggered_field": null
+  },
+  "verification_observations": [],
+  "windows": [
+    {
+      "action": "symptom-registered",
+      "candidate_receipt_digest": null,
+      "hypothesis_id": null,
+      "note": "2 hypotheses registered",
+      "observation_window_digest": "sha256:ec3a42cd4798a6071d5887270c5ca12137a0464fea6e341c0c1c5b1aed24ea1b",
+      "outcome_digest": null,
+      "plan_digest": null,
+      "recovery_receipt_digest": null,
+      "slo_met": false,
+      "window_id": "window-1"
+    },
+    {
+      "action": "observe",
+      "candidate_receipt_digest": null,
+      "hypothesis_id": "hyp-thp-never",
+      "note": "advanced to probing with component evidence",
+      "observation_window_digest": "sha256:0338d5f306c5c4d257dc85459f1fb95af9c3b3be9c7a48ea9d93cc335c08cd32",
+      "outcome_digest": null,
+      "plan_digest": null,
+      "recovery_receipt_digest": null,
+      "slo_met": false,
+      "window_id": "window-2"
+    },
+    {
+      "action": "intervened",
+      "candidate_receipt_digest": "sha256:57324c2abbb4119e9993939a01090f15f9e3ee5ecd108a5881ee19b3cadc742e",
+      "hypothesis_id": "hyp-thp-never",
+      "note": "business retest rejected the hypothesis; restored and refuted",
+      "observation_window_digest": "sha256:3db1ab265295bebe0f73b370260bd7966befd4089c68c5517d5d0c12d953b1c8",
+      "outcome_digest": "sha256:7521da2fd1fc86d8d73e248cf8a857c427c083b2cce2edfa50fe4126eded18b0",
+      "plan_digest": "sha256:1ad612bf2a7d82b14aa2eb208a410142e47c81a92084f8fbaa7d340b5d53a8dc",
+      "recovery_receipt_digest": "sha256:2fb8bfe9a8bbeb0a8c5c239055b243fe16de0fd8e1533fc2d65889250d0c8efe",
+      "slo_met": false,
+      "window_id": "window-3"
+    },
+    {
+      "action": "observe",
+      "candidate_receipt_digest": null,
+      "hypothesis_id": "hyp-thp-always",
+      "note": "advanced to probing with component evidence",
+      "observation_window_digest": "sha256:d08168d437075e8c3862b27d3b8acb27df80a3faa258cfe0cc37b8cac42185cf",
+      "outcome_digest": null,
+      "plan_digest": null,
+      "recovery_receipt_digest": null,
+      "slo_met": false,
+      "window_id": "window-4"
+    },
+    {
+      "action": "probe-blocked",
+      "candidate_receipt_digest": null,
+      "hypothesis_id": "hyp-thp-always",
+      "note": "symptom 'symptom-window-1' has only one hypothesis; single-correlation root causes are not actionable — register at least one competing hypothesis or collect more O2 evidence only",
+      "observation_window_digest": "sha256:45a9c646eb4d9abfd05425fe4fd2a02977c378663879fbab34aeffd696ab4c7d",
+      "outcome_digest": null,
+      "plan_digest": null,
+      "recovery_receipt_digest": null,
+      "slo_met": false,
+      "window_id": "window-5"
+    },
+    {
+      "action": "probe-blocked",
+      "candidate_receipt_digest": null,
+      "hypothesis_id": "hyp-thp-always",
+      "note": "symptom 'symptom-window-1' has only one hypothesis; single-correlation root causes are not actionable — register at least one competing hypothesis or collect more O2 evidence only",
+      "observation_window_digest": "sha256:933843b4bf486096d48794005b934046e255a6f357767e4d7a1a8de6092cbe39",
+      "outcome_digest": null,
+      "plan_digest": null,
+      "recovery_receipt_digest": null,
+      "slo_met": false,
+      "window_id": "window-6"
+    }
+  ],
+  "workload_contract_digest": "sha256:beb2a9e6a25c82597b0d30576f444632defe07810e7a0f9665de144ad9c1ecb1"
+}
