@@ -185,6 +185,84 @@ def test_recovery_refuses_changed_host_key(tmp_path, monkeypatch) -> None:
     assert remote_recovery.recover_remembered_target(target_id, settings) is True
 
 
+def test_ensure_target_worker_waits_for_registration_on_current_tunnel(
+    tmp_path, monkeypatch
+) -> None:
+    settings = Settings(_env_file=None, data_dir=tmp_path)
+    target_id = "external:10.0.0.8"
+    host_key = "SHA256:" + "A" * 43
+    EncryptedSshCredentialStore(settings).save(target_id, _request(), host_key)
+    target = SimpleNamespace(
+        id=target_id,
+        provider="external",
+        lifecycle_status="active",
+        fingerprint_json={"host_key_sha256": host_key},
+    )
+
+    class FakeSession:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args) -> None:
+            pass
+
+        def get(self, _model, requested_id):
+            return target if requested_id == target_id else None
+
+    worker = SimpleNamespace(id="remote-current")
+    deployments = []
+    monkeypatch.setattr(remote_recovery, "SessionLocal", FakeSession)
+    monkeypatch.setattr(remote_recovery, "target_worker_ready", lambda *_args: False)
+    monkeypatch.setattr(
+        remote_recovery,
+        "deploy_remote_worker",
+        lambda *_args: deployments.append(target_id)
+        or {"workerId": worker.id, "transport": "reverse-tunnel"},
+    )
+    monkeypatch.setattr(remote_recovery, "_fresh_bound_worker", lambda *_args, **_kwargs: worker)
+    monkeypatch.setattr(
+        remote_recovery,
+        "deployment_status",
+        lambda _target_id: {
+            "active": True,
+            "workerId": worker.id,
+            "remotePort": 45989,
+            "transport": "reverse-tunnel",
+        },
+    )
+
+    result = remote_recovery.ensure_target_worker(
+        target_id, settings, registration_timeout=0
+    )
+
+    assert deployments == [target_id]
+    assert result["status"] == "recovered"
+    assert result["remotePort"] == 45989
+
+
+def test_start_preflight_recovers_remote_execution_target(
+    db_session, tmp_path, monkeypatch
+) -> None:
+    target = db_session.get(app_module.TargetRecord, "local")
+    target.provider = "alibaba"
+    request = app_module.create_demo_request()
+    experiment = SimpleNamespace(spec_json=request.spec.model_dump(mode="json"))
+    recovered = []
+    monkeypatch.setattr(
+        app_module,
+        "ensure_target_worker",
+        lambda target_id, _settings: recovered.append(target_id),
+    )
+
+    app_module._ensure_experiment_workers(
+        db_session,
+        experiment,
+        Settings(_env_file=None, data_dir=tmp_path),
+    )
+
+    assert recovered == ["local"]
+
+
 def test_manual_ssh_test_reuses_saved_credentials_and_restores_worker(
     tmp_path, monkeypatch
 ) -> None:

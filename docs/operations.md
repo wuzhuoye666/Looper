@@ -29,6 +29,8 @@ Alternatively, set `LOOPER_REMOTE_WORKER_API_URL` to a stable control-plane URL 
 
 When `LOOPER_REMOTE_WORKER_API_URL` is unset, Looper keeps the control plane loopback-only and uses the remembered SSH credentials to recreate process-local reverse tunnels after every restart. Deleting either credential file disables recovery for all enrolled machines; do not copy the pair to a different Windows account and expect DPAPI decryption to work.
 
+For remembered SSH targets, Looper verifies execution readiness before an experiment enters the queue. If a Worker heartbeat is stale or belongs to a previous reverse-tunnel deployment, the control plane creates a new tunnel, restarts that target's Worker, and waits for a post-deployment registration before queuing work. The same recovery runs continuously after heartbeats stop, with per-target serialization and backoff. A target is marked non-runnable while its bound Worker is offline, including cloud-provider targets. If recovery cannot register the Worker within 30 seconds, the start request fails explicitly instead of leaving a study indefinitely queued. Stable direct Worker API URLs remain the preferred production topology because they avoid reverse-tunnel recovery altogether.
+
 ## SQLite
 
 Local mode supports one API process and a local disk. Do not put the database on SMB, NFS, or a synchronized folder. The API configures WAL, foreign keys, full synchronous writes, and a 15-second busy timeout. Back up the SQLite file together with the artifact CAS after a WAL checkpoint.

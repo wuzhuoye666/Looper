@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import os
+from datetime import UTC, datetime
 from unittest.mock import Mock
 
 import httpx
 import pytest
 from looper_api.config import Settings
-from looper_api.remote_worker import _worker_api_endpoint
+from looper_api.remote_worker import RemoteWorkerDeployment, _worker_api_endpoint
 from looper_worker import main as worker_main
 
 
@@ -47,6 +48,32 @@ def test_empty_remote_worker_api_url_is_treated_as_unset(tmp_path) -> None:
     )
 
     assert settings.remote_worker_api_url is None
+
+
+def test_deployment_generation_is_stable() -> None:
+    from looper_api import remote_worker
+
+    deployed_at = datetime(2026, 8, 24, 14, 30, tzinfo=UTC)
+    deployment = RemoteWorkerDeployment(
+        target_id="external:machine",
+        client=None,
+        remote_port=None,
+        worker_id="remote-worker",
+        transport="direct",
+        deployed_at=deployed_at,
+    )
+    monkeypatch_deployments = remote_worker._deployments
+    previous = monkeypatch_deployments.get(deployment.target_id)
+    monkeypatch_deployments[deployment.target_id] = deployment
+    try:
+        status = remote_worker.deployment_status(deployment.target_id)
+    finally:
+        if previous is None:
+            monkeypatch_deployments.pop(deployment.target_id, None)
+        else:
+            monkeypatch_deployments[deployment.target_id] = previous
+
+    assert status["deployedAt"] == "2026-08-24T14:30:00+00:00"
 
 
 def test_worker_loads_local_token_from_dotenv(tmp_path, monkeypatch) -> None:

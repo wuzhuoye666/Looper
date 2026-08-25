@@ -6,6 +6,8 @@ import io
 import ipaddress
 import json
 import logging
+import threading
+import time
 import zipfile
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
@@ -174,9 +176,12 @@ from looper_api.providers.registry import CloudProviderRegistry, get_provider_re
 from looper_api.providers.tencent_cvm import TencentInventoryError, sync_cvm_inventory
 from looper_api.remote_credentials import EncryptedSshCredentialStore, RemoteCredentialError
 from looper_api.remote_recovery import (
-    recover_remembered_target,
+    REMOTE_TARGET_PROVIDERS,
+    RemoteWorkerRecoveryError,
+    ensure_target_worker,
     remembered_target_ids,
     remembered_target_request,
+    target_worker_ready,
 )
 from looper_api.remote_worker import deploy_remote_worker, deployment_status
 from looper_api.scheduler import (
@@ -316,22 +321,78 @@ async def _lease_sweeper() -> None:
 
 async def _remote_worker_recovery() -> None:
     settings = get_settings()
-    try:
-        pending = set(await asyncio.to_thread(remembered_target_ids, settings))
-    except Exception:
-        logger.exception("Unable to read remembered remote Worker credentials")
-        return
-    while pending:
-        for target_id in sorted(pending):
+    retry_after: dict[str, float] = {}
+    failures: dict[str, int] = {}
+
+    async def run_recovery_call(function: Any, *args: Any, **kwargs: Any) -> Any:
+        """Run SSH recovery in a daemon thread so API shutdown never waits on it."""
+
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future[Any] = loop.create_future()
+
+        def deliver(value: Any = None, error: BaseException | None = None) -> None:
+            if future.cancelled() or future.done():
+                return
+            if error is not None:
+                future.set_exception(error)
+            else:
+                future.set_result(value)
+
+        def invoke() -> None:
             try:
-                recovered = await asyncio.to_thread(recover_remembered_target, target_id, settings)
-            except Exception:
-                logger.exception("Remote Worker recovery failed for %s", target_id)
-                continue
-            if recovered:
-                pending.discard(target_id)
-        if pending:
+                value = function(*args, **kwargs)
+            except BaseException as error:
+                with suppress(RuntimeError):
+                    loop.call_soon_threadsafe(deliver, None, error)
+            else:
+                with suppress(RuntimeError):
+                    loop.call_soon_threadsafe(deliver, value, None)
+
+        threading.Thread(
+            target=invoke,
+            daemon=True,
+            name=f"looper-recovery-{getattr(function, '__name__', 'call')}",
+        ).start()
+        return await future
+
+    async def recover_target(target_id: str) -> None:
+        try:
+            ready = await run_recovery_call(target_worker_ready, target_id, settings)
+            if ready:
+                failures.pop(target_id, None)
+                retry_after.pop(target_id, None)
+                return
+            await run_recovery_call(
+                ensure_target_worker,
+                target_id,
+                settings,
+                registration_timeout=30.0,
+            )
+            failures.pop(target_id, None)
+            retry_after.pop(target_id, None)
+        except Exception:
+            logger.exception("Remote Worker recovery failed for %s", target_id)
+            count = failures.get(target_id, 0) + 1
+            failures[target_id] = count
+            retry_after[target_id] = time.monotonic() + min(
+                300.0, 15.0 * (2 ** (count - 1))
+            )
+
+    while True:
+        try:
+            targets = set(await run_recovery_call(remembered_target_ids, settings))
+        except Exception:
+            logger.exception("Unable to read remembered remote Worker credentials")
             await asyncio.sleep(30)
+            continue
+        due = [
+            target_id
+            for target_id in sorted(targets)
+            if retry_after.get(target_id, 0.0) <= time.monotonic()
+        ]
+        if due:
+            await asyncio.gather(*(recover_target(target_id) for target_id in due))
+        await asyncio.sleep(5)
 
 
 def _retry_pending_cloud_ssh_sync(settings: Settings) -> int:
@@ -425,6 +486,7 @@ async def origin_guard(request: Request, call_next: Any) -> Any:
 @app.exception_handler(SourceDiscoveryError)
 @app.exception_handler(DeepSeekCredentialError)
 @app.exception_handler(RemoteCredentialError)
+@app.exception_handler(RemoteWorkerRecoveryError)
 @app.exception_handler(SourceArchiveError)
 @app.exception_handler(CapacityError)
 async def domain_error(_request: Request, error: Exception) -> JSONResponse:
@@ -2169,7 +2231,34 @@ def get_variability(experiment_id: str, session: SessionDependency) -> dict[str,
     return result
 
 
-def _experiment_action(session: Session, experiment_id: str, action: str) -> dict[str, Any]:
+def _ensure_experiment_workers(
+    session: Session,
+    experiment: ExperimentRecord,
+    app_settings: Settings,
+) -> None:
+    spec = ExperimentSpec.model_validate(experiment.spec_json)
+    target_ids = list(spec.target_ids)
+    if spec.selection is not None and spec.selection.load_generator_target_id:
+        target_ids = [spec.selection.load_generator_target_id]
+    for target_id in dict.fromkeys(target_ids):
+        provider = session.scalar(
+            select(TargetRecord.provider).where(TargetRecord.id == target_id)
+        )
+        if provider not in REMOTE_TARGET_PROVIDERS:
+            continue
+        ensure_target_worker(target_id, app_settings)
+        # Registration is committed by a separate Worker request. Discard
+        # identity-map snapshots so scheduler readiness sees the refreshed
+        # runnable/capability projection instead of the pre-recovery row.
+        session.expire_all()
+
+
+def _experiment_action(
+    session: Session,
+    experiment_id: str,
+    action: str,
+    app_settings: Settings | None = None,
+) -> dict[str, Any]:
     record = session.get(ExperimentRecord, experiment_id)
     if record is None:
         raise HTTPException(status_code=404, detail="experiment not found")
@@ -2179,14 +2268,20 @@ def _experiment_action(session: Session, experiment_id: str, action: str) -> dic
         "resume": resume_experiment,
         "cancel": cancel_experiment,
     }
+    if action in {"start", "resume"}:
+        _ensure_experiment_workers(session, record, app_settings or get_settings())
     updated = actions[action](session, record)
     session.commit()
     return experiment_view(session, updated, detail=True)
 
 
 @app.post("/api/v1/experiments/{experiment_id}/start")
-def start_action(experiment_id: str, session: SessionDependency) -> dict[str, Any]:
-    return _experiment_action(session, experiment_id, "start")
+def start_action(
+    experiment_id: str,
+    session: SessionDependency,
+    app_settings: SettingsDependency,
+) -> dict[str, Any]:
+    return _experiment_action(session, experiment_id, "start", app_settings)
 
 
 @app.post("/api/v1/experiments/{experiment_id}/pause")
@@ -2195,8 +2290,12 @@ def pause_action(experiment_id: str, session: SessionDependency) -> dict[str, An
 
 
 @app.post("/api/v1/experiments/{experiment_id}/resume")
-def resume_action(experiment_id: str, session: SessionDependency) -> dict[str, Any]:
-    return _experiment_action(session, experiment_id, "resume")
+def resume_action(
+    experiment_id: str,
+    session: SessionDependency,
+    app_settings: SettingsDependency,
+) -> dict[str, Any]:
+    return _experiment_action(session, experiment_id, "resume", app_settings)
 
 
 @app.post("/api/v1/experiments/{experiment_id}/cancel")

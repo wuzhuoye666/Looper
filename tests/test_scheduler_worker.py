@@ -1,10 +1,17 @@
 from __future__ import annotations
 
+from datetime import timedelta
 from pathlib import Path
 
 import pytest
 from looper_api.config import Settings
-from looper_api.models import AttemptRecord, BenchmarkRecord, CheckRecord, EvaluationRecord
+from looper_api.models import (
+    AttemptRecord,
+    BenchmarkRecord,
+    CheckRecord,
+    EvaluationRecord,
+    TargetRecord,
+)
 from looper_api.scheduler import (
     SchedulerError,
     _reconcile_evaluation,
@@ -22,11 +29,12 @@ from looper_api.worker_service import (
     WorkerError,
     claim_attempt,
     complete_attempt,
+    expire_stale_workers,
     heartbeat_attempt,
     register_worker,
     start_attempt,
 )
-from looper_core.canonical import new_id, utc_now
+from looper_core.canonical import canonical_digest, new_id, utc_now
 from looper_core.contracts import BenchmarkInputBinding, MetricObservation
 from looper_core.state import AttemptStatus, CandidateStatus, ExperimentStatus
 
@@ -181,6 +189,60 @@ def test_worker_reregistration_requeues_its_interrupted_attempt(
     assert second_claim is not None
     assert second_claim["attemptId"] == first_claim["attemptId"]
     assert second_claim["fencingToken"] == first_claim["fencingToken"] + 1
+
+
+def test_stale_cloud_worker_makes_target_not_runnable(
+    db_session: object, tmp_path: Path
+) -> None:
+    session = db_session
+    settings = Settings(
+        _env_file=None,
+        data_dir=tmp_path,
+        database_url="sqlite://",
+        local_worker_token="secret",
+        worker_stale_seconds=10,
+    )
+    target_id = "cloud:alibaba:cn-test:i-stale"
+    now = utc_now()
+    session.add(
+        TargetRecord(
+            id=target_id,
+            name="stale cloud target",
+            provider="alibaba",
+            status="available",
+            capabilities_json=["python", "local-process"],
+            inventory_json={"instance_state": "RUNNING"},
+            fingerprint_json={},
+            snapshot_digest=canonical_digest({"target": target_id}),
+            runnable=True,
+            lifecycle_status="active",
+            created_at=now,
+            updated_at=now,
+        )
+    )
+    worker = register_worker(
+        session,
+        settings,
+        WorkerRegister(
+            workerId="worker-stale-cloud",
+            name="stale cloud worker",
+            token="secret",
+            capabilities=["python", "local-process"],
+            targetIds=[target_id],
+            fingerprint={},
+        ),
+    )
+    worker.last_heartbeat_at = now - timedelta(seconds=11)
+    session.flush()
+
+    affected = expire_stale_workers(session, settings)
+    target = session.get(TargetRecord, target_id)
+
+    assert affected == [target_id]
+    assert worker.status == "offline"
+    assert target is not None
+    assert target.runnable is False
+    assert target.status == "inventory-only"
 
 
 def test_completion_rejects_required_metrics_without_enough_samples(

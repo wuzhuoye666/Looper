@@ -226,7 +226,7 @@ def expire_stale_workers(session: Session, settings: Settings) -> list[str]:
     }
     for target_id in affected_targets - live_targets:
         target = session.get(TargetRecord, target_id)
-        if target is not None and target.provider == "external":
+        if target is not None:
             target.runnable = False
             target.status = "inventory-only"
             target.updated_at = utc_now()

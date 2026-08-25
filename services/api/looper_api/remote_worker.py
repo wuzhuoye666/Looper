@@ -11,6 +11,7 @@ import socket
 import threading
 import zipfile
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -33,6 +34,7 @@ class RemoteWorkerDeployment:
     remote_port: int | None
     worker_id: str
     transport: str = "reverse-tunnel"
+    deployed_at: datetime = field(default_factory=utc_now)
     stop_event: threading.Event = field(default_factory=threading.Event)
     tunnel_thread: threading.Thread | None = None
 
@@ -461,7 +463,7 @@ def _deploy_remote_worker_impl(
                 else "user"
             ),
             "elevatedViaSudo": elevate,
-            "deployedAt": utc_now().isoformat(),
+            "deployedAt": deployment.deployed_at.isoformat(),
         }
     except Exception:
         if deployment is not None:
@@ -488,4 +490,5 @@ def deployment_status(target_id: str) -> dict[str, Any]:
             "remotePort": deployment.remote_port if tunnel_active and deployment else None,
             "transport": deployment.transport if deployment else None,
             "restartSafe": bool(deployment and deployment.transport == "direct"),
+            "deployedAt": deployment.deployed_at.isoformat() if deployment else None,
         }
