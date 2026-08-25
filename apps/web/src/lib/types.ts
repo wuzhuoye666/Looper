@@ -103,7 +103,29 @@ export interface PostOptimizationStatus {
   reason: string; action?: PostOptimizationAction; baselineParameters?: Record<string, unknown>;
   candidateParameters?: Record<string, unknown>; followUpExperiment?: Experiment;
 }
-export interface DashboardData { counts?: Partial<Record<ExperimentStatus, number>>; activeExperiments?: Experiment[]; recentExperiments?: Experiment[]; trend?: Array<{ time: string; score: number; baseline?: number }>; successRate?: number; totalExperiments?: number; computeHours?: number }
+export interface ScenarioComparisonAxis {
+  key: string; workloadId: string; label: string; metric: string; unit: string;
+  direction: 'maximize' | 'minimize';
+}
+export interface ScenarioComparisonValue {
+  raw: number; normalized: number; studyCount: number; sampleCount: number;
+}
+export interface ScenarioComparisonTarget {
+  targetId: string; label: string; updatedAt?: string; studyCount: number;
+  validSampleCount: number;
+  values: Record<string, ScenarioComparisonValue>;
+}
+export interface ScenarioComparison {
+  id: string; scenarioId: string; scenarioName: string; benchmarkId: string;
+  benchmarkName: string; benchmarkVersion: string; updatedAt?: string;
+  axes: ScenarioComparisonAxis[]; targets: ScenarioComparisonTarget[];
+}
+export interface DashboardData {
+  counts?: Partial<Record<ExperimentStatus, number>>; activeExperiments?: Experiment[];
+  recentExperiments?: Experiment[]; trend?: Array<{ time: string; score: number; baseline?: number }>;
+  scenarioComparisons?: ScenarioComparison[]; successRate?: number; totalExperiments?: number;
+  computeHours?: number;
+}
 export type MetricRole = 'primary_outcome' | 'hard_gate' | 'guardrail' | 'cost_efficiency' | 'stability' | 'diagnostic' | 'context';
 export type MetricVisibility = 'summary' | 'detail' | 'expert' | 'hidden';
 export type MetricDisplayFormat = 'number' | 'percent' | 'duration' | 'bytes' | 'throughput' | 'boolean';

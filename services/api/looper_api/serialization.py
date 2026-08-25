@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import math
 from collections import Counter, defaultdict
 from datetime import UTC, datetime
+from statistics import median
 from typing import Any
 
 from looper_core.contracts import Direction, ExperimentSpec
@@ -94,12 +96,7 @@ def _result_sections(manifest: dict[str, Any]) -> list[dict[str, Any]]:
         section_id = str(raw.get("id") or "").strip()
         label = str(raw.get("label") or "").strip()
         metrics = raw.get("metrics")
-        if (
-            not section_id
-            or section_id in seen
-            or not label
-            or not isinstance(metrics, list)
-        ):
+        if not section_id or section_id in seen or not label or not isinstance(metrics, list):
             continue
         declared_metrics = [
             str(metric)
@@ -497,8 +494,7 @@ def _attempt_metric_views(
     return [
         view
         for item in display
-        if (view := _observation_metric_view(item, metric_specs.get(item.metric, {})))
-        is not None
+        if (view := _observation_metric_view(item, metric_specs.get(item.metric, {}))) is not None
     ]
 
 
@@ -553,7 +549,318 @@ def _workload_primary_metric(
         roles = declaration.get("presentation", {}).get("roles", [])
         if "primary_outcome" in roles:
             return str(name)
+    global_primary_metrics = [
+        str(name)
+        for name, declaration in (manifest.get("spec", {}).get("metrics") or {}).items()
+        if "primary_outcome" in declaration.get("presentation", {}).get("roles", [])
+    ]
+    if len(global_primary_metrics) == 1:
+        return global_primary_metrics[0]
     return None
+
+
+def _comparison_axes(manifest: dict[str, Any]) -> list[dict[str, str]]:
+    spec = manifest.get("spec") or {}
+    declarations = spec.get("metrics") or {}
+    workloads = spec.get("workloads") or []
+    benchmark_id = str((manifest.get("metadata") or {}).get("id") or "")
+    metric_profile = {
+        "dcperf.mediawiki.closed-loop": [
+            ("closed_loop_successful_rps", "成功请求率"),
+            ("latency_p50_ms", "P50 延迟"),
+            ("latency_p95_ms", "P95 延迟"),
+            ("latency_p99_ms", "P99 延迟"),
+        ]
+    }.get(benchmark_id)
+    axes: list[dict[str, str]] = []
+    if metric_profile:
+        for workload in workloads:
+            workload_id = str(workload.get("id") or "")
+            for metric, label in metric_profile:
+                declaration = declarations.get(metric) or {}
+                direction = str(declaration.get("direction") or "")
+                unit = str(declaration.get("unit") or "")
+                if not workload_id or direction not in {"maximize", "minimize"} or not unit:
+                    continue
+                axes.append(
+                    {
+                        "key": metric,
+                        "workloadId": workload_id,
+                        "label": label,
+                        "metric": metric,
+                        "unit": unit,
+                        "direction": direction,
+                    }
+                )
+        return axes
+
+    for workload in workloads:
+        workload_id = str(workload.get("id") or "")
+        metric = _workload_primary_metric(manifest, workload_id)
+        declaration = declarations.get(metric or "") or {}
+        direction = str(declaration.get("direction") or "")
+        unit = str(declaration.get("unit") or "")
+        if not workload_id or not metric or direction not in {"maximize", "minimize"} or not unit:
+            continue
+        axes.append(
+            {
+                "key": workload_id,
+                "workloadId": workload_id,
+                "label": str(workload.get("name") or workload_id),
+                "metric": metric,
+                "unit": unit,
+                "direction": direction,
+            }
+        )
+    return axes
+
+
+def _normalize_comparison_values(values: dict[str, float], direction: str) -> dict[str, float]:
+    finite = {
+        key: float(value) for key, value in values.items() if math.isfinite(value) and value >= 0
+    }
+    if len(finite) < 2:
+        return {}
+    if direction == "maximize":
+        best = max(finite.values())
+        if best == 0:
+            return {key: 100.0 for key in finite}
+        return {key: min(100.0, max(0.0, value / best * 100)) for key, value in finite.items()}
+    positive = {key: value for key, value in finite.items() if value > 0}
+    if len(positive) < 2:
+        return {}
+    best = min(positive.values())
+    return {key: min(100.0, best / value * 100) for key, value in positive.items()}
+
+
+def _scenario_comparison_views(
+    session: Session, experiments: list[ExperimentRecord]
+) -> list[dict[str, Any]]:
+    groups: dict[tuple[str, str, str], dict[str, Any]] = {}
+    experiment_meta: dict[str, dict[str, Any]] = {}
+    for record in experiments:
+        if record.status != ExperimentStatus.COMPLETED:
+            continue
+        spec = ExperimentSpec.model_validate(record.spec_json)
+        if spec.mode.value != "selection" or spec.scenario is None:
+            continue
+        benchmark = session.scalar(
+            select(BenchmarkRecord).where(
+                BenchmarkRecord.benchmark_id == spec.benchmark_id,
+                BenchmarkRecord.version == spec.benchmark_version,
+            )
+        )
+        if benchmark is None:
+            continue
+        axes = _comparison_axes(benchmark.manifest_json)
+        if not axes:
+            continue
+        key = (spec.scenario.id, spec.benchmark_id, spec.benchmark_version)
+        group = groups.setdefault(
+            key,
+            {
+                "id": "@".join(key),
+                "scenarioId": spec.scenario.id,
+                "scenarioName": spec.scenario.name,
+                "benchmarkId": spec.benchmark_id,
+                "benchmarkName": benchmark.name,
+                "benchmarkVersion": spec.benchmark_version,
+                "axes": axes,
+                "updatedAt": None,
+                "targets": {},
+            },
+        )
+        binding_labels = {
+            item.target_id: item.label
+            for item in (spec.selection.target_bindings if spec.selection else [])
+        }
+        experiment_meta[record.id] = {
+            "record": record,
+            "group": group,
+            "axesByWorkload": {
+                workload_id: [axis for axis in group["axes"] if axis["workloadId"] == workload_id]
+                for workload_id in {axis["workloadId"] for axis in group["axes"]}
+            },
+            "requiredChecks": set(
+                (benchmark.manifest_json.get("spec") or {})
+                .get("adapter", {})
+                .get("requiredChecks", [])
+            ),
+            "bindingLabels": binding_labels,
+        }
+
+    experiment_ids = list(experiment_meta)
+    evaluations = (
+        list(
+            session.scalars(
+                select(EvaluationRecord).where(EvaluationRecord.experiment_id.in_(experiment_ids))
+            )
+        )
+        if experiment_ids
+        else []
+    )
+    eligible_evaluations = {
+        item.id: item
+        for item in evaluations
+        if CandidateStatus(item.status) == CandidateStatus.FEASIBLE
+    }
+    attempts = (
+        list(
+            session.scalars(
+                select(AttemptRecord).where(
+                    AttemptRecord.evaluation_id.in_(list(eligible_evaluations)),
+                    AttemptRecord.status == AttemptStatus.SUCCEEDED,
+                )
+            )
+        )
+        if eligible_evaluations
+        else []
+    )
+    attempt_ids = [item.id for item in attempts]
+    checks_by_attempt: dict[str, dict[str, bool]] = defaultdict(dict)
+    observations_by_attempt: dict[str, list[ObservationRecord]] = defaultdict(list)
+    if attempt_ids:
+        for check in session.scalars(
+            select(CheckRecord).where(CheckRecord.attempt_id.in_(attempt_ids))
+        ):
+            checks_by_attempt[check.attempt_id][check.check_id] = check.passed
+        for observation in session.scalars(
+            select(ObservationRecord).where(ObservationRecord.attempt_id.in_(attempt_ids))
+        ):
+            observations_by_attempt[observation.attempt_id].append(observation)
+
+    attempts_by_evaluation: dict[str, list[AttemptRecord]] = defaultdict(list)
+    for attempt in attempts:
+        meta = experiment_meta[attempt.experiment_id]
+        required_checks = meta["requiredChecks"]
+        check_results = checks_by_attempt[attempt.id]
+        if all(check_results.get(check_id) is True for check_id in required_checks):
+            attempts_by_evaluation[attempt.evaluation_id].append(attempt)
+
+    for evaluation in eligible_evaluations.values():
+        meta = experiment_meta[evaluation.experiment_id]
+        axes = meta["axesByWorkload"].get(evaluation.workload_id, [])
+        if not axes:
+            continue
+        axis_results: list[tuple[dict[str, str], float, int]] = []
+        for axis in axes:
+            attempt_values: list[float] = []
+            for attempt in attempts_by_evaluation[evaluation.id]:
+                values = [
+                    float(item.value_number)
+                    for item in observations_by_attempt[attempt.id]
+                    if item.metric == axis["metric"]
+                    and item.phase != "warmup"
+                    and item.value_number is not None
+                    and math.isfinite(float(item.value_number))
+                ]
+                if values:
+                    attempt_values.append(sum(values) / len(values))
+            if not attempt_values:
+                continue
+            valid_sample_count = sum(
+                1
+                for attempt in attempts_by_evaluation[evaluation.id]
+                for item in observations_by_attempt[attempt.id]
+                if item.metric == axis["metric"]
+                and item.phase != "warmup"
+                and item.value_number is not None
+                and math.isfinite(float(item.value_number))
+            )
+            axis_results.append(
+                (axis, sum(attempt_values) / len(attempt_values), valid_sample_count)
+            )
+        if not axis_results:
+            continue
+        record = meta["record"]
+        group = meta["group"]
+        target_record = session.get(TargetRecord, evaluation.target_id)
+        label = (
+            meta["bindingLabels"].get(evaluation.target_id)
+            or (target_record.name if target_record else None)
+            or evaluation.target_id
+        )
+        target = group["targets"].setdefault(
+            evaluation.target_id,
+            {
+                "targetId": evaluation.target_id,
+                "label": label,
+                "updatedAt": None,
+                "studies": set(),
+                "values": defaultdict(lambda: defaultdict(list)),
+                "sampleCounts": defaultdict(lambda: defaultdict(int)),
+            },
+        )
+        updated_at = _iso(record.updated_at)
+        target["label"] = label
+        target["updatedAt"] = max(filter(None, [target["updatedAt"], updated_at]), default=None)
+        target["studies"].add(record.id)
+        for axis, value, valid_sample_count in axis_results:
+            target["values"][axis["key"]][record.id].append(value)
+            target["sampleCounts"][axis["key"]][record.id] += valid_sample_count
+        group["updatedAt"] = max(filter(None, [group["updatedAt"], updated_at]), default=None)
+
+    comparisons: list[dict[str, Any]] = []
+    for group in groups.values():
+        raw_targets = group.pop("targets")
+        normalized_by_axis: dict[str, dict[str, float]] = {}
+        kept_axes: list[dict[str, str]] = []
+        medians_by_target: dict[str, dict[str, float]] = defaultdict(dict)
+        for axis in group["axes"]:
+            raw_values: dict[str, float] = {}
+            for target_id, target in raw_targets.items():
+                studies = target["values"].get(axis["key"], {})
+                study_values = [sum(values) / len(values) for values in studies.values() if values]
+                if study_values:
+                    raw_values[target_id] = float(median(study_values))
+            normalized = _normalize_comparison_values(raw_values, axis["direction"])
+            if len(normalized) < 2:
+                continue
+            kept_axes.append(axis)
+            normalized_by_axis[axis["key"]] = normalized
+            for target_id, value in raw_values.items():
+                if target_id in normalized:
+                    medians_by_target[target_id][axis["key"]] = value
+
+        targets: list[dict[str, Any]] = []
+        for target_id, target in raw_targets.items():
+            values = {}
+            for axis in kept_axes:
+                if axis["key"] not in medians_by_target[target_id]:
+                    continue
+                studies = target["values"][axis["key"]]
+                values[axis["key"]] = {
+                    "raw": medians_by_target[target_id][axis["key"]],
+                    "normalized": normalized_by_axis[axis["key"]][target_id],
+                    "studyCount": len(studies),
+                    "sampleCount": sum(target["sampleCounts"][axis["key"]].values()),
+                }
+            if values:
+                targets.append(
+                    {
+                        "targetId": target_id,
+                        "label": target["label"],
+                        "updatedAt": target["updatedAt"],
+                        "studyCount": len(target["studies"]),
+                        "validSampleCount": sum(value["sampleCount"] for value in values.values()),
+                        "values": values,
+                    }
+                )
+        targets.sort(
+            key=lambda item: (
+                len(item["values"]),
+                item.get("updatedAt") or "",
+                item["label"],
+            ),
+            reverse=True,
+        )
+        if len(targets) < 2 or not kept_axes:
+            continue
+        group["axes"] = kept_axes
+        group["targets"] = targets
+        comparisons.append(group)
+    comparisons.sort(key=lambda item: item.get("updatedAt") or "", reverse=True)
+    return comparisons
 
 
 def experiment_view(
@@ -768,14 +1075,10 @@ def experiment_view(
         # Preserve every attempt for the per-round view, including failed
         # retries that still uploaded partial evidence.
         metric_specs = (
-            benchmark.manifest_json.get("spec", {}).get("metrics", {})
-            if benchmark
-            else {}
+            benchmark.manifest_json.get("spec", {}).get("metrics", {}) if benchmark else {}
         )
         required_checks = set(
-            benchmark.manifest_json.get("spec", {})
-            .get("adapter", {})
-            .get("requiredChecks", [])
+            benchmark.manifest_json.get("spec", {}).get("adapter", {}).get("requiredChecks", [])
             if benchmark
             else []
         )
@@ -804,9 +1107,7 @@ def experiment_view(
                 check_results.get(check_id) is True for check_id in required_checks
             )
             attempt_status = AttemptStatus(attempt.status)
-            valid_measurement = (
-                attempt_status == AttemptStatus.SUCCEEDED and required_checks_passed
-            )
+            valid_measurement = attempt_status == AttemptStatus.SUCCEEDED and required_checks_passed
             terminal_failure = attempt_status in {
                 AttemptStatus.FAILED,
                 AttemptStatus.TIMED_OUT,
@@ -842,9 +1143,7 @@ def experiment_view(
                 }
             )
         valid_runs = [
-            item
-            for item in run_views
-            if item["status"] == "completed" and item["metrics"]
+            item for item in run_views if item["status"] == "completed" and item["metrics"]
         ]
         if valid_runs:
             metrics = _average_metric_views(valid_runs)
@@ -879,9 +1178,7 @@ def experiment_view(
         if failed_check_ids:
             phase_detail = f"采集数据已回传；校验未通过：{', '.join(failed_check_ids)}"
         elif (
-            latest
-            and AttemptStatus(latest.status) == AttemptStatus.FAILED
-            and latest.error_message
+            latest and AttemptStatus(latest.status) == AttemptStatus.FAILED and latest.error_message
         ):
             phase_detail = f"采集流程失败：{latest.error_message}"
         duration = None
@@ -1037,6 +1334,7 @@ def dashboard_view(session: Session) -> dict[str, Any]:
         "activeExperiments": [experiment_view(session, item) for item in active[:6]],
         "recentExperiments": [experiment_view(session, item) for item in experiments[:8]],
         "trend": trend,
+        "scenarioComparisons": _scenario_comparison_views(session, experiments),
         "successRate": success_count / len(terminal) if terminal else None,
         "totalExperiments": len(experiments),
         "computeHours": float(attempt_seconds or 0) / 3600,
