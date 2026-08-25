@@ -28,7 +28,12 @@
             "digest": { "type": ["string", "null"], "pattern": "^sha256:[0-9a-f]{64}$" }
           }
         },
-        "x-extensions": { "type": "object" }
+        "x-extensions": {
+          "type": "object",
+          "properties": {
+            "diagnosticRecommendations": { "$ref": "#/$defs/diagnosticRecommendations" }
+          }
+        }
       }
     },
     "spec": {
@@ -669,6 +674,66 @@
         "displayFormat": { "enum": ["number", "percent", "duration", "bytes", "throughput", "boolean"] },
         "displayPrecision": { "type": "integer", "minimum": 0 },
         "glossary": { "type": "string", "maxLength": 500 }
+      }
+    },
+    "diagnosticPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["minimumSamples", "cvStable", "cvUnstable", "modeMinimumSamples"],
+      "properties": {
+        "minimumSamples": { "type": "integer", "minimum": 2, "maximum": 1000 },
+        "cvStable": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 },
+        "cvUnstable": { "type": "number", "exclusiveMinimum": 0, "maximum": 2 },
+        "slowShareUnstable": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 },
+        "outlierFenceK": { "type": "number", "exclusiveMinimum": 0, "maximum": 10 },
+        "modeMinimumSamples": { "type": "integer", "minimum": 8, "maximum": 1000 },
+        "modeMinR2": { "type": "number", "minimum": 0, "maximum": 1 },
+        "modeMinClusterShare": { "type": "number", "exclusiveMinimum": 0, "maximum": 0.5 },
+        "modeGapRatio": { "type": "number", "exclusiveMinimum": 0, "maximum": 100 },
+        "skewThreshold": { "type": "number", "exclusiveMinimum": 0, "maximum": 100 },
+        "associationMinCorrelation": { "type": "number", "minimum": 0, "maximum": 1 },
+        "associationMinLift": { "type": "number", "exclusiveMinimum": 1, "maximum": 100 },
+        "attributionMinEtaSquared": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    },
+    "diagnosticRule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "scope", "when", "priority", "kind", "action", "rationale"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z][a-z0-9._-]*$" },
+        "scope": { "enum": ["group", "study"] },
+        "when": {
+          "enum": [
+            "stable", "warning", "unstable", "insufficient_evidence",
+            "outlier_present", "multimodal", "missing_system_metrics",
+            "gate_failure", "single_target", "no_comparison"
+          ]
+        },
+        "workloadIds": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]*$" }
+        },
+        "priority": { "enum": ["high", "medium", "low"] },
+        "kind": { "enum": ["diagnostic", "retest", "data_collection"] },
+        "action": { "type": "string", "minLength": 1, "maxLength": 1000 },
+        "rationale": { "type": "string", "minLength": 1, "maxLength": 2000 }
+      }
+    },
+    "diagnosticRecommendations": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "policy", "rules"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "policy": { "$ref": "#/$defs/diagnosticPolicy" },
+        "rules": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/diagnosticRule" }
+        }
       }
     },
     "outputs": {

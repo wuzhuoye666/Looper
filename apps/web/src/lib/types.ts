@@ -161,7 +161,7 @@ export interface Benchmark {
   decisionQuestion?: string; primaryMetric?: string; scenario?: ScenarioContract;
   selectionReady?: boolean; singleNodeReady?: boolean;
   registrationId?: string; registrationStatus?: string;
-  auditStatus?: 'legacy-unreviewed' | 'registered-not-admitted';
+  auditStatus?: 'registered-not-admitted';
 }
 export interface BenchmarkInputDeclaration {
   id: string; kind: 'dataset' | 'artifact' | 'config' | 'endpoint' | 'secret' | 'device' | 'topology';
@@ -244,7 +244,8 @@ export interface VariabilityDistribution {
   iqr?: number | null; mad?: number | null; tailMean?: number | null; skewness?: number | null;
 }
 export interface VariabilityGroupReport {
-  groupLabel: string; metric: string; unit: string; direction: string; status: VariabilityStatus;
+  groupLabel: string; targetId: string; workloadId: string; metric: string; unit: string; direction: string; status: VariabilityStatus;
+  invalidAttemptCount?: number;
   distribution: VariabilityDistribution;
   stability: { verdict: VariabilityStatus; cv?: number | null; slow_run_share?: number; skewed?: boolean; suspected_multimodal?: boolean; reasons: string[] };
   modes?: { cutoff: number; fastMode: { count: number; center: number }; slowMode: { count: number; center: number } } | null;
@@ -252,9 +253,13 @@ export interface VariabilityGroupReport {
   outliers: { slow: string[]; fast: string[] };
   associationClues: Array<{ metric: string; correlation: number; lift?: number | null; direction: string; slowMean?: number | null; normalMean?: number | null; likelyConsequence: boolean; note: string }>;
   attribution: Array<{ dimension: string; etaSquared?: number | null; groupCount: number; dominant: boolean; groupMeans?: Record<string, number> }>;
-  recommendations: Array<{ action: string; rationale: string; priority: 'high' | 'medium' | 'low'; kind: string }>;
+  recommendations: VariabilityRecommendation[];
   selectionImpact: { summary: string; confidence: string; details?: string[] };
   evidence: { sampleCount: number; hostCount?: number; distinctDates?: number; systemMetricCount?: number };
+}
+export interface VariabilityRecommendation {
+  ruleId: string; source: 'benchmark-contract'; action: string; rationale: string;
+  priority: 'high' | 'medium' | 'low'; kind: string;
 }
 export interface VariabilityComparison {
   metric: string; unit: string; direction: string; baselineLabel: string; candidateLabel: string;
@@ -268,6 +273,7 @@ export interface VariabilityComparison {
 export interface VariabilityData {
   experiment_id: string; mode?: string; metric: string; unit: string; direction: string;
   status: string; group_statuses?: string[]; groups: VariabilityGroupReport[]; comparisons: VariabilityComparison[];
+  reason?: string; studyRecommendations?: VariabilityRecommendation[]; diagnosticContractDigest?: string;
   policy?: Record<string, unknown>; input_digest?: string; policy_digest?: string;
   evidence?: { attempt_count?: number; run_group_count?: number; system_metric_names?: string[] };
 }

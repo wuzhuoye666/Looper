@@ -7,10 +7,11 @@ import { BackLink } from '../components/Layout';
 import { StatusBadge } from '../components/StatusBadge';
 import { EmptyState, ErrorState, LoadingState } from '../components/States';
 import { ExperimentTerminal } from '../components/ExperimentTerminal';
+import { VariabilityPanel } from '../components/VariabilityPanel';
 import { API_BASE, api, resolveApiUrl } from '../lib/api';
 import { benchmarkDecisionQuestion } from '../lib/benchmarkPresentation';
 import { formatDate, formatNumber, scoreDelta } from '../lib/format';
-import type { AnalysisData, BenchmarkResultSection, Evaluation, Experiment, MetricDefinition, PostOptimizationStatus, SelectionComparison, SelectionTargetResult } from '../lib/types';
+import type { AnalysisData, BenchmarkResultSection, Evaluation, Experiment, MetricDefinition, PostOptimizationStatus, SelectionComparison } from '../lib/types';
 
 const executionPhases = [
   ['deploying-package', '下发脚本'],
@@ -40,6 +41,11 @@ export function ExperimentDetailPage() {
     queryKey: ['analysis', id],
     queryFn: () => api.analysis(id),
     enabled: Boolean(id) && ['results', 'evidence'].includes(tab),
+  });
+  const variability = useQuery({
+    queryKey: ['variability', id],
+    queryFn: () => api.variability(id),
+    enabled: Boolean(id) && selectionMode && tab === 'results',
   });
   const postOptimization = useQuery({
     queryKey: ['post-optimization', id],
@@ -89,14 +95,14 @@ export function ExperimentDetailPage() {
     <nav className="tabs" aria-label="研究详情">{tabs.map(([key, label]) => <button key={key} className={tab === key ? 'active' : ''} onClick={() => setTab(key)}>{label}</button>)}</nav>
     {tab === 'overview' && <Overview experiment={experiment} evaluations={experiment.evaluations || []} delta={delta} />}
     {tab === 'results' && (selectionMode
-      ? <AsyncPanel query={analysis}><TargetResults items={analysis.data?.targets || []} /></AsyncPanel>
+      ? <AsyncPanel query={variability}>{variability.data && <VariabilityPanel data={variability.data} evaluations={experiment.evaluations || []} />}</AsyncPanel>
       : <Evaluations items={experiment.evaluations || []} retrying={retry.isPending} onRetry={attemptId => retry.mutate(attemptId)} />)}
     {tab.startsWith('benchmark:') && <BenchmarkMetricSection
       section={(experiment.resultSections || []).find(item => `benchmark:${item.id}` === tab)}
       definitions={experiment.metricDefinitions}
       evaluations={experiment.evaluations || []}
     />}
-    {tab === 'evidence' && <AsyncPanel query={analysis}><Evidence items={analysis.data?.evidence || []} evaluations={experiment.evaluations || []} /></AsyncPanel>}
+    {tab === 'evidence' && <AsyncPanel query={analysis}><Evidence items={analysis.data?.evidence || []} /></AsyncPanel>}
     {tab === 'config' && <Config value={experiment.config || {}} />}
      {tab === 'terminal' && <ExperimentTerminal experimentId={experiment.id} />}
   </div>;
@@ -180,7 +186,7 @@ export function experimentTabs(experiment: Experiment): string[][] {
   );
   return [
     ['overview', '概览'],
-    ['results', experiment.mode === 'selection' ? '目标结果' : '运行结果'],
+    ['results', experiment.mode === 'selection' ? '优化建议' : '运行结果'],
     ...benchmarkTabs,
     ['evidence', '证据'],
     ['config', '配置'],
@@ -371,14 +377,6 @@ function MetricDefinitions({ definitions }: { definitions?: Record<string, Metri
   })}</div></section>;
 }
 
-function TargetResults({ items }: { items: SelectionTargetResult[] }) {
-  if (!items.length) return <EmptyState title="暂无目标结果" description="完成有效 block 后显示每个候选资源的主指标。" />;
-  return <section className="panel table-panel"><div className="table-wrap"><table><thead><tr><th>候选资源</th><th>Placement</th><th>有效 / 无效 block</th><th>主指标</th><th>单位价格容量</th><th>状态</th></tr></thead><tbody>{items.map(item => {
-    const primary = item.metrics[0];
-    return <tr key={item.target_id}><td><strong>{item.label}</strong><span className="cell-meta">{item.variant_id}</span></td><td>{item.placement_pair_id}</td><td>{item.valid_block_count} / {item.invalid_block_count}</td><td className="metric-cell">{formatNumber(primary?.raw)} {primary?.unit}</td><td>{item.price_efficiency ? `${formatNumber(item.price_efficiency.value)} ${item.price_efficiency.unit}` : '—'}</td><td>{item.status}</td></tr>;
-  })}</tbody></table></div></section>;
-}
-
 function Comparisons({ items }: { items: SelectionComparison[] }) {
   if (!items.length) return <EmptyState title="暂无对比结论" description="至少两个变体与成对 block 才能形成比较。" />;
   return <div className="comparison-list">{items.map(item => <section className="panel comparison-panel" key={`${item.metric}-${item.baseline_variant}-${item.candidate_variant}`}>
@@ -399,42 +397,22 @@ function Pareto({ data }: { data: AnalysisData['pareto'] }) {
   return <section className="panel table-panel"><div className="table-wrap"><table><thead><tr><th>候选</th><th>Pareto 排名</th><th>得分</th><th>成本</th><th>延迟</th>{stabilityKeys.map(key => <th key={key}>{stabilityLabel(key)}</th>)}</tr></thead><tbody>{data.map((item, index) => <tr key={item.id || index}><td>{item.candidate}</td><td>{item.rank ?? '—'}</td><td>{formatNumber(item.score)}</td><td>{formatNumber(item.cost)}</td><td>{formatNumber(item.latency)}</td>{stabilityKeys.map(key => <td key={key} className="metric-cell">{item.objectives?.[key] == null ? '—' : formatNumber(item.objectives[key], 4)}</td>)}</tr>)}</tbody></table></div></section>;
 }
 
-export function Evidence({ items, evaluations }: { items: NonNullable<AnalysisData['evidence']>; evaluations: Evaluation[] }) {
+export function Evidence({ items }: { items: NonNullable<AnalysisData['evidence']> }) {
   if (!items.length) return <EmptyState title="暂无证据" />;
-  const runs = evaluations.flatMap(item => (item.runs || []).map(run => ({ ...run, candidate: item.candidate })));
+  const item = items.find(candidate => candidate.artifacts?.some(artifact => artifact.url.includes('/evidence'))) || items[0];
   return <div className="evidence-list">
-    {items.map(item => <article className="evidence-card" key={item.id}>
+    <article className="evidence-card" key={item.id}>
       <div className="evidence-card-header">
         <div className="evidence-icon">{item.kind === 'config' ? <FileCode2 size={19} /> : <FileText size={19} />}</div>
         <div className="evidence-card-copy">
-          <div className="catalog-title"><h2>{evidenceTitle(item.title)}</h2>{item.kind && <span className="tag">{evidenceKindLabel(item.kind)}</span>}</div>
+          <div className="catalog-title"><h2>完整原始数据</h2>{item.kind && <span className="tag">{evidenceKindLabel(item.kind)}</span>}</div>
           <p>{evidenceSummary(item.summary)}</p>
-          <span className="cell-meta">包含本次实验的全部轮次、重试记录、观测、校验和制品</span>
+          <span className="cell-meta">包含本次实验的全部轮次、重试记录、原始观测、门禁、事件、分析快照和制品</span>
         </div>
       </div>
-      <EvidenceFiles items={item.artifacts || []} />
-    </article>)}
-    {runs.map((run, index) => {
-      const status = run.status === 'completed' ? '成功' : run.status === 'failed' ? '失败' : run.status || '未知';
-      const attempt = run.retry ? `重试 ${run.retry}` : '首次尝试';
-      return <article className="evidence-card" key={`evidence-${run.attemptId}-${index}`}>
-        <div className="evidence-card-header">
-          <div className="evidence-icon"><FileText size={19} /></div>
-          <div className="evidence-card-copy">
-            <div className="catalog-title"><h2>第 {run.round} 轮 · {attempt}</h2><span className="tag">{run.candidate}</span><span className={`tag ${run.status === 'completed' ? 'ok' : 'bad'}`}>{status}</span></div>
-            <p>{run.status === 'completed' ? '该次尝试已形成原始日志、测试结果、系统指纹和校验文件。' : '该次尝试未形成完整结果，保留下发、准备、错误和清理日志供排查。'}</p>
-            {run.error && <span className="cell-error evidence-attempt-error">失败原因：{run.error}</span>}
-            <span className="cell-meta">尝试 ID：{run.attemptId} · {run.artifacts?.length || 0} 个文件</span>
-          </div>
-        </div>
-        <EvidenceFiles items={run.artifacts || []} />
-      </article>;
-    })}
+      <ArtifactLinks items={item.artifacts || []} />
+    </article>
   </div>;
-}
-
-function EvidenceFiles({ items }: { items: Array<{ name: string; url: string }> }) {
-  return <details className="evidence-card-files"><summary className="evidence-files-heading"><strong>证据文件</strong><span>{items.length} 个 · 点击展开</span></summary><div className="evidence-files-content"><ArtifactLinks items={items} /></div></details>;
 }
 
 function ArtifactLinks({ items }: { items: Array<{ name: string; url: string }> }) {
@@ -443,10 +421,6 @@ function ArtifactLinks({ items }: { items: Array<{ name: string; url: string }> 
     const href = item.url.startsWith('http') ? item.url : `${resolveApiUrl(API_BASE).origin}${item.url}`;
     return <a key={`${item.url}-${index}`} href={href} target="_blank" rel="noreferrer" title={`原始文件名：${item.name}`}><span>{artifactLabel(item.name)}</span><code>{item.name}</code><ExternalLink size={12} /></a>;
   })}</div>;
-}
-
-function evidenceTitle(title: string) {
-  return title === 'Immutable experiment evidence' ? '完整实验原始证据' : title;
 }
 
 function evidenceKindLabel(kind: string) {

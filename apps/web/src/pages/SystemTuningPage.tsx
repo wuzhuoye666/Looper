@@ -18,6 +18,7 @@ import {
 import {
   DEMO_CONFIG_ITEMS,
   DEMO_FRAMES,
+  DEMO_FRAMES_MULTI,
   DEMO_TARGETS,
   EMPTY_METRICS,
   KEEP_FRAMES,
@@ -158,6 +159,7 @@ export function SystemTuningPage() {
   });
   const logEndRef = useRef<HTMLDivElement | null>(null);
   const frameIndexRef = useRef(0);
+  const scriptRef = useRef(DEMO_FRAMES);
   const enabledItemsRef = useRef(enabledItems);
   enabledItemsRef.current = enabledItems;
 
@@ -193,10 +195,12 @@ export function SystemTuningPage() {
   // 演示运行主循环：按帧推进阶段、追加日志、更新指标。
   // 副作用必须在 interval 回调主体执行——不能放进 setState 的 updater
   // （updater 必须是纯函数，React StrictMode 会 double-invoke 它导致日志双份）。
+  // 剧本按授权配置项数量选择：≥2 项走多参数剧本（逐参数验证→组合复验）。
   useEffect(() => {
     if (status !== 'running') return;
+    const script = scriptRef.current;
     const timer = window.setInterval(() => {
-      const frame = DEMO_FRAMES[frameIndexRef.current];
+      const frame = script[frameIndexRef.current];
       if (!frame) {
         window.clearInterval(timer);
         setStatus('needs-approval');
@@ -207,7 +211,7 @@ export function SystemTuningPage() {
       if (frame.metrics) setMetrics((prev) => ({ ...prev, ...frame.metrics }));
       if (frame.hypotheses) setHypotheses(frame.hypotheses);
       frameIndexRef.current += 1;
-      if (frameIndexRef.current >= DEMO_FRAMES.length) {
+      if (frameIndexRef.current >= script.length) {
         window.clearInterval(timer);
         setStatus('needs-approval');
       }
@@ -261,6 +265,11 @@ export function SystemTuningPage() {
     const authorizedNames = DEMO_CONFIG_ITEMS
       .filter((item) => enabledItemsRef.current[item.id])
       .map((item) => item.name);
+    // 剧本选择：≥2 个授权项走多参数剧本（逐参数验证 → 组合复验）
+    scriptRef.current = authorizedNames.length >= 2 ? DEMO_FRAMES_MULTI : DEMO_FRAMES;
+    const multiNote = authorizedNames.length >= 2
+      ? `；多参数纪律：${authorizedNames.length} 项授权将逐参数分相位验证，组合收益以组合复验实测为准`
+      : '';
     setStatus('running');
     setStageIndex(0);
     setFrameIndex(0);
@@ -271,7 +280,7 @@ export function SystemTuningPage() {
     setDecision(null);
     appendLogs([
       { stage: 'baseline', level: 'info', text: `调优任务启动：目标 ${targetId}，主指标 ${metricName}（${metricDir === 'maximize' ? '越大越好' : '越小越好'}）` },
-      { stage: 'baseline', level: 'info', text: `授权可改配置项 ${authorizedNames.length} 个（${authorizedNames.join('、')}）；MDE ${mdePct}%，退化红线 ${degradationPct}%，最大干预 ${maxInterventions} 次，预算 ${budgetMinutes} 分钟` },
+      { stage: 'baseline', level: 'info', text: `授权可改配置项 ${authorizedNames.length} 个（${authorizedNames.join('、')}）；MDE ${mdePct}%，退化红线 ${degradationPct}%，最大干预 ${maxInterventions} 次，预算 ${budgetMinutes} 分钟${multiNote}` },
     ]);
   };
 
@@ -539,12 +548,16 @@ export function SystemTuningPage() {
 
           {status === 'completed' && (
             <div className="tuning-result">
-              {decision === 'approved-keep' && (
+              {decision === 'approved-keep' && (scriptRef.current === DEMO_FRAMES_MULTI ? (
+                <p className="tuning-result-line ok"><CheckCircle2 size={15} />调优完成：组合候选（THP=always + swappiness=10，+18.63%）经你授权保留生效，批准时刻成为这两项的新基线；证据链已封存可回放。</p>
+              ) : (
                 <p className="tuning-result-line ok"><CheckCircle2 size={15} />调优完成：假设①（+15.59%）经你授权保留生效，THP = always 已成为该配置项的新基线；证据链已封存可回放。</p>
-              )}
-              {decision === 'approved' && (
+              ))}
+              {decision === 'approved' && (scriptRef.current === DEMO_FRAMES_MULTI ? (
+                <p className="tuning-result-line ok"><CheckCircle2 size={15} />调优完成：组合候选已生成推荐配置（+18.63%，单项 THP +15.59% / swappiness +2.71%），现场已恢复起点，零残留。</p>
+              ) : (
                 <p className="tuning-result-line ok"><CheckCircle2 size={15} />调优完成：假设①已生成推荐配置（+15.59%），现场已恢复起点，零残留。</p>
-              )}
+              ))}
               {decision === 'rejected' && (
                 <p className="tuning-result-line"><RotateCcw size={15} />调优完成：候选被拒绝，保持默认配置也是有效结论；现场已恢复起点。</p>
               )}

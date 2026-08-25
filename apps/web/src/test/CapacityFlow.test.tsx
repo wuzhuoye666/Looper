@@ -76,7 +76,10 @@ beforeEach(() => {
 it('五步向导保存业务链、服务器矩阵并通过真实预检启动', async () => {
   renderRoute('/capacity/capacity_test');
   expect(await screen.findByRole('heading', { name: '订单容量测试' })).toBeInTheDocument();
-  expect(screen.getByRole('navigation', { name: '主导航' })).toHaveTextContent('容量测试');
+  expect(screen.getByRole('navigation', { name: '主导航' })).not.toHaveTextContent('容量测试');
+  expect(screen.getByRole('button', { name: '选型' })).toHaveAttribute('aria-expanded', 'true');
+  expect(screen.getByRole('button', { name: '可提供代码' })).toHaveAttribute('aria-expanded', 'true');
+  expect(screen.getByRole('link', { name: '容量测试' })).toHaveClass('active');
 
   fireEvent.click(screen.getByRole('button', { name: /确认构建方案/ }));
   fireEvent.click(screen.getByRole('button', { name: /下一步/ }));

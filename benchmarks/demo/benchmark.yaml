@@ -198,7 +198,6 @@ spec:
     environmentAxes: [machine, day]
     requiredEvidence: [system-fingerprint, raw-result, log]
   x-extensions:
-    bootstrapCatalog: true
     executionStatus: executable
     selectionDefaults: {repeats: 5, timeoutSeconds: 1800, seed: 20260305}
     sourceLock: source-lock.json

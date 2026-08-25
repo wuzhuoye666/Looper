@@ -28,7 +28,7 @@ from looper_core.analysis import cvar, quantile
 from looper_core.contracts import Direction, StabilityMetric, StabilityObjectiveSpec, StrictModel
 
 VARIABILITY_ANALYZER_ID = "looper.variability-analyzer"
-VARIABILITY_CODE_VERSION = "1.1.0"
+VARIABILITY_CODE_VERSION = "1.2.0"
 
 #: System metrics the analyzer knows how to interpret. Benchmarks and adapters
 #: emit them as ordinary observations using these canonical names.
@@ -68,6 +68,7 @@ class VariabilityPolicy(StrictModel):
     cv_unstable: float = Field(default=0.15, alias="cvUnstable", gt=0)
     slow_share_unstable: float = Field(default=0.30, alias="slowShareUnstable", gt=0, le=1)
     outlier_fence_k: float = Field(default=1.5, alias="outlierFenceK", gt=0)
+    mode_minimum_samples: int = Field(default=8, alias="modeMinimumSamples", ge=8)
     mode_min_r2: float = Field(default=0.5, alias="modeMinR2", ge=0, le=1)
     mode_min_cluster_share: float = Field(default=0.10, alias="modeMinClusterShare", gt=0, le=0.5)
     mode_gap_ratio: float = Field(
@@ -446,7 +447,7 @@ def _detect_modes(
 
     ordered = sorted(_badness(value, direction) for value in values)
     count = len(ordered)
-    if count < 4:
+    if count < policy.mode_minimum_samples:
         return None
     grand = mean(ordered)
     total_ss = sum((value - grand) ** 2 for value in ordered)

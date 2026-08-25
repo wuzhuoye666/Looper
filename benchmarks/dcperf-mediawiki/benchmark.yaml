@@ -415,6 +415,33 @@ spec:
   x-extensions:
     bootstrapCatalog: true
     executionStatus: executable
+    diagnosticRecommendations:
+      enabled: true
+      policy:
+        minimumSamples: 5
+        cvStable: 0.05
+        cvUnstable: 0.15
+        slowShareUnstable: 0.30
+        outlierFenceK: 1.5
+        modeMinimumSamples: 8
+        modeMinR2: 0.5
+        modeMinClusterShare: 0.10
+        modeGapRatio: 2.5
+        skewThreshold: 1.0
+        associationMinCorrelation: 0.3
+        associationMinLift: 1.2
+        attributionMinEtaSquared: 0.25
+      rules:
+        - {id: dcperf.stable, scope: group, when: stable, priority: low, kind: diagnostic, action: 当前成功吞吐在合同阈值内稳定，可保持负载配置继续验证。, rationale: 通过门禁的 DCPerf 原始轮次变异系数处于稳定范围。}
+        - {id: dcperf.warning, scope: group, when: warning, priority: medium, kind: retest, action: 保持 duration、scale-out 和 client threads 不变并增加重复次数。, rationale: 成功吞吐出现波动、偏度或异常轮次。}
+        - {id: dcperf.unstable, scope: group, when: unstable, priority: high, kind: retest, action: 检查服务预热、CPU 饱和与后台负载后执行同配置复测。, rationale: 成功吞吐的 CV 或慢轮次占比超过 DCPerf 合同阈值。}
+        - {id: dcperf.samples, scope: group, when: insufficient_evidence, priority: high, kind: retest, action: 将通过全部门禁的有效轮次补足到至少 5 次。, rationale: 当前有效吞吐样本不足。}
+        - {id: dcperf.outlier, scope: group, when: outlier_present, priority: medium, kind: diagnostic, action: 展开原始终端并对照 wrk、HHVM、nginx 和系统指纹定位异常轮次。, rationale: 原始成功吞吐存在 IQR 异常值。}
+        - {id: dcperf.multimodal, scope: group, when: multimodal, priority: high, kind: retest, action: 固定服务状态、CPU affinity 和频率后做分组复测。, rationale: 至少 8 个有效样本呈现疑似快慢双模式。}
+        - {id: dcperf.system-metrics, scope: group, when: missing_system_metrics, priority: high, kind: data_collection, action: 补充 CPU 利用率、频率、迁移和上下文切换采集。, rationale: 缺少解释全栈吞吐波动所需的系统指标。}
+        - {id: dcperf.gates, scope: group, when: gate_failure, priority: high, kind: diagnostic, action: 先排查请求核对、失败率、超时或 CPU 饱和门禁，再补测。, rationale: 未过必要门禁的轮次已从吞吐统计中排除。}
+        - {id: dcperf.single-target, scope: study, when: single_target, priority: medium, kind: retest, action: 如需机型比较，请以相同 DCPerf 合同增加目标机。, rationale: 单目标结果只用于稳定性诊断，不形成性能优劣或采购结论。}
+        - {id: dcperf.no-comparison, scope: study, when: no_comparison, priority: low, kind: diagnostic, action: 当前报告不输出服务器排名。, rationale: 缺少同工作负载的可比较有效证据。}
     resultPresentation:
       sections:
         - id: throughput-latency

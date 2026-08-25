@@ -17,24 +17,12 @@ const BENCHMARK_COPY: Record<string, BenchmarkCopy> = {
     decisionQuestion: '在满足 P99 延迟目标的前提下，哪种服务器规格能以更低的小时成本完成更多银行事务？',
     scenario: 'database',
   },
-  'looper.fixture.config-driven': {
-    name: '配置驱动适配器合同验证套件',
-    description: '验证完整测试包的下发、环境准备、任务执行、结果标准化、证据采集和结果展示流程。',
-    decisionQuestion: '目标机器能否在无需预装套件脚本或手工配置环境的情况下，接收并运行完整测试包？',
-    scenario: 'development-test',
-  },
   'dcperf.mediawiki.closed-loop': {
     name: 'DCPerf MediaWiki 单机闭环测试',
     selectionLabel: '网站承载能力（DCPerf）',
     description: '在同一台云服务器上运行 MediaWiki 全栈服务和负载生成器，测试生产型网站场景的请求处理能力。',
     decisionQuestion: '当 MediaWiki 全部组件共享一台云服务器时，各服务器规格每秒能完成多少个成功请求？',
     scenario: 'web-api',
-  },
-  'looper.demo.compression': {
-    name: '确定性压缩循环测试',
-    description: '使用固定数据进行 zlib 压缩，在确保逐字节无损还原和合理压缩率的同时，对比吞吐量与延迟。',
-    decisionQuestion: '哪种服务器和压缩参数能在确保无损还原及合理压缩率的同时，提供最高的数据吞吐量？',
-    scenario: 'development-test',
   },
   'looper.phoronix-phpbench': {
     name: 'Phoronix 测试套件 / PHPBench',
@@ -164,10 +152,7 @@ export function inputKindLabel(kind: BenchmarkInputDeclaration['kind']): string 
   return INPUT_KIND_LABELS[kind];
 }
 
-export function executionBlockerLabel(benchmark: Pick<Benchmark, 'id' | 'executionBlockerReason'>): string | undefined {
+export function executionBlockerLabel(benchmark: Pick<Benchmark, 'executionBlockerReason'>): string | undefined {
   if (!benchmark.executionBlockerReason) return undefined;
-  if (benchmark.id === 'benchbase.smallbank.postgres') {
-    return '该套件需要分别部署客户端和服务端；当前 Looper 暂不支持客户端 / 服务端多机编排。';
-  }
   return benchmark.executionBlockerReason;
 }

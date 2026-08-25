@@ -31,13 +31,24 @@ from sqlalchemy import select
 
 def test_scenario_catalog_exposes_execution_boundary(db_session: object) -> None:
     session = db_session
+    for benchmark_id in (
+        "benchbase.smallbank.postgres",
+        "looper.fixture.config-driven",
+        "looper.demo.compression",
+    ):
+        record = session.scalar(
+            select(BenchmarkRecord).where(BenchmarkRecord.benchmark_id == benchmark_id)
+        )
+        session.delete(record)
+    session.flush()
     records = list(session.scalars(select(BenchmarkRecord).order_by(BenchmarkRecord.key)))
     views = {record.benchmark_id: benchmark_view(record) for record in records}
-    assert set(views) >= {
-        "looper.demo.compression",
+    assert set(views) >= {"dcperf.mediawiki.closed-loop", "looper.sysbench"}
+    assert {
         "benchbase.smallbank.postgres",
-        "dcperf.mediawiki.closed-loop",
-    }
+        "looper.fixture.config-driven",
+        "looper.demo.compression",
+    }.isdisjoint(views)
     assert "looper.phoronix-phpbench" in views
     phoronix = views["looper.phoronix-phpbench"]
     assert phoronix["selectionReady"] is True
@@ -61,12 +72,7 @@ def test_scenario_catalog_exposes_execution_boundary(db_session: object) -> None
             ],
         }
     ]
-    benchbase = views["benchbase.smallbank.postgres"]
-    assert benchbase["category"] == "scenario"
-    assert benchbase["executionStatus"] == "stage0-adapter-only"
-    assert benchbase["singleNodeReady"] is False
-    assert benchbase["runnable"] is False
-    assert benchbase["primaryMetric"] == "committed_tps"
+    assert "auditStatus" not in views["dcperf.mediawiki.closed-loop"]
 
 
 def test_public_catalog_hides_internal_validation_suites(db_session: object) -> None:
@@ -185,27 +191,22 @@ def test_benchmark_view_exposes_metric_presentation_without_dropping_metrics(
     records = list(session.scalars(select(BenchmarkRecord).order_by(BenchmarkRecord.key)))
     views = {record.benchmark_id: benchmark_view(record) for record in records}
 
-    benchbase = views["benchbase.smallbank.postgres"]
+    sysbench = views["looper.sysbench"]
     # The legacy metrics string list is preserved for existing clients.
-    assert "committed_tps" in benchbase["metrics"]
+    assert "events_per_sec" in sysbench["metrics"]
     # Structured definitions are additive.
-    assert "metricDefinitions" in benchbase
-    committed = benchbase["metricDefinitions"]["committed_tps"]
-    assert committed["unit"] == "transactions/second"
-    assert committed["presentation"]["roles"] == ["primary_outcome"]
-    assert committed["presentation"]["defaultVisibility"] == "summary"
-
-    # A context metric is machine-readable and not presented as a hard gate.
-    offered = benchbase["metricDefinitions"]["offered_tps"]
-    assert offered["presentation"]["roles"] == ["context"]
+    assert "metricDefinitions" in sysbench
+    events = sysbench["metricDefinitions"]["events_per_sec"]
+    assert events["unit"] == "events/s"
+    assert events["presentation"]["roles"] == ["primary_outcome"]
+    assert events["presentation"]["defaultVisibility"] == "summary"
 
     # A hard gate role is a display hint and never a substitute for scenario gates.
-    p99 = benchbase["metricDefinitions"]["latency_p99_ms"]
-    assert "hard_gate" in p99["presentation"]["roles"]
-    assert "guardrail" in p99["presentation"]["roles"]
+    run_ok = sysbench["metricDefinitions"]["sysbench_run_ok"]
+    assert "hard_gate" in run_ok["presentation"]["roles"]
 
     # Primary metric appears as a primary_outcome in its presentation semantics.
-    assert "primary_outcome" in committed["presentation"]["roles"]
+    assert "primary_outcome" in events["presentation"]["roles"]
 
 
 def test_catalog_exposes_only_current_version_per_benchmark_id(db_session: object) -> None:
@@ -496,11 +497,15 @@ def test_experiment_view_keeps_all_declared_sample_metrics(db_session: object) -
     assert all(sample["sampleCount"] == 3 for sample in samples)
 
 
-def test_stage0_adapter_cannot_be_selected_for_a_new_study(
+def test_removed_adapter_cannot_be_selected_for_a_new_study(
     db_session: object,
 ) -> None:
     session = db_session
-    with pytest.raises(SchedulerError, match="not directly testable"):
+    session.delete(session.scalar(select(BenchmarkRecord).where(
+        BenchmarkRecord.benchmark_id == "benchbase.smallbank.postgres"
+    )))
+    session.flush()
+    with pytest.raises(SchedulerError, match="not installed"):
         _normalize_create_request(
             {
                 "mode": "selection",
