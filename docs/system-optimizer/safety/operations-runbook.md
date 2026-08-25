@@ -1,7 +1,9 @@
 # System Optimizer 运维与验收手册（M5-01 草案）
 
-> 当前状态：synthetic M3 可运行；真实 CVM 动态闭环、REAL-L6C、REAL-SSH、REAL-S9
-> 尚未关闭。本手册不会把 readiness 或 collector smoke test 写成真实闭环成功。
+> 当前状态：synthetic M3 可运行；真实 CVM 动态闭环已两轮关闭（REAL-M3-01 功能校准
+> 2026-08-25 晨、REAL-DISC-01 双臂发现运行 2026-08-25 午后含首个真实 accepted candidate
+> 与晋升）；REAL-L6C、REAL-SSH、REAL-S9 尚未关闭。本手册不会把 readiness 或 collector
+> smoke test 写成真实闭环成功。
 
 ## 1. 三命令本地验收
 
@@ -57,6 +59,22 @@ readiness 只证明接口可读/可构建，不代表动态 A/B、收益、回�
 归档至少包含：git commit、环境 snapshot、所有输入合同、原始 collector/workload 输出、
 content-addressed evidence、固定索引、receipt 全链、attention/lease 终态、命令和日志。
 `.artifacts/` 默认不提交 Git；若要长期保存，先确认脱敏、存储位置和保留期。
+
+### 5.1 REAL-DISC-01 双臂发现运行（2026-08-25，已归档）
+
+- 目标：`47.104.25.156`（阿里云 u1-c1m1.2xlarge 8C8G，按量，平台下单）；代码 `8439654`
+  部署于 `/opt/looper-discovery/`；负载 `stress-ng --vm 8 --vm-bytes 600M --timeout 60s`。
+- 用户显式授权：THP madvise→always / madvise→never 双相位、MDE 0.02、SLO 45131.14、
+  相位结束无条件恢复。
+- 结果：相位 1 always +15.59% 晋升（复测中位 51649 vs 基线 44684，CV 0.65%）；相位 2
+  never −1.31% 多窗破退化界 safety-triggered 拒绝。双相位 THP 均恢复 madvise，零
+  guard/lease/attention，receipt 全 terminal。
+- 证据：`.artifacts/discovery-8vcpu-20260825/`（未跟踪）；两相位 tar 包 sha256
+  `02b77f20893f2ac56b985bdee4bb272d29ab33db0a25c908c5c5b4477bb83dbe` /
+  `4598915084fdc300d7d5d2fde5011289a21f32881f7ee822103bdbb34f85d3a4` 双端一致；
+  当前代码回放验证 ALL-PASS（`downloaded-verification.json`）。
+- 诚实边界：SLO 为用户批准的介入触发器而非机器缺陷声明；无先验宣称（MEMORY 旧记录
+  "never=−3.8%" 无 artifact 支撑已废弃）；单主指标为会话设计选择。
 
 ## 6. schema 与迁移承诺
 
