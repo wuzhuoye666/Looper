@@ -17,7 +17,9 @@ from looper_api.benchmark_registration import (
     registration_ready,
     update_registration,
 )
-from looper_api.models import BenchmarkRecord, EventRecord
+from looper_api.models import BenchmarkRecord, BenchmarkRegistrationRecord, EventRecord
+from looper_api.seed import seed_system
+from looper_core.canonical import utc_now
 from looper_api.serialization import benchmark_view
 from sqlalchemy import select
 
@@ -86,6 +88,48 @@ def test_retired_yaml_configuration_import_is_rejected() -> None:
     assert next(
         item for item in constraints if item["code"] == "identity.not-retired"
     )["status"] == "fail"
+
+
+def test_startup_keeps_historical_registration_for_retired_benchmark(db_session) -> None:
+    now = utc_now()
+    key = "looper.demo.compression@0.0.1-history"
+    benchmark = BenchmarkRecord(
+        key=key,
+        benchmark_id="looper.demo.compression",
+        version="0.0.1-history",
+        name="Retired historical benchmark",
+        description="historical evidence only",
+        license="INTERNAL",
+        manifest_digest="sha256:" + "9" * 64,
+        manifest_json={"historical": True},
+        manifest_path=None,
+        package_digest=None,
+        trusted=True,
+        installed_at=now,
+    )
+    db_session.add(benchmark)
+    db_session.add(
+        BenchmarkRegistrationRecord(
+            id="reg_retired_history",
+            status="registered",
+            revision=1,
+            draft_json={},
+            constraints_json=[],
+            manifest_digest=benchmark.manifest_digest,
+            package_digest=None,
+            package_path=None,
+            benchmark_key=key,
+            created_at=now,
+            updated_at=now,
+            registered_at=now,
+        )
+    )
+    db_session.flush()
+
+    seed_system(db_session)
+
+    assert db_session.get(BenchmarkRecord, key) is benchmark
+    assert db_session.get(BenchmarkRegistrationRecord, "reg_retired_history") is not None
 
 
 def test_raw_result_is_a_first_class_raw_evidence_role() -> None:

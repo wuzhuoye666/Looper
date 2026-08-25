@@ -4,7 +4,7 @@ from pathlib import Path
 
 from looper_core.canonical import utc_now
 from looper_core.manifest import load_and_validate_manifest
-from sqlalchemy import delete, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from looper_api.models import BenchmarkRecord, ProjectRecord
@@ -17,11 +17,6 @@ def repository_root() -> Path:
 
 def seed_system(session: Session) -> None:
     now = utc_now()
-    session.execute(
-        delete(BenchmarkRecord).where(
-            BenchmarkRecord.benchmark_id.in_(RETIRED_BENCHMARK_IDS)
-        )
-    )
     project = session.get(ProjectRecord, "default")
     if project is None:
         session.add(
