@@ -66,7 +66,7 @@ def test_server_constraints_require_complete_traceable_contract() -> None:
     assert all(item["detail"] for item in constraints)
 
 
-def test_yaml_configuration_import_prefills_manifest_facts() -> None:
+def test_retired_yaml_configuration_import_is_rejected() -> None:
     path = Path(__file__).parents[1] / "benchmarks" / "benchbase-smallbank" / "benchmark.yaml"
     draft = draft_from_manifest_bytes(path.read_bytes(), filename=path.name)
 
@@ -82,7 +82,10 @@ def test_yaml_configuration_import_prefills_manifest_facts() -> None:
     assert draft.has_reference is True
     assert draft.cross_environment_audit is True
     constraints, _ = evaluate_registration_constraints(draft)
-    assert registration_ready(constraints)
+    assert not registration_ready(constraints)
+    assert next(
+        item for item in constraints if item["code"] == "identity.not-retired"
+    )["status"] == "fail"
 
 
 def test_raw_result_is_a_first_class_raw_evidence_role() -> None:

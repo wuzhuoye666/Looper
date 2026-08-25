@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from looper_api.events import append_event
 from looper_api.models import BenchmarkRecord, BenchmarkRegistrationRecord
+from looper_api.retired_benchmarks import is_retired_benchmark
 
 
 def _camel(value: str) -> str:
@@ -184,6 +185,11 @@ def evaluate_registration_constraints(
     constraints.append(_constraint(
         "identity.stable-id", "身份", "Benchmark ID 符合 v1alpha1 稳定标识规则",
         identifier_ok, "必须匹配 ^[a-z][a-z0-9.-]{2,63}$。",
+    ))
+    constraints.append(_constraint(
+        "identity.not-retired", "身份", "Benchmark ID 未被永久退役",
+        not is_retired_benchmark(draft.benchmark_id),
+        "永久退役的 Benchmark ID 不允许重新登记。",
     ))
     revision_ok = bool(
         re.fullmatch(r"[0-9a-f]{40}", draft.source_revision)
