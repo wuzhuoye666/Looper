@@ -10,6 +10,8 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
+import urllib.error
 import urllib.request
 import zipfile
 from pathlib import Path, PurePosixPath
@@ -18,11 +20,41 @@ PTS_URL = (
     "https://github.com/phoronix-test-suite/phoronix-test-suite/archive/"
     "f977d6e270d5eb9eebfa26d3ca62385c00a547a6.zip"
 )
+PTS_CODELOAD_URL = (
+    "https://codeload.github.com/phoronix-test-suite/phoronix-test-suite/zip/"
+    "f977d6e270d5eb9eebfa26d3ca62385c00a547a6"
+)
 PTS_SHA256 = "9d4b811a1ff4710ac89d19b34ba7ef4188b8ce1bfe61d5d276b0ee689dba1dc4"
 PTS_VERSION = "10.8.6"
 PAYLOAD_URL = "http://phoronix-test-suite.com/benchmark-files/phpbench-081-patched2.zip"
 PAYLOAD_SHA256 = "32503bd4ace0c8429493de864ca48bb16febed867e52b75f4369d7145f797718"
 MAX_DOWNLOAD_BYTES = 32 * 1024 * 1024
+
+# Some cloud targets have slow or flaky egress to GitHub/codeload. Keep the
+# digest-pinned sources ordered so a slow (but not failed) connection can fall
+# back to the equivalent codeload endpoint. A mirror can be injected through
+# LOOPER_PTS_ARCHIVE_URL / LOOPER_PHPBENCH_PAYLOAD_URL; the SHA-256 digest is
+# still enforced, so a mirror serving different bytes fails closed.
+PTS_URLS = tuple(
+    url
+    for url in dict.fromkeys(
+        [os.environ.get("LOOPER_PTS_ARCHIVE_URL"), PTS_URL, PTS_CODELOAD_URL]
+    )
+    if url
+)
+PAYLOAD_URLS = tuple(
+    url
+    for url in dict.fromkeys(
+        [os.environ.get("LOOPER_PHPBENCH_PAYLOAD_URL"), PAYLOAD_URL]
+    )
+    if url
+)
+
+DOWNLOAD_ATTEMPTS = 3
+DOWNLOAD_READ_TIMEOUT = 60
+DOWNLOAD_TOTAL_TIMEOUT = 600
+DOWNLOAD_CHUNK_BYTES = 128 * 1024
+DOWNLOAD_RETRY_DELAYS = (2, 5, 10)
 
 
 class PreparationError(RuntimeError):
@@ -78,25 +110,98 @@ def _ensure_system_packages() -> tuple[str, str]:
     return php, unzip
 
 
-def _download(url: str, destination: Path, expected_sha256: str) -> None:
-    if (
-        destination.is_file()
-        and hashlib.sha256(destination.read_bytes()).hexdigest() == expected_sha256
-    ):
-        return
+def _download_once(url: str, destination: Path, expected_sha256: str) -> None:
+    """Stream one digest-pinned download to destination.
+
+    Reads in fixed chunks so a slow-but-steady connection is allowed to finish
+    within DOWNLOAD_TOTAL_TIMEOUT while each socket read still respects
+    DOWNLOAD_READ_TIMEOUT. A digest mismatch or size overflow is fatal.
+    """
     request = urllib.request.Request(url, headers={"User-Agent": "Looper/1 PTS adapter"})
-    with urllib.request.urlopen(request, timeout=60) as response:  # noqa: S310 - pinned digest
-        content = response.read(MAX_DOWNLOAD_BYTES + 1)
-    if len(content) > MAX_DOWNLOAD_BYTES:
-        raise PreparationError(f"dependency download exceeded {MAX_DOWNLOAD_BYTES} bytes")
-    observed = hashlib.sha256(content).hexdigest()
+    deadline = time.monotonic() + DOWNLOAD_TOTAL_TIMEOUT
+    total = 0
+    with (
+        urllib.request.urlopen(request, timeout=DOWNLOAD_READ_TIMEOUT) as response,
+        destination.open("wb") as stream,
+    ):
+        while True:
+            if time.monotonic() > deadline:
+                raise TimeoutError(
+                    f"download exceeded {DOWNLOAD_TOTAL_TIMEOUT}s wall-clock: {url}"
+                )
+            chunk = response.read(DOWNLOAD_CHUNK_BYTES)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > MAX_DOWNLOAD_BYTES:
+                raise PreparationError(
+                    f"dependency download exceeded {MAX_DOWNLOAD_BYTES} bytes: {url}"
+                )
+            stream.write(chunk)
+    if total == 0:
+        raise PreparationError(f"dependency download returned no bytes: {url}")
+    observed = hashlib.sha256(destination.read_bytes()).hexdigest()
     if observed != expected_sha256:
         raise PreparationError(
             f"dependency digest mismatch for {url}: expected {expected_sha256}, got {observed}"
         )
-    temporary = destination.with_suffix(destination.suffix + ".tmp")
-    temporary.write_bytes(content)
-    temporary.replace(destination)
+
+
+def _download(
+    urls: tuple[str, ...] | list[str] | str,
+    destination: Path,
+    expected_sha256: str,
+) -> None:
+    """Try each source URL with retries; digest is always enforced."""
+    if isinstance(urls, str):
+        urls = [urls]
+    if (
+        destination.is_file()
+        and hashlib.sha256(destination.read_bytes()).hexdigest() == expected_sha256
+    ):
+        print(f"using cached {destination.name} (sha256 ok)", flush=True)
+        return
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    last_error: Exception | None = None
+    for url in urls:
+        temporary = destination.with_suffix(destination.suffix + ".tmp")
+        try:
+            for attempt in range(1, DOWNLOAD_ATTEMPTS + 1):
+                try:
+                    print(
+                        f"downloading {destination.name} from {url} "
+                        f"(attempt {attempt}/{DOWNLOAD_ATTEMPTS})",
+                        flush=True,
+                    )
+                    _download_once(url, temporary, expected_sha256)
+                    temporary.replace(destination)
+                    print(
+                        f"downloaded {destination.name} "
+                        f"({destination.stat().st_size} bytes)",
+                        flush=True,
+                    )
+                    return
+                except PreparationError:
+                    temporary.unlink(missing_ok=True)
+                    raise
+                except (OSError, TimeoutError, urllib.error.URLError) as error:
+                    # socket.timeout is a TimeoutError/OSError subclass.
+                    last_error = error
+                    temporary.unlink(missing_ok=True)
+                    if attempt < DOWNLOAD_ATTEMPTS:
+                        delay = DOWNLOAD_RETRY_DELAYS[
+                            min(attempt - 1, len(DOWNLOAD_RETRY_DELAYS) - 1)
+                        ]
+                        print(
+                            f"download from {url} failed: {error}; retrying in {delay}s",
+                            flush=True,
+                        )
+                        time.sleep(delay)
+                    else:
+                        print(f"source exhausted: {url}", flush=True)
+        except PreparationError:
+            raise
+    raise PreparationError(f"dependency download failed for {destination.name}: {last_error}")
 
 
 def _extract_pts(archive_path: Path, destination: Path) -> Path:
@@ -135,8 +240,8 @@ def main(argv: list[str] | None = None) -> int:
     php, _unzip = _ensure_system_packages()
     pts_archive = cache / "phoronix-test-suite.zip"
     payload = cache / "phpbench-081-patched2.zip"
-    _download(PTS_URL, pts_archive, PTS_SHA256)
-    _download(PAYLOAD_URL, payload, PAYLOAD_SHA256)
+    _download(PTS_URLS, pts_archive, PTS_SHA256)
+    _download(PAYLOAD_URLS, payload, PAYLOAD_SHA256)
     launcher = _extract_pts(pts_archive, cache / "phoronix-test-suite")
 
     bin_dir = cache / "bin"

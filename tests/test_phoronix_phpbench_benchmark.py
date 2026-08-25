@@ -29,6 +29,9 @@ producer = _load_module("looper_phoronix_phpbench_producer", PACKAGE_DIR / "prod
 normalizer = _load_module(
     "looper_phoronix_phpbench_normalizer", PACKAGE_DIR / "normalizer.py"
 )
+prepare = _load_module(
+    "looper_phoronix_phpbench_prepare", PACKAGE_DIR / "prepare.py"
+)
 
 
 def _write_envelope(tmp_path: Path, **parameters: int) -> Path:
@@ -227,3 +230,39 @@ def test_normalizer_failure_emits_only_failure_flags(tmp_path: Path) -> None:
     assert all(item["value"] is False for item in metrics)
     result = json.loads((output / "result.json").read_text(encoding="utf-8"))
     assert result["status"] == "failed"
+
+
+def test_prepare_download_retries_then_succeeds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[str] = []
+
+    def fake_download_once(url: str, destination: Path, _sha: str) -> None:
+        calls.append(url)
+        if len(calls) == 1:
+            raise OSError("network down")
+        destination.write_bytes(b"payload")
+
+    monkeypatch.setattr(prepare, "_download_once", fake_download_once)
+    monkeypatch.setattr(prepare, "DOWNLOAD_RETRY_DELAYS", (0, 0, 0))
+    destination = tmp_path / "artifact.zip"
+    prepare._download(prepare.PTS_URLS, destination, "irrelevant")
+    assert len(calls) == 2
+    assert calls[0] == calls[1]
+    assert destination.read_bytes() == b"payload"
+
+
+def test_prepare_download_raises_after_all_attempts_fail(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[str] = []
+
+    def fake_download_once(url: str, destination: Path, _sha: str) -> None:
+        calls.append(url)
+        raise OSError("boom")
+
+    monkeypatch.setattr(prepare, "_download_once", fake_download_once)
+    monkeypatch.setattr(prepare, "DOWNLOAD_RETRY_DELAYS", (0, 0, 0))
+    with pytest.raises(prepare.PreparationError):
+        prepare._download(prepare.PAYLOAD_URLS, tmp_path / "payload.zip", "irrelevant")
+    assert len(calls) == prepare.DOWNLOAD_ATTEMPTS

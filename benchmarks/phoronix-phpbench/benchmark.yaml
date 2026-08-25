@@ -3,7 +3,7 @@ kind: Benchmark
 metadata:
   id: looper.phoronix-phpbench
   name: Phoronix Test Suite / PHPBench
-  version: 10.8.6-phpbench1.1.6-looper6
+  version: 10.8.6-phpbench1.1.6-looper7
   description: "Phoronix Test Suite 10.8.6 的固定 profile 接入包。Looper 在用户选定目标后自动部署 PTS、PHP CLI、unzip 和 Adapter；producer 仅允许执行 pts/phpbench-1.1.6，保存 PTS 原始 JSON；normalizer 校验 profile、Score 单位与 HIB 方向后生成标准观测。"
   license: GPL-3.0-or-later
   source:

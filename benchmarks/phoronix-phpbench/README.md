@@ -21,11 +21,15 @@ The normalizer only emits a score when the result identifier, `Score` scale,
 `HIB` direction, finite aggregate, and finite raw samples all match the package
 contract. Raw PTS JSON is kept as `pts-result.json`.
 
-Version `looper6` is executable through Looper's managed local-process
+Version `looper7` is executable through Looper's managed local-process
 provisioning contract. A clean Linux Worker only needs Python, the Worker
 runtime, network access during first preparation, and root/passwordless sudo.
 After the user selects a target and starts the experiment, Looper delivers this
 complete package, runs `prepare.py`, installs PHP CLI/unzip when missing,
 downloads and verifies the pinned PTS source and PHPBench payload, and reuses the
-version-scoped dependency cache on later attempts. Final registration of the ZIP
-is the explicit approval for this trusted local-process package.
+version-scoped dependency cache on later attempts. The downloader streams in
+fixed chunks, retries transient failures with backoff, falls back to the
+equivalent codeload archive, and keeps the SHA-256 check as a hard gate. On
+cloud targets with slow egress a mirror can be injected via
+`LOOPER_PTS_ARCHIVE_URL` or `LOOPER_PHPBENCH_PAYLOAD_URL`. Final registration of
+the ZIP is the explicit approval for this trusted local-process package.

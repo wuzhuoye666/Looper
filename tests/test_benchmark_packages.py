@@ -139,7 +139,7 @@ def test_executable_zip_registration_grants_explicit_local_package_trust(
     )
     benchmark = db_session.get(
         BenchmarkRecord,
-        "looper.phoronix-phpbench@10.8.6-phpbench1.1.6-looper6",
+        "looper.phoronix-phpbench@10.8.6-phpbench1.1.6-looper7",
     )
     assert benchmark is not None
     assert benchmark.trusted is True
