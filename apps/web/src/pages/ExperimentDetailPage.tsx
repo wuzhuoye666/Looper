@@ -8,6 +8,7 @@ import { StatusBadge } from '../components/StatusBadge';
 import { EmptyState, ErrorState, LoadingState } from '../components/States';
 import { ExperimentTerminal } from '../components/ExperimentTerminal';
 import { API_BASE, api, resolveApiUrl } from '../lib/api';
+import { benchmarkDecisionQuestion } from '../lib/benchmarkPresentation';
 import { formatDate, formatNumber, scoreDelta } from '../lib/format';
 import type { AnalysisData, BenchmarkResultSection, Evaluation, Experiment, MetricDefinition, PostOptimizationStatus, SelectionComparison, SelectionTargetResult } from '../lib/types';
 
@@ -64,11 +65,16 @@ export function ExperimentDetailPage() {
   const experiment = query.data;
   const tabs = experimentTabs(experiment);
   const delta = scoreDelta(experiment.bestScore, experiment.baselineScore);
+  const decisionQuestion = benchmarkDecisionQuestion({
+    id: experiment.benchmarkId || '',
+    decisionQuestion: experiment.decisionQuestion || experiment.description,
+    scenario: experiment.scenario,
+  });
   return <div className="page">
     <BackLink to="/experiments">返回选型研究</BackLink>
     <header className="detail-heading"><div>
       <div className="title-line"><h1>{experiment.name || `研究 ${experiment.id}`}</h1><StatusBadge status={experiment.status} /></div>
-      <p>{experiment.decisionQuestion || experiment.description || '暂无研究描述。'}</p>
+      <p>{decisionQuestion}</p>
       <span className="id-label">ID: {experiment.id} · 更新于 {formatDate(experiment.updatedAt)}</span>
     </div><ExperimentActions status={experiment.status} busy={action.isPending} onAction={value => action.mutate(value)} /></header>
     {action.isError && <div className="inline-alert"><AlertTriangle size={16} />{action.error.message}</div>}
@@ -156,10 +162,7 @@ function Overview({ experiment, evaluations, delta }: { experiment: Experiment; 
     ];
     return <>
       <section className="stat-grid detail-stats">{stats.map(item => <div className="stat-block" key={item.label}><div className="stat-label"><span>{item.label}</span></div><strong>{item.value}</strong><small>{item.note}</small></div>)}</section>
-      <section className="content-grid overview-grid">
-        <div className="panel"><div className="panel-heading"><div><h2>采购问题</h2><p>{experiment.scenario?.workload_class || 'scenario'}</p></div></div><div className="decision-copy">{experiment.decisionQuestion || experiment.scenario?.decision_question || experiment.description}</div></div>
-        <div className="panel"><div className="panel-heading"><div><h2>场景边界</h2></div></div><dl className="info-list"><div><dt>拓扑</dt><dd>{experiment.scenario?.topology || '—'}</dd></div><div><dt>主指标</dt><dd>{experiment.scenario?.primary_metric || experiment.objective || '—'}</dd></div><div><dt>重复</dt><dd>{evaluations.length ? `${evaluations.length} evaluations` : '待执行'}</dd></div></dl></div>
-      </section>
+      <section className="panel"><div className="panel-heading"><div><h2>场景边界</h2></div></div><dl className="info-list"><div><dt>拓扑</dt><dd>{experiment.scenario?.topology || '—'}</dd></div><div><dt>主指标</dt><dd>{experiment.scenario?.primary_metric || experiment.objective || '—'}</dd></div><div><dt>重复</dt><dd>{evaluations.length ? `${evaluations.length} evaluations` : '待执行'}</dd></div></dl></section>
     </>;
   }
   const stats = [

@@ -8,7 +8,7 @@ import { ErrorState } from '../components/States';
 import { TargetSshButton } from '../components/TargetSshButton';
 import { api } from '../lib/api';
 import {
-  benchmarkDecisionQuestion, benchmarkDescription, benchmarkMetricLabel, benchmarkName, benchmarkScenario,
+  benchmarkDecisionQuestion, benchmarkMetricLabel, benchmarkName, benchmarkScenario,
   capabilityLabel, inputKindLabel, topologyLabel,
 } from '../lib/benchmarkPresentation';
 import type { Benchmark, BenchmarkTargetRequirementSummary, CloudInstanceType, CloudProviderId } from '../lib/types';
@@ -296,7 +296,6 @@ export function CreateExperimentPage() {
             <div><span>主要参数</span><strong>{benchmarkMetricLabel(selectedBenchmark, selectedBenchmark.primaryMetric)}</strong></div>
             <div><span>部署方式</span><strong>{topologyLabel(selectedBenchmark.scenario.topology)} · {targetOptions.data?.machineCount ?? 1} 台机器</strong></div>
           </div>}
-          {selectedBenchmark && <div className="benchmark-suite-content full"><strong>套件内容</strong><p>{benchmarkDescription(selectedBenchmark)}</p></div>}
           {requirements.length > 0 && <div className="benchmark-requirements full"><strong>测试机器要求</strong><div className="tags">{requirements.map(label => <span key={label}>{label}</span>)}</div></div>}
           <div className="full">
             <div className="candidate-toolbar">
