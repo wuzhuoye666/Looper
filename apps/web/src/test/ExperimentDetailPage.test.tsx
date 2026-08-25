@@ -99,7 +99,9 @@ describe('experiment result navigation', () => {
 
     expect(screen.getByText('第 1 轮')).toBeInTheDocument();
     expect(screen.getByText('1 / 1 通过')).toBeInTheDocument();
+    expect(screen.getByText('超时预算门禁')).toBeInTheDocument();
+    expect(screen.getByText('超时请求率处于闭环预算范围内。')).toBeInTheDocument();
     expect(screen.getByText('timeout-budget')).toBeInTheDocument();
-    expect(screen.getByText('timeoutRatio')).toBeInTheDocument();
+    expect(screen.getByText('超时率: 0')).toBeInTheDocument();
   });
 });

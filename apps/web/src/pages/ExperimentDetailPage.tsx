@@ -228,10 +228,51 @@ export function ValidityGatesSection({ section, evaluations }: {
     <div className="panel-heading"><div><h2>{section.label}</h2><p>{section.description || '按已测轮次查看失败、超时和资源饱和门禁。'}</p></div></div>
     <div className="validity-run-list">{runs.map((run, index) => <details key={`${run.attemptId}-${index}`} className="validity-run">
       <summary><strong>第 {run.round} 轮</strong><span className="cell-meta">{run.candidate}{run.retry ? ` · 重试 ${run.retry}` : ''}</span><StatusBadge status={run.status === 'completed' ? 'completed' : 'failed'} /><span className="cell-meta">{run.gateResults?.filter(item => item.passed).length || 0} / {run.gateResults?.length || 0} 通过</span></summary>
-      <div className="validity-gate-grid">{(run.gateResults || []).map(gate => <article key={gate.id} className={gate.passed ? 'gate-pass' : 'gate-fail'}><div><strong>{gate.id || '未命名门禁'}</strong><span className="tag">{gate.passed ? '通过' : '未通过'}</span></div>{gate.message && <p>{gate.message}</p>}{gate.details && <pre>{JSON.stringify(gate.details, null, 2)}</pre>}</article>)}</div>
+      <div className="validity-gate-grid">{(run.gateResults || []).map(gate => <article key={gate.id} className={gate.passed ? 'gate-pass' : 'gate-fail'}><div><strong>{gateLabel(gate.id)}</strong><span className="tag">{gate.id || '未命名门禁'}</span><span className="tag">{gate.passed ? '通过' : '未通过'}</span></div>{(gate.message || gate.id) && <p>{gateMessage(gate.id, gate.message)}</p>}{gate.details && <pre>{formatGateDetails(gate.details)}</pre>}</article>)}</div>
       {run.error && <p className="cell-error">{run.error}</p>}
     </details>)}</div>
   </section>;
+}
+
+const gateLabels: Record<string, string> = {
+  'native-identity': '原生工作负载身份',
+  'request-accounting': '请求数核对',
+  'failure-budget': '失败请求率门禁',
+  'timeout-budget': '超时预算门禁',
+  'tail-sample-count': '尾延迟样本数',
+  'cpu-saturation': 'CPU 饱和度门禁',
+};
+
+const gateMessages: Record<string, string> = {
+  'native-identity': '已确认执行的是原生 DCPerf 工作负载。',
+  'request-accounting': 'Wrk 请求数与成功、失败请求数一致。',
+  'failure-budget': '失败请求率低于测试套件门槛。',
+  'timeout-budget': '超时请求率处于闭环预算范围内。',
+  'tail-sample-count': '原生延迟摘要包含足够的请求样本。',
+  'cpu-saturation': '目标 CPU 达到 DCPerf 饱和下限。',
+};
+
+const gateDetailLabels: Record<string, string> = {
+  benchmarkName: 'Benchmark 名称', sourceRevision: '源码版本', difference: '差值', failed: '失败请求数',
+  requests: '请求总数', successful: '成功请求数', tolerance: '允许误差', failedRequestRatio: '失败请求率',
+  maximum: '最大允许值', timeoutRatio: '超时率', minimum: '最低要求', successfulRequests: '成功请求数',
+  cpuUtilizationP95: 'CPU 利用率 P95',
+};
+
+function gateLabel(id?: string) {
+  return (id && gateLabels[id]) || id || '未命名门禁';
+}
+
+function gateMessage(id?: string, message?: string | null) {
+  return (id && gateMessages[id]) || message || '暂无门禁说明。';
+}
+
+function formatGateDetails(details: Record<string, unknown>) {
+  return Object.entries(details).map(([key, value]) => {
+    const label = gateDetailLabels[key] || key;
+    const rendered = typeof value === 'boolean' ? (value ? '是' : '否') : String(value);
+    return `${label}: ${rendered}`;
+  }).join('\n');
 }
 
 const sysbenchMetricColumns = [
