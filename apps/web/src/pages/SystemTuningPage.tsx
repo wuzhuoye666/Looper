@@ -199,7 +199,7 @@ export function SystemTuningPage() {
       {/* ① 定位区 */}
       <div className="tuning-hero panel">
         <div className="tuning-hero-copy">
-          <h1>业务系统调优</h1>
+          <h1>实负载调优</h1>
           <p>在你的业务负载下实测，<strong>只修改系统配置，不碰业务代码</strong>；基线由业务负载在目标机上自测产生，调优结束自动还原现场，每一步留下可回放证据。</p>
           <div className="tuning-badges">
             <span><ShieldCheck size={13} />只改系统配置</span>
