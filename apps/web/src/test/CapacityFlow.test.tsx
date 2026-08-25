@@ -65,7 +65,7 @@ beforeEach(() => {
     if (url.endsWith('/capacity-studies/capacity_test')) return Response.json(current);
     if (url.endsWith('/capacity-studies')) return Response.json({ items: [current], total: 1 });
     if (url.endsWith('/targets')) return Response.json({ items: [
-      { id: 'sut-1', name: '被测一号', status: 'online', lifecycleStatus: 'active', runnable: true, hardware: '4 vCPU' },
+      { id: 'sut-1', name: '被测一号', status: 'online', lifecycleStatus: 'active', runnable: true, hardware: '4 vCPU', privateIp: '10.0.0.1', publicIp: '203.0.113.1' },
       { id: 'loadgen-1', name: '施压一号', status: 'online', lifecycleStatus: 'active', runnable: true, hardware: '8 vCPU' },
     ] });
     if (url.endsWith('/operator/session')) return Response.json({ required: true, configured: true, authenticated: false, operatorGateReady: true });
@@ -91,6 +91,8 @@ it('五步向导保存业务链、服务器矩阵并通过真实预检启动', a
   expect(screen.getByRole('heading', { name: '选择被测服务器和施压机' })).toBeInTheDocument();
 
   fireEvent.click(screen.getByRole('checkbox', { name: /被测一号/ }));
+  expect((screen.getByLabelText('被测一号 内网 URL') as HTMLInputElement).value).toBe('http://10.0.0.1:8000');
+  expect((screen.getByLabelText('被测一号 公网 URL') as HTMLInputElement).value).toBe('http://203.0.113.1:8000');
   fireEvent.change(screen.getByLabelText('内网施压机'), { target: { value: 'loadgen-1' } });
   fireEvent.change(screen.getByLabelText('公网施压机'), { target: { value: 'loadgen-1' } });
   fireEvent.change(screen.getByLabelText('被测一号 内网 URL'), { target: { value: 'http://10.0.0.1:8000' } });

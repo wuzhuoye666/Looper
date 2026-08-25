@@ -315,6 +315,8 @@ def target_view(record: TargetRecord) -> dict[str, Any]:
             or inventory.get("private_ip")
             or ("local" if record.id == "local" else "—")
         ),
+        "privateIp": first_value("private_ip", "privateIp"),
+        "publicIp": first_value("public_ip", "publicIp"),
         "status": status,
         # Cloud resources consistently show the purchased image. SSH probes
         # enrich the fingerprint with the running OS, but must not replace the

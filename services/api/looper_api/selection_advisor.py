@@ -21,6 +21,7 @@ from looper_api.providers.utils import (
     instance_type_search_text,
     matches_instance_type_facets,
 )
+from looper_api.selection_pricing import PriceInfo, estimate_instance_hourly
 
 ScenarioId = Literal[
     "web-api",
@@ -67,6 +68,7 @@ class SelectionAdvisorRequest(ApiModel):
     minimum_network_pps: int | None = Field(default=None, ge=0, le=2_000_000_000)
     code_availability: Literal["available", "unavailable", "unknown"] = "unknown"
     architecture: Literal["x86", "arm", "unknown"] = "unknown"
+    budget_monthly_cny: float | None = Field(default=None, ge=0, le=1_000_000)
     query: str | None = Field(default=None, max_length=120)
     architecture_class: InstanceSelectionClass | None = None
     type_kind: str | None = Field(default=None, max_length=60)
@@ -99,6 +101,23 @@ class AdvisedInstanceType(InstanceTypeInfo):
     match_tier: Literal["preferred", "suitable", "other"]
     reasons: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+    price: "PriceInfo | None" = None
+
+
+class RecommendationScores(ApiModel):
+    scenario_rank: int
+    performance: float
+    hourly_price: float
+    value_per_yuan: float
+
+
+class RecommendedInstanceType(ApiModel):
+    category: Literal["balanced", "value", "performance"]
+    label: str
+    reason: str
+    scores: RecommendationScores
+    item: AdvisedInstanceType
+    price: "PriceInfo | None" = None
 
 
 class SelectionAdvisorResponse(ApiModel):
@@ -119,6 +138,7 @@ class SelectionAdvisorResponse(ApiModel):
     stale: bool = False
     warning: str | None = None
     instance_type_facets: InstanceTypeFacets | None = None
+    top_picks: list[RecommendedInstanceType] = Field(default_factory=list)
 
 
 _ALIBABA_FAMILY_ORDERS: dict[str, list[set[str]]] = {
@@ -231,6 +251,27 @@ def _combined_family_rank(item: InstanceTypeInfo, request: SelectionAdvisorReque
         for component in request.co_located_components
     )
     return rank
+
+
+def _performance_score(item: InstanceTypeInfo, request: SelectionAdvisorRequest) -> float:
+    gpu_relevant = request.minimum_gpu_count > 0 or (item.gpu or 0) > 0
+    gpu_weight = 32.0 if gpu_relevant else 8.0
+    bandwidth = min(
+        item.network_bandwidth_rx_gbps or 0,
+        item.network_bandwidth_tx_gbps or 0,
+    )
+    pps = min(item.network_pps_rx or 0, item.network_pps_tx or 0)
+    return (
+        item.cpu
+        + 4.0 * item.memory_gib
+        + gpu_weight * max(item.gpu or 0, 0)
+        + 0.5 * bandwidth
+        + pps / 1_000_000
+    )
+
+
+def _suitable_rank_limit(request: SelectionAdvisorRequest) -> int:
+    return 2 + len(request.co_located_components)
 
 
 def _zone_capabilities(item: InstanceTypeInfo) -> list[dict[str, object]]:
@@ -402,6 +443,179 @@ def _reasons_and_warnings(
     return reasons, warnings, tier
 
 
+def _to_advised(
+    item: InstanceTypeInfo,
+    request: SelectionAdvisorRequest,
+    price: "PriceInfo | None" = None,
+) -> tuple[AdvisedInstanceType, int]:
+    rank = _combined_family_rank(item, request)
+    reasons, warnings, tier = _reasons_and_warnings(item, request, rank)
+    enriched = enrich_instance_type_labels(item)
+    advised = AdvisedInstanceType(
+        **enriched.model_dump(),
+        matchTier=tier,
+        reasons=reasons,
+        warnings=warnings,
+        price=price,
+    )
+    return advised, rank
+
+
+def _balanced_candidate(
+    candidates: list[InstanceTypeInfo], request: SelectionAdvisorRequest
+) -> InstanceTypeInfo:
+    del request
+    return candidates[0]
+
+
+def _value_candidate(
+    candidates: list[InstanceTypeInfo],
+    request: SelectionAdvisorRequest,
+    price_reader: "Callable[[InstanceTypeInfo], PriceInfo | None]",
+) -> InstanceTypeInfo:
+    def sort_key(item: InstanceTypeInfo) -> tuple[float, float, int]:
+        price = price_reader(item)
+        performance = _performance_score(item, request)
+        if price is None:
+            return (0.0, float("inf"), _combined_family_rank(item, request))
+        hourly = float(price.hourly_amount)
+        value = performance / hourly if hourly > 0 else 0.0
+        return (-value, hourly, _combined_family_rank(item, request))
+
+    return min(candidates, key=sort_key)
+
+
+def _performance_candidate(
+    candidates: list[InstanceTypeInfo],
+    request: SelectionAdvisorRequest,
+    price_reader: "Callable[[InstanceTypeInfo], PriceInfo | None]",
+) -> InstanceTypeInfo:
+    def sort_key(item: InstanceTypeInfo) -> tuple[float, float, int]:
+        price = price_reader(item)
+        hourly = float(price.hourly_amount) if price else float("inf")
+        return (
+            -_performance_score(item, request),
+            hourly,
+            _combined_family_rank(item, request),
+        )
+
+    return min(candidates, key=sort_key)
+
+
+def _recommendation_reason(
+    category: Literal["balanced", "value", "performance"],
+    item: InstanceTypeInfo,
+    request: SelectionAdvisorRequest,
+    *,
+    eligible_total: int,
+    relaxed: bool,
+    price: "PriceInfo | None",
+) -> str:
+    enriched = enrich_instance_type_labels(item)
+    scenario = SCENARIO_LABELS[request.primary_scenario]
+    family_label = enriched.family_label or enriched.type_label or item.family or item.id
+    performance = _performance_score(item, request)
+    bandwidth = min(
+        item.network_bandwidth_rx_gbps or 0,
+        item.network_bandwidth_tx_gbps or 0,
+    )
+    gpu_text = f" / {item.gpu or 0:g} GPU" if item.gpu else ""
+    if category == "balanced":
+        reason = (
+            f"在 {eligible_total} 个合格候选中，{family_label} 对「{scenario}」场景匹配度最高，"
+            f"{item.cpu} vCPU / {item.memory_gib:g} GiB，适合作为均衡选择。"
+        )
+    elif category == "value":
+        if price is None:
+            reason = "价格不可用，无法评估性价比。"
+        else:
+            hourly = float(price.hourly_amount)
+            value = performance / hourly if hourly > 0 else 0.0
+            reason = (
+                f"性能分 {performance:.1f}，性价比分 {value:.1f}"
+                "（性能分 ÷ 实时小时价）在场景匹配候选池中最高。"
+            )
+    else:
+        reason = (
+            f"性能分 {performance:.1f}（{item.cpu} vCPU / {item.memory_gib:g} GiB / "
+            f"{bandwidth:g} Gbit/s{gpu_text}）在场景匹配候选池中最高。"
+        )
+    if relaxed:
+        reason += "（场景匹配候选不足，已放宽到全部合格候选）"
+    return reason
+
+
+def _build_top_picks(
+    ranked: list[InstanceTypeInfo],
+    request: SelectionAdvisorRequest,
+    price_reader: "Callable[[InstanceTypeInfo], PriceInfo | None]",
+) -> list[RecommendedInstanceType]:
+    if not ranked:
+        return []
+    eligible_total = len(ranked)
+    suitable_limit = _suitable_rank_limit(request)
+    suitable_pool = [
+        item
+        for item in ranked
+        if _combined_family_rank(item, request) <= suitable_limit
+    ]
+    pool = suitable_pool if len(suitable_pool) >= 3 else ranked
+    relaxed = pool is not suitable_pool
+
+    pickers = {
+        "balanced": (
+            "均衡型",
+            lambda candidates, req: _balanced_candidate(candidates, req),
+        ),
+        "value": (
+            "性价比型",
+            lambda candidates, req: _value_candidate(candidates, req, price_reader),
+        ),
+        "performance": (
+            "性能型",
+            lambda candidates, req: _performance_candidate(candidates, req, price_reader),
+        ),
+    }
+    selected_ids: set[str] = set()
+    picks: list[RecommendedInstanceType] = []
+    for category, (label, picker) in pickers.items():
+        candidates = [item for item in pool if item.id not in selected_ids]
+        if not candidates:
+            candidates = [item for item in ranked if item.id not in selected_ids]
+        if not candidates:
+            break
+        chosen = picker(candidates, request)
+        selected_ids.add(chosen.id)
+        price = price_reader(chosen)
+        advised, scenario_rank = _to_advised(chosen, request, price)
+        performance = _performance_score(chosen, request)
+        hourly = float(price.hourly_amount) if price else 0.0
+        value_per_yuan = performance / hourly if hourly > 0 else 0.0
+        picks.append(
+            RecommendedInstanceType(
+                category=category,
+                label=label,
+                reason=_recommendation_reason(
+                    category,
+                    chosen,
+                    request,
+                    eligible_total=eligible_total,
+                    relaxed=relaxed,
+                    price=price,
+                ),
+                scores=RecommendationScores(
+                    scenario_rank=scenario_rank,
+                    performance=round(performance, 2),
+                    hourly_price=hourly,
+                    value_per_yuan=round(value_per_yuan, 2),
+                ),
+                item=advised,
+                price=price,
+            )
+        )
+    return picks
+
+
 def advise_instance_types(
     request: SelectionAdvisorRequest,
     items: list[InstanceTypeInfo],
@@ -411,6 +625,7 @@ def advise_instance_types(
     expires_at: str,
     stale: bool = False,
     warning: str | None = None,
+    price_reader: "Callable[[InstanceTypeInfo], PriceInfo | None] | None" = None,
 ) -> SelectionAdvisorResponse:
     remaining = list(items)
     stages: list[ExclusionStage] = []
@@ -490,6 +705,24 @@ def advise_instance_types(
         )
         stages.append(stage)
 
+    if request.budget_monthly_cny is not None and price_reader is not None:
+        def _within_budget(item: InstanceTypeInfo) -> bool:
+            price = price_reader(item)
+            if price is None:
+                return False
+            try:
+                return float(price.monthly_amount) <= request.budget_monthly_cny
+            except (TypeError, ValueError):
+                return False
+
+        remaining, stage = _filter_stage(
+            remaining,
+            "budget",
+            "月预算",
+            _within_budget,
+        )
+        stages.append(stage)
+
     ranked = sorted(
         remaining,
         key=lambda item: (
@@ -503,6 +736,8 @@ def advise_instance_types(
         ),
     )
     eligible_total = len(ranked)
+    _price_reader = price_reader or (lambda _item: None)
+    top_picks = _build_top_picks(ranked, request, _price_reader)
     instance_type_facets = build_instance_type_facets(ranked)
     query = (request.query or "").casefold()
     facet_filters = CatalogFilters(
@@ -518,14 +753,8 @@ def advise_instance_types(
     ]
     advised: list[AdvisedInstanceType] = []
     for item in searched[request.offset : request.offset + request.limit]:
-        rank = _combined_family_rank(item, request)
-        reasons, warnings, tier = _reasons_and_warnings(item, request, rank)
-        item = enrich_instance_type_labels(item)
-        advised.append(
-            AdvisedInstanceType(
-                **item.model_dump(), matchTier=tier, reasons=reasons, warnings=warnings
-            )
-        )
+        advised_item, _rank = _to_advised(item, request, _price_reader(item))
+        advised.append(advised_item)
     next_offset = request.offset + request.limit
     most_restrictive = max(stages, key=lambda item: item.removed, default=None)
     return SelectionAdvisorResponse(
@@ -548,4 +777,5 @@ def advise_instance_types(
         stale=stale,
         warning=warning,
         instanceTypeFacets=instance_type_facets,
+        topPicks=top_picks,
     )

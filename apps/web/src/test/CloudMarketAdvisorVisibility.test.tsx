@@ -39,6 +39,16 @@ describe('选型研究页的云选型助手', () => {
         total: 1, eligibleTotal: 1, offset: 0, limit: 20, nextOffset: null,
         exclusionStages: [{ code: 'availability', label: '可用区库存', before: 1, after: 1, removed: 0 }],
         source: 'live', fetchedAt: '2026-08-24T00:00:00Z', expiresAt: '2026-08-24T00:05:00Z', stale: false,
+        topPicks: [{
+          category: 'balanced', label: '均衡型', reason: '测试推荐理由 S9.ADVISOR',
+          scores: { scenarioRank: 0, performance: 48, estimatedHourly: 0.781, valuePerYuan: 61.5 },
+          item: {
+            provider: 'tencent', region: 'ap-test', id: 'S9.ADVISOR', family: 'S9', cpu: 4, memoryGib: 8,
+            architecture: 'X86', zones: ['ap-test-1'], available: true, matchTier: 'preferred',
+            reasons: ['规格族适合 Web / API 场景'], warnings: [],
+          },
+          price: { hourlyAmount: '0.781', currency: 'CNY', source: 'estimated' },
+        }],
       });
       return response({ items: [] });
     }));

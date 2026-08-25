@@ -187,6 +187,7 @@ export interface BenchmarkRegistration {
 }
 export interface Target {
   id: string; name: string; type?: string; provider?: string; orderId?: string; endpoint?: string;
+  privateIp?: string | null; publicIp?: string | null;
   status?: 'online' | 'offline' | 'degraded' | 'unknown' | 'inventory';
   lifecycleStatus?: 'active' | 'missing' | 'archived'; framework?: string; version?: string;
   hardware?: string; lastSeenAt?: string; lastInventorySeenAt?: string; missingSince?: string;
@@ -404,7 +405,7 @@ export interface SelectionAdvisorRequest {
   exactMemoryGib?: number; workloadScale?: string; minimumGpuCount: number;
   localStorage: 'required' | 'not-required' | 'unknown'; minimumNetworkBandwidthGbps?: number;
   minimumNetworkPps?: number; codeAvailability: 'available' | 'unavailable' | 'unknown';
-  architecture: 'x86' | 'arm' | 'unknown'; query?: string; offset: number; limit: number;
+  architecture: 'x86' | 'arm' | 'unknown'; budgetMonthlyCny?: number; query?: string; offset: number; limit: number;
   architectureClass?: InstanceSelectionClass; typeKind?: string; familyToken?: string;
 }
 export interface SelectionExclusionStage {
@@ -412,13 +413,26 @@ export interface SelectionExclusionStage {
 }
 export interface AdvisedCloudInstanceType extends CloudInstanceType {
   matchTier: 'preferred' | 'suitable' | 'other'; reasons: string[]; warnings: string[];
+  price?: SelectionRecommendationPrice;
+}
+export type RecommendationCategory = 'balanced' | 'value' | 'performance';
+export interface SelectionRecommendationScores {
+  scenarioRank: number; performance: number; hourlyPrice: number; valuePerYuan: number;
+}
+export interface SelectionRecommendationPrice {
+  hourlyAmount: string; monthlyAmount: string; currency: string; source: 'price-table' | 'live' | 'unavailable' | 'estimated';
+  fetchedAt?: string; warning?: string;
+}
+export interface SelectionRecommendationPick {
+  category: RecommendationCategory; label: string; reason: string;
+  scores: SelectionRecommendationScores; item: AdvisedCloudInstanceType; price: SelectionRecommendationPrice | null;
 }
 export interface SelectionAdvisorResponse {
   provider: 'alibaba' | 'tencent'; region: string; zone?: string; items: AdvisedCloudInstanceType[]; total: number;
   eligibleTotal: number; offset: number; limit: number; nextOffset?: number; exclusionStages: SelectionExclusionStage[];
   mostRestrictiveStage?: SelectionExclusionStage; source: 'live' | 'cache' | 'stale-cache';
   fetchedAt: string; expiresAt: string; stale: boolean; warning?: string;
-  instanceTypeFacets?: InstanceTypeFacets;
+  instanceTypeFacets?: InstanceTypeFacets; topPicks: SelectionRecommendationPick[];
 }
 export interface CloudImage {
   provider: CloudProviderId; region: string; id: string; name: string; platform?: string; architecture?: string;

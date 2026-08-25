@@ -1089,6 +1089,37 @@ class AlibabaEcsProvider(CloudProvider):
             "no usable system disk category", code="system_disk_category_unresolved"
         )
 
+    def quote_instance_type(
+        self,
+        *,
+        region: str,
+        zone: str,
+        instance_type: str,
+        image_id: str,
+        system_disk_gib: int = 50,
+        system_disk_category: str | None = None,
+        public_ip: bool = True,
+        public_bandwidth_mbps: int = 1,
+    ) -> ProviderQuote:
+        spec = CloudPurchaseSpec(
+            provider=self.id,
+            region=region,
+            zone=zone,
+            instance_type=instance_type,
+            image_id=image_id,
+            instance_name="selection-price",
+            count=1,
+            billing_mode="postpaid",
+            vpc_id="selection-quote-vpc",
+            subnet_id="selection-quote-subnet",
+            security_group_ids=["selection-quote-sg"],
+            system_disk_type=system_disk_category,
+            system_disk_gib=system_disk_gib,
+            public_ip=public_ip,
+            internet_bandwidth_mbps=public_bandwidth_mbps,
+        )
+        return self.quote(spec)
+
     def purchase(
         self,
         spec: CloudPurchaseSpec,

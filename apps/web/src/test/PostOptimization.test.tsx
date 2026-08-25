@@ -19,6 +19,8 @@ const action = {
   description: '只调整一个低风险 Benchmark 参数。',
 };
 
+let currentExperiment = experiment;
+
 function renderPage() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(<QueryClientProvider client={client}>
@@ -32,6 +34,7 @@ describe('Benchmark 完成后的优化复测', () => {
   afterEach(() => cleanup());
 
   beforeEach(() => {
+    currentExperiment = experiment;
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       let data: unknown = {};
@@ -47,7 +50,7 @@ describe('Benchmark 完成后的优化复测', () => {
           baselineParameters: { compression_level: 6, chunk_size: 16384 },
         };
       } else if (url.endsWith('/experiments/exp-done')) {
-        data = experiment;
+        data = currentExperiment;
       }
       return new Response(JSON.stringify(data), {
         status: init?.method === 'POST' ? 201 : 200,
@@ -73,5 +76,19 @@ describe('Benchmark 完成后的优化复测', () => {
       const call = vi.mocked(fetch).mock.calls.find(([, init]) => init?.method === 'POST');
       expect(String(call?.[0])).toContain('/experiments/exp-done/post-optimization');
     });
+  });
+
+  it('VGO 完成后不显示通用优化复测窗口', async () => {
+    currentExperiment = {
+      ...experiment,
+      benchmarkId: 'looper.vgo.variability',
+      benchmarkName: 'VGO 性能波动与稳定性测试',
+    };
+    renderPage();
+
+    expect(await screen.findByRole('heading', { name: '完成的压缩测试' })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Benchmark 完成后的优化复测' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '优化建议' })).toBeInTheDocument();
+    expect(vi.mocked(fetch).mock.calls.some(([input]) => String(input).endsWith('/post-optimization'))).toBe(false);
   });
 });

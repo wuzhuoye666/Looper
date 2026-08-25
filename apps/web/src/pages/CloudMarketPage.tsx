@@ -5,6 +5,7 @@ import {
   CheckCircle2,
   ChevronDown,
   ChevronLeft,
+  ClipboardList,
   Cloud,
   Cpu,
   LockKeyhole,
@@ -19,7 +20,7 @@ import {
   XCircle,
 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
+import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { PageHeader } from '../components/PageHeader';
 import { InstanceTypeFacetFilter } from '../components/InstanceTypeFacetFilter';
 import { InstancePricePreview } from '../components/InstancePricePreview';
@@ -752,7 +753,7 @@ export function CloudMarketPage() {
     <PageHeader
       title="云资源市场"
       description="统一检索四家云的按量资源、实时询价与受保护订单。"
-      actions={<button className="button secondary" onClick={() => Promise.all([providers.refetch(), readiness.refetch(), auth.refetch()])}><RefreshCw size={15} />刷新连接</button>}
+      actions={<><Link className="button secondary" to="/cloud/orders"><ClipboardList size={15} />云订单</Link><button className="button secondary" onClick={() => Promise.all([providers.refetch(), readiness.refetch(), auth.refetch()])}><RefreshCw size={15} />刷新连接</button></>}
     />
     <section className="provider-strip" aria-label="云厂商连接状态">
       {available.map(item => <button key={item.id} className={`provider-card ${provider === item.id ? 'selected' : ''}`} onClick={() => setProvider(item.id)}>

@@ -12,42 +12,83 @@ function response(data: unknown) {
   });
 }
 
+function makeItem(id: string, provider: "alibaba" | "tencent", region: string, zone: string | undefined, aggregate: boolean) {
+  const fallbackZone = provider === "tencent" ? "ap-test-1" : "cn-test-a";
+  const family = provider === "tencent" ? id.split(".")[0] : id.split(".").slice(0, 2).join(".");
+  const familyToken = provider === "tencent" ? id.split(".")[0] : id.split(".")[1];
+  return {
+    provider, region, id, family,
+    typeLabel: provider === "tencent" ? "内存型" : "本地存储型",
+    familyLabel: provider === "tencent" ? "内存型 " + family : "本地 SSD 型 " + familyToken,
+    cpu: 8, memoryGib: 32, gpu: 0, architecture: "X86", zones: zone ? [zone] : [fallbackZone], available: true,
+    localStorageCount: 1, localStorageCapacityGib: 1900, localStorageCategory: "local_ssd_pro",
+    attributes: provider === "tencent" || aggregate ? { zoneCapabilities: [{ zone: fallbackZone, available: true, localStorageCategory: "LOCAL_SSD" }] } : {},
+    matchTier: "preferred", reasons: ["规格族优先匹配数据库场景", "精确匹配 8 vCPU / 32 GiB"],
+    warnings: provider === "tencent" || aggregate ? ["地域聚合结果，需选择可用区确认；当前匹配：" + fallbackZone] : [],
+  };
+}
+
 function advisorResponse(
   offset: number,
-  provider: 'alibaba' | 'tencent' = 'alibaba',
-  query = '',
+  provider: "alibaba" | "tencent" = "alibaba",
+  query = "",
   aggregate = false,
 ) {
-  const id = provider === 'tencent'
-    ? (offset === 0 ? 'M8.LARGE32' : 'M7.LARGE32')
-    : (query.toLowerCase().includes('i8i') || offset > 0 ? 'ecs.i8i.xlarge' : 'ecs.i9i.xlarge');
-  const region = provider === 'tencent' ? 'ap-test' : 'cn-test';
-  const zone = provider === 'tencent' || aggregate ? undefined : 'cn-test-a';
+  const region = provider === "tencent" ? "ap-test" : "cn-test";
+  const zone = provider === "tencent" || aggregate ? undefined : "cn-test-a";
+  const pageId = provider === "tencent"
+    ? (offset === 0 ? "M8.LARGE32" : "M7.LARGE32")
+    : (query.toLowerCase().includes("i8i") || offset > 0 ? "ecs.i8i.xlarge" : "ecs.i9i.xlarge");
+  const items = [makeItem(pageId, provider, region, zone, aggregate)];
+  const pickIds = provider === "tencent"
+    ? ["M8.LARGE32", "SA3.LARGE32", "C7.LARGE32"]
+    : ["ecs.i9i.xlarge", "ecs.c9i.xlarge", "ecs.r9i.xlarge"];
+  const categories = [
+    { category: "balanced", label: "均衡型" },
+    { category: "value", label: "性价比型" },
+    { category: "performance", label: "性能型" },
+  ];
+  const topPicks = pickIds.map((id, index) => ({
+    category: categories[index].category,
+    label: categories[index].label,
+    reason: "测试推荐理由 " + id,
+    scores: { scenarioRank: 0, performance: 200 + index, hourlyPrice: 3.04, valuePerYuan: 65.8 },
+    item: makeItem(id, provider, region, zone, aggregate),
+    price: { hourlyAmount: "3.040", monthlyAmount: "2219.2", currency: "CNY", source: "live" },
+  }));
   return {
     provider,
     region,
     zone,
-    items: [{
-      provider, region, id, family: provider === 'tencent' ? id.split('.')[0] : id.split('.').slice(0, 2).join('.'),
-      typeLabel: provider === 'tencent' ? '内存型' : '本地存储型',
-      familyLabel: provider === 'tencent' ? `内存型 ${id.split('.')[0]}` : `本地 SSD 型 ${id.split('.')[1]}`,
-      cpu: 8, memoryGib: 32, gpu: 0, architecture: 'X86', zones: zone ? [zone] : ['ap-test-1'], available: true,
-      localStorageCount: 1, localStorageCapacityGib: 1900, localStorageCategory: 'local_ssd_pro',
-      attributes: provider === 'tencent' || aggregate ? { zoneCapabilities: [{ zone: provider === 'tencent' ? 'ap-test-1' : 'cn-test-a', available: true, localStorageCategory: 'LOCAL_SSD' }] } : {},
-      matchTier: 'preferred', reasons: ['规格族优先匹配数据库场景', '精确匹配 8 vCPU / 32 GiB'],
-      warnings: provider === 'tencent' || aggregate ? [`地域聚合结果，需选择可用区确认；当前匹配：${provider === 'tencent' ? 'ap-test-1' : 'cn-test-a'}`] : [],
-    }],
+    items,
     total: query ? 1 : 21,
     eligibleTotal: 21,
     offset,
     limit: 20,
     nextOffset: !query && offset === 0 ? 20 : null,
     exclusionStages: [
-      { code: 'availability', label: '可用区库存', before: 30, after: 28, removed: 2 },
-      { code: 'exact-spec', label: '精确 CPU / 内存', before: 28, after: 21, removed: 7 },
+      { code: "availability", label: "可用区库存", before: 30, after: 28, removed: 2 },
+      { code: "exact-spec", label: "精确 CPU / 内存", before: 28, after: 21, removed: 7 },
     ],
-    mostRestrictiveStage: { code: 'exact-spec', label: '精确 CPU / 内存', before: 28, after: 21, removed: 7 },
-    source: 'live', fetchedAt: '2026-08-22T00:00:00Z', expiresAt: '2026-08-22T00:05:00Z', stale: false,
+    mostRestrictiveStage: { code: "exact-spec", label: "精确 CPU / 内存", before: 28, after: 21, removed: 7 },
+    source: "live", fetchedAt: "2026-08-22T00:00:00Z", expiresAt: "2026-08-22T00:05:00Z", stale: false,
+    topPicks,
+  };
+}
+
+function selectionQuoteResponse(body: Record<string, unknown>) {
+  const item = body.item as Record<string, unknown>;
+  return {
+    provider: item.provider,
+    region: item.region,
+    zone: body.zone || null,
+    instanceType: item.id,
+    hourlyAmount: "3.040",
+    monthlyAmount: "2219.2",
+    currency: "CNY",
+    source: "live",
+    fetchedAt: "2026-08-22T00:00:00Z",
+    expiresAt: "2026-08-22T00:05:00Z",
   };
 }
 
@@ -103,6 +144,10 @@ describe('阿里云 ECS 选型助手', () => {
   it('CPU 与内存直接作为可选输入，代码可用性保持单选', async () => {
     const requests: Array<Record<string, unknown>> = [];
     vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(_input).includes('/cloud/selection-advisor/quote')) {
+        const quoteBody = JSON.parse(String(init?.body || '{}')) as Record<string, unknown>;
+        return response(selectionQuoteResponse(quoteBody));
+      }
       const body = JSON.parse(String(init?.body || '{}')) as Record<string, unknown>;
       requests.push(body);
       return response(advisorResponse(0));
@@ -140,6 +185,10 @@ describe('阿里云 ECS 选型助手', () => {
   it('按前序答案展示分支、精确筛选并加载更多候选', async () => {
     const requests: Array<Record<string, unknown>> = [];
     vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(_input).includes('/cloud/selection-advisor/quote')) {
+        const quoteBody = JSON.parse(String(init?.body || '{}')) as Record<string, unknown>;
+        return response(selectionQuoteResponse(quoteBody));
+      }
       const body = JSON.parse(String(init?.body || '{}')) as Record<string, unknown>;
       requests.push(body);
       return response(advisorResponse(Number(body.offset || 0), 'alibaba', String(body.query || '')));
@@ -155,31 +204,32 @@ describe('阿里云 ECS 选型助手', () => {
     expect(view.container.querySelector('input[type="file"]')).not.toBeInTheDocument();
     await completeDatabaseQuestionnaire();
 
-    expect(await screen.findByRole('heading', { name: '剩余 21 个候选' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: '从 21 个候选中推荐 3 台机型' })).toBeInTheDocument();
     expect(view.container.querySelector('.advisor-results')).toBeInTheDocument();
     expect(view.container.querySelector('.advisor-market-layout')).not.toHaveClass('questionnaire');
     expect(screen.getByText('ecs.i9i.xlarge')).toBeInTheDocument();
-    expect(screen.getByLabelText(/预估价格约 3\.04 元每小时，月约 2,219 元，已包含 50 GiB 系统盘、1 Mbps 公网 IP/)).toBeInTheDocument();
-    expect(screen.getByText('月约 ¥2,219 · 含 50 GiB 系统盘、1 Mbps 公网 IP')).toBeInTheDocument();
-    expect(screen.getByText(/本地存储型 · 本地 SSD 型 i9i/)).toBeInTheDocument();
+    expect(screen.getAllByLabelText(/实时价约 3\.04 元每小时，月约 2,219 元/)[0]).toBeInTheDocument();
+    expect(screen.getAllByText('月约 ¥2,219')[0]).toBeInTheDocument();
+    expect(screen.getAllByText(/本地存储型 · 本地 SSD 型 i9i/)[0]).toBeInTheDocument();
     expect(requests[0]).toMatchObject({
       primaryScenario: 'database', sizingMode: 'exact', exactCpu: 8, exactMemoryGib: 32,
       localStorage: 'required', codeAvailability: 'available', architecture: 'x86', offset: 0, limit: 20,
     });
 
+    fireEvent.click(screen.getByRole('button', { name: '查看全部候选（21 台）' }));
     fireEvent.change(screen.getByLabelText('搜索候选机型'), { target: { value: 'ecs.i8i' } });
     expect(requests[requests.length - 1].query).toBeUndefined();
     expect(screen.getByText('内容尚未确认，当前结果保持不变')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: '确认' }));
     expect(await screen.findByText('ecs.i8i.xlarge')).toBeInTheDocument();
     await waitFor(() => expect(requests[requests.length - 1]).toMatchObject({ query: 'ecs.i8i', offset: 0, limit: 20 }));
-    expect(screen.getByRole('heading', { name: '匹配 1 个候选' })).toBeInTheDocument();
+    expect(screen.getByText('从 21 个候选中匹配 1 条，已显示 1 条')).toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText('搜索候选机型'), { target: { value: '本地存储型' } });
     expect(requests[requests.length - 1]).toMatchObject({ query: 'ecs.i8i' });
     fireEvent.click(screen.getByRole('button', { name: '确认' }));
     await waitFor(() => expect(requests[requests.length - 1]).toMatchObject({ query: '本地存储型', offset: 0, limit: 20 }));
-    await screen.findByText('ecs.i9i.xlarge');
+    await screen.findAllByText('ecs.i9i.xlarge');
 
     const search = screen.getByLabelText('搜索候选机型');
     for (const value of ['本地存储', '本地存', '本地', '本', '']) {
@@ -188,7 +238,7 @@ describe('阿里云 ECS 选型助手', () => {
     expect(search).toHaveValue('');
     expect(requests[requests.length - 1]).toMatchObject({ query: '本地存储型' });
     fireEvent.click(screen.getByRole('button', { name: '确认' }));
-    expect(await screen.findByText('ecs.i9i.xlarge')).toBeInTheDocument();
+    expect((await screen.findAllByText('ecs.i9i.xlarge')).length).toBeGreaterThan(0);
     fireEvent.click(screen.getByRole('button', { name: /加载更多/ }));
     expect(await screen.findByText('ecs.i8i.xlarge')).toBeInTheDocument();
     expect(requests[requests.length - 1]).toMatchObject({ offset: 20, limit: 20 });
@@ -196,13 +246,17 @@ describe('阿里云 ECS 选型助手', () => {
 
   it('选择机型后，修改硬约束会清除已选结果并解释原因', async () => {
     vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(_input).includes('/cloud/selection-advisor/quote')) {
+        const quoteBody = JSON.parse(String(init?.body || '{}')) as Record<string, unknown>;
+        return response(selectionQuoteResponse(quoteBody));
+      }
       const body = JSON.parse(String(init?.body || '{}')) as Record<string, unknown>;
       return response(advisorResponse(Number(body.offset || 0), 'alibaba', String(body.query || '')));
     }));
     renderAdvisor();
     await completeDatabaseQuestionnaire();
 
-    fireEvent.click(await screen.findByRole('button', { name: '选择此机型' }));
+    fireEvent.click((await screen.findAllByRole('button', { name: '选择此机型' }))[0]);
     expect(screen.getByTestId('selected-instance')).toHaveTextContent('ecs.i9i.xlarge');
     fireEvent.click(screen.getByRole('button', { name: '资源需求' }));
     fireEvent.change(screen.getByLabelText('精确 vCPU'), { target: { value: '16' } });
@@ -213,6 +267,10 @@ describe('阿里云 ECS 选型助手', () => {
   it('腾讯云可在不选可用区时生成地域候选并发送正确厂商', async () => {
     const requests: Array<Record<string, unknown>> = [];
     vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(_input).includes('/cloud/selection-advisor/quote')) {
+        const quoteBody = JSON.parse(String(init?.body || '{}')) as Record<string, unknown>;
+        return response(selectionQuoteResponse(quoteBody));
+      }
       const body = JSON.parse(String(init?.body || '{}')) as Record<string, unknown>;
       requests.push(body);
       return response(advisorResponse(Number(body.offset || 0), 'tencent', String(body.query || '')));
@@ -223,7 +281,7 @@ describe('阿里云 ECS 选型助手', () => {
     await completeDatabaseQuestionnaire('ap-test', null);
 
     expect(await screen.findByText('M8.LARGE32')).toBeInTheDocument();
-    expect(screen.getByText(/地域聚合结果，需选择可用区确认/)).toBeInTheDocument();
+    expect(screen.getAllByText(/地域聚合结果，需选择可用区确认/)[0]).toBeInTheDocument();
     expect(requests[0]).toMatchObject({ provider: 'tencent', region: 'ap-test', offset: 0 });
     expect(requests[0].zone).toBeUndefined();
   });
@@ -231,6 +289,10 @@ describe('阿里云 ECS 选型助手', () => {
   it('阿里云地域聚合候选在未选可用区时保持有效并可选择', async () => {
     const requests: Array<Record<string, unknown>> = [];
     vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(_input).includes('/cloud/selection-advisor/quote')) {
+        const quoteBody = JSON.parse(String(init?.body || '{}')) as Record<string, unknown>;
+        return response(selectionQuoteResponse(quoteBody));
+      }
       const body = JSON.parse(String(init?.body || '{}')) as Record<string, unknown>;
       requests.push(body);
       return response(advisorResponse(
@@ -244,9 +306,9 @@ describe('阿里云 ECS 选型助手', () => {
 
     await completeDatabaseQuestionnaire('cn-test', null);
 
-    expect(await screen.findByText('ecs.i9i.xlarge')).toBeInTheDocument();
-    expect(screen.getByText(/地域聚合结果，需选择可用区确认/)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: '选择此机型' }));
+    expect((await screen.findAllByText('ecs.i9i.xlarge')).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/地域聚合结果，需选择可用区确认/)[0]).toBeInTheDocument();
+    fireEvent.click((await screen.findAllByRole('button', { name: '选择此机型' }))[0]);
     expect(screen.getByTestId('selected-instance')).toHaveTextContent('ecs.i9i.xlarge');
     expect(requests[0]).toMatchObject({ provider: 'alibaba', region: 'cn-test', offset: 0 });
     expect(requests[0].zone).toBeUndefined();

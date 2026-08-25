@@ -1,6 +1,7 @@
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { VariabilityPanel } from '../components/VariabilityPanel';
+import { VgoOptimizationAdvice } from '../components/VgoOptimizationAdvice';
 import { Evidence, experimentTabs, PhpBenchResultSection, SysbenchWorkloadSection, ValidityGatesSection } from '../pages/ExperimentDetailPage';
 import type { Experiment } from '../lib/types';
 
@@ -23,6 +24,17 @@ describe('experiment result navigation', () => {
     expect(tabs.flat()).not.toContain('对比结论');
     expect(tabs.flat()).not.toContain('可信度');
     expect(tabs.flat()).not.toContain('波动分析');
+  });
+
+  it('labels the VGO result tab as optimization advice', () => {
+    const tabs = experimentTabs({
+      id: 'exp-vgo', name: 'VGO', status: 'completed', mode: 'optimization',
+      benchmarkId: 'looper.vgo.variability',
+    });
+
+    expect(tabs.map(([, label]) => label)).toEqual([
+      '概览', '优化建议', '证据', '配置', '原始终端',
+    ]);
   });
 
   it('renders the benchmark-selected Sysbench workload view with collected metrics', () => {
@@ -144,6 +156,30 @@ describe('experiment result navigation', () => {
     expect(screen.queryByText('数据事实与诊断原因')).not.toBeInTheDocument();
     expect(screen.queryByText('CV=0.004，原始结果稳定')).not.toBeInTheDocument();
     expect(screen.queryByText('单位价格容量')).not.toBeInTheDocument();
+  });
+
+  it('renders VGO optimization advice from measured baseline and optimized metrics', () => {
+    render(<VgoOptimizationAdvice evaluations={[{
+      id: 'eval-vgo', candidate: '8 核 16G 测试机', workload: 'matmul', status: 'completed',
+      metrics: [
+        { name: 'runtime_cv', value: 0.063478, unit: 'ratio' },
+        { name: 'optimized_runtime_cv', value: 0.05444, unit: 'ratio' },
+        { name: 'cv_reduction_ratio', value: 0.142382, unit: 'ratio' },
+        { name: 'median_improvement_ratio', value: 0.027014, unit: 'ratio' },
+        { name: 'p95_improvement_ratio', value: 0.020378, unit: 'ratio' },
+        { name: 'rollback_median_drift_ratio', value: 0.005243, unit: 'ratio' },
+        { name: 'correctness_rate', value: 1, unit: 'ratio' },
+        { name: 'cpu_steal_p95_percent', value: 0, unit: '%' },
+        { name: 'sample_count', value: 85, unit: 'count' },
+        { name: 'run_ok', value: true, unit: 'bool' },
+      ],
+    }]} />);
+
+    expect(screen.getByRole('heading', { name: '优化建议' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Matmul' })).toBeInTheDocument();
+    expect(screen.getByText('门禁通过')).toBeInTheDocument();
+    expect(screen.getByText('+14.24%')).toBeInTheDocument();
+    expect(screen.getByText('建议保留当前 VGO 优化配置，并在服务器部署后扩大轮次复核。')).toBeInTheDocument();
   });
 
   it('shows the concrete round and value for an anomalous run', () => {

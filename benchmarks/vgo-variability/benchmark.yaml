@@ -3,12 +3,12 @@ kind: Benchmark
 metadata:
   id: looper.vgo.variability
   name: VGO 性能波动与稳定性测试
-  version: 1.1.0
+  version: 1.1.1
   description: "使用 VGO 原始 run_case.sh/run_case.py 执行 10% 规模的最小完整波动诊断：profile、基线/优化随机区块交替和 rollback；保留所有原始参数并输出 CV、典型耗时、尾部耗时及优化对比。"
   license: INTERNAL
   source:
     url: looper://workspace/01_论文复现/刘桂宏_论文复现包/papers/01_VGO性能波动优化
-    digest: sha256:9ee834d8a824bbe4af6edcd3ae11230caa4c01ffea9ef77360328d615e289237
+    digest: sha256:afc882984ffb7bf3134e303d6abb5c728eb2fb635898b9c663a9bb0ccc819b7a
   x-extensions:
     category: performance-stability
 spec:
@@ -158,29 +158,29 @@ spec:
   runtime:
     type: local-process
     workingDirectory: .
-    dependencyLockDigest: sha256:2d2d68bcab3708c6d7555de3d5be7a4786061afed7e9c905f4cf68da9f64b35f
+    dependencyLockDigest: sha256:0aebc4f60e00715b055badc3cf0b7d37ea16f4f458d90f214d7a93d05eb3dec9
     dependencies:
       - id: vgo-source-snapshot
         source: bundled:vgo-source.tar.gz
-        digest: sha256:9ee834d8a824bbe4af6edcd3ae11230caa4c01ffea9ef77360328d615e289237
+        digest: sha256:afc882984ffb7bf3134e303d6abb5c728eb2fb635898b9c663a9bb0ccc819b7a
         license: INTERNAL
       - id: parboil-driver
-        source: https://www.phoronix-test-suite.com/benchmark-files/pb2.5driver.tgz
+        source: http://filedn.com/luEeJVCCazShDlU4ibloXvu/class/pb2.5driver.tgz
         digest: sha256:32f6eedc30faa0e724af4546060dc1f291e36f224530836961510028f1555bde
         license: upstream-Free
       - id: parboil-benchmarks
-        source: https://www.phoronix-test-suite.com/benchmark-files/pb2.5benchmarks.tgz
+        source: http://filedn.com/luEeJVCCazShDlU4ibloXvu/class/pb2.5benchmarks.tgz
         digest: sha256:1b862fd8cc9a1e291dab3491ba84e4e8dd34f6b59d2913a633a0bb15ff5634cc
         license: upstream-Free
       - id: parboil-datasets
-        source: https://www.phoronix-test-suite.com/benchmark-files/pb2.5datasets_standard.tgz
+        source: http://filedn.com/luEeJVCCazShDlU4ibloXvu/class/pb2.5datasets_standard.tgz
         digest: sha256:449916452aa75e440d1a4b2b8aa42f6d9e5d70591f2890544f6f0a830e81bea0
         license: upstream-Free
     provisioning:
       mode: managed
       hostCapabilities: [python, local-process, linux, ubuntu-22.04, root]
       provides: [perf, vgo-runtime, parboil-2.5, sharp, sharp-3.0.0, p7zip, tcmalloc]
-      cacheKey: sha256:2d2d68bcab3708c6d7555de3d5be7a4786061afed7e9c905f4cf68da9f64b35f
+      cacheKey: sha256:0aebc4f60e00715b055badc3cf0b7d37ea16f4f458d90f214d7a93d05eb3dec9
       requiresNetwork: true
       privilege: sudo
     commands:
@@ -194,7 +194,7 @@ spec:
         allowedExitCodes: [0]
         environment:
           LOOPER_VGO_ROOT: "{cache}/vgo-source"
-          LOOPER_VGO_SOURCE_DIGEST: sha256:9ee834d8a824bbe4af6edcd3ae11230caa4c01ffea9ef77360328d615e289237
+          LOOPER_VGO_SOURCE_DIGEST: sha256:afc882984ffb7bf3134e303d6abb5c728eb2fb635898b9c663a9bb0ccc819b7a
       normalize:
         argv: ["{python}", "{benchmarkRoot}/normalizer.py", "--envelope", "{envelope}", "--output", "{output}"]
         timeoutSeconds: 60

@@ -195,6 +195,13 @@ from looper_api.scheduler import (
 )
 from looper_api.seed import seed_system
 from looper_api.selection_advisor import SelectionAdvisorRequest, advise_instance_types
+from looper_api.selection_pricing import (
+    PriceInfo,
+    SelectionPriceQuoteRequest,
+    resolve_item_price,
+    selection_instance_quote,
+)
+from looper_api.price_catalog import AlibabaPriceTable, build_alibaba_region_map
 from looper_api.serialization import (
     analysis_view,
     benchmark_view,
@@ -1072,6 +1079,22 @@ def cloud_catalog(
     return result.model_dump(mode="json", by_alias=True)
 
 
+_PRICE_TABLE: AlibabaPriceTable | None = None
+_PRICE_TABLE_PATH = Path(__file__).resolve().parents[3] / "prices" / "instancePrice.csv"
+
+
+def _get_price_table() -> AlibabaPriceTable | None:
+    global _PRICE_TABLE
+    if _PRICE_TABLE is not None:
+        return _PRICE_TABLE
+    if not _PRICE_TABLE_PATH.is_file():
+        return None
+    provider = get_provider_registry().get(ProviderId.ALIBABA)
+    region_map = build_alibaba_region_map(provider)
+    _PRICE_TABLE = AlibabaPriceTable(_PRICE_TABLE_PATH, region_map)
+    return _PRICE_TABLE
+
+
 @app.post("/api/v1/cloud/selection-advisor/search")
 def cloud_selection_advisor(
     request: SelectionAdvisorRequest,
@@ -1087,6 +1110,15 @@ def cloud_selection_advisor(
         "instance-type",
         CatalogFilters(region=request.region, zone=request.zone, offset=request.offset),
     )
+    price_table = _get_price_table()
+
+    def price_reader(item: InstanceTypeInfo) -> "PriceInfo | None":
+        return resolve_item_price(
+            item,
+            registry=registry,
+            price_table=price_table,
+        )
+
     response = advise_instance_types(
         request,
         [InstanceTypeInfo.model_validate(item) for item in catalog.items],
@@ -1095,9 +1127,19 @@ def cloud_selection_advisor(
         expires_at=catalog.expires_at.isoformat(),
         stale=catalog.stale,
         warning=catalog.warning,
+        price_reader=price_reader,
     )
     session.commit()
     return response.model_dump(mode="json", by_alias=True)
+
+
+@app.post("/api/v1/cloud/selection-advisor/quote")
+def cloud_selection_advisor_quote(
+    request: SelectionPriceQuoteRequest,
+    registry: ProviderRegistryDependency,
+) -> dict[str, Any]:
+    result = selection_instance_quote(request, registry)
+    return result.model_dump(mode="json", by_alias=True)
 
 
 @app.post("/api/v1/cloud/network/{provider}/managed-security-group", status_code=201)

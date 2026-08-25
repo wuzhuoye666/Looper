@@ -114,6 +114,19 @@ def _local_disk_details(item: Any) -> tuple[str | None, float | None, list[dict[
     return ", ".join(categories) or None, max(capacities, default=None), details
 
 
+def _quota_price_hourly(item: Any) -> float | None:
+    price = attr(item, "Price")
+    if price is None:
+        return None
+    charge_unit = attr(price, "ChargeUnit")
+    if charge_unit and str(charge_unit).upper() != "HOUR":
+        return None
+    value = attr(price, "UnitPriceDiscount")
+    if value is None:
+        value = attr(price, "UnitPrice")
+    return _number(value)
+
+
 def _quota_capability(item: Any) -> dict[str, Any]:
     status = str(attr(item, "Status", default="") or "").upper()
     disk_category, disk_capacity, disk_details = _local_disk_details(item)
@@ -137,6 +150,7 @@ def _quota_capability(item: Any) -> dict[str, Any]:
         "localStorageCapacityGib": disk_capacity,
         "localStorageCount": int(attr(item, "StorageBlockAmount", default=0) or 0),
         "localDiskTypes": disk_details,
+        "hourlyPrice": _quota_price_hourly(item),
     }
 
 
@@ -649,6 +663,12 @@ class TencentCvmProvider(CloudProvider):
                     if capability.get("localStorageCategory")
                 }
             )
+            price_values = [
+                float(capability["hourlyPrice"])
+                for capability in metric_capabilities
+                if capability.get("hourlyPrice") is not None
+            ]
+            hourly_price = min(price_values) if price_values else None
             gpu_model = attr(representative, "GpuType", "GPUType", "GpuModel")
             items.append(
                 InstanceTypeInfo(
@@ -687,6 +707,10 @@ class TencentCvmProvider(CloudProvider):
                         "cpuType": attr(representative, "CpuType", "CPUType"),
                         "fpga": int(attr(representative, "Fpga", "FPGA", default=0) or 0),
                         "gpuCores": _number(attr(representative, "Gpu", "GPU")) or 0,
+                        "hourlyPrice": hourly_price,
+                        "monthlyPrice": (
+                            hourly_price * 730 if hourly_price is not None else None
+                        ),
                         "zoneCapabilities": capabilities,
                     },
                 )
@@ -796,6 +820,60 @@ class TencentCvmProvider(CloudProvider):
         request = models.InquiryPriceRunInstancesRequest()
         request.from_json_string(canonical_json(self._run_payload(spec)))
         response = self._call("InquiryPriceRunInstances", spec.region, request)
+        price = response.Price
+        instance_price = attr(price, "InstancePrice")
+        bandwidth_price = attr(price, "BandwidthPrice")
+        instance_amount = self._hourly_amount(instance_price, "instance")
+        bandwidth_amount = self._hourly_amount(bandwidth_price, "bandwidth")
+        amount = instance_amount + bandwidth_amount
+        if amount <= 0:
+            raise CloudProviderError("Tencent Cloud quote did not include an hourly price")
+        return ProviderQuote(
+            providerQuoteId=attr(response, "RequestId"),
+            amount=amount,
+            currency="CNY",
+            estimated=False,
+            expiresAt=utc_now() + timedelta(minutes=5),
+            details={
+                "requestId": attr(response, "RequestId"),
+                "instancePrice": to_plain(instance_price),
+                "bandwidthPrice": to_plain(bandwidth_price),
+            },
+        )
+
+    def quote_instance_type(
+        self,
+        *,
+        region: str,
+        zone: str,
+        instance_type: str,
+        image_id: str,
+        system_disk_gib: int = 50,
+        system_disk_category: str | None = None,
+        public_ip: bool = True,
+        public_bandwidth_mbps: int = 1,
+    ) -> ProviderQuote:
+        from tencentcloud.cvm.v20170312 import models
+
+        payload: dict[str, Any] = {
+            "Placement": {"Zone": zone},
+            "ImageId": image_id,
+            "InstanceType": instance_type,
+            "InstanceChargeType": "POSTPAID_BY_HOUR",
+            "InstanceCount": 1,
+            "SystemDisk": {
+                "DiskType": system_disk_category or "CLOUD_PREMIUM",
+                "DiskSize": system_disk_gib,
+            },
+            "InternetAccessible": {
+                "InternetChargeType": "BANDWIDTH_POSTPAID_BY_HOUR",
+                "InternetMaxBandwidthOut": public_bandwidth_mbps if public_ip else 0,
+                "PublicIpAssigned": public_ip,
+            },
+        }
+        request = models.InquiryPriceRunInstancesRequest()
+        request.from_json_string(canonical_json(payload))
+        response = self._call("InquiryPriceRunInstances", region, request)
         price = response.Price
         instance_price = attr(price, "InstancePrice")
         bandwidth_price = attr(price, "BandwidthPrice")

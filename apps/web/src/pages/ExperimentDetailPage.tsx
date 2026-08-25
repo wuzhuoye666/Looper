@@ -8,6 +8,7 @@ import { StatusBadge } from '../components/StatusBadge';
 import { EmptyState, ErrorState, LoadingState } from '../components/States';
 import { ExperimentTerminal } from '../components/ExperimentTerminal';
 import { VariabilityPanel } from '../components/VariabilityPanel';
+import { VgoOptimizationAdvice } from '../components/VgoOptimizationAdvice';
 import { API_BASE, api, resolveApiUrl } from '../lib/api';
 import { benchmarkDecisionQuestion } from '../lib/benchmarkPresentation';
 import { formatDate, formatNumber, scoreDelta } from '../lib/format';
@@ -37,6 +38,7 @@ export function ExperimentDetailPage() {
     refetchInterval: current => ['running', 'queued'].includes(current.state.data?.status || '') ? 5000 : 15000,
   });
   const selectionMode = query.data?.mode === 'selection';
+  const vgoMode = query.data?.benchmarkId === 'looper.vgo.variability';
   const analysis = useQuery({
     queryKey: ['analysis', id],
     queryFn: () => api.analysis(id),
@@ -50,7 +52,7 @@ export function ExperimentDetailPage() {
   const postOptimization = useQuery({
     queryKey: ['post-optimization', id],
     queryFn: () => api.postOptimization(id),
-    enabled: Boolean(id) && query.data?.status === 'completed' && query.data?.mode !== 'selection',
+    enabled: Boolean(id) && query.data?.status === 'completed' && query.data?.mode !== 'selection' && !vgoMode,
     refetchInterval: current => current.state.data?.status === 'retesting' ? 5000 : false,
   });
   const action = useMutation({
@@ -85,7 +87,7 @@ export function ExperimentDetailPage() {
     </div><ExperimentActions status={experiment.status} busy={action.isPending} onAction={value => action.mutate(value)} /></header>
     {action.isError && <div className="inline-alert"><AlertTriangle size={16} />{action.error.message}</div>}
     {experiment.activePhase && ['queued', 'running'].includes(experiment.status) && <section className="panel execution-progress" aria-label="自动部署与测试进度"><div className="execution-progress-heading"><LoaderCircle size={19}/><div><small>Looper 自动执行中</small><strong>{experiment.activePhaseDetail || experiment.activePhase}</strong></div></div><ol>{executionPhases.map(([key,label],index)=>{const activeIndex=executionPhases.findIndex(([phase])=>phase===experiment.activePhase);return <li className={key===experiment.activePhase?'active':index<activeIndex?'done':''} key={key}><span>{index+1}</span><small>{label}</small></li>;})}</ol></section>}
-     {experiment.status === 'completed' && !selectionMode && <PostOptimizationPanel
+     {experiment.status === 'completed' && !selectionMode && !vgoMode && <PostOptimizationPanel
       data={postOptimization.data}
       loading={postOptimization.isLoading}
       error={postOptimization.isError ? postOptimization.error : optimize.isError ? optimize.error : null}
@@ -94,9 +96,11 @@ export function ExperimentDetailPage() {
     />}
     <nav className="tabs" aria-label="研究详情">{tabs.map(([key, label]) => <button key={key} className={tab === key ? 'active' : ''} onClick={() => setTab(key)}>{label}</button>)}</nav>
     {tab === 'overview' && <Overview experiment={experiment} evaluations={experiment.evaluations || []} delta={delta} />}
-    {tab === 'results' && (selectionMode
-      ? <AsyncPanel query={variability}>{variability.data && <VariabilityPanel data={variability.data} evaluations={experiment.evaluations || []} />}</AsyncPanel>
-      : <Evaluations items={experiment.evaluations || []} retrying={retry.isPending} onRetry={attemptId => retry.mutate(attemptId)} />)}
+    {tab === 'results' && (vgoMode
+      ? <VgoOptimizationAdvice evaluations={experiment.evaluations || []} />
+      : selectionMode
+        ? <AsyncPanel query={variability}>{variability.data && <VariabilityPanel data={variability.data} evaluations={experiment.evaluations || []} />}</AsyncPanel>
+        : <Evaluations items={experiment.evaluations || []} retrying={retry.isPending} onRetry={attemptId => retry.mutate(attemptId)} />)}
     {tab.startsWith('benchmark:') && <BenchmarkMetricSection
       section={(experiment.resultSections || []).find(item => `benchmark:${item.id}` === tab)}
       definitions={experiment.metricDefinitions}
@@ -186,7 +190,7 @@ export function experimentTabs(experiment: Experiment): string[][] {
   );
   return [
     ['overview', '概览'],
-    ['results', experiment.mode === 'selection' ? '优化建议' : '运行结果'],
+    ['results', experiment.mode === 'selection' || experiment.benchmarkId === 'looper.vgo.variability' ? '优化建议' : '运行结果'],
     ...benchmarkTabs,
     ['evidence', '证据'],
     ['config', '配置'],

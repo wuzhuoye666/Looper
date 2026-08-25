@@ -28,7 +28,7 @@ def load_module(name: str, path: Path):
 
 
 def test_vgo_is_seeded_as_a_real_selection_benchmark(db_session) -> None:
-    record = db_session.get(BenchmarkRecord, "looper.vgo.variability@1.1.0")
+    record = db_session.get(BenchmarkRecord, "looper.vgo.variability@1.1.1")
     assert record is not None
     view = benchmark_view(record)
     assert view["selectionReady"] is True
@@ -97,6 +97,27 @@ def test_vgo_source_snapshot_passes_archive_and_per_file_verification(
     prepare.extract_verified_source(archive, source_lock, extracted)
     assert (extracted / "scripts" / "run_case.sh").is_file()
     assert (extracted / "scripts" / "run_case.py").is_file()
+
+
+def test_vgo_parboil_download_uses_verified_multi_source_failover(tmp_path: Path) -> None:
+    prepare = load_module("vgo_prepare_download_test", PACKAGE_ROOT / "prepare.py")
+    archive, source_lock = prepare.verify_source_archive(PACKAGE_ROOT)
+    extracted = tmp_path / "source"
+    prepare.extract_verified_source(archive, source_lock, extracted)
+    setup = (extracted / "scripts" / "setup_ubuntu.sh").read_text(encoding="utf-8")
+
+    assert "VGO_PARBOIL_MIRROR_BASE_URL" in setup
+    assert "http://www.phoronix-test-suite.com/benchmark-files" in setup
+    assert "http://filedn.com/luEeJVCCazShDlU4ibloXvu/class" in setup
+    assert "https://www.phoronix-test-suite.com/benchmark-files" in setup
+    assert "--connect-timeout 10" in setup
+    assert "--speed-time 20" in setup
+    assert "--retry-all-errors" in setup
+    assert 'local partial="$target.part"' in setup
+    assert "sha256sum --check --status" in setup
+    assert setup.index("http://filedn.com/") < setup.index(
+        "http://www.phoronix-test-suite.com/"
+    )
 
 
 def test_vgo_prepare_retries_transient_package_manager_lock(tmp_path: Path, monkeypatch) -> None:

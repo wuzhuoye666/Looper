@@ -129,6 +129,33 @@ class CloudProvider(ABC):
     def quote(self, spec: CloudPurchaseSpec) -> ProviderQuote:
         raise NotImplementedError
 
+    def quote_instance_type(
+        self,
+        *,
+        region: str,
+        zone: str,
+        instance_type: str,
+        image_id: str,
+        system_disk_gib: int = 50,
+        system_disk_category: str | None = None,
+        public_ip: bool = True,
+        public_bandwidth_mbps: int = 1,
+    ) -> ProviderQuote:
+        del (
+            region,
+            zone,
+            instance_type,
+            image_id,
+            system_disk_gib,
+            system_disk_category,
+            public_ip,
+            public_bandwidth_mbps,
+        )
+        raise CloudProviderError(
+            "selection price inquiry is not supported",
+            code="unsupported_selection_quote",
+        )
+
     @abstractmethod
     def purchase(
         self,

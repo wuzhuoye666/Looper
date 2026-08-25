@@ -4,7 +4,7 @@ import type {
   CloudKeyPair, CloudQuote, CloudReconciliationContext, CloudRegion, CloudSecurityGroup, CloudSubnet, CloudVpc, CloudZone,
   InstanceNetworkResolution, InstanceNetworkResolveRequest,
   DashboardData, Experiment, GlobalSearchResult, ListResponse, PostOptimizationStatus, SelectionAdvisorRequest,
-  SelectionAdvisorResponse, SourceDiscovery, SourceDiscoveryProviderConfig, SourceDiscoveryReadiness, CapacityDraft, CapacityStudy,
+  SelectionAdvisorResponse, SelectionRecommendationPrice, SourceDiscovery, SourceDiscoveryProviderConfig, SourceDiscoveryReadiness, CapacityDraft, CapacityStudy,
   BenchmarkTargetOptions, Target, TargetDestroyPreview, TargetDestroyResult, VariabilityData, SystemOptimizationStudy, SystemOptimizationAuthorizationProfile,
 } from './types';
 
@@ -248,6 +248,9 @@ export const api = {
     api.catalog<CloudImage>(provider, 'image', params),
   selectionAdvisor: (payload: SelectionAdvisorRequest) => request<SelectionAdvisorResponse>(
     '/cloud/selection-advisor/search', { method: 'POST', body: JSON.stringify(payload) },
+  ),
+  selectionAdvisorQuote: (payload: { item: CloudInstanceType; zone?: string }) => request<SelectionRecommendationPrice>(
+    '/cloud/selection-advisor/quote', { method: 'POST', body: JSON.stringify(payload) },
   ),
   vpcs: (provider: CloudProviderId, region: string) => api.catalog<CloudVpc>(provider, 'vpc', { region }),
   subnets: (provider: CloudProviderId, region: string, zone: string, vpcId: string) =>

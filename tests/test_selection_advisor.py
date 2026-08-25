@@ -6,6 +6,7 @@ import pytest
 from looper_api.app import cloud_selection_advisor
 from looper_api.cloud_contracts import CatalogResponse, InstanceTypeInfo, ProviderId
 from looper_api.selection_advisor import SelectionAdvisorRequest, advise_instance_types
+from looper_api.selection_pricing import PriceInfo
 from pydantic import ValidationError
 
 
@@ -54,13 +55,18 @@ def request(**values: object) -> SelectionAdvisorRequest:
     return SelectionAdvisorRequest.model_validate(payload)
 
 
-def advise(query: SelectionAdvisorRequest, items: list[InstanceTypeInfo]):
+def advise(
+    query: SelectionAdvisorRequest,
+    items: list[InstanceTypeInfo],
+    price_reader=None,
+):
     return advise_instance_types(
         query,
         items,
         source="live",
         fetched_at="2026-08-22T00:00:00+00:00",
         expires_at="2026-08-22T00:05:00+00:00",
+        price_reader=price_reader,
     )
 
 
@@ -215,9 +221,129 @@ def test_zero_result_reports_the_most_restrictive_stage_without_relaxing() -> No
         [instance("ecs.g9i.xlarge", "ecs.g9i")],
     )
     assert result.total == 0
+    assert result.top_picks == []
     assert result.most_restrictive_stage is not None
     assert result.most_restrictive_stage.code == "exact-spec"
     assert result.most_restrictive_stage.after == 0
+
+
+def test_top_picks_returns_three_distinct_categories_with_reasons() -> None:
+    items = [
+        instance("ecs.g9i.xlarge", "ecs.g9i"),
+        instance("ecs.c9i.xlarge", "ecs.c9i"),
+        instance("ecs.r9i.xlarge", "ecs.r9i"),
+    ]
+    price_reader = lambda _item: PriceInfo(
+        hourly_amount="1.000",
+        monthly_amount="30.000",
+        source="price-table",
+    )
+    result = advise(request(codeAvailability="available"), items, price_reader)
+
+    assert [pick.category for pick in result.top_picks] == [
+        "balanced",
+        "value",
+        "performance",
+    ]
+    assert len({pick.item.id for pick in result.top_picks}) == 3
+    assert all(pick.reason for pick in result.top_picks)
+    assert all(pick.scores.performance > 0 for pick in result.top_picks)
+    assert all(
+        pick.price is not None and pick.price.source == "price-table"
+        for pick in result.top_picks
+    )
+
+
+def test_top_picks_ignore_search_and_facets() -> None:
+    items = [
+        instance("ecs.g9i.xlarge", "ecs.g9i"),
+        instance("ecs.c9i.xlarge", "ecs.c9i"),
+        instance("ecs.r9i.xlarge", "ecs.r9i"),
+    ]
+    base = advise(request(codeAvailability="available"), items)
+    filtered = advise(
+        request(
+            codeAvailability="available",
+            query="g9i",
+            architectureClass="x86",
+        ),
+        items,
+    )
+
+    assert [pick.item.id for pick in base.top_picks] == [
+        pick.item.id for pick in filtered.top_picks
+    ]
+
+
+def test_top_picks_fall_back_to_fewer_candidates_when_pool_is_small() -> None:
+    items = [
+        instance("ecs.g9i.xlarge", "ecs.g9i"),
+        instance("ecs.c9i.xlarge", "ecs.c9i"),
+    ]
+    result = advise(request(codeAvailability="available"), items)
+
+    assert [pick.category for pick in result.top_picks] == ["balanced", "value"]
+    assert len({pick.item.id for pick in result.top_picks}) == 2
+
+
+def test_budget_filters_candidates_by_monthly_price() -> None:
+    items = [
+        instance("ecs.g9i.xlarge", "ecs.g9i"),
+        instance("ecs.c9i.xlarge", "ecs.c9i"),
+        instance("ecs.r9i.xlarge", "ecs.r9i"),
+    ]
+
+    def price_reader(item: InstanceTypeInfo):
+        if item.id == "ecs.r9i.xlarge":
+            return PriceInfo(
+                hourly_amount="3.000",
+                monthly_amount="900.000",
+                source="price-table",
+            )
+        return PriceInfo(
+            hourly_amount="1.000",
+            monthly_amount="300.000",
+            source="price-table",
+        )
+
+    result = advise(
+        request(codeAvailability="available", budgetMonthlyCny=500),
+        items,
+        price_reader,
+    )
+
+    assert result.eligible_total == 2
+    assert all(
+        item.price is not None and float(item.price.monthly_amount) <= 500
+        for item in result.items
+    )
+    assert any(stage.code == "budget" for stage in result.exclusion_stages)
+
+
+def test_selection_quote_falls_back_to_estimate_when_image_is_missing() -> None:
+    from looper_api.providers.registry import CloudProviderRegistry
+    from looper_api.selection_pricing import (
+        SelectionPriceQuoteRequest,
+        selection_instance_quote,
+    )
+
+    class FakeProvider:
+        id = ProviderId.ALIBABA
+
+        def search_images(self, _filters: object):
+            return []
+
+    registry = CloudProviderRegistry(
+        factories={ProviderId.ALIBABA: lambda: FakeProvider()}
+    )
+    item = instance("ecs.g9i.xlarge", "ecs.g9i")
+    result = selection_instance_quote(
+        SelectionPriceQuoteRequest(item=item, zone="cn-test-a"),
+        registry,
+    )
+
+    assert result.source == "estimated"
+    assert "未找到兼容镜像" in (result.warning or "")
 
 
 def test_exact_sizing_requires_both_cpu_and_memory() -> None:

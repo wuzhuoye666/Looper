@@ -1,9 +1,9 @@
 {
   "schemaVersion": "looper.dependency-lock/v1",
-  "benchmark": "looper.vgo.variability@1.0.2",
+  "benchmark": "looper.vgo.variability@1.1.1",
   "sourceSnapshot": {
     "path": "vgo-source.tar.gz",
-    "sha256": "9ee834d8a824bbe4af6edcd3ae11230caa4c01ffea9ef77360328d615e289237"
+    "sha256": "afc882984ffb7bf3134e303d6abb5c728eb2fb635898b9c663a9bb0ccc819b7a"
   },
   "upstreamSources": [
     {
@@ -14,17 +14,29 @@
     },
     {
       "id": "parboil-driver",
-      "source": "https://www.phoronix-test-suite.com/benchmark-files/pb2.5driver.tgz",
+      "source": "http://filedn.com/luEeJVCCazShDlU4ibloXvu/class/pb2.5driver.tgz",
+      "mirrors": [
+        "http://www.phoronix-test-suite.com/benchmark-files/pb2.5driver.tgz",
+        "https://www.phoronix-test-suite.com/benchmark-files/pb2.5driver.tgz"
+      ],
       "sha256": "32f6eedc30faa0e724af4546060dc1f291e36f224530836961510028f1555bde"
     },
     {
       "id": "parboil-benchmarks",
-      "source": "https://www.phoronix-test-suite.com/benchmark-files/pb2.5benchmarks.tgz",
+      "source": "http://filedn.com/luEeJVCCazShDlU4ibloXvu/class/pb2.5benchmarks.tgz",
+      "mirrors": [
+        "http://www.phoronix-test-suite.com/benchmark-files/pb2.5benchmarks.tgz",
+        "https://www.phoronix-test-suite.com/benchmark-files/pb2.5benchmarks.tgz"
+      ],
       "sha256": "1b862fd8cc9a1e291dab3491ba84e4e8dd34f6b59d2913a633a0bb15ff5634cc"
     },
     {
       "id": "parboil-datasets",
-      "source": "https://www.phoronix-test-suite.com/benchmark-files/pb2.5datasets_standard.tgz",
+      "source": "http://filedn.com/luEeJVCCazShDlU4ibloXvu/class/pb2.5datasets_standard.tgz",
+      "mirrors": [
+        "http://www.phoronix-test-suite.com/benchmark-files/pb2.5datasets_standard.tgz",
+        "https://www.phoronix-test-suite.com/benchmark-files/pb2.5datasets_standard.tgz"
+      ],
       "sha256": "449916452aa75e440d1a4b2b8aa42f6d9e5d70591f2890544f6f0a830e81bea0"
     }
   ],
