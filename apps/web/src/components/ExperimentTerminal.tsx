@@ -1,6 +1,7 @@
 import { ArrowDownToLine, Clipboard, LoaderCircle, Terminal, Wifi, WifiOff } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { API_BASE, resolveApiUrl } from '../lib/api';
+import { formatTime as formatBeijingTime } from '../lib/format';
 
 type TerminalStream = 'command' | 'stdout' | 'stderr' | 'system';
 type ConnectionState = 'connecting' | 'live' | 'reconnecting';
@@ -102,7 +103,7 @@ export function ExperimentTerminal({ experimentId }: { experimentId: string }) {
     <div className="terminal-viewport" ref={viewportRef} role="log" aria-live="polite">
       {!lines.length && <div className="terminal-empty"><LoaderCircle size={18} /><span>等待 Worker 透传目标机命令和原始输出</span></div>}
       {lines.map(line => <div className={'terminal-line ' + line.stream} key={line.id}>
-        <span className="terminal-line-meta"><time>{formatTime(line.createdAt)}</time><b>{streamLabels[line.stream]}</b><small>{stageLabels[line.stage] || line.stage}</small><small title={line.attemptId}>#{line.sequence} · {shortId(line.attemptId)}{line.workerId ? ' · ' + shortId(line.workerId) : ''}</small></span>
+        <span className="terminal-line-meta"><time>{formatBeijingTime(line.createdAt)}</time><b>{streamLabels[line.stream]}</b><small>{stageLabels[line.stage] || line.stage}</small><small title={line.attemptId}>#{line.sequence} · {shortId(line.attemptId)}{line.workerId ? ' · ' + shortId(line.workerId) : ''}</small></span>
         <pre>{line.text}</pre>
       </div>)}
     </div>
@@ -137,11 +138,6 @@ function isStream(value: unknown): value is TerminalStream {
 
 function shortId(value: string): string {
   return value.length > 18 ? value.slice(0, 7) + '…' + value.slice(-6) : value;
-}
-
-function formatTime(value: string): string {
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleTimeString('zh-CN', { hour12: false });
 }
 
 function formatCopiedLine(line: TerminalLine): string {

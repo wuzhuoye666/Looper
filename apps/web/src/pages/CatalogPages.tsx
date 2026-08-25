@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { AlertTriangle, ArrowRight, Boxes, Cpu, Download, ExternalLink, Filter, LoaderCircle, Plus, RefreshCw, Search, Server, Trash2, TriangleAlert, X } from 'lucide-react';
+import { AlertTriangle, Boxes, Cpu, Download, ExternalLink, Filter, LoaderCircle, Plus, RefreshCw, Search, Server, Trash2, TriangleAlert, X } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ImportTargetDialog } from '../components/ImportTargetDialog';
@@ -107,7 +107,7 @@ export function TargetsPage() {
               <td>{formatDate(x.lastInventorySeenAt || x.lastSeenAt)}</td>
               <td>{x.endpoint?.startsWith('http') ? <a className="text-link" href={x.endpoint} target="_blank" rel="noreferrer">打开<ExternalLink size={14} /></a> : x.endpoint ? <code>{x.endpoint}</code> : '—'}</td>
               <td><TargetSshButton target={x} onConfigure={() => setSshTarget(x)} /></td>
-              <td><div className="table-actions">{x.runnable && <Link className="button secondary compact-button" to="/experiments/new" aria-label={`对 ${x.name} 做最终测试`}><ArrowRight size={14} />最终测试</Link>}{(CLOUD_PROVIDERS.has(x.type || '') || x.type === 'external') && x.lifecycleStatus === 'active'
+              <td><div className="table-actions">{(CLOUD_PROVIDERS.has(x.type || '') || x.type === 'external') && x.lifecycleStatus === 'active'
                 ? <button className="button danger-ghost compact-button" onClick={() => setDestroyTarget(x)} aria-label={`销毁 ${x.name}`}><Trash2 size={14} />销毁</button>
                 : null}</div></td>
             </tr>
