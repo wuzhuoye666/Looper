@@ -128,7 +128,9 @@ ObservationWindow:
 ```
 
 - 每个观察窗口携带自己的 `workload_identity_digest`；相邻窗口身份漂移超过任务
-  声明容差 → 触发 S10 的"负载消失/剧变"停止类评估（不是静默继续）。
+  声明容差 → 触发 S0–S10 中动态相位的窗口预算自 v1alpha3 起由 gate 合同 `PhaseBudgetV3.max_windows` 唯一承载：窗口耗尽在末窗常规评估内产生 `stop=true`（BUDGET_EXHAUSTED，优先级低于安全/漂移/干预数/墙钟、高于 target-met），证据绑定末窗观测 digest（DYN-END-01I，2026-08-25）。
+
+S10 的"负载消失/剧变"停止类评估（不是静默继续）。
 - **开销 A/B 复用 L4 已有合同**：`build_collection_overhead_evidence`（成对
   裸墙钟、无阈值无裁决）。O2 开窗与 O3 授权必须各自携带开销证据 digest；
   开销证据只记录不裁决——"开销是否可接受"是任务输入，不内置默认。
