@@ -70,6 +70,33 @@ def test_scenario_manifests_validate(path: str, execution_status: str) -> None:
     assert manifest["spec"]["x-extensions"]["executionStatus"] == execution_status
 
 
+@pytest.mark.parametrize(
+    "path",
+    [
+        "benchmarks/sysbench/benchmark.yaml",
+        "benchmarks/dcperf-mediawiki/benchmark.yaml",
+        "benchmarks/phoronix-phpbench/benchmark.yaml",
+    ],
+)
+def test_builtin_diagnostic_contracts_validate(path: str) -> None:
+    manifest, _ = load_and_validate_manifest(__import__("pathlib").Path(path))
+    contract = manifest["spec"]["x-extensions"]["diagnosticRecommendations"]
+    assert contract["enabled"] is True
+    assert contract["policy"]["modeMinimumSamples"] >= 8
+    assert contract["rules"]
+
+
+def test_diagnostic_contract_rejects_invalid_threshold_order() -> None:
+    manifest, _ = load_and_validate_manifest(
+        __import__("pathlib").Path("benchmarks/sysbench/benchmark.yaml")
+    )
+    invalid = json.loads(json.dumps(manifest))
+    policy = invalid["spec"]["x-extensions"]["diagnosticRecommendations"]["policy"]
+    policy["cvStable"] = policy["cvUnstable"]
+    with pytest.raises(ManifestError, match="cvStable must be lower"):
+        validate_document(invalid, "benchmark-manifest.schema.json")
+
+
 def test_client_load_accounting_closes_the_request_chain() -> None:
     accounting = ClientLoadAccounting(
         schemaVersion="v1alpha1",

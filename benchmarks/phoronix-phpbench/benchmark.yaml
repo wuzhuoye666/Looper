@@ -238,6 +238,33 @@ spec:
     bootstrapCatalog: true
     executionStatus: executable
     selectionDefaults: {repeats: 3, timeoutSeconds: 10800, seed: 20260302}
+    diagnosticRecommendations:
+      enabled: true
+      policy:
+        minimumSamples: 3
+        cvStable: 0.05
+        cvUnstable: 0.15
+        slowShareUnstable: 0.30
+        outlierFenceK: 1.5
+        modeMinimumSamples: 8
+        modeMinR2: 0.5
+        modeMinClusterShare: 0.10
+        modeGapRatio: 2.5
+        skewThreshold: 1.0
+        associationMinCorrelation: 0.3
+        associationMinLift: 1.2
+        attributionMinEtaSquared: 0.25
+      rules:
+        - {id: phpbench.stable, scope: group, when: stable, priority: low, kind: diagnostic, action: 当前 PHPBench 综合分数稳定，可保持 PTS profile 与运行时配置复测。, rationale: 通过门禁的原始分数 CV 低于合同稳定阈值。}
+        - {id: phpbench.warning, scope: group, when: warning, priority: medium, kind: retest, action: 保持 profile 和 PHP 运行时不变并增加重复次数。, rationale: PHPBench 分数出现波动、偏度或异常轮次。}
+        - {id: phpbench.unstable, scope: group, when: unstable, priority: high, kind: retest, action: 固定 PHP 运行时、CPU 频率并隔离后台进程后重测。, rationale: 综合分数 CV 或慢轮次占比超过合同阈值。}
+        - {id: phpbench.samples, scope: group, when: insufficient_evidence, priority: high, kind: retest, action: 将通过 PTS 与 Profile 门禁的有效轮次补足到至少 3 次。, rationale: 当前有效综合分数样本不足。}
+        - {id: phpbench.outlier, scope: group, when: outlier_present, priority: medium, kind: diagnostic, action: 对照 pts-result.json、运行元数据和终端输出检查异常轮次。, rationale: 原始 PHPBench 分数存在 IQR 异常值。}
+        - {id: phpbench.multimodal, scope: group, when: multimodal, priority: high, kind: retest, action: 固定 PHP runtime 与 CPU 状态后分组复测。, rationale: 至少 8 个有效样本呈现疑似快慢双模式。}
+        - {id: phpbench.system-metrics, scope: group, when: missing_system_metrics, priority: medium, kind: data_collection, action: 补充 CPU 频率、上下文切换和运行队列指标。, rationale: 当前证据不足以解释 PHP 运行时波动。}
+        - {id: phpbench.gates, scope: group, when: gate_failure, priority: high, kind: diagnostic, action: 先修复 PTS 执行或 Profile 版本门禁，再补充有效轮次。, rationale: 未通过必要门禁的轮次已从综合分数统计中排除。}
+        - {id: phpbench.single-target, scope: study, when: single_target, priority: medium, kind: retest, action: 如需比较环境，请使用相同 PTS profile 增加目标机。, rationale: 单目标只能诊断分数稳定性，不形成性能优劣或采购结论。}
+        - {id: phpbench.no-comparison, scope: study, when: no_comparison, priority: low, kind: diagnostic, action: 当前报告不输出运行环境排名。, rationale: 缺少可比较目标或有效成对证据。}
     resultPresentation:
       sections:
         - id: phpbench-results

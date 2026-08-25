@@ -48,6 +48,47 @@ def validate_document(document: dict[str, Any], schema_name: str) -> None:
             for error in errors
         )
         raise ManifestError(rendered)
+    if schema_name == "benchmark-manifest.schema.json":
+        _validate_diagnostic_recommendations(document)
+
+
+def _validate_diagnostic_recommendations(document: dict[str, Any]) -> None:
+    spec = document.get("spec") or {}
+    contract = (spec.get("x-extensions") or {}).get("diagnosticRecommendations")
+    if not isinstance(contract, dict):
+        return
+    policy = contract.get("policy") or {}
+    if policy.get("cvStable", 0) >= policy.get("cvUnstable", 0):
+        raise ManifestError(
+            "spec/x-extensions/diagnosticRecommendations/policy: "
+            "cvStable must be lower than cvUnstable"
+        )
+    audit_minimum = (spec.get("audit") or {}).get("minimumRepeats")
+    if audit_minimum is not None and policy.get("minimumSamples") != audit_minimum:
+        raise ManifestError(
+            "spec/x-extensions/diagnosticRecommendations/policy: "
+            "minimumSamples must equal audit.minimumRepeats"
+        )
+    workload_ids = {str(item.get("id")) for item in spec.get("workloads", [])}
+    rules = contract.get("rules") or []
+    rule_ids = [str(item.get("id")) for item in rules]
+    if len(rule_ids) != len(set(rule_ids)):
+        raise ManifestError(
+            "spec/x-extensions/diagnosticRecommendations/rules: rule ids must be unique"
+        )
+    unknown = sorted(
+        {
+            str(workload_id)
+            for rule in rules
+            for workload_id in rule.get("workloadIds", [])
+            if str(workload_id) not in workload_ids
+        }
+    )
+    if unknown:
+        raise ManifestError(
+            "spec/x-extensions/diagnosticRecommendations/rules: "
+            f"unknown workload ids: {unknown}"
+        )
 
 
 def load_and_validate_manifest(path: Path) -> tuple[dict[str, Any], str]:

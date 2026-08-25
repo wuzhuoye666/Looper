@@ -267,6 +267,33 @@ spec:
     bootstrapCatalog: true
     executionStatus: executable
     selectionDefaults: {repeats: 5, timeoutSeconds: 3600, seed: 20260301}
+    diagnosticRecommendations:
+      enabled: true
+      policy:
+        minimumSamples: 5
+        cvStable: 0.05
+        cvUnstable: 0.15
+        slowShareUnstable: 0.30
+        outlierFenceK: 1.5
+        modeMinimumSamples: 8
+        modeMinR2: 0.5
+        modeMinClusterShare: 0.10
+        modeGapRatio: 2.5
+        skewThreshold: 1.0
+        associationMinCorrelation: 0.3
+        associationMinLift: 1.2
+        attributionMinEtaSquared: 0.25
+      rules:
+        - {id: sysbench.stable, scope: group, when: stable, priority: low, kind: diagnostic, action: 当前 workload 的重复结果稳定，可保持同一参数继续复测。, rationale: 有效轮次的变异系数低于 Sysbench 合同稳定阈值。}
+        - {id: sysbench.warning, scope: group, when: warning, priority: medium, kind: retest, action: 在相同线程数和时长下增加重复次数，并检查异常轮次。, rationale: 原始 Sysbench 主指标出现波动、偏度或异常样本。}
+        - {id: sysbench.unstable, scope: group, when: unstable, priority: high, kind: retest, action: 固定 CPU 频率、绑核并隔离后台负载后重新采集。, rationale: 主指标变异系数或慢轮次占比超过合同不稳定阈值。}
+        - {id: sysbench.samples, scope: group, when: insufficient_evidence, priority: high, kind: retest, action: 将该 workload 的有效重复次数补足到至少 5 次。, rationale: 当前有效样本不足以区分真实波动和偶然噪声。}
+        - {id: sysbench.outlier, scope: group, when: outlier_present, priority: medium, kind: diagnostic, action: 对照原始终端和系统指纹排查异常轮次。, rationale: IQR 规则在原始 Benchmark 轮次中检测到异常值。}
+        - {id: sysbench.multimodal, scope: group, when: multimodal, priority: high, kind: retest, action: 分别固定 CPU affinity、NUMA 和频率做控制变量复测。, rationale: 至少 8 个有效样本呈现疑似快慢双模式。}
+        - {id: sysbench.system-metrics, scope: group, when: missing_system_metrics, priority: medium, kind: data_collection, action: 复测时补充 CPU 频率、迁移、上下文切换和 NUMA 指标。, rationale: 当前证据缺少解释性能波动所需的系统指标。}
+        - {id: sysbench.gates, scope: group, when: gate_failure, priority: high, kind: diagnostic, action: 先处理失败轮次的执行门禁，再补充有效样本。, rationale: 存在执行失败或未通过 Sysbench 必要门禁的轮次，这些轮次未进入统计。}
+        - {id: sysbench.single-target, scope: study, when: single_target, priority: medium, kind: retest, action: 如需比较机型，请用相同合同增加至少一台目标机复测。, rationale: 当前只有一台目标机，只能诊断稳定性，不能形成性能优劣或采购结论。}
+        - {id: sysbench.no-comparison, scope: study, when: no_comparison, priority: low, kind: diagnostic, action: 当前报告不输出候选机型排名。, rationale: 缺少可比较目标或同 workload 的有效成对证据。}
     resultPresentation:
       sections:
         - id: sysbench-workloads

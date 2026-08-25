@@ -2,12 +2,19 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from looper_api.models import AnalysisSnapshotRecord, AttemptRecord, ObservationRecord
+from looper_api.models import (
+    AnalysisSnapshotRecord,
+    AttemptRecord,
+    BenchmarkRecord,
+    ExperimentRecord,
+    ObservationRecord,
+)
 from looper_api.scheduler import create_demo_request, create_experiment, start_experiment
-from looper_api.variability_service import build_variability_report
+from looper_api.variability_service import _metric_declaration, build_variability_report
 from looper_core.contracts import Direction
 from looper_core.state import AttemptStatus
 from looper_core.variability import (
@@ -110,6 +117,21 @@ def test_bimodal_distribution_detects_fast_and_slow_modes() -> None:
     assert labels["fast-0"] == "fast_mode"
     assert labels["slow-0"] == "slow_mode"
     assert all(run.slow for run in report.runs if run.run_id.startswith("slow-"))
+
+
+def test_five_samples_never_trigger_multimodal_detection() -> None:
+    report = analyze_variability(
+        [
+            _sample(value, run_id=f"r{index}")
+            for index, value in enumerate([100, 101, 99, 180, 181])
+        ],
+        metric="throughput",
+        unit="events/s",
+        direction=Direction.MAXIMIZE,
+        group_label="g",
+    )
+    assert report.modes is None
+    assert report.stability.get("suspected_multimodal") is not True
 
 
 def test_outlier_runs_are_flagged_by_iqr_fence() -> None:
@@ -358,7 +380,35 @@ def test_policy_thresholds_change_the_verdict() -> None:
     assert report.status == "unstable"
 
 
+def test_sysbench_uses_workload_specific_primary_metrics() -> None:
+    from looper_core.manifest import load_and_validate_manifest
+
+    manifest, _ = load_and_validate_manifest(
+        __import__("pathlib").Path("benchmarks/sysbench/benchmark.yaml")
+    )
+    spec = manifest["spec"]
+    assert _metric_declaration(spec, "memory") == (
+        "throughput_mib_s",
+        "MiB/s",
+        "maximize",
+    )
+    for workload_id in ("cpu", "thread", "mutex"):
+        assert _metric_declaration(spec, workload_id) == (
+            "events_per_sec",
+            "events/s",
+            "maximize",
+        )
+
+
 # --- Service layer -----------------------------------------------------------------
+
+
+def test_service_returns_explicit_empty_state_without_contract(db_session) -> None:
+    experiment = create_experiment(db_session, create_demo_request())
+    result = build_variability_report(db_session, experiment.id, persist=False)
+    assert result["status"] == "unavailable"
+    assert result["groups"] == []
+    assert "未声明优化建议规则" in result["reason"]
 
 
 def _add_observation(
@@ -390,6 +440,36 @@ def _add_observation(
 
 def _prepare_service_experiment(db_session) -> str:
     experiment = create_experiment(db_session, create_demo_request())
+    benchmark = (
+        db_session.query(BenchmarkRecord)
+        .where(
+            BenchmarkRecord.benchmark_id == experiment.spec_json["benchmark_id"],
+            BenchmarkRecord.version == experiment.spec_json["benchmark_version"],
+        )
+        .one()
+    )
+    manifest = deepcopy(benchmark.manifest_json)
+    manifest["spec"].setdefault("x-extensions", {})["diagnosticRecommendations"] = {
+        "enabled": True,
+        "policy": {
+            "minimumSamples": 5,
+            "cvStable": 0.05,
+            "cvUnstable": 0.15,
+            "modeMinimumSamples": 8,
+        },
+        "rules": [
+            {
+                "id": "test.stable",
+                "scope": "group",
+                "when": "stable",
+                "priority": "low",
+                "kind": "diagnostic",
+                "action": "保持配置",
+                "rationale": "测试合同",
+            }
+        ],
+    }
+    benchmark.manifest_json = manifest
     start_experiment(db_session, experiment)
     db_session.flush()
     attempts = list(
@@ -402,7 +482,7 @@ def _prepare_service_experiment(db_session) -> str:
     sequence_base = 9000
     for evaluation_id, group in by_candidate.items():
         existing = group[0]
-        for extra in range(3):
+        for extra in range(6):
             new_attempt = AttemptRecord(
                 id=f"att-extra-{evaluation_id[:8]}-{extra}",
                 experiment_id=existing.experiment_id,
@@ -463,9 +543,10 @@ def test_service_builds_variability_report_from_experiment(db_session) -> None:
     experiment_id = _prepare_service_experiment(db_session)
     result = build_variability_report(db_session, experiment_id, persist=True)
     assert result["analyzer"] == "looper.variability-analyzer"
-    assert result["metric"] == "throughput_mib_s"
+    assert result["metric"] == "workload-specific"
     assert result["status"] == "available"
     assert len(result["groups"]) == 2
+    assert {group["metric"] for group in result["groups"]} == {"throughput_mib_s"}
     group_labels = " ".join(group["groupLabel"] for group in result["groups"])
     assert "medium" in group_labels
     statuses = {group["status"] for group in result["groups"]}
@@ -505,3 +586,33 @@ def test_service_variability_snapshot_is_cached(db_session) -> None:
         .all()
     )
     assert len(snapshots) == 1
+
+
+def test_contract_change_creates_a_new_policy_snapshot(db_session) -> None:
+    experiment_id = _prepare_service_experiment(db_session)
+    first = build_variability_report(db_session, experiment_id, persist=True)
+    experiment = db_session.get(ExperimentRecord, experiment_id)
+    assert experiment is not None
+    benchmark = (
+        db_session.query(BenchmarkRecord)
+        .where(
+            BenchmarkRecord.benchmark_id == experiment.spec_json["benchmark_id"],
+            BenchmarkRecord.version == experiment.spec_json["benchmark_version"],
+        )
+        .one()
+    )
+    manifest = deepcopy(benchmark.manifest_json)
+    manifest["spec"]["x-extensions"]["diagnosticRecommendations"]["policy"][
+        "cvStable"
+    ] = 0.04
+    benchmark.manifest_json = manifest
+    db_session.flush()
+
+    second = build_variability_report(db_session, experiment_id, persist=True)
+    assert first["policy_digest"] != second["policy_digest"]
+    snapshots = (
+        db_session.query(AnalysisSnapshotRecord)
+        .where(AnalysisSnapshotRecord.experiment_id == experiment_id)
+        .all()
+    )
+    assert len(snapshots) == 2

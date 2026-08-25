@@ -1,5 +1,6 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
+import { VariabilityPanel } from '../components/VariabilityPanel';
 import { Evidence, experimentTabs, PhpBenchResultSection, SysbenchWorkloadSection, ValidityGatesSection } from '../pages/ExperimentDetailPage';
 import type { Experiment } from '../lib/types';
 
@@ -17,7 +18,7 @@ describe('experiment result navigation', () => {
     } satisfies Experiment);
 
     expect(tabs.map(([, label]) => label)).toEqual([
-      '概览', '目标结果', '吞吐与延迟', '有效性门禁', '证据', '配置', '原始终端',
+      '概览', '优化建议', '吞吐与延迟', '有效性门禁', '证据', '配置', '原始终端',
     ]);
     expect(tabs.flat()).not.toContain('对比结论');
     expect(tabs.flat()).not.toContain('可信度');
@@ -105,37 +106,41 @@ describe('experiment result navigation', () => {
     expect(screen.getByText('超时率: 0')).toBeInTheDocument();
   });
 
-  it('renders localized evidence in full-width file sections and distinguishes retries', () => {
+  it('renders only the complete raw evidence download', () => {
     render(<Evidence
       items={[{
         id: 'evidence-summary', title: 'Immutable experiment evidence', kind: 'content-addressed',
         summary: '5 attempts, 33 observations, 68 artifacts',
         artifacts: [{ name: '完整证据包', url: '/evidence' }],
       }]}
-      evaluations={[{
-        id: 'eval-dcperf', candidate: '测试机3', status: 'completed', runs: [
-          {
-            attemptId: 'att-first', round: 1, retry: 0, status: 'failed', measured: false,
-            artifacts: [{ name: 'prepare.stdout.log', url: '/prepare' }], error: '缺少结果文件',
-          },
-          {
-            attemptId: 'att-retry', round: 1, retry: 1, status: 'completed', measured: true,
-            artifacts: [{ name: 'result.json', url: '/result' }],
-          },
-        ],
-      }]}
     />);
 
-    expect(screen.getByRole('heading', { name: '完整实验原始证据' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: '完整原始数据' })).toBeInTheDocument();
     expect(screen.getByText('5 次尝试 · 33 条观测 · 68 个制品')).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: '第 1 轮 · 首次尝试' })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: '第 1 轮 · 重试 1' })).toBeInTheDocument();
-    expect(screen.getByText('环境准备标准输出')).toBeInTheDocument();
-    expect(screen.getByText('标准化测试结果')).toBeInTheDocument();
-    expect(screen.getAllByText('证据文件')).toHaveLength(3);
-    const firstFiles = screen.getAllByText('证据文件')[0].closest('details');
-    expect(firstFiles).not.toHaveAttribute('open');
-    fireEvent.click(screen.getAllByText('证据文件')[0]);
-    expect(firstFiles).toHaveAttribute('open');
+    expect(screen.getByRole('link', { name: /完整证据包/ })).toBeInTheDocument();
+    expect(screen.queryByText(/第 1 轮/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/尝试 ID/)).not.toBeInTheDocument();
+  });
+
+  it('renders contract-backed optimization advice without a ranking conclusion', () => {
+    render(<VariabilityPanel data={{
+      experiment_id: 'exp-1', mode: 'selection', metric: 'workload-specific', unit: 'varies', direction: 'varies',
+      status: 'available', groups: [{
+        groupLabel: '测试机3 · memory', targetId: 'target-3', workloadId: 'memory', metric: 'throughput_mib_s',
+        unit: 'MiB/s', direction: 'maximize', status: 'stable', invalidAttemptCount: 1,
+        distribution: { count: 5, mean: 4467.92, median: 4460, standardDeviation: 20, coefficientOfVariation: 0.004, minimum: 4430, maximum: 4500 },
+        stability: { verdict: 'stable', reasons: ['CV=0.004，原始结果稳定'] }, modes: null, runs: [], outliers: { slow: [], fast: [] },
+        associationClues: [], attribution: [], selectionImpact: { summary: '', confidence: 'high' }, evidence: { sampleCount: 5 },
+        recommendations: [{ ruleId: 'sysbench.stable', source: 'benchmark-contract', action: '保持配置复测', rationale: '合同稳定阈值已满足', priority: 'low', kind: 'diagnostic' }],
+      }], comparisons: [], studyRecommendations: [{ ruleId: 'sysbench.single-target', source: 'benchmark-contract', action: '增加目标机复测', rationale: '单目标不形成采购结论', priority: 'medium', kind: 'retest' }],
+      diagnosticContractDigest: 'sha256:contract',
+    }} />);
+
+    expect(screen.getByRole('heading', { name: '优化建议' })).toBeInTheDocument();
+    expect(screen.getByText('内存吞吐')).toBeInTheDocument();
+    expect(screen.getByText('4,467.92 MiB/s')).toBeInTheDocument();
+    expect(screen.getByText(/不形成性能优劣、领先或采购结论/)).toBeInTheDocument();
+    expect(screen.getByText('保持配置复测')).toBeInTheDocument();
+    expect(screen.queryByText('单位价格容量')).not.toBeInTheDocument();
   });
 });
