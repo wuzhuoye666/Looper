@@ -10,7 +10,8 @@
 ```
 session-dir/
   workload-contract.yaml     # WorkloadContract（yaml.safe_dump 兼容格式）
-  gate-contract.json         # DynamicPhaseGateContract（model_dump_json）
+  gate-contract.json         # DynamicPhaseGateContract | V2 | V3（model_dump_json，按 schema_version 分派）；
+                            #   v1alpha3 合同在 budget 内声明 max_windows，窗口预算单一来源在此文件
   promotion-contract.json    # PromotionContract
   hypothesis-proposals.yaml  # 声明式竞争假设（rank/change 显式）
   business-policy.json       # BusinessRetestPolicy（全部数值任务显式）

@@ -57,11 +57,13 @@ from looper_core.system_opt.observation import (
 from looper_core.system_opt.phase_gate import (
     DynamicPhaseGateContract,
     DynamicPhaseGateContractV2,
+    DynamicPhaseGateContractV3,
     GateDecision,
     GateStopClass,
     PhaseGateState,
     evaluate_phase_gate,
     evaluate_phase_gate_v2,
+    evaluate_phase_gate_v3,
 )
 from looper_core.system_opt.result_vector import (
     PromotionContract,
@@ -906,6 +908,402 @@ def run_dynamic_phase_v2(
     )
 
 
+def run_dynamic_phase_v3(
+    *,
+    contract: WorkloadContract,
+    gate_contract: DynamicPhaseGateContractV3,
+    manifest: ConfigManifest,
+    promotion_contract: PromotionContract,
+    environment_digest: str,
+    probe_top_k: int,
+    load_identity: Callable[[str], LoadCommandIdentity],
+    o0_source: Callable[[str], str],
+    hypothesis_source: Callable[[SymptomRecord], list[ComponentHypothesis]],
+    prepare_intervention: Callable[[ComponentHypothesis], InterventionPlan],
+    execute_intervention: Callable[[InterventionPlan, str], DynamicInterventionExecution],
+    clock: Callable[[], datetime],
+    o1_source: Callable[[str], list[ComponentMetricSnapshot]] | None = None,
+    component_probe: Callable[[ComponentHypothesis, ObservationWindow], str] | None = None,
+    retest: Callable[[str], RetestOutcome] | None = None,
+    verification_window_count: int = 0,
+    refutation_sink: Callable[
+        [ComponentHypothesis, SymptomRecord, InterventionExperiment], None
+    ]
+    | None = None,
+) -> DynamicPhaseRunV2:
+    """Run the v3 prepare -> pre-execution gate -> execute state machine.
+
+    The window budget is taken from ``gate_contract.budget.max_windows`` (the
+    single source of truth) and enforced by ``evaluate_phase_gate_v3`` in the
+    last window's regular evaluation, so every normal return carries a
+    ``stop=true`` decision whose evidence digest is the last window's digest.
+    """
+
+    max_windows = gate_contract.budget.max_windows
+    if probe_top_k < 1 or verification_window_count < 0:
+        raise ValueError("probe_top_k need >=1; verification windows >=0")
+    if gate_contract.workload_contract_digest != contract.digest:
+        raise ValueError("gate contract is not bound to this workload contract")
+    degradation_spec = next(
+        (
+            metric
+            for metric in contract.o0_metrics
+            if metric.metric_id == gate_contract.degradation.metric_id
+        ),
+        None,
+    )
+    if degradation_spec is None:
+        raise ValueError("degradation gate metric is not declared by the workload contract")
+
+    ledger = HypothesisLedger()
+    windows: list[DynamicWindowRecordV2] = []
+    observations: list[VerificationObservation] = []
+    promotion: PromotionEvidence | None = None
+    symptom_registered = False
+    interventions = 0
+    risky_interventions = 0
+    consecutive_lcb_rounds = 0
+    degradation_events = 0
+    pre_intervention_value: float | None = None
+    elapsed = 0.0
+    gate_state = PhaseGateState(
+        consecutive_slo_met_windows=0,
+        consecutive_lcb_threshold_rounds=0,
+        interventions=0,
+        risky_interventions=0,
+        elapsed_seconds=0.0,
+        windows_observed=0,
+        identity_drift_events=0,
+        degradation_events=0,
+        evidence_digest=contract.digest,
+    )
+
+    def evaluate(window_digest: str) -> GateDecision:
+        return evaluate_phase_gate_v3(
+            gate_contract,
+            gate_state.model_copy(update={"evidence_digest": window_digest}),
+        )
+
+    def finish(decision: GateDecision, note: str | None = None) -> DynamicPhaseRunV2:
+        return DynamicPhaseRunV2(
+            workload_contract_digest=contract.digest,
+            gate_contract_digest=gate_contract.digest,
+            windows=windows,
+            verification_observations=observations,
+            promotion=promotion,
+            hypothesis_ledger_digest=ledger.digest,
+            stop_gate_decision=decision,
+            risky_interventions=risky_interventions,
+            execution_receipts=[
+                digest
+                for item in windows
+                for digest in (
+                    item.candidate_receipt_digest,
+                    item.recovery_receipt_digest,
+                )
+                if digest is not None
+            ],
+            note=note,
+        )
+
+    def safety_stop(field: str, reason: str, evidence_digest: str) -> GateDecision:
+        return GateDecision(
+            stop=True,
+            stop_class=GateStopClass.SAFETY_TRIGGERED,
+            triggered_field=field,
+            reason=reason[:600],
+            contract_digest=gate_contract.digest,
+            evidence_digest=evidence_digest,
+        )
+
+    for index in range(1, max_windows + 1):
+        window_id = f"window-{index}"
+        started = clock()
+        try:
+            window = record_window(
+                contract,
+                window_id=window_id,
+                phase_id=contract.phases[0].phase_id,
+                load_command=load_identity(window_id),
+                o0_raw=o0_source(window_id),
+                o1=o1_source(window_id) if o1_source is not None else None,
+                started_at=started,
+                finished_at=clock(),
+            )
+        except WorkloadIdentityDrift:
+            gate_state = gate_state.model_copy(
+                update={"identity_drift_events": gate_state.identity_drift_events + 1}
+            )
+            decision = evaluate(gate_state.evidence_digest)
+            windows.append(
+                DynamicWindowRecordV2(
+                    window_id=window_id,
+                    action=WindowAction.IDENTITY_DRIFT,
+                    note="identity drift stopped the phase via the gate",
+                )
+            )
+            return finish(decision)
+        elapsed += (window.finished_at - window.started_at).total_seconds()
+
+        slo = contract.slos[0] if contract.slos else None
+        slo_met: bool | None = None
+        if slo is not None:
+            spec = next(
+                (metric for metric in contract.o0_metrics if metric.metric_id == slo.metric_id),
+                None,
+            )
+            if spec is None:
+                raise ValueError("SLO metric is not declared by the workload contract")
+            observation = next(item for item in window.o0 if item.metric_id == spec.metric_id)
+            slo_met = _slo_met(
+                aggregate(observation.values, spec.aggregation), slo.comparator, slo.bound
+            )
+
+        action = WindowAction.OBSERVE
+        hypothesis_id: str | None = None
+        note: str | None = None
+        plan_digest: str | None = None
+        outcome_digest: str | None = None
+        candidate_receipt_digest: str | None = None
+        recovery_receipt_digest: str | None = None
+
+        if slo_met is False and not symptom_registered:
+            symptom = SymptomRecord(
+                symptom_id=f"symptom-{window_id}",
+                window_id=window_id,
+                workload_contract_digest=contract.digest,
+                evidence_digest=window.digest,
+                description="SLO violated by the observation window",
+            )
+            ledger.register_symptom(symptom)
+            for hypothesis in hypothesis_source(symptom):
+                ledger.register_hypothesis(hypothesis)
+            symptom_registered = True
+            action = WindowAction.SYMPTOM_REGISTERED
+            note = f"{len(ledger.for_symptom(symptom.symptom_id))} hypotheses registered"
+        elif symptom_registered and component_probe is not None:
+            queue = ledger.probe_queue(top_k=probe_top_k)
+            if queue:
+                head = queue[0]
+                hypothesis_id = head.hypothesis_id
+                if head.status is HypothesisStatus.PROPOSED:
+                    ledger.begin_probing(head.hypothesis_id, component_probe(head, window))
+                    note = "advanced to probing with component evidence"
+                else:
+                    try:
+                        ledger.request_intervention(head.hypothesis_id)
+                    except HypothesisRoutingError as error:
+                        action = WindowAction.PROBE_BLOCKED
+                        note = str(error)
+                    else:
+                        plan = prepare_intervention(head)
+                        plan_digest = plan.digest
+                        gate_rejection = evaluate_intervention_gate(
+                            plan=plan,
+                            manifest=manifest,
+                            contract=gate_contract,
+                            risky_interventions=risky_interventions,
+                            evidence_digest=window.digest,
+                        )
+                        if gate_rejection is not None:
+                            windows.append(
+                                DynamicWindowRecordV2(
+                                    window_id=window_id,
+                                    observation_window_digest=window.digest,
+                                    slo_met=slo_met,
+                                    action=WindowAction.GATE_REJECTED,
+                                    hypothesis_id=hypothesis_id,
+                                    note=gate_rejection.reason,
+                                    plan_digest=plan.digest,
+                                )
+                            )
+                            return finish(gate_rejection)
+                        resolved = resolve_plan_risk(plan, manifest)
+                        try:
+                            execution = execute_intervention(plan, window_id)
+                        except DynamicInterventionError as error:
+                            if error.outcome is not None and error.outcome.apply_started:
+                                interventions += 1
+                                if resolved.final_risk is not RiskLevel.LOW:
+                                    risky_interventions += 1
+                            outcome_digest = error.outcome.digest if error.outcome else None
+                            candidate_receipt_digest = error.candidate_receipt_digest
+                            recovery_receipt_digest = error.recovery_receipt_digest
+                            if candidate_receipt_digest is None:
+                                raise
+                            windows.append(
+                                DynamicWindowRecordV2(
+                                    window_id=window_id,
+                                    observation_window_digest=window.digest,
+                                    slo_met=slo_met,
+                                    action=WindowAction.INTERVENTION_FAILED,
+                                    hypothesis_id=hypothesis_id,
+                                    note=str(error)[:500],
+                                    plan_digest=plan.digest,
+                                    outcome_digest=outcome_digest,
+                                    candidate_receipt_digest=candidate_receipt_digest,
+                                    recovery_receipt_digest=recovery_receipt_digest,
+                                )
+                            )
+                            return finish(
+                                safety_stop(
+                                    error.triggered_field,
+                                    str(error),
+                                    recovery_receipt_digest or candidate_receipt_digest,
+                                )
+                            )
+
+                        outcome = execution.outcome
+                        outcome_digest = outcome.digest
+                        candidate_receipt_digest = execution.candidate_receipt_digest
+                        recovery_receipt_digest = execution.recovery_receipt_digest
+                        if outcome.apply_started:
+                            interventions += 1
+                            if resolved.final_risk is not RiskLevel.LOW:
+                                risky_interventions += 1
+                        experiment = outcome.experiment
+                        if experiment is None:
+                            action = WindowAction.INTERVENTION_FAILED
+                            note = "safety execution completed without a business experiment"
+                        elif experiment.accepted:
+                            confirmed = ledger.confirm(head.hypothesis_id, experiment)
+                            action = WindowAction.INTERVENED
+                            note = "business retest accepted the hypothesis"
+                            hypothesis_id = confirmed.hypothesis_id
+                            if retest is not None:
+                                for verification_index in range(1, verification_window_count + 1):
+                                    verify_id = f"verify-{window_id}-{verification_index}"
+                                    retest_outcome = retest(verify_id)
+                                    observations.append(
+                                        verification_observation(
+                                            window_id=verify_id,
+                                            promoted_candidate_id=confirmed.hypothesis_id,
+                                            environment_digest=environment_digest,
+                                            outcome=retest_outcome.improvement,
+                                            evidence_digest=retest_outcome.measurement_batch_digest,
+                                        )
+                                    )
+                                action = WindowAction.VERIFIED
+                                promotion = evaluate_promotion(observations, promotion_contract)
+                        else:
+                            refuted = ledger.refute(
+                                head.hypothesis_id, experiment.measurement_batch_digest
+                            )
+                            if refutation_sink is not None:
+                                refutation_sink(
+                                    refuted,
+                                    ledger.symptom(refuted.symptom_id),
+                                    experiment,
+                                )
+                            action = WindowAction.INTERVENED
+                            note = "business retest rejected the hypothesis; restored and refuted"
+                        if experiment is not None and experiment.business_lcb is not None:
+                            consecutive_lcb_rounds = (
+                                consecutive_lcb_rounds + 1
+                                if experiment.business_lcb
+                                <= gate_contract.convergence.lcb_threshold
+                                else 0
+                            )
+                        before = next(
+                            (
+                                item
+                                for item in window.o0
+                                if item.metric_id == degradation_spec.metric_id
+                            ),
+                            None,
+                        )
+                        if before is not None:
+                            pre_intervention_value = aggregate(
+                                before.values, degradation_spec.aggregation
+                            )
+                        if outcome.safety_state is SafetyState.NEEDS_ATTENTION:
+                            field = (
+                                "intervention.recovery"
+                                if recovery_receipt_digest
+                                else "intervention.rollback"
+                            )
+                            windows.append(
+                                DynamicWindowRecordV2(
+                                    window_id=window_id,
+                                    observation_window_digest=window.digest,
+                                    slo_met=slo_met,
+                                    action=WindowAction.INTERVENTION_FAILED,
+                                    hypothesis_id=hypothesis_id,
+                                    note=note,
+                                    plan_digest=plan_digest,
+                                    outcome_digest=outcome_digest,
+                                    candidate_receipt_digest=candidate_receipt_digest,
+                                    recovery_receipt_digest=recovery_receipt_digest,
+                                )
+                            )
+                            return finish(
+                                safety_stop(
+                                    field,
+                                    "intervention safety state requires operator attention",
+                                    recovery_receipt_digest or candidate_receipt_digest,
+                                )
+                            )
+
+        degradation_observation = next(
+            (item for item in window.o0 if item.metric_id == degradation_spec.metric_id),
+            None,
+        )
+        if degradation_observation is not None and pre_intervention_value is not None:
+            current_value = aggregate(degradation_observation.values, degradation_spec.aggregation)
+            reference = pre_intervention_value
+            if degradation_spec.direction is O0MetricDirection.MAXIMIZE:
+                worsened = current_value < reference
+                relative = (reference - current_value) / abs(reference) if reference != 0 else None
+            else:
+                worsened = current_value > reference
+                relative = (current_value - reference) / abs(reference) if reference != 0 else None
+            beyond_limit = relative is None or (relative > gate_contract.degradation.relative_limit)
+            if worsened and beyond_limit:
+                degradation_events += 1
+                note = (
+                    f"degradation: {degradation_spec.metric_id} worsened from "
+                    f"{reference:.6f} to {current_value:.6f} "
+                    f"(limit {gate_contract.degradation.relative_limit:.6f})"
+                )
+
+        gate_state = gate_state.model_copy(
+            update={
+                "consecutive_slo_met_windows": (
+                    gate_state.consecutive_slo_met_windows + 1
+                    if slo_met
+                    else 0
+                    if slo_met is False
+                    else gate_state.consecutive_slo_met_windows
+                ),
+                "interventions": interventions,
+                "risky_interventions": risky_interventions,
+                "consecutive_lcb_threshold_rounds": consecutive_lcb_rounds,
+                "degradation_events": degradation_events,
+                "elapsed_seconds": elapsed,
+                "windows_observed": index,
+            }
+        )
+        decision = evaluate(window.digest)
+        windows.append(
+            DynamicWindowRecordV2(
+                window_id=window_id,
+                observation_window_digest=window.digest,
+                slo_met=slo_met,
+                action=action,
+                hypothesis_id=hypothesis_id,
+                note=note,
+                plan_digest=plan_digest,
+                outcome_digest=outcome_digest,
+                candidate_receipt_digest=candidate_receipt_digest,
+                recovery_receipt_digest=recovery_receipt_digest,
+            )
+        )
+        if decision.stop:
+            return finish(decision)
+
+    raise RuntimeError("window budget should have stopped the phase in the final window")
+
+
 __all__ = [
     "DYNAMIC_PHASE_RUN_SCHEMA",
     "DYNAMIC_PHASE_RUN_V2_SCHEMA",
@@ -916,5 +1314,6 @@ __all__ = [
     "WindowAction",
     "run_dynamic_phase",
     "run_dynamic_phase_v2",
+    "run_dynamic_phase_v3",
     "load_dynamic_phase_run",
 ]
