@@ -1,15 +1,45 @@
 {
   "schemaVersion": "looper.dependency-lock/v1",
-  "benchmark": "looper.sysbench@1.0.1",
+  "benchmark": "looper.sysbench@1.0.2",
   "systemPackages": [
     {
-      "name": "sysbench",
-      "versionConstraint": ">=1.0,<1.1",
+      "name": "build-essential",
       "installers": ["apt-get"]
+    },
+    {
+      "name": "automake",
+      "installers": ["apt-get"]
+    },
+    {
+      "name": "libtool",
+      "installers": ["apt-get"]
+    },
+    {
+      "name": "pkg-config",
+      "installers": ["apt-get"]
+    },
+    {
+      "name": "libaio-dev",
+      "installers": ["apt-get"]
+    },
+    {
+      "name": "ca-certificates",
+      "installers": ["apt-get"]
+    }
+  ],
+  "assets": [
+    {
+      "id": "sysbench-1.0.20-source",
+      "url": "https://codeload.github.com/akopytov/sysbench/tar.gz/ebf1c90da05dea94648165e4f149abc20c979557",
+      "commit": "ebf1c90da05dea94648165e4f149abc20c979557",
+      "sha256": "sha256:2a664cb397ebb0678a91d7b876c1ffcebe728a52cbb1ffe0aa63b36fad1c9e1c",
+      "bytes": 1509951,
+      "license": "GPL-2.0"
     }
   ],
   "source": {
     "url": "https://github.com/akopytov/sysbench",
-    "commit": "3ceba0b1e115f8c50d1d045a4574d8ed643bd497"
+    "commit": "ebf1c90da05dea94648165e4f149abc20c979557",
+    "version": "1.0.20"
   }
 }

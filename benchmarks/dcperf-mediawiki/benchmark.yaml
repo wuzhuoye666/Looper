@@ -3,7 +3,7 @@ kind: Benchmark
 metadata:
   id: dcperf.mediawiki.closed-loop
   name: DCPerf MediaWiki Closed-Loop
-  version: 2026.08-pilot19
+  version: 2026.08-pilot20
   description: Pinned single-node DCPerf MediaWiki closed-loop capacity workload with resumable managed Ubuntu 22.04/24.04 provisioning and native Benchpress evidence.
   license: MIT
   source:

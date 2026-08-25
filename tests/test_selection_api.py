@@ -267,6 +267,13 @@ def test_experiment_view_keeps_completed_repeat_metrics_while_later_repeats_are_
     assert first.repeat_index == 0
     same_evaluation = [item for item in attempts if item.evaluation_id == first.evaluation_id]
     assert [item.repeat_index for item in same_evaluation] == [0, 1, 2]
+    first.status = AttemptStatus.SUCCEEDED
+    first.completed_at = utc_now()
+    session.add(CheckRecord(
+        id=new_id("chk"), attempt_id=first.id, check_id="roundtrip", passed=True,
+        scope="attempt", kind="correctness", message=None, details_json={},
+        created_at=utc_now(),
+    ))
     session.add(
         ObservationRecord(
             id=new_id("obs"),
@@ -329,6 +336,13 @@ def test_experiment_view_averages_successful_repeat_metrics(db_session: object) 
     assert len(attempts) == 3
     for attempt, value in zip(attempts, (517432.0, 528171.0, 525322.0), strict=True):
         attempt.status = AttemptStatus.SUCCEEDED
+        attempt.completed_at = utc_now()
+        for check_id in ("pts-run-ok", "profile-contract-match"):
+            session.add(CheckRecord(
+                id=new_id("chk"), attempt_id=attempt.id, check_id=check_id, passed=True,
+                scope="attempt", kind="correctness", message=None, details_json={},
+                created_at=utc_now(),
+            ))
         session.add(
             ObservationRecord(
                 id=new_id("obs"),
@@ -360,6 +374,117 @@ def test_experiment_view_averages_successful_repeat_metrics(db_session: object) 
     assert scores[0]["sampleIndex"] is None
     assert scores[0]["sampleCount"] == 3
     assert scores[0]["statistic"] == "mean"
+
+
+def test_experiment_view_excludes_failed_rounds_from_metric_average(
+    db_session: object,
+) -> None:
+    session = db_session
+    experiment = create_experiment(session, create_demo_request("Valid repeat average"))
+    start_experiment(session, experiment)
+    attempts = list(
+        session.scalars(
+            select(AttemptRecord)
+            .where(AttemptRecord.experiment_id == experiment.id)
+            .order_by(AttemptRecord.queue_sequence)
+        )
+    )
+    first = attempts[0]
+    same_evaluation = [item for item in attempts if item.evaluation_id == first.evaluation_id]
+    succeeded, failed = same_evaluation[:2]
+    for attempt, status, value, passed in (
+        (succeeded, AttemptStatus.SUCCEEDED, 100.0, True),
+        (failed, AttemptStatus.FAILED, 900.0, False),
+    ):
+        attempt.status = status
+        attempt.completed_at = utc_now()
+        session.add(ObservationRecord(
+            id=new_id("obs"), attempt_id=attempt.id, metric="throughput_mib_s",
+            value_number=value, value_boolean=None, unit="MiB/s", phase="measurement",
+            workload="corpus-small", sample_index=None, sample_count=1,
+            statistic="median", timestamp_text=None, attributes_json={}, created_at=utc_now(),
+        ))
+        session.add(CheckRecord(
+            id=new_id("chk"), attempt_id=attempt.id, check_id="roundtrip", passed=passed,
+            scope="attempt", kind="correctness", message=None, details_json={},
+            created_at=utc_now(),
+        ))
+    session.flush()
+
+    view = experiment_view(session, experiment, detail=True)
+    evaluation = next(item for item in view["evaluations"] if item["id"] == first.evaluation_id)
+    throughput = next(
+        item for item in evaluation["metrics"] if item["name"] == "throughput_mib_s"
+    )
+    assert throughput["value"] == 100.0
+    assert [run["status"] for run in evaluation["runs"][:2]] == ["completed", "failed"]
+
+
+def test_experiment_view_keeps_all_declared_sample_metrics(db_session: object) -> None:
+    session = db_session
+    benchmark = session.scalar(
+        select(BenchmarkRecord).where(
+            BenchmarkRecord.benchmark_id == "looper.phoronix-phpbench"
+        )
+    )
+    assert benchmark is not None
+    request = _normalize_create_request(
+        {
+            "mode": "selection",
+            "name": "PHPBench sample visibility",
+            "benchmarkId": benchmark.benchmark_id,
+            "benchmarkVersion": benchmark.version,
+            "targetIds": ["local"],
+            "config": {"repeats": 3},
+        },
+        session,
+    )
+    experiment = create_experiment(session, request)
+    start_experiment(session, experiment)
+    attempt = session.scalar(
+        select(AttemptRecord)
+        .where(AttemptRecord.experiment_id == experiment.id)
+        .order_by(AttemptRecord.repeat_index)
+    )
+    assert attempt is not None
+    attempt.status = AttemptStatus.SUCCEEDED
+    attempt.completed_at = utc_now()
+    for check_id in ("pts-run-ok", "profile-contract-match"):
+        session.add(CheckRecord(
+            id=new_id("chk"), attempt_id=attempt.id, check_id=check_id, passed=True,
+            scope="attempt", kind="correctness", message=None, details_json={},
+            created_at=utc_now(),
+        ))
+    for index, value in enumerate((517432.0, 528171.0, 525322.0)):
+        session.add(
+            ObservationRecord(
+                id=new_id("obs"),
+                attempt_id=attempt.id,
+                metric="phpbench_score_sample",
+                value_number=value,
+                value_boolean=None,
+                unit="Score",
+                phase="measurement",
+                workload="phpbench",
+                sample_index=index,
+                sample_count=3,
+                statistic="sample",
+                timestamp_text=None,
+                attributes_json={},
+                created_at=utc_now(),
+            )
+        )
+    session.flush()
+
+    view = experiment_view(session, experiment, detail=True)
+    samples = [
+        metric
+        for metric in view["evaluations"][0]["metrics"]
+        if metric["name"] == "phpbench_score_sample"
+    ]
+    assert [sample["value"] for sample in samples] == [517432.0, 528171.0, 525322.0]
+    assert [sample["sampleIndex"] for sample in samples] == [0, 1, 2]
+    assert all(sample["sampleCount"] == 3 for sample in samples)
 
 
 def test_stage0_adapter_cannot_be_selected_for_a_new_study(

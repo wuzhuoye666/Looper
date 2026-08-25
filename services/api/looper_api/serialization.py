@@ -506,6 +506,14 @@ def _average_metric_views(runs: list[dict[str, Any]]) -> list[dict[str, Any]]:
             grouped.setdefault(metric["name"], []).append(metric)
     result: list[dict[str, Any]] = []
     for _name, values in grouped.items():
+        if any(
+            item.get("sampleIndex") is not None or item.get("statistic") == "sample"
+            for item in values
+        ):
+            # Raw sample series are evidence, not scalar round summaries. Keep
+            # every sample instead of collapsing them into another mean.
+            result.extend(values)
+            continue
         numeric = [
             item["value"]
             for item in values
@@ -521,6 +529,27 @@ def _average_metric_views(runs: list[dict[str, Any]]) -> list[dict[str, Any]]:
         else:
             result.append(values[-1])
     return result
+
+
+def _workload_primary_metric(
+    manifest: dict[str, Any] | None, workload_id: str | None
+) -> str | None:
+    """Return the workload-specific primary outcome declared by the package."""
+
+    if not manifest or not workload_id:
+        return None
+    workloads = manifest.get("spec", {}).get("workloads", [])
+    workload = next(
+        (item for item in workloads if str(item.get("id")) == workload_id),
+        None,
+    )
+    if not workload:
+        return None
+    for name, declaration in (workload.get("metrics") or {}).items():
+        roles = declaration.get("presentation", {}).get("roles", [])
+        if "primary_outcome" in roles:
+            return str(name)
+    return None
 
 
 def experiment_view(
@@ -739,6 +768,13 @@ def experiment_view(
             if benchmark
             else {}
         )
+        required_checks = set(
+            benchmark.manifest_json.get("spec", {})
+            .get("adapter", {})
+            .get("requiredChecks", [])
+            if benchmark
+            else []
+        )
         run_views: list[dict[str, Any]] = []
         for attempt in sorted(
             evaluation_attempts,
@@ -759,12 +795,30 @@ def experiment_view(
                 )
             )
             run_metrics = _attempt_metric_views(observations, metric_specs)
+            check_results = {check.check_id: check.passed for check in checks}
+            required_checks_passed = all(
+                check_results.get(check_id) is True for check_id in required_checks
+            )
+            attempt_status = AttemptStatus(attempt.status)
+            valid_measurement = (
+                attempt_status == AttemptStatus.SUCCEEDED and required_checks_passed
+            )
+            terminal_failure = attempt_status in {
+                AttemptStatus.FAILED,
+                AttemptStatus.TIMED_OUT,
+                AttemptStatus.CANCELLED,
+                AttemptStatus.LOST,
+            }
             run_views.append(
                 {
                     "attemptId": attempt.id,
                     "round": attempt.repeat_index + 1,
                     "retry": attempt.retry_index,
-                    "status": "completed" if run_metrics else "failed",
+                    "status": "completed"
+                    if valid_measurement
+                    else "failed"
+                    if terminal_failure or attempt_status == AttemptStatus.SUCCEEDED
+                    else attempt_status.value,
                     "measured": bool(run_metrics),
                     "startedAt": _iso(attempt.started_at),
                     "completedAt": _iso(attempt.completed_at),
@@ -783,40 +837,31 @@ def experiment_view(
                     "error": attempt.error_message,
                 }
             )
-
-        # Result cards show one arithmetic mean across successful repeat
-        # collections. Raw and failed attempts remain visible in ``runs`` and
-        # in the immutable evidence bundle.
-        successful_result_attempts = [
+        valid_runs = [
             item
-            for item in evaluation_attempts
-            if item.id in attempts_with_observations
-            and AttemptStatus(item.status) == AttemptStatus.SUCCEEDED
+            for item in run_views
+            if item["status"] == "completed" and item["metrics"]
         ]
-        if successful_result_attempts:
-            successful_observations = list(
-                session.scalars(
-                    select(ObservationRecord)
-                    .join(AttemptRecord, AttemptRecord.id == ObservationRecord.attempt_id)
-                    .where(
-                        ObservationRecord.attempt_id.in_(
-                            [item.id for item in successful_result_attempts]
-                        )
-                    )
-                    .order_by(
-                        AttemptRecord.queue_sequence,
-                        AttemptRecord.repeat_index,
-                        AttemptRecord.retry_index,
-                        ObservationRecord.created_at,
-                        ObservationRecord.id,
-                    )
-                )
-            )
-            mean_metrics = _mean_observation_metric_views(
-                successful_observations, metric_specs
-            )
-            if mean_metrics:
-                metrics = mean_metrics
+        if valid_runs:
+            metrics = _average_metric_views(valid_runs)
+        elif run_views and is_selection:
+            # Target-level analysis can contain a valid result from another
+            # workload. It must not make this failed evaluation look measured.
+            metrics = []
+        workload_primary = _workload_primary_metric(
+            benchmark.manifest_json if benchmark else None,
+            evaluation.workload_id,
+        )
+        workload_score = next(
+            (
+                item.get("value")
+                for item in metrics
+                if item.get("name") == workload_primary
+                and isinstance(item.get("value"), (int, float))
+                and not isinstance(item.get("value"), bool)
+            ),
+            None,
+        )
         failed_check_ids: list[str] = []
         if latest and AttemptStatus(latest.status) == AttemptStatus.FAILED:
             failed_check_ids = list(
@@ -851,7 +896,11 @@ def experiment_view(
                 "status": status_map[CandidateStatus(evaluation.status)],
                 "phase": latest.phase if latest else None,
                 "phaseDetail": phase_detail,
-                "score": objective_rows[0].get("raw") if objective_rows else None,
+                "score": workload_score
+                if workload_primary
+                else objective_rows[0].get("raw")
+                if objective_rows
+                else None,
                 "duration": duration,
                 "createdAt": _iso(evaluation.created_at),
                 "metrics": metrics,

@@ -65,9 +65,10 @@ def test_package_is_canonicalized_installed_and_materialized(tmp_path: Path) -> 
                 "benchmark.yaml",
                 "dependency-lock.json",
                 "normalizer.py",
-                "prepare.py",
-                "producer.py",
-            },
+                    "prepare.py",
+                    "producer.py",
+                    "versioning.py",
+                },
         ),
         (
             PACKAGE_ROOT,

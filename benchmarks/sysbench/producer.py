@@ -1,72 +1,60 @@
-"""Sysbench producer: run the native sysbench binary and capture a raw result.
-
-Locates sysbench through ``LOOPER_SYSBENCH_BIN`` or ``PATH``. The executable is
-*never* fabricated: if it is missing the run fails closed with a clear error and
-no raw result is produced. A failed sysbench run is still captured as evidence
-(exit code + stderr) so the failure is traceable instead of silently dropped.
-"""
+"""Run the pinned cache-local Sysbench binary and capture a raw result."""
 
 from __future__ import annotations
 
 import argparse
 import json
-import os
 import re
-import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 from looper_benchmark_sdk import load_envelope
+from versioning import PREPARED_SCHEMA, require_expected_version
 
 DEFAULT_TIMEOUT_SECONDS = 360
-SUPPORTED_VERSION_PATTERN = re.compile(
-    r"^sysbench\s+(1\.0\.\d+)(?:\s|$)", re.MULTILINE
-)
 
 
 class SysbenchError(RuntimeError):
     pass
 
 
-def _validate_sysbench_binary(binary: str) -> None:
-    """Reject binaries outside the 1.0.x output contract before measuring."""
+def resolve_sysbench_bin(cache: Path) -> str:
+    """Resolve and revalidate the executable recorded by managed provisioning."""
 
+    marker = cache / "prepared.json"
+    try:
+        state = json.loads(marker.read_text(encoding="utf-8"))
+        candidate = Path(str(state["binary"])).resolve()
+    except (OSError, KeyError, json.JSONDecodeError) as error:
+        raise SysbenchError(f"pinned Sysbench cache marker is unavailable: {error}") from error
+    if state.get("schemaVersion") != PREPARED_SCHEMA:
+        raise SysbenchError("pinned Sysbench cache marker has an unsupported schema")
+    cache_root = cache.resolve()
+    if candidate != cache_root and cache_root not in candidate.parents:
+        raise SysbenchError("pinned Sysbench binary is outside the dependency cache")
+    if not candidate.is_file():
+        raise SysbenchError(f"pinned Sysbench binary is missing: {candidate}")
     try:
         completed = subprocess.run(
-            [binary, "--version"], capture_output=True, text=True, timeout=30
+            [str(candidate), "--version"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
         )
     except (OSError, subprocess.TimeoutExpired) as error:
-        raise SysbenchError(f"could not inspect sysbench executable {binary}: {error}") from error
-    output = "\n".join((completed.stdout or "", completed.stderr or "")).strip()
-    match = SUPPORTED_VERSION_PATTERN.search(output)
-    if completed.returncode != 0 or match is None:
-        detail = output or f"exit code {completed.returncode}"
+        raise SysbenchError(f"cannot execute pinned Sysbench binary: {error}") from error
+    if completed.returncode != 0:
+        detail = (completed.stderr or completed.stdout).strip()
         raise SysbenchError(
-            "expected sysbench 1.0.x; refusing incompatible executable "
-            f"{binary}: {detail}"
+            f"pinned Sysbench version probe failed: {detail or completed.returncode}"
         )
-
-
-def resolve_sysbench_bin() -> str:
-    explicit = os.environ.get("LOOPER_SYSBENCH_BIN")
-    if explicit:
-        candidate = Path(explicit).expanduser()
-        if not candidate.is_file():
-            raise SysbenchError(
-                f"LOOPER_SYSBENCH_BIN points to a missing file: {candidate}"
-            )
-        resolved = str(candidate.resolve())
-        _validate_sysbench_binary(resolved)
-        return resolved
-    found = shutil.which("sysbench")
-    if found is None:
-        raise SysbenchError(
-            "sysbench executable not found in PATH; install sysbench or set "
-            "LOOPER_SYSBENCH_BIN (e.g. WSL/Docker path to the sysbench binary)"
-        )
-    _validate_sysbench_binary(found)
-    return found
+    try:
+        require_expected_version(completed.stdout or completed.stderr)
+    except ValueError as error:
+        raise SysbenchError(str(error)) from error
+    return str(candidate)
 
 
 def _first_float(text: str, pattern: str) -> float | None:
@@ -86,10 +74,14 @@ def parse_sysbench_output(text: str) -> dict[str, object]:
     version = re.search(r"^sysbench\s+([0-9][0-9.]*)", text, re.MULTILINE)
     if version:
         parsed["version"] = version.group(1)
-    total_time = _first_float(text, r"total time:\s+([0-9.]+)s")
+    total_time = _first_float(
+        text, r"(?:total time|time elapsed):\s+([0-9.]+)s"
+    )
     if total_time is not None:
         parsed["totalTimeSeconds"] = total_time
-    events_per_second = _first_float(text, r"events per second:\s+([0-9.]+)")
+    events_per_second = _first_float(
+        text, r"(?:events per second|events/s \(eps\)):\s+([0-9.]+)"
+    )
     total_events = re.search(r"total number of events:\s+(\d+)", text)
     if total_events:
         parsed["totalEvents"] = int(total_events.group(1))
@@ -152,6 +144,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Sysbench producer")
     parser.add_argument("--envelope", required=True)
     parser.add_argument("--output", required=True)
+    parser.add_argument("--cache", required=True)
     args = parser.parse_args(argv)
 
     envelope = load_envelope(args.envelope)
@@ -165,7 +158,7 @@ def main(argv: list[str] | None = None) -> int:
     output.mkdir(parents=True, exist_ok=True)
     log_path = output / "adapter.log"
 
-    bin_path = resolve_sysbench_bin()
+    bin_path = resolve_sysbench_bin(Path(args.cache))
     argv = build_argv(bin_path, test, threads, duration, extra_args)
     timeout = min(max(duration + 60, 90), DEFAULT_TIMEOUT_SECONDS)
     with log_path.open("a", encoding="utf-8") as log:

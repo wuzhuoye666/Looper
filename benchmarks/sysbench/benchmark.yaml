@@ -3,13 +3,13 @@ kind: Benchmark
 metadata:
   id: looper.sysbench
   name: Sysbench
-  version: 1.0.1
-  description: "Sysbench 1.0 通用系统性能套件：选择目标机器后由 Looper 自动下发 Adapter、安装或复用 sysbench，再运行 CPU、内存、线程调度与互斥锁测试。"
+  version: 1.0.2
+  description: "Sysbench 1.0.20 通用系统性能套件：选择目标机器后由 Looper 自动下发 Adapter、构建或复用固定版本，再运行 CPU、内存、线程调度与互斥锁测试。"
   license: GPL-2.0
   source:
     url: https://github.com/akopytov/sysbench
-    commit: 3ceba0b1e115f8c50d1d045a4574d8ed643bd497
-    digest: null
+    commit: ebf1c90da05dea94648165e4f149abc20c979557
+    digest: sha256:2a664cb397ebb0678a91d7b876c1ffcebe728a52cbb1ffe0aa63b36fad1c9e1c
 spec:
   trust: trusted
   capabilities: [python, local-process, linux, sysbench]
@@ -127,7 +127,7 @@ spec:
           cpu: {minimumLogicalCpus: 1}
           software:
             - name: sysbench
-              versionConstraint: ">=1.0,<1.1"
+              versionConstraint: "==1.0.20"
         placement:
           sameZone: true
           dedicated: true
@@ -143,25 +143,28 @@ spec:
   runtime:
     type: local-process
     workingDirectory: .
-    dependencyLockDigest: "sha256:24312a4f48a6635524f17b4ab84dc2869b014c1885e3aa2fb1c2c28150881064"
+    dependencyLockDigest: "sha256:f35a2d54055b15526be976706666d20c2ed9251b5179aca9849c31a0a0522ddf"
+    dependencies:
+      - id: sysbench-1.0.20-source
+        source: https://codeload.github.com/akopytov/sysbench/tar.gz/ebf1c90da05dea94648165e4f149abc20c979557
+        digest: sha256:2a664cb397ebb0678a91d7b876c1ffcebe728a52cbb1ffe0aa63b36fad1c9e1c
+        license: GPL-2.0
     provisioning:
       mode: managed
       hostCapabilities: [python, local-process, linux]
       provides: [sysbench]
-      cacheKey: "sha256:24312a4f48a6635524f17b4ab84dc2869b014c1885e3aa2fb1c2c28150881064"
+      cacheKey: "sha256:f35a2d54055b15526be976706666d20c2ed9251b5179aca9849c31a0a0522ddf"
       requiresNetwork: true
       privilege: sudo
     commands:
       prepare:
-        argv: ["{python}", "{benchmarkRoot}/prepare.py", "--cache", "{cache}"]
+        argv: ["{python}", "{benchmarkRoot}/prepare.py", "--benchmark-root", "{benchmarkRoot}", "--cache", "{cache}"]
         timeoutSeconds: 900
         allowedExitCodes: [0]
       run:
-        argv: ["{python}", "{benchmarkRoot}/producer.py", "--envelope", "{envelope}", "--output", "{output}"]
+        argv: ["{python}", "{benchmarkRoot}/producer.py", "--envelope", "{envelope}", "--output", "{output}", "--cache", "{cache}"]
         timeoutSeconds: 360
         allowedExitCodes: [0]
-        environment:
-          LOOPER_SYSBENCH_BIN: "{cache}/bin/sysbench"
       normalize:
         argv: ["{python}", "{benchmarkRoot}/normalizer.py", "--envelope", "{envelope}", "--output", "{output}"]
         timeoutSeconds: 60

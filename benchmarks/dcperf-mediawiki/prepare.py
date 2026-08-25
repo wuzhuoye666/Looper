@@ -13,6 +13,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -32,6 +33,11 @@ MARKER_NAME = "dcperf-mediawiki-ready.json"
 DOWNLOAD_BLOCK_BYTES = 1024 * 1024
 DOWNLOAD_ROUTE_PROBE_SECONDS = 15.0
 DOWNLOAD_ROUTE_MIN_MIB_PER_SECOND = 0.25
+HHVM_VERSION_PATTERN = re.compile(
+    r"(?:HipHop\s+VM|HHVM)\s+(?P<major>\d+)\.(?P<minor>\d+)"
+    r"(?:\.(?P<patch>\d+))?",
+    re.IGNORECASE,
+)
 
 
 class PrepareError(RuntimeError):
@@ -89,6 +95,11 @@ def read_os_release() -> dict[str, str]:
 
 
 def check_host() -> None:
+    if tuple(sys.version_info[:2]) < (3, 10):
+        fail(
+            "unsupported Python runtime: expected >=3.10, got "
+            f"{sys.version_info[0]}.{sys.version_info[1]}.{sys.version_info[2]}"
+        )
     if hasattr(os, "geteuid") and os.geteuid() != 0:
         fail(
             "managed DCPerf provisioning requires root so it can install system packages "
@@ -391,9 +402,26 @@ def hhvm_version() -> str:
     return (completed.stdout or completed.stderr or "").splitlines()[0].strip()
 
 
+def parse_hhvm_version(output: str) -> tuple[int, int, int | None] | None:
+    match = HHVM_VERSION_PATTERN.search(output.strip())
+    if match is None:
+        return None
+    patch = match.group("patch")
+    return (
+        int(match.group("major")),
+        int(match.group("minor")),
+        int(patch) if patch is not None else None,
+    )
+
+
+def is_expected_hhvm_version(output: str) -> bool:
+    version = parse_hhvm_version(output)
+    return version is not None and version[:2] == (3, 30)
+
+
 def install_hhvm(archive: Path) -> None:
     existing_version = hhvm_version()
-    if "3.30" in existing_version:
+    if is_expected_hhvm_version(existing_version):
         log(f"verified existing HHVM: {existing_version}")
         return
     if HHVM_BIN.exists():
@@ -428,7 +456,7 @@ def install_hhvm(archive: Path) -> None:
     finally:
         shutil.rmtree(stage, ignore_errors=True)
     first_line = hhvm_version()
-    if "3.30" not in first_line:
+    if not is_expected_hhvm_version(first_line):
         fail(f"unexpected HHVM version: {first_line or 'unavailable'}")
 
 
@@ -592,7 +620,7 @@ def prepared_cache_valid(cache: Path) -> bool:
         and root.is_dir()
         and (cache / "runtime/dcperf/benchpress_cli.py").is_file()
         and (cache / "runtime/dcperf/benchmarks/oss_performance_mediawiki/wrk/wrk").is_file()
-        and "3.30" in hhvm_version()
+        and is_expected_hhvm_version(hhvm_version())
     )
 
 

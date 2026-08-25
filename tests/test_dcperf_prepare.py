@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
+import json
 from pathlib import Path
 from types import ModuleType
+
+import pytest
 
 PACKAGE_ROOT = Path("benchmarks/dcperf-mediawiki")
 
@@ -94,3 +97,53 @@ def test_recentchanges_uses_non_eval_renderer_in_repo_authoritative_mode(tmp_pat
     content = settings.read_text(encoding="utf-8")
     assert "$wgDefaultUserOptions['usenewrc'] = 0;" in content
     assert content.count("Looper: use the non-eval RecentChanges renderer") == 1
+
+
+@pytest.mark.parametrize(
+    "output",
+    [
+        "HipHop VM 3.30.12 (rel)",
+        "HHVM 3.30.0-dev",
+        "HipHop VM 3.30",
+    ],
+)
+def test_hhvm_330_version_is_accepted(output: str) -> None:
+    prepare = load_prepare()
+    assert prepare.is_expected_hhvm_version(output) is True
+
+
+@pytest.mark.parametrize(
+    "output",
+    [
+        "HipHop VM 13.30.1",
+        "HipHop VM 3.300.1",
+        "HHVM 4.0.0 with compatibility 3.30",
+        "3.30",
+        "",
+    ],
+)
+def test_misleading_hhvm_versions_are_rejected(output: str) -> None:
+    prepare = load_prepare()
+    assert prepare.is_expected_hhvm_version(output) is False
+
+
+def test_host_rejects_python_older_than_310(monkeypatch) -> None:
+    prepare = load_prepare()
+    monkeypatch.setattr(
+        prepare.sys,
+        "version_info",
+        (3, 9, 18),
+    )
+    with pytest.raises(prepare.PrepareError, match="expected >=3.10"):
+        prepare.check_host()
+
+
+def test_source_lock_tracks_current_prepare_script() -> None:
+    lock = json.loads((PACKAGE_ROOT / "source-lock.json").read_text(encoding="utf-8"))
+    declared = next(
+        item["sha256"] for item in lock["files"] if item["path"] == "prepare.py"
+    )
+    actual = "sha256:" + hashlib.sha256(
+        (PACKAGE_ROOT / "prepare.py").read_bytes()
+    ).hexdigest()
+    assert declared == actual
