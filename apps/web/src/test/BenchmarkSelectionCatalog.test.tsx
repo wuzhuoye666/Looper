@@ -22,7 +22,7 @@ describe('选型研究 Benchmark 目录', () => {
           id: 'registered.adapter', key: 'registered.adapter@1.0.0',
           name: 'Registered Adapter', version: '1.0.0', category: 'database',
           selectionReady: true, singleNodeReady: true, runnable: true, packageReady: true, tags: ['python'],
-          selectionDefaults: { repeats: 3, timeout: 1200, seed: 101 },
+          selectionDefaults: { repeats: 1, timeout: 1200, seed: 101 },
           scenario: {
             id: 'registered.adapter', name: 'Registered Adapter',
             decision_question: 'Which target performs better?', user_value: 'Target selection',
@@ -108,5 +108,20 @@ describe('选型研究 Benchmark 目录', () => {
     expect(await screen.findByLabelText('每个目标重复数')).toHaveValue(7);
     expect(screen.getByLabelText('最长测试时间（秒）')).toHaveValue(2400);
     expect(screen.getByLabelText('测试顺序随机种子')).toHaveValue(202);
+  });
+
+  it('允许套件声明单次外层重复以承载内部多轮诊断', async () => {
+    renderPage();
+    fireEvent.change(screen.getByLabelText('研究名称 *'), { target: { value: '最小完整诊断' } });
+    fireEvent.click(screen.getByRole('button', { name: /下一步/ }));
+
+    await waitFor(() => expect(screen.getByLabelText(/想模拟的业务场景/)).toHaveValue('registered.adapter@1.0.0'));
+    fireEvent.change(await screen.findByLabelText('测试环境'), { target: { value: 'external-ssh' } });
+    fireEvent.click(await screen.findByRole('radio'));
+    fireEvent.click(screen.getByRole('button', { name: /下一步/ }));
+
+    const repeats = await screen.findByLabelText('每个目标重复数');
+    expect(repeats).toHaveValue(1);
+    expect(repeats).toHaveAttribute('min', '1');
   });
 });

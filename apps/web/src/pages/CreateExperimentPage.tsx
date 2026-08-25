@@ -345,7 +345,7 @@ export function CreateExperimentPage() {
             <label><span>{input.id} · {inputKindLabel(input.kind)}{input.required ? ' *' : ''}</span><input required={input.required} type={input.kind === 'secret' ? 'password' : 'text'} value={form.inputBindings[input.id]?.reference || ''} onChange={event => updateInputBinding(input.id, 'reference', event.target.value)} placeholder={input.kind === 'secret' ? '受管密钥引用' : '资源地址或目标设备引用'} /><small>{input.description || '运行前由调度器校验绑定类型；只传递引用，不在测试合同中保存内容。'}</small></label>
             {input.digestRequired && <label><span>SHA-256 摘要 *</span><input required value={form.inputBindings[input.id]?.digest || ''} onChange={event => updateInputBinding(input.id, 'digest', event.target.value)} placeholder="sha256:…" pattern="sha256:[0-9a-f]{64}" /></label>}
           </div>)}
-          <label><span>每个目标重复数</span><input type="number" min="3" max="50" value={form.repeats} onChange={event => update('repeats', Number(event.target.value))} /></label>
+          <label><span>每个目标重复数</span><input type="number" min={Math.min(3, selectionDefaults(selectedBenchmark).repeats)} max="50" value={form.repeats} onChange={event => update('repeats', Number(event.target.value))} /></label>
           <label><span>最长测试时间（秒）</span><input type="number" min="300" max="31536000" value={form.timeout} onChange={event => update('timeout', Number(event.target.value))} /></label>
           <label><span>测试顺序随机种子</span><input type="number" min="0" value={form.seed} onChange={event => update('seed', Number(event.target.value))} /></label>
           <label><span>对比单位</span><input value="时间分块 · 配对对照" readOnly /></label>

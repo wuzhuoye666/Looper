@@ -3,8 +3,8 @@ kind: Benchmark
 metadata:
   id: looper.vgo.variability
   name: VGO 性能波动与稳定性测试
-  version: 1.0.2
-  description: "使用现有 VGO 论文复现包的原始 run_case.sh/run_case.py，在真实 Ubuntu 候选服务器上运行 Matmul、7-Zip、LBM 和 SAD 基线测试；比较运行时间 CV、中位数、P95、正确率和 CPU steal，不使用模拟结果。"
+  version: 1.1.0
+  description: "使用 VGO 原始 run_case.sh/run_case.py 执行 10% 规模的最小完整波动诊断：profile、基线/优化随机区块交替和 rollback；保留所有原始参数并输出 CV、典型耗时、尾部耗时及优化对比。"
   license: INTERNAL
   source:
     url: looper://workspace/01_论文复现/刘桂宏_论文复现包/papers/01_VGO性能波动优化
@@ -16,20 +16,27 @@ spec:
   capabilities:
     [python, local-process, linux, ubuntu-22.04, perf, root, vgo-runtime, parboil-2.5, sharp, sharp-3.0.0, p7zip, tcmalloc]
   parameters:
-    samples_per_attempt:
+    diagnostic_scale_percent:
       type: integer
-      minimum: 3
-      maximum: 30
+      minimum: 1
+      maximum: 25
       step: 1
       default: 10
-      description: 每个 Looper attempt 内由原始 VGO run_case.sh 采集的独立 baseline 样本数。
+      description: 相对于论文正式轮次的采样比例；默认 10%，Matmul 为 30/20/30/5，其余为 50/20/50/5。
+    ab_blocks:
+      type: integer
+      minimum: 2
+      maximum: 10
+      step: 1
+      default: 5
+      description: 基线组与优化组的随机平衡交替区块数；总样本会向上取整为区块数的整数倍。
     warmups:
       type: integer
       minimum: 0
       maximum: 5
       step: 1
       default: 1
-      description: 每个 attempt 正式采样前的 VGO 预热次数。
+      description: Profile 和 rollback 阶段的预热次数；交替 A/B 区块不重复预热以缩短时间。
     per_run_timeout_seconds:
       type: integer
       minimum: 60
@@ -37,13 +44,27 @@ spec:
       step: 30
       default: 300
       description: 原始 VGO 单次 workload 的超时上限。
+    inter_run_delay_milliseconds:
+      type: integer
+      minimum: 0
+      maximum: 5000
+      step: 100
+      default: 0
+      description: 两次真实 workload 运行之间的等待毫秒数；最小测试默认不等待。
+    order_seed:
+      type: integer
+      minimum: 0
+      maximum: 2147483647
+      step: 1
+      default: 2026
+      description: 基线/优化区块顺序的确定性随机种子，便于复核完全相同的执行规划。
   workloads:
     - id: matmul
       name: Matmul 内存分配波动
       weight: 1
       metadata:
         originalBenchmark: matmul
-        originalPhase: baseline
+        originalPhase: profile/blocked/rollback
         paperCase: Figure 2
         expectedFactor: dTLB / page allocation
     - id: 7z
@@ -51,21 +72,21 @@ spec:
       weight: 1
       metadata:
         originalBenchmark: 7z
-        originalPhase: baseline
+        originalPhase: profile/blocked/rollback
         expectedFactor: context switches
     - id: lbm
       name: Parboil LBM 调度波动
       weight: 1
       metadata:
         originalBenchmark: lbm
-        originalPhase: baseline
+        originalPhase: profile/blocked/rollback
         expectedFactor: CPU placement / context switches
     - id: sad
       name: Parboil SAD 内存局部性波动
       weight: 1
       metadata:
         originalBenchmark: sad
-        originalPhase: baseline
+        originalPhase: profile/blocked/rollback
         expectedFactor: THP / dTLB misses
   scenario:
     id: stability.vgo.cpu-variability
@@ -129,7 +150,7 @@ spec:
     protocol: looper-adapter/v1
     executionModel: batch-suite
     primaryMetric: runtime_cv
-    requiredChecks: [original-vgo-script, vgo-sample-contract]
+    requiredChecks: [original-vgo-script, vgo-sample-contract, vgo-alternating-plan]
     inputs: []
     canonicalOutputs:
       metrics: metrics.jsonl
@@ -193,13 +214,39 @@ spec:
         defaultVisibility: summary
         displayFormat: percent
         displayPrecision: 2
+    optimized_runtime_cv:
+      unit: ratio
+      direction: minimize
+      kind: aggregate
+      required: true
+      minimumSamples: 1
+      description: 随机区块交替设计中优化组运行时间的变异系数。
+      presentation:
+        userLabel: 优化组波动系数（CV）
+        roles: [primary_outcome, stability]
+        defaultVisibility: summary
+        displayFormat: percent
+        displayPrecision: 2
+    cv_reduction_ratio:
+      unit: ratio
+      direction: maximize
+      kind: aggregate
+      required: true
+      minimumSamples: 1
+      description: 相比基线组，优化组 CV 的相对下降比例；正值表示波动降低。
+      presentation:
+        userLabel: 波动降低比例
+        roles: [primary_outcome, stability]
+        defaultVisibility: summary
+        displayFormat: percent
+        displayPrecision: 2
     median_runtime_seconds:
       unit: s
       direction: minimize
       kind: aggregate
       required: true
       minimumSamples: 1
-      description: 原始 VGO baseline 有效样本的中位运行时间。
+      description: 随机区块交替设计中基线组有效样本的中位运行时间。
       presentation:
         userLabel: 中位运行时间
         userDescription: 典型执行耗时，避免只追求稳定却明显牺牲平均性能。
@@ -207,13 +254,39 @@ spec:
         defaultVisibility: summary
         displayFormat: duration
         displayPrecision: 3
+    optimized_median_runtime_seconds:
+      unit: s
+      direction: minimize
+      kind: aggregate
+      required: true
+      minimumSamples: 1
+      description: 优化组有效样本的中位运行时间。
+      presentation:
+        userLabel: 优化组中位运行时间
+        roles: [guardrail]
+        defaultVisibility: summary
+        displayFormat: duration
+        displayPrecision: 3
+    median_improvement_ratio:
+      unit: ratio
+      direction: maximize
+      kind: aggregate
+      required: true
+      minimumSamples: 1
+      description: 优化组相对基线组的中位耗时改善比例；正值表示更快。
+      presentation:
+        userLabel: 中位耗时改善
+        roles: [guardrail]
+        defaultVisibility: summary
+        displayFormat: percent
+        displayPrecision: 2
     p95_runtime_seconds:
       unit: s
       direction: minimize
       kind: aggregate
       required: true
       minimumSamples: 1
-      description: 原始 VGO baseline 有效样本的 P95 运行时间。
+      description: 随机区块交替设计中基线组有效样本的 P95 运行时间。
       presentation:
         userLabel: P95 运行时间
         userDescription: 较慢一侧的尾部执行耗时，用于识别偶发慢运行。
@@ -221,6 +294,45 @@ spec:
         defaultVisibility: summary
         displayFormat: duration
         displayPrecision: 3
+    optimized_p95_runtime_seconds:
+      unit: s
+      direction: minimize
+      kind: aggregate
+      required: true
+      minimumSamples: 1
+      description: 优化组有效样本的 P95 运行时间。
+      presentation:
+        userLabel: 优化组 P95 运行时间
+        roles: [guardrail, stability]
+        defaultVisibility: summary
+        displayFormat: duration
+        displayPrecision: 3
+    p95_improvement_ratio:
+      unit: ratio
+      direction: maximize
+      kind: aggregate
+      required: true
+      minimumSamples: 1
+      description: 优化组相对基线组的 P95 耗时改善比例；正值表示尾部变快。
+      presentation:
+        userLabel: P95 耗时改善
+        roles: [guardrail, stability]
+        defaultVisibility: summary
+        displayFormat: percent
+        displayPrecision: 2
+    rollback_median_drift_ratio:
+      unit: ratio
+      direction: minimize
+      kind: aggregate
+      required: true
+      minimumSamples: 1
+      description: rollback 中位耗时相对随机区块基线中位数的绝对漂移。
+      presentation:
+        userLabel: 回滚后中位漂移
+        roles: [guardrail, diagnostic]
+        defaultVisibility: summary
+        displayFormat: percent
+        displayPrecision: 2
     runtime_seconds:
       unit: s
       direction: minimize
@@ -286,8 +398,8 @@ spec:
         defaultVisibility: summary
         displayFormat: boolean
   outputs:
-    maxBytes: 8388608
-    maxMetricLines: 256
+    maxBytes: 16777216
+    maxMetricLines: 512
     artifacts:
       - path: vgo-raw.csv
         role: raw-result
@@ -301,6 +413,10 @@ spec:
         role: profile
         mediaType: application/json
         required: true
+      - path: vgo-diagnostics.json
+        role: result
+        mediaType: application/json
+        required: true
       - path: vgo-run.log
         role: log
         mediaType: text/plain
@@ -310,7 +426,7 @@ spec:
         mediaType: application/json
         required: true
   audit:
-    minimumRepeats: 3
+    minimumRepeats: 1
     referencePolicy: required
     environmentAxes: [machine, day, placement]
     requiredEvidence: [system-fingerprint, raw-result, profile, log]
@@ -319,15 +435,15 @@ spec:
     executionStatus: executable
     selectable: true
     category: performance-stability
-    selectionDefaults: {repeats: 3, timeoutSeconds: 86400, seed: 20260825}
+    selectionDefaults: {repeats: 1, timeoutSeconds: 86400, seed: 20260825}
     sourceLock: source-lock.json
     resultPresentation:
       sections:
         - id: vgo-stability
           label: VGO 稳定性结果
           view: vgo-stability
-          description: 展示运行时间 CV、中位数、P95、逐次样本与原始脚本执行门禁。
-          metrics: [runtime_cv, median_runtime_seconds, p95_runtime_seconds, runtime_seconds, run_ok]
+          description: 展示基线/优化组 CV、中位数、P95、改善比例、回滚漂移和逐次样本。
+          metrics: [runtime_cv, optimized_runtime_cv, cv_reduction_ratio, median_runtime_seconds, optimized_median_runtime_seconds, median_improvement_ratio, p95_runtime_seconds, optimized_p95_runtime_seconds, p95_improvement_ratio, rollback_median_drift_ratio, runtime_seconds, run_ok]
         - id: vgo-quality
           label: VGO 质量与环境
           view: vgo-quality

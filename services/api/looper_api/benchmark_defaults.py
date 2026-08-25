@@ -29,7 +29,7 @@ def benchmark_selection_defaults(manifest: Mapping[str, Any]) -> dict[str, int]:
         declared.get("repeats"),
         _positive_int(audit.get("minimumRepeats"), _DEFAULT_REPEATS),
     )
-    repeats = max(3, min(50, repeats))
+    repeats = max(1, min(50, repeats))
     timeout = _positive_int(
         declared.get("timeoutSeconds", declared.get("timeout")),
         _DEFAULT_TIMEOUT_SECONDS,
