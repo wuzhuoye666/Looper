@@ -28,7 +28,7 @@ def load_module(name: str, path: Path):
 
 
 def test_vgo_is_seeded_as_a_real_selection_benchmark(db_session) -> None:
-    record = db_session.get(BenchmarkRecord, "looper.vgo.variability@1.1.1")
+    record = db_session.get(BenchmarkRecord, "looper.vgo.variability@1.1.2")
     assert record is not None
     view = benchmark_view(record)
     assert view["selectionReady"] is True
@@ -182,7 +182,7 @@ def test_vgo_prepare_waits_for_package_manager_holder(
 
 
 def test_vgo_producer_invokes_original_entry_point_and_keeps_other_attempts(
-    tmp_path: Path, monkeypatch
+    tmp_path: Path, monkeypatch, capsys
 ) -> None:
     producer = load_module("vgo_producer_test", PACKAGE_ROOT / "producer.py")
     source_root = tmp_path / "vgo-source"
@@ -277,6 +277,10 @@ def test_vgo_producer_invokes_original_entry_point_and_keeps_other_attempts(
         "rollback",
     ]
     assert len(observed_commands) == 6
+    progress = capsys.readouterr().out
+    assert "[vgo-progress] workload=7z stage=profile" in progress
+    assert "total_samples=18/18" in progress
+    assert "status=completed" in progress
     assert keep.read_text(encoding="utf-8") == "keep\n"
     assert not (source_root / "data" / "raw" / "looper_attempt-1_lease-7").exists()
 

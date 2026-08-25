@@ -10,6 +10,8 @@ import random
 import re
 import shutil
 import subprocess
+import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -171,6 +173,20 @@ def combine_csv(files: list[Path], destination: Path) -> int:
     return len(rows)
 
 
+def csv_data_rows(path: Path) -> int:
+    """Count completed VGO samples without treating the CSV header as a sample."""
+
+    try:
+        with path.open("r", encoding="utf-8", errors="replace", newline="") as stream:
+            return max(sum(1 for _line in stream) - 1, 0)
+    except OSError:
+        return 0
+
+
+def raw_data_rows(raw_dir: Path) -> int:
+    return sum(csv_data_rows(path) for path in raw_dir.glob("*.csv"))
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run a minimal complete VGO variability diagnosis")
     parser.add_argument("--envelope", required=True, type=Path)
@@ -213,11 +229,45 @@ def main() -> int:
     commands: list[dict[str, Any]] = []
     process_return_code = 0
     adapter_log: list[str] = []
+    total_requested_runs = sum(
+        plan[item] for item in ("profile", "baseline", "mitigated", "rollback")
+    )
 
     def execute(label: str, command: list[str], expected_new_runs: int) -> bool:
         nonlocal process_return_code
         commands.append({"label": label, "argv": command, "expectedNewRuns": expected_new_runs})
         adapter_log.append("$ " + " ".join(command))
+        rows_before = raw_data_rows(raw_dir)
+        monitor_stop = threading.Event()
+        started = time.monotonic()
+
+        def report_progress() -> None:
+            last_rows = -1
+            last_heartbeat = started
+            while not monitor_stop.wait(1.0):
+                rows_now = raw_data_rows(raw_dir)
+                now = time.monotonic()
+                stage_rows = max(0, min(rows_now - rows_before, expected_new_runs))
+                if rows_now != last_rows or now - last_heartbeat >= 30:
+                    print(
+                        "[vgo-progress] "
+                        f"workload={workload} stage={label} "
+                        f"stage_samples={stage_rows}/{expected_new_runs} "
+                        f"total_samples={rows_now}/{total_requested_runs} "
+                        f"elapsed_seconds={int(now - started)}",
+                        flush=True,
+                    )
+                    last_rows = rows_now
+                    last_heartbeat = now
+
+        print(
+            "[vgo-progress] "
+            f"workload={workload} stage={label} stage_samples=0/{expected_new_runs} "
+            f"total_samples={rows_before}/{total_requested_runs} status=started",
+            flush=True,
+        )
+        monitor = threading.Thread(target=report_progress, name="vgo-progress", daemon=True)
+        monitor.start()
         try:
             completed = subprocess.run(
                 command,
@@ -243,6 +293,19 @@ def main() -> int:
                     "Looper VGO adapter timed out.",
                 ]
             )
+        finally:
+            monitor_stop.set()
+            monitor.join(timeout=2.0)
+        rows_after = raw_data_rows(raw_dir)
+        print(
+            "[vgo-progress] "
+            f"workload={workload} stage={label} "
+            f"stage_samples={max(0, min(rows_after - rows_before, expected_new_runs))}/"
+            f"{expected_new_runs} total_samples={rows_after}/{total_requested_runs} "
+            f"elapsed_seconds={int(time.monotonic() - started)} "
+            f"status={'completed' if process_return_code == 0 else 'failed'}",
+            flush=True,
+        )
         return process_return_code == 0
 
     try:
