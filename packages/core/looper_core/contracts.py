@@ -438,6 +438,7 @@ class ExperimentSpec(StrictModel):
     target_ids: list[str] = Field(default_factory=lambda: ["local"])
     workload_ids: list[str] = Field(default_factory=list)
     input_bindings: dict[str, BenchmarkInputBinding] = Field(default_factory=dict)
+    selection_parameters: dict[str, Any] = Field(default_factory=dict)
     baseline_parameters: dict[str, Any] = Field(default_factory=dict)
     search_space: dict[str, SearchParameter] = Field(default_factory=dict)
     objectives: list[ObjectiveSpec] = Field(default_factory=list)
@@ -483,6 +484,8 @@ class ExperimentSpec(StrictModel):
         if self.mode == ExperimentMode.OPTIMIZATION:
             if self.scenario is not None or self.selection is not None:
                 raise ValueError("optimization experiments cannot declare selection fields")
+            if self.selection_parameters:
+                raise ValueError("optimization experiments cannot declare selection parameters")
             system_parameters = {
                 parameter
                 for parameter in {*self.search_space, *self.baseline_parameters}

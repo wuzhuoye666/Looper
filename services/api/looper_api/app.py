@@ -2178,7 +2178,30 @@ def _selection_create_request(payload: dict[str, Any], session: Session) -> Expe
         if isinstance(raw_input_bindings, dict)
         else {}
     )
-    workload_ids = [str(item["id"]) for item in benchmark.manifest_json["spec"]["workloads"]]
+    available_workload_ids = [
+        str(item["id"]) for item in benchmark.manifest_json["spec"]["workloads"]
+    ]
+    requested_workload_ids = payload.get("workloadIds")
+    workload_ids = (
+        [str(item) for item in requested_workload_ids]
+        if isinstance(requested_workload_ids, list)
+        else available_workload_ids
+    )
+    if not workload_ids or len(workload_ids) != len(set(workload_ids)):
+        raise SchedulerError("selection study requires unique workload ids")
+    unknown_workloads = sorted(set(workload_ids) - set(available_workload_ids))
+    if unknown_workloads:
+        raise SchedulerError(f"selection study contains unknown workloads: {unknown_workloads}")
+    raw_selection_parameters = payload.get("selectionParameters")
+    selection_parameters = (
+        dict(raw_selection_parameters)
+        if isinstance(raw_selection_parameters, dict)
+        else {}
+    )
+    parameter_declarations = benchmark.manifest_json["spec"].get("parameters") or {}
+    unknown_parameters = sorted(set(selection_parameters) - set(parameter_declarations))
+    if unknown_parameters:
+        raise SchedulerError(f"unknown benchmark parameters: {unknown_parameters}")
     if scenario.load_search is not None:
         load_point_budget = (
             len(scenario.load_search.common_load_fractions)
@@ -2202,6 +2225,7 @@ def _selection_create_request(payload: dict[str, Any], session: Session) -> Expe
         target_ids=target_ids,
         workload_ids=workload_ids,
         input_bindings=input_bindings,
+        selection_parameters=selection_parameters,
         objectives=[
             ObjectiveSpec(
                 metric=scenario.primary_metric,

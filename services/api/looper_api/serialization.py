@@ -559,6 +559,268 @@ def _workload_primary_metric(
     return None
 
 
+def _compact_metric_value(value: float | bool, declaration: dict[str, Any], unit: str) -> str:
+    """Format one benchmark result for the compact experiment-list conclusion."""
+
+    if isinstance(value, bool):
+        return "通过" if value else "未通过"
+    presentation = declaration.get("presentation") or {}
+    display_format = str(presentation.get("displayFormat") or "")
+    precision = int(presentation.get("displayPrecision", 2))
+    if display_format == "percent" or unit == "ratio":
+        return f"{value * 100:.{precision}f}%"
+    if display_format == "duration" or unit in {"s", "ms", "us", "ns"}:
+        return f"{value:.{precision}f} {unit}".strip()
+    if abs(value) >= 1000:
+        rendered = f"{value:,.{max(0, precision)}f}"
+    else:
+        rendered = f"{value:.{max(0, precision)}f}"
+    if "." in rendered:
+        rendered = rendered.rstrip("0").rstrip(".")
+    return f"{rendered} {unit}".strip()
+
+
+def _selection_workload_results(
+    session: Session,
+    record: ExperimentRecord,
+    manifest: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Build a small, contract-driven result projection for the experiment list.
+
+    Only successful attempts that passed every adapter-required check contribute.
+    The manifest supplies workload labels, primary metrics and presentation rules,
+    so new benchmark packages get a useful conclusion without UI hard-coding.
+    """
+
+    evaluations = list(
+        session.scalars(
+            select(EvaluationRecord)
+            .where(EvaluationRecord.experiment_id == record.id)
+            .order_by(EvaluationRecord.created_at)
+        )
+    )
+    if not evaluations:
+        return []
+    attempts = list(
+        session.scalars(
+            select(AttemptRecord).where(
+                AttemptRecord.experiment_id == record.id,
+                AttemptRecord.status == AttemptStatus.SUCCEEDED,
+            )
+        )
+    )
+    attempt_ids = [item.id for item in attempts]
+    required_checks = set(
+        (manifest.get("spec") or {}).get("adapter", {}).get("requiredChecks", [])
+    )
+    checks_by_attempt: dict[str, dict[str, bool]] = defaultdict(dict)
+    observations_by_attempt: dict[str, list[ObservationRecord]] = defaultdict(list)
+    if attempt_ids:
+        for check in session.scalars(
+            select(CheckRecord).where(CheckRecord.attempt_id.in_(attempt_ids))
+        ):
+            checks_by_attempt[check.attempt_id][check.check_id] = check.passed
+        for observation in session.scalars(
+            select(ObservationRecord)
+            .where(ObservationRecord.attempt_id.in_(attempt_ids))
+            .order_by(ObservationRecord.created_at)
+        ):
+            if observation.phase != "warmup":
+                observations_by_attempt[observation.attempt_id].append(observation)
+
+    attempts_by_evaluation: dict[str, list[AttemptRecord]] = defaultdict(list)
+    for attempt in attempts:
+        check_results = checks_by_attempt[attempt.id]
+        if all(check_results.get(check_id) is True for check_id in required_checks):
+            attempts_by_evaluation[attempt.evaluation_id].append(attempt)
+
+    spec = manifest.get("spec") or {}
+    declarations = spec.get("metrics") or {}
+    workloads = {
+        str(item.get("id")): str(item.get("name") or item.get("id"))
+        for item in spec.get("workloads", [])
+    }
+    results: list[dict[str, Any]] = []
+    for evaluation in evaluations:
+        per_metric: dict[str, list[float | bool]] = defaultdict(list)
+        units: dict[str, str] = {}
+        for attempt in attempts_by_evaluation[evaluation.id]:
+            latest_by_metric = {
+                item.metric: item for item in observations_by_attempt[attempt.id]
+            }
+            for metric, observation in latest_by_metric.items():
+                declaration = declarations.get(metric, {})
+                if declaration.get("kind") == "sample":
+                    continue
+                value: float | bool | None = (
+                    observation.value_boolean
+                    if observation.value_boolean is not None
+                    else float(observation.value_number)
+                    if observation.value_number is not None
+                    else None
+                )
+                if value is not None:
+                    per_metric[metric].append(value)
+                    units[metric] = observation.unit
+        metrics: dict[str, dict[str, Any]] = {}
+        for metric, values in per_metric.items():
+            numeric_values = [
+                float(value)
+                for value in values
+                if isinstance(value, (int, float)) and not isinstance(value, bool)
+            ]
+            value: float | bool
+            if numeric_values:
+                value = sum(numeric_values) / len(numeric_values)
+            else:
+                value = all(bool(item) for item in values)
+            metrics[metric] = {
+                "value": value,
+                "unit": units.get(metric) or str(declarations.get(metric, {}).get("unit") or ""),
+            }
+        results.append(
+            {
+                "workloadId": evaluation.workload_id,
+                "workloadLabel": workloads.get(evaluation.workload_id, evaluation.workload_id),
+                "status": CandidateStatus(evaluation.status).value,
+                "metrics": metrics,
+            }
+        )
+    return results
+
+
+def _vgo_conclusion(results: list[dict[str, Any]]) -> str | None:
+    labels = {"matmul": "Matmul", "7z": "7-Zip", "lbm": "LBM", "sad": "SAD"}
+    completed = [item for item in results if item["metrics"]]
+    if not completed:
+        return None
+
+    outcomes: list[str] = []
+    lowered = unchanged = worsened = 0
+    for item in completed:
+        metrics = item["metrics"]
+        correctness = metrics.get("correctness_rate", {}).get("value")
+        baseline = metrics.get("runtime_cv", {}).get("value")
+        optimized = metrics.get("optimized_runtime_cv", {}).get("value")
+        label = labels.get(item["workloadId"], item["workloadLabel"])
+        if isinstance(correctness, (int, float)) and correctness < 1:
+            outcomes.append(f"{label}：正确性未通过")
+            continue
+        if not isinstance(baseline, (int, float)) or not isinstance(optimized, (int, float)):
+            outcomes.append(f"{label}：已完成")
+            continue
+        baseline_text = f"{baseline * 100:.2f}%"
+        optimized_text = f"{optimized * 100:.2f}%"
+        if baseline == 0:
+            change = 0 if optimized == 0 else math.inf
+        else:
+            change = (optimized - baseline) / baseline
+        if change <= -0.01:
+            lowered += 1
+            verdict = "优化后波动更低"
+        elif change >= 0.01:
+            worsened += 1
+            verdict = "优化未改善波动"
+        else:
+            unchanged += 1
+            verdict = "优化前后波动接近"
+        outcomes.append(f"{label}：{verdict}（CV {baseline_text}→{optimized_text}）")
+    if len(completed) == 1:
+        return outcomes[0]
+    parts = []
+    if lowered:
+        parts.append(f"{lowered} 项波动降低")
+    if unchanged:
+        parts.append(f"{unchanged} 项基本不变")
+    if worsened:
+        parts.append(f"{worsened} 项未改善")
+    failed = len(results) - len(completed)
+    if failed:
+        parts.append(f"{failed} 项无有效结果")
+    return f"{len(completed)}/{len(results)} 项完成：" + "，".join(parts)
+
+
+def _selection_result_conclusion(
+    session: Session,
+    record: ExperimentRecord,
+    spec: ExperimentSpec,
+    benchmark: BenchmarkRecord | None,
+    analysis: dict[str, Any] | None,
+) -> str:
+    status = ExperimentStatus(record.status)
+    if status == ExperimentStatus.QUEUED:
+        return "排队中"
+    if status in {ExperimentStatus.RUNNING, ExperimentStatus.PAUSED}:
+        return "测试中" if status == ExperimentStatus.RUNNING else "已暂停"
+    if status == ExperimentStatus.DRAFT:
+        return "待执行"
+
+    comparison = (
+        (analysis or {}).get("comparisons", [None])[0]
+        if (analysis or {}).get("comparisons")
+        else None
+    )
+    if comparison and comparison.get("winner"):
+        metric = str(comparison.get("metric") or spec.objectives[0].metric)
+        declaration = (
+            (benchmark.manifest_json.get("spec") or {}).get("metrics", {}).get(metric, {})
+            if benchmark
+            else {}
+        )
+        metric_label = str(
+            (declaration.get("presentation") or {}).get("userLabel") or metric
+        )
+        return f"{comparison['winner']} · {metric_label}领先"
+
+    results = (
+        _selection_workload_results(session, record, benchmark.manifest_json)
+        if benchmark
+        else []
+    )
+    valid_results = [item for item in results if item["metrics"]]
+    if len(spec.target_ids) > 1 and valid_results:
+        return "结果已采集，候选差异暂不可区分"
+    if (
+        benchmark
+        and benchmark.benchmark_id == "looper.vgo.variability"
+        and (conclusion := _vgo_conclusion(results))
+    ):
+        parameter_specs = (benchmark.manifest_json.get("spec") or {}).get("parameters", {})
+        quick_design = any(
+            isinstance(spec.selection_parameters.get(name), (int, float))
+            and isinstance(parameter_specs.get(name, {}).get("default"), (int, float))
+            and spec.selection_parameters[name] < parameter_specs[name]["default"]
+            for name in ("diagnostic_scale_percent", "ab_blocks", "warmups")
+        )
+        return f"快速验证 · {conclusion}" if quick_design else conclusion
+
+    if valid_results and benchmark:
+        declarations = (benchmark.manifest_json.get("spec") or {}).get("metrics", {})
+        summaries: list[str] = []
+        for item in valid_results:
+            metric = _workload_primary_metric(benchmark.manifest_json, item["workloadId"])
+            measured = item["metrics"].get(metric) if metric else None
+            if not metric or not measured:
+                continue
+            declaration = declarations.get(metric, {})
+            label = str(
+                (declaration.get("presentation") or {}).get("userLabel") or metric
+            )
+            value = _compact_metric_value(measured["value"], declaration, measured["unit"])
+            summaries.append(f"{item['workloadLabel']}：{label} {value}")
+        if len(summaries) == 1:
+            return summaries[0]
+        if summaries:
+            return f"{len(summaries)}/{len(results)} 项完成 · {summaries[0]}"
+        return f"{len(valid_results)}/{len(results)} 项测试完成"
+
+    if status == ExperimentStatus.CANCELLED:
+        return "已取消，未形成结论"
+    if status == ExperimentStatus.FAILED:
+        return "执行失败，未产出有效结果"
+    return "测试完成，但无有效结果"
+
+
 def _comparison_axes(manifest: dict[str, Any]) -> list[dict[str, str]]:
     spec = manifest.get("spec") or {}
     declarations = spec.get("metrics") or {}
@@ -570,7 +832,13 @@ def _comparison_axes(manifest: dict[str, Any]) -> list[dict[str, str]]:
             ("latency_p50_ms", "P50 延迟"),
             ("latency_p95_ms", "P95 延迟"),
             ("latency_p99_ms", "P99 延迟"),
-        ]
+        ],
+        "looper.vgo.variability": [
+            ("runtime_cv", "基线 CV"),
+            ("optimized_runtime_cv", "优化后 CV"),
+            ("optimized_median_runtime_seconds", "优化后中位耗时"),
+            ("optimized_p95_runtime_seconds", "优化后 P95"),
+        ],
     }.get(benchmark_id)
     axes: list[dict[str, str]] = []
     if metric_profile:
@@ -584,8 +852,15 @@ def _comparison_axes(manifest: dict[str, Any]) -> list[dict[str, str]]:
                     continue
                 axes.append(
                     {
-                        "key": metric,
+                        "key": f"{workload_id}:{metric}"
+                        if benchmark_id == "looper.vgo.variability"
+                        else metric,
                         "workloadId": workload_id,
+                        **(
+                            {"workloadLabel": str(workload.get("name") or workload_id)}
+                            if benchmark_id == "looper.vgo.variability"
+                            else {}
+                        ),
                         "label": label,
                         "metric": metric,
                         "unit": unit,
@@ -994,6 +1269,11 @@ def experiment_view(
         "scenario": spec.scenario.model_dump(mode="json") if spec.scenario else None,
         "comparison": (analysis or {}).get("comparisons", [None])[0]
         if (analysis or {}).get("comparisons")
+        else None,
+        "resultConclusion": _selection_result_conclusion(
+            session, record, spec, benchmark, analysis
+        )
+        if is_selection
         else None,
         "config": record.spec_json,
         "candidateCount": len(candidates),

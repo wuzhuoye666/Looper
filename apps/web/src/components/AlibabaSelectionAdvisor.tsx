@@ -13,6 +13,7 @@ import type {
   CloudZone,
   SelectionAdvisorRequest,
   SelectionRecommendationPrice,
+  SelectionRecommendationScores,
   SelectionScenario,
   InstanceSelectionClass,
 } from '../lib/types';
@@ -52,7 +53,7 @@ const initialAnswers: Answers = {
 };
 
 const stepLabels = ['使用场景', '资源需求', '部署约束', '推荐结果'];
-const budgetPresets = [0, 500, 1000, 2000, 5000, 10000];
+const HOURS_PER_MONTH = 730;
 const UNAVAILABLE_PRICE: SelectionRecommendationPrice = { hourlyAmount: '', monthlyAmount: '', currency: 'CNY', source: 'unavailable' };
 const codeAvailabilityOptions = [
   { value: 'available', label: '可以提供', detail: '后续版本可进行兼容性分析' },
@@ -69,6 +70,11 @@ function architectureKind(value?: string) {
 
 function formatNumber(value: number) {
   return Number.isInteger(value) ? String(value) : value.toFixed(2).replace(/0+$/, '').replace(/\.$/, '');
+}
+
+function formatBudgetInput(value: number, fractionDigits: number) {
+  if (value <= 0) return '';
+  return String(Number(value.toFixed(fractionDigits)));
 }
 
 function hasExactSizing(answers: Answers) {
@@ -142,6 +148,7 @@ export function CloudSelectionAdvisor({
   const [typeKind, setTypeKind] = useState<string | undefined>();
   const [familyToken, setFamilyToken] = useState<string | undefined>();
   const [showAllCandidates, setShowAllCandidates] = useState(false);
+  const [showAlgorithmHelp, setShowAlgorithmHelp] = useState(false);
   const [livePrices, setLivePrices] = useState<Record<string, SelectionRecommendationPrice>>({});
   const gpuRelevant = answers.primaryScenario === 'ai' || answers.primaryScenario === 'video';
   const localStorageRelevant = ['database', 'search-logs', 'big-data-messaging'].some(value =>
@@ -196,6 +203,7 @@ export function CloudSelectionAdvisor({
     setTypeKind(undefined);
     setFamilyToken(undefined);
     setShowAllCandidates(false);
+    setShowAlgorithmHelp(false);
     setLivePrices({});
   }, [answers, provider, region, zone]);
 
@@ -285,13 +293,10 @@ export function CloudSelectionAdvisor({
             {networkRelevant && <div className="advisor-fields"><label><span>最低内网带宽 Gbit/s</span><input aria-label="最低内网带宽 Gbit/s" type="number" min={0} step={0.1} value={answers.minimumNetworkBandwidthGbps || ''} placeholder="不清楚可留空" onChange={event => update('minimumNetworkBandwidthGbps', Number(event.target.value))} /></label><label><span>最低网络 PPS</span><input aria-label="最低网络 PPS" type="number" min={0} value={answers.minimumNetworkPps || ''} placeholder="不清楚可留空" onChange={event => update('minimumNetworkPps', Number(event.target.value))} /></label></div>}
           </section>
           <section className="advisor-question-section">
-            <div className="advisor-section-heading"><h4>预算（每月）</h4><p>按每月价格过滤推荐；阿里云使用官方价格表，腾讯云使用实时询价。</p></div>
+            <div className="advisor-section-heading"><h4>预算（可选）</h4><p>每月和每小时预算都可以直接填写；修改任一项，另一项按 730 小时/月自动更新。留空表示不限制。</p></div>
             <div className="advisor-fields">
-              <label><span>月预算</span><select aria-label="月预算" value={budgetPresets.includes(answers.budgetMonthlyCny) ? String(answers.budgetMonthlyCny) : "custom"} onChange={event => update("budgetMonthlyCny", Number(event.target.value))}>
-                {budgetPresets.map(value => <option key={value} value={String(value)}>{value === 0 ? "不限制" : "¥" + value + " / 月"}</option>)}
-                <option value="custom">自定义</option>
-              </select></label>
-              {answers.budgetMonthlyCny > 0 && <label><span>自定义 ¥</span><input aria-label="自定义月预算" type="number" min={0} value={answers.budgetMonthlyCny || ""} onChange={event => update("budgetMonthlyCny", Number(event.target.value))} /></label>}
+              <label><span>每月预算 ¥</span><input aria-label="每月预算" type="number" min={1} step={1} placeholder="可选，不填则不限制" value={formatBudgetInput(answers.budgetMonthlyCny, 2)} onChange={event => update('budgetMonthlyCny', Math.max(0, Number(event.target.value)))} /></label>
+              <label><span>每小时预算 ¥</span><input aria-label="每小时预算" type="number" min={0.001} step={0.001} placeholder="可选，不填则不限制" value={formatBudgetInput(answers.budgetMonthlyCny / HOURS_PER_MONTH, 4)} onChange={event => update('budgetMonthlyCny', Math.max(0, Math.round(Number(event.target.value) * HOURS_PER_MONTH * 100) / 100))} /></label>
             </div>
           </section>
           <QuestionActions back={() => setStep(0)} next={() => setStep(2)} nextLabel="继续设置部署约束" />
@@ -324,11 +329,37 @@ export function CloudSelectionAdvisor({
       {result && <>
         <section className="panel advisor-result-summary">
           <div><span className="eyebrow">TOP PICKS</span><h2>{result.eligibleTotal ? "从 " + result.eligibleTotal + " 个候选中推荐 " + topPicks.length + " 台机型" : "没有满足全部硬约束的机型"}</h2><p>{result.stale ? result.warning : "目录来源：" + (result.source === "live" ? "实时" : "缓存") + " · 价格来自官方价格表 / 实时询价"}</p></div>
-          <div className="advisor-elimination">{result.exclusionStages.map(stage => <span key={stage.code}><small>{stage.label}</small><strong>{stage.before} → {stage.after}</strong></span>)}</div>
+          <div className="advisor-summary-meta">
+            <div className="advisor-elimination">{result.exclusionStages.map(stage => <span key={stage.code}><small>{stage.label}</small><strong>{stage.before} → {stage.after}</strong></span>)}</div>
+            <button
+              type="button"
+              className="advisor-algorithm-help-button"
+              aria-label={showAlgorithmHelp ? "收起推荐算法说明" : "查看推荐算法说明"}
+              aria-expanded={showAlgorithmHelp}
+              aria-controls="advisor-recommendation-algorithm"
+              title="查看推荐算法说明"
+              onClick={() => setShowAlgorithmHelp(current => !current)}
+            ><span aria-hidden="true">?</span></button>
+          </div>
           {!result.eligibleTotal && result.mostRestrictiveStage && <div className="advisor-zero-warning"><AlertTriangle size={15} /><span>限制最大的是“{result.mostRestrictiveStage.label}”，排除了 {result.mostRestrictiveStage.removed} 个机型。系统没有自动放宽条件。</span></div>}
           {selectionNotice && <div className="advisor-zero-warning"><AlertTriangle size={15} /><span>{selectionNotice}</span></div>}
+          {showAlgorithmHelp && <section id="advisor-recommendation-algorithm" className="advisor-algorithm-help" aria-label="推荐算法说明">
+            <header><span className="eyebrow">HOW IT WORKS</span><h3>三类推荐怎么计算</h3><p>先用你填写的硬约束排除不合格机型，再在当前候选池内做相对评分；分数不是厂商跑分。</p></header>
+            <div className="advisor-algorithm-flow" aria-label="基础评分计算方式">
+              <article><strong>1. 场景匹配</strong><p>看规格族是否适合当前主场景和同机组件；主场景的影响是同机组件的 2 倍。</p></article>
+              <article><strong>2. 容量性能</strong><p><b>90%</b> × 场景加权资源百分位 + <b>10%</b> × 规格代数百分位。资源包括 CPU、内存、GPU、带宽、PPS 和本地盘；规格代数只用于同等资源时轻微倾向更新代产品。</p></article>
+              <article><strong>3. 单价效率</strong><p>容量性能 ÷ 小时价，再换算成候选池百分位。它回答“每花 1 元得到多少能力”。</p></article>
+              <article><strong>4. 成本控制</strong><p>100 − 小时价百分位。它只回答“价格是否更低”，与单价效率不是同一项。</p></article>
+            </div>
+            <div className="advisor-algorithm-categories">
+              <article><span>均衡型</span><strong>场景 35% + 容量 25% + 效率 25% + 成本 15%</strong><p>先排除容量性能低于候选池第 30 百分位或低于 25 分的机型，避免为了某一项牺牲基本能力。</p></article>
+              <article><span>性价比型</span><strong>场景 20% + 容量 25% + 效率 45% + 成本 10%</strong><p>只比较有有效价格且达到同一容量门槛的机型，核心是“能力/价格”，不会直接选最便宜的一台。</p></article>
+              <article><span>性能型</span><strong>场景 20% + 容量 40% + 效率 30% + 成本 10%</strong><p>只在容量性能前约 30% 的机型中评选，同时保留效率和成本约束，不会直接选最贵的一台。</p></article>
+            </div>
+            <p className="advisor-algorithm-note">如果三类的第一名重复，系统会从各类高分候选中组合出三台不同机型，并让三类总分之和最高。候选池、地域或价格变化后，百分位和推荐结果也会重新计算。</p>
+          </section>}
         </section>
-        {topPicks.length > 0 && <section className="advisor-pick-list" aria-label="三张精选推荐">{topPicks.map(pick => <CandidateCard key={pick.item.id} item={pick.item} selected={selected?.id === pick.item.id} onSelect={() => { onSelect(pick.item); setSelectionNotice(""); }} badge={pick.label} badgeCategory={pick.category} headlineReason={pick.reason} priceOverride={livePrices[pick.item.id] ?? pick.price ?? UNAVAILABLE_PRICE} />)}</section>}
+        {topPicks.length > 0 && <section className="advisor-pick-list" aria-label="三张精选推荐">{topPicks.map(pick => <CandidateCard key={pick.item.id} item={pick.item} selected={selected?.id === pick.item.id} onSelect={() => { onSelect(pick.item); setSelectionNotice(""); }} badge={pick.label} badgeCategory={pick.category} headlineReason={pick.reason} scores={pick.scores} priceOverride={livePrices[pick.item.id] ?? pick.price ?? UNAVAILABLE_PRICE} />)}</section>}
         {result.eligibleTotal > 0 && <button type="button" className="button secondary advisor-load-more" onClick={() => setShowAllCandidates(current => !current)}>{showAllCandidates ? "收起全部候选" : "查看全部候选（" + result.eligibleTotal + " 台）"}</button>}
         {showAllCandidates && <>
           {result.eligibleTotal > 0 && <InstanceTypeFacetFilter
@@ -359,12 +390,13 @@ function QuestionActions({ back, next, disabled, nextLabel = '下一步' }: { ba
   return <div className="advisor-actions"><button type="button" className="button secondary" onClick={back}><ChevronLeft size={14} />上一步</button>{next && <button type="button" className="button primary" disabled={disabled} onClick={next}>{nextLabel}<ChevronRight size={14} /></button>}</div>;
 }
 
-function CandidateCard({ item, selected, onSelect, badge, badgeCategory, headlineReason, priceOverride }: { item: AdvisedCloudInstanceType; selected: boolean; onSelect: () => void; badge?: string; badgeCategory?: "balanced" | "value" | "performance"; headlineReason?: string; priceOverride?: SelectionRecommendationPrice }) {
+function CandidateCard({ item, selected, onSelect, badge, badgeCategory, headlineReason, scores, priceOverride }: { item: AdvisedCloudInstanceType; selected: boolean; onSelect: () => void; badge?: string; badgeCategory?: "balanced" | "value" | "performance"; headlineReason?: string; scores?: SelectionRecommendationScores; priceOverride?: SelectionRecommendationPrice }) {
   const bandwidth = Math.min(item.networkBandwidthRxGbps || 0, item.networkBandwidthTxGbps || 0);
   const pps = Math.min(item.networkPpsRx || 0, item.networkPpsTx || 0);
   return <article className={["panel", "advisor-candidate", selected ? "selected" : "", badgeCategory ? "advisor-pick-" + badgeCategory : ""].filter(Boolean).join(" ")}>
     <div className="candidate-heading">{badge && <span className={["pick-badge", badgeCategory || ""].filter(Boolean).join(" ")}>{badge}</span>}<span className={["match-tier", item.matchTier].join(" ")}>{item.matchTier === "preferred" ? "优先匹配" : item.matchTier === "suitable" ? "适合" : "其他候选"}</span><span className={["stock-label", item.available === true ? "available" : "unknown"].join(" ")}>{item.available === true ? "库存可用" : "库存未知"}</span></div>
     {headlineReason && <p className="candidate-pick-reason"><Sparkles size={12} />{headlineReason}</p>}
+    {scores && <div className="candidate-score-breakdown" aria-label="推荐评分构成"><span><strong>{Math.round(scores.categoryScore)}</strong>综合</span><span><strong>{Math.round(scores.scenarioFit)}</strong>场景</span><span><strong>{Math.round(scores.performance)}</strong>容量</span><span><strong>{Math.round(scores.costEfficiency)}</strong>效率</span><span><strong>{Math.round(scores.costControl)}</strong>成本</span></div>}
     <h3>{item.id}</h3><p>{item.typeLabel || "其他类型"} · {item.familyLabel || ("规格族 " + (item.family || item.id))} · {item.architecture || "架构未知"}</p>
     <div className="candidate-facts"><span><strong>{item.cpu}</strong>vCPU</span><span><strong>{formatNumber(item.memoryGib)}</strong>GiB 内存</span>{item.gpu ? <span><strong>{formatNumber(item.gpu)}</strong>GPU</span> : null}{bandwidth ? <span><strong>{formatNumber(bandwidth)}</strong>Gbit/s</span> : null}{pps ? <span><strong>{pps.toLocaleString()}</strong>PPS</span> : null}</div>
     <InstancePricePreview item={item} price={priceOverride} />

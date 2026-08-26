@@ -22,6 +22,7 @@ from looper_api.serialization import (
     _normalize_comparison_values,
     _observation_metric_view,
     _scenario_comparison_views,
+    _vgo_conclusion,
     dashboard_view,
     experiment_view,
 )
@@ -179,6 +180,57 @@ def test_dcperf_comparison_axes_use_throughput_and_latency_profile() -> None:
         "minimize",
         "minimize",
     ]
+
+
+def test_vgo_comparison_axes_keep_four_key_results_per_workload() -> None:
+    manifest = {
+        "metadata": {"id": "looper.vgo.variability"},
+        "spec": {
+            "workloads": [
+                {"id": "matmul", "name": "Matmul 内存分配波动"},
+                {"id": "7z", "name": "7-Zip 单线程波动"},
+            ],
+            "metrics": {
+                "runtime_cv": {"unit": "ratio", "direction": "minimize"},
+                "optimized_runtime_cv": {"unit": "ratio", "direction": "minimize"},
+                "optimized_median_runtime_seconds": {"unit": "s", "direction": "minimize"},
+                "optimized_p95_runtime_seconds": {"unit": "s", "direction": "minimize"},
+                "cpu_steal_p95_percent": {"unit": "%", "direction": "minimize"},
+            },
+        },
+    }
+
+    axes = _comparison_axes(manifest)
+
+    assert len(axes) == 8
+    assert [axis["label"] for axis in axes[:4]] == [
+        "基线 CV",
+        "优化后 CV",
+        "优化后中位耗时",
+        "优化后 P95",
+    ]
+    assert axes[0]["key"] == "matmul:runtime_cv"
+    assert axes[0]["workloadLabel"] == "Matmul 内存分配波动"
+    assert axes[4]["key"] == "7z:runtime_cv"
+    assert all(axis["metric"] != "cpu_steal_p95_percent" for axis in axes)
+
+
+def test_vgo_conclusion_explains_whether_optimization_reduced_variability() -> None:
+    result = _vgo_conclusion(
+        [
+            {
+                "workloadId": "7z",
+                "workloadLabel": "7-Zip 单线程波动",
+                "metrics": {
+                    "correctness_rate": {"value": 1.0},
+                    "runtime_cv": {"value": 0.0028},
+                    "optimized_runtime_cv": {"value": 0.0072},
+                },
+            }
+        ]
+    )
+
+    assert result == "7-Zip：优化未改善波动（CV 0.28%→0.72%）"
 
 
 def _add_target(session: object, target_id: str, name: str) -> None:
@@ -377,6 +429,7 @@ def test_scenario_comparison_groups_versions_and_uses_study_median(db_session: o
     session.flush()
 
     detail = experiment_view(session, studies[0], detail=True)
+    assert detail["resultConclusion"].startswith("4/4 项完成")
     assert {item["workload"]: item["status"] for item in detail["evaluations"]} == {
         "cpu": "completed",
         "memory": "completed",

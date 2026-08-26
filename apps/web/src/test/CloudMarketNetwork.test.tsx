@@ -93,11 +93,13 @@ describe('腾讯云购买网络选择', () => {
         const all = Array.from({ length: 25 }, (_, index) => ({
           provider: 'tencent',
           region: 'ap-test',
-          id: index === 0 ? 'img-tencentos-test' : `img-tencentos-test-${index + 1}`,
+          id: index === 0 ? 'img-tencentos-test'
+            : index === 3 ? 'ubuntu_22_04_uefi_x64_20G_alibase_20240807.vhd'
+              : `img-tencentos-test-${index + 1}`,
           name: index === 0 ? 'TencentOS Server 4 for x86_64'
             : index === 1 ? 'Custom Linux test image'
-              : index === 2 ? 'Ubuntu Server 24.04 LTS 64位'
-                : index === 3 ? 'Ubuntu Server 22.04 LTS 64位'
+              : index === 2 ? 'ubuntu_24_04_x64_20G_alibase_20260810.vhd'
+                : index === 3 ? 'ubuntu_22_04_uefi_x64_20G_alibase_20240807.vhd'
                   : index === 4 ? 'Debian 12.0 64位'
                     : index === 5 ? 'CentOS Stream 9 64位'
                       : index === 6 ? 'Windows Server 2022 数据中心版 64位 中文版'
@@ -341,15 +343,16 @@ describe('腾讯云购买网络选择', () => {
     const image = screen.getByLabelText('操作系统镜像');
     expect(image).toBeInTheDocument();
     await waitFor(() => expect(image).not.toBeDisabled());
-    await waitFor(() => expect(image).toHaveValue('img-tencentos-test-4'));
+    await waitFor(() => expect(image).toHaveValue('ubuntu_22_04_uefi_x64_20G_alibase_20240807.vhd'));
     const options = within(image).getAllByRole('option');
     expect(options).toHaveLength(8);
-    expect(options[1]).toHaveTextContent('Ubuntu Server 22.04 LTS 64位');
-    expect(options[2]).toHaveTextContent('Ubuntu Server 24.04 LTS 64位');
-    expect(options[3]).toHaveTextContent('Debian 12.0 64位');
-    expect(options[4]).toHaveTextContent('CentOS Stream 9 64位');
-    expect(options[5]).toHaveTextContent('TencentOS Server 4 for x86_64');
-    expect(options[6]).toHaveTextContent('Windows Server 2022');
+    expect(options[1]).toHaveTextContent('Ubuntu 22.04 · x86_64 · UEFI · 20 GiB');
+    expect(options[1]).toHaveValue('ubuntu_22_04_uefi_x64_20G_alibase_20240807.vhd');
+    expect(options[2]).toHaveTextContent('Ubuntu 24.04 · x86_64 · 20 GiB');
+    expect(options[3]).toHaveTextContent('Debian 12.0 64位 · 20 GiB');
+    expect(options[4]).toHaveTextContent('CentOS Stream 9 64位 · 20 GiB');
+    expect(options[5]).toHaveTextContent('TencentOS Server 4 for x86_64 · 20 GiB');
+    expect(options[6]).toHaveTextContent('Windows Server 2022 数据中心版 64位 中文版 · 20 GiB');
     expect(options[7]).toHaveTextContent('更多镜像');
     expect(within(image).queryByRole('group', { name: '更多镜像' })).not.toBeInTheDocument();
     fireEvent.change(image, { target: { value: '__more_images__' } });

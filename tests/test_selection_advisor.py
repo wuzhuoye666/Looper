@@ -200,10 +200,7 @@ def test_gpu_local_storage_network_and_inventory_filters_are_explained() -> None
 
 
 def test_unknown_inventory_is_retained_and_pagination_is_stable() -> None:
-    items = [
-        instance(f"ecs.g9i.{index:02d}", "ecs.g9i", available=None)
-        for index in range(25)
-    ]
+    items = [instance(f"ecs.g9i.{index:02d}", "ecs.g9i", available=None) for index in range(25)]
     first = advise(request(limit=20), items)
     second = advise(request(offset=20, limit=20), items)
 
@@ -233,11 +230,14 @@ def test_top_picks_returns_three_distinct_categories_with_reasons() -> None:
         instance("ecs.c9i.xlarge", "ecs.c9i"),
         instance("ecs.r9i.xlarge", "ecs.r9i"),
     ]
-    price_reader = lambda _item: PriceInfo(
-        hourly_amount="1.000",
-        monthly_amount="30.000",
-        source="price-table",
-    )
+
+    def price_reader(_item: InstanceTypeInfo) -> PriceInfo:
+        return PriceInfo(
+            hourly_amount="1.000",
+            monthly_amount="30.000",
+            source="price-table",
+        )
+
     result = advise(request(codeAvailability="available"), items, price_reader)
 
     assert [pick.category for pick in result.top_picks] == [
@@ -248,9 +248,10 @@ def test_top_picks_returns_three_distinct_categories_with_reasons() -> None:
     assert len({pick.item.id for pick in result.top_picks}) == 3
     assert all(pick.reason for pick in result.top_picks)
     assert all(pick.scores.performance > 0 for pick in result.top_picks)
+    assert all(0 <= pick.scores.category_score <= 100 for pick in result.top_picks)
+    assert all(0 <= pick.scores.scenario_fit <= 100 for pick in result.top_picks)
     assert all(
-        pick.price is not None and pick.price.source == "price-table"
-        for pick in result.top_picks
+        pick.price is not None and pick.price.source == "price-table" for pick in result.top_picks
     )
 
 
@@ -282,8 +283,47 @@ def test_top_picks_fall_back_to_fewer_candidates_when_pool_is_small() -> None:
     ]
     result = advise(request(codeAvailability="available"), items)
 
-    assert [pick.category for pick in result.top_picks] == ["balanced", "value"]
+    assert [pick.category for pick in result.top_picks] == ["balanced", "performance"]
     assert len({pick.item.id for pick in result.top_picks}) == 2
+
+
+def test_top_picks_avoid_choosing_the_cheapest_and_largest_by_default() -> None:
+    items = [
+        instance("ecs.g9i.tiny", "ecs.g9i", cpu=2, memory=2, bandwidth=1, pps=300_000),
+        instance("ecs.g9i.small", "ecs.g9i", cpu=4, memory=8, bandwidth=3, pps=1_000_000),
+        instance("ecs.g9i.mid", "ecs.g9i", cpu=8, memory=16, bandwidth=8, pps=2_000_000),
+        instance("ecs.g9i.fast", "ecs.g9i", cpu=32, memory=64, bandwidth=25, pps=6_000_000),
+        instance("ecs.g9i.huge", "ecs.g9i", cpu=192, memory=576, bandwidth=75, pps=16_800_000),
+    ]
+    hourly_prices = {
+        "ecs.g9i.tiny": 0.05,
+        "ecs.g9i.small": 0.35,
+        "ecs.g9i.mid": 0.90,
+        "ecs.g9i.fast": 4.80,
+        "ecs.g9i.huge": 31.93,
+    }
+
+    def price_reader(item: InstanceTypeInfo) -> PriceInfo:
+        hourly = hourly_prices[item.id]
+        return PriceInfo(
+            hourly_amount=f"{hourly:.3f}",
+            monthly_amount=f"{hourly * 730:.3f}",
+            source="price-table",
+        )
+
+    result = advise(
+        request(primaryScenario="game", codeAvailability="available"),
+        items,
+        price_reader,
+    )
+    by_category = {pick.category: pick for pick in result.top_picks}
+
+    assert set(by_category) == {"balanced", "value", "performance"}
+    assert by_category["value"].item.id != "ecs.g9i.tiny"
+    assert by_category["performance"].item.id != "ecs.g9i.huge"
+    assert len({pick.item.id for pick in result.top_picks}) == 3
+    assert "避免只因价格最低" in by_category["value"].reason
+    assert "不直接选择最大或最贵规格" in by_category["performance"].reason
 
 
 def test_budget_filters_candidates_by_monthly_price() -> None:
@@ -314,8 +354,7 @@ def test_budget_filters_candidates_by_monthly_price() -> None:
 
     assert result.eligible_total == 2
     assert all(
-        item.price is not None and float(item.price.monthly_amount) <= 500
-        for item in result.items
+        item.price is not None and float(item.price.monthly_amount) <= 500 for item in result.items
     )
     assert any(stage.code == "budget" for stage in result.exclusion_stages)
 
@@ -333,9 +372,7 @@ def test_selection_quote_falls_back_to_estimate_when_image_is_missing() -> None:
         def search_images(self, _filters: object):
             return []
 
-    registry = CloudProviderRegistry(
-        factories={ProviderId.ALIBABA: lambda: FakeProvider()}
-    )
+    registry = CloudProviderRegistry(factories={ProviderId.ALIBABA: lambda: FakeProvider()})
     item = instance("ecs.g9i.xlarge", "ecs.g9i")
     result = selection_instance_quote(
         SelectionPriceQuoteRequest(item=item, zone="cn-test-a"),

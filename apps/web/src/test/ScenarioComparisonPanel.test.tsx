@@ -45,6 +45,47 @@ const comparison: ScenarioComparison = {
   ],
 };
 
+const vgoComparison: ScenarioComparison = {
+  id: 'vgo@1.1.2',
+  scenarioId: 'stability.vgo.cpu-variability',
+  scenarioName: 'VGO 稳定性对比',
+  benchmarkId: 'looper.vgo.variability',
+  benchmarkName: 'VGO 性能波动与稳定性测试',
+  benchmarkVersion: '1.1.2',
+  axes: [
+    { key: 'matmul:runtime_cv', workloadId: 'matmul', workloadLabel: 'Matmul 内存分配波动', label: '基线 CV', metric: 'runtime_cv', unit: 'ratio', direction: 'minimize' },
+    { key: 'matmul:optimized_runtime_cv', workloadId: 'matmul', workloadLabel: 'Matmul 内存分配波动', label: '优化后 CV', metric: 'optimized_runtime_cv', unit: 'ratio', direction: 'minimize' },
+    { key: 'matmul:optimized_median_runtime_seconds', workloadId: 'matmul', workloadLabel: 'Matmul 内存分配波动', label: '优化后中位耗时', metric: 'optimized_median_runtime_seconds', unit: 's', direction: 'minimize' },
+    { key: 'matmul:optimized_p95_runtime_seconds', workloadId: 'matmul', workloadLabel: 'Matmul 内存分配波动', label: '优化后 P95', metric: 'optimized_p95_runtime_seconds', unit: 's', direction: 'minimize' },
+    { key: '7z:runtime_cv', workloadId: '7z', workloadLabel: '7-Zip 单线程波动', label: '基线 CV', metric: 'runtime_cv', unit: 'ratio', direction: 'minimize' },
+    { key: '7z:optimized_runtime_cv', workloadId: '7z', workloadLabel: '7-Zip 单线程波动', label: '优化后 CV', metric: 'optimized_runtime_cv', unit: 'ratio', direction: 'minimize' },
+    { key: '7z:optimized_median_runtime_seconds', workloadId: '7z', workloadLabel: '7-Zip 单线程波动', label: '优化后中位耗时', metric: 'optimized_median_runtime_seconds', unit: 's', direction: 'minimize' },
+    { key: '7z:optimized_p95_runtime_seconds', workloadId: '7z', workloadLabel: '7-Zip 单线程波动', label: '优化后 P95', metric: 'optimized_p95_runtime_seconds', unit: 's', direction: 'minimize' },
+  ],
+  targets: [
+    { targetId: 'vgo-a', label: '机器 A', studyCount: 1, validSampleCount: 16, values: {
+      'matmul:runtime_cv': { raw: 0.04, normalized: 50, studyCount: 1, sampleCount: 1 },
+      'matmul:optimized_runtime_cv': { raw: 0.02, normalized: 75, studyCount: 1, sampleCount: 1 },
+      'matmul:optimized_median_runtime_seconds': { raw: 1.2, normalized: 100, studyCount: 1, sampleCount: 1 },
+      'matmul:optimized_p95_runtime_seconds': { raw: 1.5, normalized: 100, studyCount: 1, sampleCount: 1 },
+      '7z:runtime_cv': { raw: 0.03, normalized: 100, studyCount: 1, sampleCount: 1 },
+      '7z:optimized_runtime_cv': { raw: 0.02, normalized: 100, studyCount: 1, sampleCount: 1 },
+      '7z:optimized_median_runtime_seconds': { raw: 2.1, normalized: 90, studyCount: 1, sampleCount: 1 },
+      '7z:optimized_p95_runtime_seconds': { raw: 2.6, normalized: 90, studyCount: 1, sampleCount: 1 },
+    } },
+    { targetId: 'vgo-b', label: '机器 B', studyCount: 1, validSampleCount: 16, values: {
+      'matmul:runtime_cv': { raw: 0.02, normalized: 100, studyCount: 1, sampleCount: 1 },
+      'matmul:optimized_runtime_cv': { raw: 0.015, normalized: 100, studyCount: 1, sampleCount: 1 },
+      'matmul:optimized_median_runtime_seconds': { raw: 1.5, normalized: 80, studyCount: 1, sampleCount: 1 },
+      'matmul:optimized_p95_runtime_seconds': { raw: 1.8, normalized: 83.3, studyCount: 1, sampleCount: 1 },
+      '7z:runtime_cv': { raw: 0.04, normalized: 75, studyCount: 1, sampleCount: 1 },
+      '7z:optimized_runtime_cv': { raw: 0.025, normalized: 80, studyCount: 1, sampleCount: 1 },
+      '7z:optimized_median_runtime_seconds': { raw: 1.9, normalized: 100, studyCount: 1, sampleCount: 1 },
+      '7z:optimized_p95_runtime_seconds': { raw: 2.3, normalized: 100, studyCount: 1, sampleCount: 1 },
+    } },
+  ],
+};
+
 describe('ScenarioComparisonPanel', () => {
   it('默认展示最新场景、雷达图和关键差异', () => {
     render(<ScenarioComparisonPanel comparisons={[comparison]} />);
@@ -74,5 +115,17 @@ describe('ScenarioComparisonPanel', () => {
   it('没有可比较数据时显示明确空状态', () => {
     render(<ScenarioComparisonPanel comparisons={[]} />);
     expect(screen.getByText('至少需要同一场景下两台目标机的有效结果。')).toBeInTheDocument();
+  });
+
+  it('VGO 每次只展示一个负载的四项关键结果', () => {
+    render(<ScenarioComparisonPanel comparisons={[vgoComparison]} />);
+    const workload = screen.getByLabelText('选择 VGO 测试负载');
+    expect(workload).toHaveValue('matmul');
+    expect(screen.getByRole('img', { name: /Matmul 内存分配波动目标机能力对比.*优化后 P95/ }))
+      .toHaveAttribute('data-chart-kind', 'radar');
+    expect(screen.getAllByText('基线 CV').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('2%').length).toBeGreaterThan(0);
+    fireEvent.change(workload, { target: { value: '7z' } });
+    expect(screen.getByRole('img', { name: /7-Zip 单线程波动目标机能力对比/ })).toBeInTheDocument();
   });
 });

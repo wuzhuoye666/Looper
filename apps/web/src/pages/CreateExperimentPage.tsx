@@ -22,6 +22,13 @@ const steps = [
 
 const FALLBACK_SELECTION_DEFAULTS = { repeats: 5, timeout: 86400, seed: 20260301 };
 const INTERNAL_BENCHMARK_IDS = new Set(['looper.fixture.config-driven', 'looper.demo.compression']);
+const VGO_BENCHMARK_ID = 'looper.vgo.variability';
+const VGO_QUICK_PARAMETERS = { diagnostic_scale_percent: 1, ab_blocks: 2, warmups: 0 };
+const VGO_QUICK_WORKLOADS = [
+  { id: '7z', label: '7-Zip' },
+  { id: 'lbm', label: 'LBM' },
+  { id: 'sad', label: 'SAD（需要完整机器门禁）' },
+];
 type AdvisorProvider = Extract<CloudProviderId, 'tencent' | 'alibaba'>;
 type AdvisorProviderState = { region: string; zone: string; selection: CloudInstanceType | null };
 const ADVISOR_PROVIDERS: Array<{ id: AdvisorProvider; label: string }> = [
@@ -71,6 +78,8 @@ export function CreateExperimentPage() {
     targetIds: [] as string[],
     targetBindings: {} as Record<string, { variantId: string; label: string; placementPairId: string }>,
     inputBindings: {} as Record<string, { reference: string; digest: string }>,
+    quickFeasibility: false,
+    quickWorkloadIds: ['7z'] as string[],
     ...FALLBACK_SELECTION_DEFAULTS,
   });
   const benchmarks = useQuery({ queryKey: ['benchmarks'], queryFn: api.benchmarks });
@@ -171,6 +180,10 @@ export function CreateExperimentPage() {
             digest: form.inputBindings[input.id].digest || undefined,
           }]),
       ),
+      workloadIds: selectedBenchmark?.id === VGO_BENCHMARK_ID && form.quickFeasibility ? form.quickWorkloadIds : undefined,
+      selectionParameters: selectedBenchmark?.id === VGO_BENCHMARK_ID && form.quickFeasibility
+        ? VGO_QUICK_PARAMETERS
+        : undefined,
       config: {
         repeats: Number(form.repeats),
         timeout: Number(form.timeout),
@@ -204,6 +217,7 @@ export function CreateExperimentPage() {
   const next = (event: FormEvent) => {
     event.preventDefault();
     if (step === 1 && (!selectedBenchmark || form.targetIds.length === 0)) return;
+    if (step === 2 && selectedBenchmark?.id === VGO_BENCHMARK_ID && form.quickFeasibility && form.quickWorkloadIds.length === 0) return;
     if (step < 2) setStep(step + 1);
     else mutation.mutate();
   };
@@ -288,6 +302,8 @@ export function CreateExperimentPage() {
                 targetIds: [],
                 targetBindings: {},
                 inputBindings: {},
+                quickFeasibility: false,
+                quickWorkloadIds: ['7z'],
               }));
             }}>
               {!selectableBenchmarks.length && <option value="">暂无可直接运行的测试套件</option>}
@@ -349,6 +365,22 @@ export function CreateExperimentPage() {
           <label><span>最长测试时间（秒）</span><input type="number" min="300" max="31536000" value={form.timeout} onChange={event => update('timeout', Number(event.target.value))} /></label>
           <label><span>测试顺序随机种子</span><input type="number" min="0" value={form.seed} onChange={event => update('seed', Number(event.target.value))} /></label>
           <label><span>对比单位</span><input value="时间分块 · 配对对照" readOnly /></label>
+          {selectedBenchmark?.id === VGO_BENCHMARK_ID && <div className="full quick-feasibility-option">
+            <label><span><input type="checkbox" checked={form.quickFeasibility} onChange={event => setForm(current => ({ ...current, quickFeasibility: event.target.checked }))} /> 仅本次快速可行性测试</span></label>
+            <small>仅为这条研究使用 1% 采样、2 个平衡区块、0 次预热；每个所选 workload 共 18 个样本。正常测试仍使用 10% 采样、5 个区块、1 次预热。</small>
+            {form.quickFeasibility && <div className="quick-workload-options" role="group" aria-label="本次快速测试负载">
+              {VGO_QUICK_WORKLOADS.map(workload => <label key={workload.id}>
+                <input type="checkbox" checked={form.quickWorkloadIds.includes(workload.id)} onChange={event => setForm(current => ({
+                  ...current,
+                  quickWorkloadIds: event.target.checked
+                    ? [...current.quickWorkloadIds, workload.id]
+                    : current.quickWorkloadIds.filter(id => id !== workload.id),
+                }))} />
+                <span>{workload.label}</span>
+              </label>)}
+              {form.quickWorkloadIds.length === 0 && <small>至少选择一个快速测试负载。</small>}
+            </div>}
+          </div>}
         </div>
         <div className="review-strip">
           <div><span>测试套件</span><strong>{selectedBenchmark ? benchmarkName(selectedBenchmark) : '未选择'}</strong></div>
@@ -359,7 +391,7 @@ export function CreateExperimentPage() {
       {mutation.isError && <ErrorState error={mutation.error} />}
       <div className="form-actions">
         {step > 0 && <button type="button" className="button secondary" onClick={() => setStep(step - 1)}>上一步</button>}
-        <button className="button primary" disabled={mutation.isPending || (step === 1 && (!selectedBenchmark || form.targetIds.length === 0))}>
+        <button className="button primary" disabled={mutation.isPending || (step === 1 && (!selectedBenchmark || form.targetIds.length === 0)) || (step === 2 && selectedBenchmark?.id === VGO_BENCHMARK_ID && form.quickFeasibility && form.quickWorkloadIds.length === 0)}>
           {step < 2 ? <>下一步<ChevronRight size={16} /></> : mutation.isPending ? '正在保存…' : '保存选型研究'}
         </button>
       </div>

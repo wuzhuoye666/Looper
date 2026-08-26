@@ -53,6 +53,18 @@ describe('选型研究 Benchmark 目录', () => {
           },
         },
         {
+          id: 'looper.vgo.variability', key: 'looper.vgo.variability@1.1.3',
+          name: 'VGO 性能波动与稳定性测试', version: '1.1.3', category: 'performance-stability',
+          selectionReady: true, singleNodeReady: true, runnable: true, packageReady: true,
+          selectionDefaults: { repeats: 1, timeout: 86400, seed: 20260825 },
+          scenario: {
+            id: 'stability.vgo.cpu-variability', name: 'VGO',
+            decision_question: 'Which target is more stable?', user_value: 'Stability',
+            workload_class: 'cpu-performance-variability', topology: 'single-node', roles: [],
+            primary_metric: 'runtime_cv', slo_gates: [],
+          },
+        },
+        {
           id: 'incomplete.adapter', key: 'incomplete.adapter@1.0.0',
           name: 'Incomplete Adapter', version: '1.0.0', category: 'unclassified',
           selectionReady: false, runnable: false,
@@ -123,5 +135,42 @@ describe('选型研究 Benchmark 目录', () => {
     const repeats = await screen.findByLabelText('每个目标重复数');
     expect(repeats).toHaveValue(1);
     expect(repeats).toHaveAttribute('min', '1');
+  });
+
+  it('VGO 快速方案可仅为当次研究选择 LBM 和 SAD', async () => {
+    renderPage();
+    fireEvent.change(screen.getByLabelText('研究名称 *'), { target: { value: 'VGO 快速验证' } });
+    fireEvent.click(screen.getByRole('button', { name: /下一步/ }));
+
+    const scenario = await screen.findByLabelText(/想模拟的业务场景/);
+    await waitFor(() => expect(scenario).toHaveValue('registered.adapter@1.0.0'));
+    fireEvent.change(scenario, { target: { value: 'looper.vgo.variability@1.1.3' } });
+    await waitFor(() => {
+      expect(scenario).toHaveValue('looper.vgo.variability@1.1.3');
+      expect(screen.getAllByText(/哪种服务器在长时运行中的性能波动更小/).length).toBeGreaterThan(0);
+    });
+    fireEvent.change(await screen.findByLabelText('测试环境'), { target: { value: 'external-ssh' } });
+    fireEvent.click(await screen.findByRole('radio'));
+    fireEvent.click(screen.getByRole('button', { name: /下一步/ }));
+
+    const quick = await screen.findByRole('checkbox', { name: /仅本次快速可行性测试/ });
+    expect(quick).not.toBeChecked();
+    fireEvent.click(quick);
+    fireEvent.click(screen.getByRole('checkbox', { name: '7-Zip' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'LBM' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: /SAD/ }));
+    fireEvent.click(screen.getByRole('button', { name: '保存选型研究' }));
+
+    await waitFor(() => {
+      const createCall = vi.mocked(fetch).mock.calls.find(([, init]) => init?.method === 'POST');
+      expect(createCall).toBeDefined();
+      const payload = JSON.parse(String(createCall?.[1]?.body));
+      expect(payload.workloadIds).toEqual(['lbm', 'sad']);
+      expect(payload.selectionParameters).toEqual({
+        diagnostic_scale_percent: 1,
+        ab_blocks: 2,
+        warmups: 0,
+      });
+    });
   });
 });

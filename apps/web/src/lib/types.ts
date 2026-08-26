@@ -87,6 +87,7 @@ export interface Experiment {
   benchmarkId?: string; benchmarkName?: string; progress?: number; bestScore?: number; baselineScore?: number;
   createdAt?: string; updatedAt?: string; owner?: string; attempts?: number; maxAttempts?: number;
   objective?: string; decisionQuestion?: string; scenario?: ScenarioContract; comparison?: SelectionComparison;
+  resultConclusion?: string;
   metricDefinitions?: Record<string, MetricDefinition>;
   resultSections?: BenchmarkResultSection[];
   config?: Record<string, unknown>; evaluations?: Evaluation[]; artifacts?: Artifact[];
@@ -104,7 +105,7 @@ export interface PostOptimizationStatus {
   candidateParameters?: Record<string, unknown>; followUpExperiment?: Experiment;
 }
 export interface ScenarioComparisonAxis {
-  key: string; workloadId: string; label: string; metric: string; unit: string;
+  key: string; workloadId: string; workloadLabel?: string; label: string; metric: string; unit: string;
   direction: 'maximize' | 'minimize';
 }
 export interface ScenarioComparisonValue {
@@ -439,7 +440,8 @@ export interface AdvisedCloudInstanceType extends CloudInstanceType {
 }
 export type RecommendationCategory = 'balanced' | 'value' | 'performance';
 export interface SelectionRecommendationScores {
-  scenarioRank: number; performance: number; hourlyPrice: number; valuePerYuan: number;
+  scenarioRank: number; scenarioFit: number; performance: number; costEfficiency: number;
+  costControl: number; categoryScore: number; hourlyPrice: number; valuePerYuan: number;
 }
 export interface SelectionRecommendationPrice {
   hourlyAmount: string; monthlyAmount: string; currency: string; source: 'price-table' | 'live' | 'unavailable' | 'estimated';

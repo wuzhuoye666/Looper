@@ -34,7 +34,7 @@ function ComparisonTooltip({
       return <div key={target.targetId}>
         <i style={{ background: SERIES[index].color }} />
         <span>{target.label}</span>
-        <b>{formatNumber(value.raw)} {axis.unit}</b>
+        <b>{comparisonValue(axis, value.raw)}</b>
         <em>{formatNumber(value.normalized, 1)}</em>
       </div>;
     })}
@@ -48,6 +48,12 @@ function leadPercent(axis: ScenarioComparisonAxis, winner: number, runnerUp: num
     : ((runnerUp - winner) / Math.abs(runnerUp)) * 100;
 }
 
+function comparisonValue(axis: ScenarioComparisonAxis, value: number) {
+  if (axis.unit === 'ratio') return `${formatNumber(value * 100, 2)}%`;
+  if (axis.unit === '%') return `${formatNumber(value, 2)}%`;
+  return `${formatNumber(value)} ${axis.unit}`;
+}
+
 export function ScenarioComparisonPanel({ comparisons = [] }: { comparisons?: ScenarioComparison[] }) {
   const [comparisonId, setComparisonId] = useState(comparisons[0]?.id || '');
   const comparison = comparisons.find(item => item.id === comparisonId) || comparisons[0];
@@ -56,12 +62,28 @@ export function ScenarioComparisonPanel({ comparisons = [] }: { comparisons?: Sc
     [comparison?.id],
   );
   const [selectedIds, setSelectedIds] = useState<string[]>(defaultTargetIds);
+  const workloadOptions = useMemo(() => {
+    if (comparison?.benchmarkId !== 'looper.vgo.variability') return [];
+    const labels = new Map<string, string>();
+    comparison.axes.forEach(axis => labels.set(
+      axis.workloadId,
+      axis.workloadLabel || axis.workloadId,
+    ));
+    return [...labels].map(([id, label]) => ({ id, label }));
+  }, [comparison?.axes, comparison?.benchmarkId]);
+  const [workloadId, setWorkloadId] = useState(workloadOptions[0]?.id || '');
 
   useEffect(() => {
     if (comparison && comparison.id !== comparisonId) setComparisonId(comparison.id);
   }, [comparison, comparisonId]);
 
   useEffect(() => setSelectedIds(defaultTargetIds), [comparison?.id, defaultTargetIds]);
+
+  useEffect(() => {
+    if (!workloadOptions.some(item => item.id === workloadId)) {
+      setWorkloadId(workloadOptions[0]?.id || '');
+    }
+  }, [workloadId, workloadOptions]);
 
   if (!comparison) {
     return <EmptyState
@@ -71,14 +93,18 @@ export function ScenarioComparisonPanel({ comparisons = [] }: { comparisons?: Sc
   }
 
   const selectedTargets = comparison.targets.filter(target => selectedIds.includes(target.targetId));
-  const rows: ChartRow[] = comparison.axes.map(axis => {
+  const visibleAxes = comparison.benchmarkId === 'looper.vgo.variability' && workloadId
+    ? comparison.axes.filter(axis => axis.workloadId === workloadId)
+    : comparison.axes;
+  const selectedWorkload = workloadOptions.find(item => item.id === workloadId);
+  const rows: ChartRow[] = visibleAxes.map(axis => {
     const row: ChartRow = { axis: axis.label, axisKey: axis.key };
     selectedTargets.forEach((target, index) => {
       row[`series${index}`] = target.values[axis.key]?.normalized;
     });
     return row;
   });
-  const differences = comparison.axes.map(axis => {
+  const differences = visibleAxes.map(axis => {
     const ranked = selectedTargets
       .map(target => ({ target, value: target.values[axis.key] }))
       .filter(item => item.value)
@@ -114,6 +140,11 @@ export function ScenarioComparisonPanel({ comparisons = [] }: { comparisons?: Sc
       >{comparisons.map(item => <option key={item.id} value={item.id}>
         {item.scenarioName} · {item.benchmarkVersion}
       </option>)}</select></label>
+      {workloadOptions.length > 0 && <label><span>测试负载</span><select
+        aria-label="选择 VGO 测试负载"
+        value={workloadId}
+        onChange={event => setWorkloadId(event.target.value)}
+      >{workloadOptions.map(item => <option key={item.id} value={item.id}>{item.label}</option>)}</select></label>}
       <div className="comparison-series" aria-label="对比目标">
         {comparison.targets.map(target => {
           const selectedIndex = selectedIds.indexOf(target.targetId);
@@ -136,10 +167,10 @@ export function ScenarioComparisonPanel({ comparisons = [] }: { comparisons?: Sc
       <div
         className="comparison-chart"
         role="img"
-        data-chart-kind={comparison.axes.length >= 3 ? 'radar' : 'bar'}
-        aria-label={`${comparison.scenarioName}目标机能力对比`}
+        data-chart-kind={visibleAxes.length >= 3 ? 'radar' : 'bar'}
+        aria-label={`${comparison.scenarioName}${selectedWorkload ? ` · ${selectedWorkload.label}` : ''}目标机能力对比：${visibleAxes.map(axis => axis.label).join('、')}`}
       >
-        {comparison.axes.length >= 3 ? <ResponsiveContainer width="100%" height={310}>
+        {visibleAxes.length >= 3 ? <ResponsiveContainer width="100%" height={310}>
           <RadarChart
             data={rows}
             outerRadius="60%"
@@ -188,7 +219,7 @@ export function ScenarioComparisonPanel({ comparisons = [] }: { comparisons?: Sc
         {differences.length ? differences.map(item => <article key={item.axis.key}>
           <span>{item.axis.label}</span>
           <strong>{item.winner.target.label}</strong>
-          <p>{formatNumber(item.winner.value.raw)} {item.axis.unit}</p>
+          <p>{comparisonValue(item.axis, item.winner.value.raw)}</p>
           <em>{item.lead == null ? '领先幅度不可计算' : `领先 ${formatNumber(item.lead, 1)}%`}</em>
         </article>) : <p className="comparison-no-difference">当前选择没有足够的共同维度。</p>}
       </aside>

@@ -11,8 +11,13 @@ const PROTECTED_STATUSES = ['queued', 'running', 'paused'];
 
 function resultLabel(item: Experiment) {
   if (item.mode !== 'selection') return formatNumber(item.bestScore);
+  if (item.resultConclusion) return item.resultConclusion;
   if (item.comparison?.winner) return item.comparison.winner;
   if (item.comparison?.status === 'insufficient_evidence') return '证据不足';
+  if (item.status === 'running') return '测试中';
+  if (item.status === 'queued') return '排队中';
+  if (item.status === 'failed') return '执行失败';
+  if (item.status === 'cancelled') return '已取消';
   return item.comparison?.conclusion_strength || '待执行';
 }
 

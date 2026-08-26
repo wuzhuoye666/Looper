@@ -119,8 +119,15 @@ function validatedNumber(value: string, minimum: number, maximum: number, fallba
   return Math.min(maximum, Math.max(minimum, normalized));
 }
 
+function normalizedImageName(name: string) {
+  return name.trim()
+    .replace(/[_-]+/g, ' ')
+    .replace(/\b(\d{1,4})\s+(\d{1,2})\b/g, '$1.$2')
+    .replace(/\s+/g, ' ');
+}
+
 function commonImageFamily(image: CloudImage) {
-  const label = image.name;
+  const label = normalizedImageName(image.name);
   if (/ubuntu/i.test(label)) return 'Ubuntu';
   if (/debian/i.test(label)) return 'Debian';
   if (/\bcentos\b/i.test(label)) return 'CentOS';
@@ -131,7 +138,7 @@ function commonImageFamily(image: CloudImage) {
 }
 
 function commonImageScore(image: CloudImage, family: CommonImageFamily) {
-  const name = image.name.trim();
+  const name = normalizedImageName(image.name);
   const officialName = /^(ubuntu(?:\s+server)?|debian|centos|alibaba\s+cloud\s+linux|alinux|tencentos|windows(?:\s+server)?)(?:\s|$)/i.test(name);
   const preferredVersion = COMMON_IMAGE_VERSION_PREFERENCES[family].findIndex(pattern => pattern.test(name));
   return (officialName ? 1_000 : 0) + (preferredVersion >= 0 ? 100 - preferredVersion : 0) + (image.imageType === 'PUBLIC_IMAGE' ? 1 : 0);
@@ -145,7 +152,7 @@ function prioritizedCommonImages(images: CloudImage[]) {
     if (family === 'Ubuntu') {
       const preferred = COMMON_IMAGE_VERSION_PREFERENCES.Ubuntu
         .slice(0, 2)
-        .map(pattern => candidates.find(image => pattern.test(image.name)))
+        .map(pattern => candidates.find(image => pattern.test(normalizedImageName(image.name))))
         .filter((image): image is CloudImage => Boolean(image));
       for (const candidate of candidates) {
         if (preferred.length >= 2) break;
@@ -157,8 +164,63 @@ function prioritizedCommonImages(images: CloudImage[]) {
   });
 }
 
+function machineStyleImageName(value: string) {
+  return /\.(?:vhd|qcow2?|raw)$/i.test(value) || (value.match(/[_-]/g)?.length || 0) >= 4;
+}
+
+function imageArchitectureLabel(image: CloudImage) {
+  const value = `${image.architecture || ''} ${image.name}`.toLowerCase();
+  if (/arm64|aarch64/.test(value)) return 'ARM64';
+  if (/x86_64|\bx64\b|\bx86\b/.test(value)) return 'x86_64';
+  return '';
+}
+
+function compactImageName(image: CloudImage) {
+  const normalized = normalizedImageName(image.name.replace(/\.(?:vhd|qcow2?|raw)$/i, ''));
+  const family = commonImageFamily(image);
+  if (family === 'Ubuntu') {
+    const version = normalized.match(/ubuntu(?:\s+server)?\s+(\d+(?:\.\d+)?)/i)?.[1];
+    return version ? `Ubuntu ${version}` : 'Ubuntu';
+  }
+  if (family === 'Debian') {
+    const version = normalized.match(/debian\s+(\d+(?:\.\d+)?)/i)?.[1];
+    return version ? `Debian ${version}` : 'Debian';
+  }
+  if (family === 'CentOS') {
+    const version = normalized.match(/centos(?:\s+stream)?\s+(\d+(?:\.\d+)?)/i)?.[1];
+    return `${/centos\s+stream/i.test(normalized) ? 'CentOS Stream' : 'CentOS'}${version ? ` ${version}` : ''}`;
+  }
+  if (family === 'Alibaba Cloud Linux') {
+    const version = normalized.match(/(?:alibaba\s+cloud\s+linux|alinux)\s+(\d+(?:\.\d+)?)/i)?.[1];
+    return `Alibaba Cloud Linux${version ? ` ${version}` : ''}`;
+  }
+  if (family === 'TencentOS') {
+    const version = normalized.match(/tencentos(?:\s+server)?\s+(\d+(?:\.\d+)?)/i)?.[1];
+    return `TencentOS${version ? ` ${version}` : ''}`;
+  }
+  if (family === 'Windows') {
+    const version = normalized.match(/windows(?:\s+server)?\s+(\d{4})/i)?.[1];
+    return `Windows Server${version ? ` ${version}` : ''}`;
+  }
+  const withoutBuildMetadata = normalized
+    .replace(/\s+(?:uefi\s+)?(?:x86 64|x64|arm64|aarch64)\b.*$/i, '')
+    .trim();
+  return withoutBuildMetadata.length > 48
+    ? `${withoutBuildMetadata.slice(0, 45).trim()}…`
+    : withoutBuildMetadata;
+}
+
 function imageLabel(image: CloudImage) {
-  return `${image.name} · ${image.id}${image.sizeGib ? ` · ${image.sizeGib} GiB` : ''}`;
+  const rawName = image.name.trim() || image.id;
+  const compact = rawName === image.id || machineStyleImageName(rawName);
+  const details = [compact ? compactImageName(image) : rawName];
+  if (compact) {
+    const architecture = imageArchitectureLabel(image);
+    if (architecture) details.push(architecture);
+    if (/\buefi\b/i.test(normalizedImageName(rawName))) details.push('UEFI');
+  }
+  if (image.sizeGib) details.push(`${image.sizeGib} GiB`);
+  return details.join(' · ');
 }
 
 function marketProvider(value: string | null): CloudProviderId | null {

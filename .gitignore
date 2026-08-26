@@ -25,6 +25,7 @@ test-results/
 
 # Looper runtime
 .looper/
+.looper-*.log
 .env
 *.db
 *.db-shm

@@ -193,6 +193,11 @@ def _validate_experiment_spec(
                 "baseline parameters must exactly match the experiment search space"
             )
     else:
+        unknown_parameters = set(spec.selection_parameters) - set(manifest_parameters)
+        if unknown_parameters:
+            raise SchedulerError(f"unknown benchmark parameters: {sorted(unknown_parameters)}")
+        for name, value in spec.selection_parameters.items():
+            _validate_declared_parameter_value(name, value, manifest_parameters[name])
         manifest_scenario = manifest["spec"].get("scenario")
         if manifest_scenario is None or spec.scenario is None:
             raise SchedulerError("selection study requires an installed scenario benchmark")
@@ -286,13 +291,10 @@ def _manifest_workloads(benchmark: BenchmarkRecord) -> dict[str, dict[str, Any]]
     return {item["id"]: item for item in benchmark.manifest_json["spec"]["workloads"]}
 
 
-def _selection_parameters(benchmark: BenchmarkRecord) -> dict[str, Any]:
-    """Resolve the benchmark-owned defaults used by target comparison runs.
-
-    Selection studies intentionally do not expose an optimization baseline in
-    their public experiment contract. The runtime envelope still needs the
-    benchmark's declared parameters, so resolve them at candidate creation.
-    """
+def _selection_parameters(
+    benchmark: BenchmarkRecord, overrides: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """Resolve defaults plus explicit one-study execution overrides."""
     declarations = benchmark.manifest_json["spec"].get("parameters") or {}
     missing = sorted(
         name for name, declaration in declarations.items()
@@ -303,7 +305,39 @@ def _selection_parameters(benchmark: BenchmarkRecord) -> dict[str, Any]:
             "selection benchmark parameters require defaults: "
             f"{missing}"
         )
-    return {name: declaration["default"] for name, declaration in declarations.items()}
+    resolved = {name: declaration["default"] for name, declaration in declarations.items()}
+    resolved.update(overrides or {})
+    return resolved
+
+
+def _validate_declared_parameter_value(
+    name: str, value: Any, declaration: dict[str, Any]
+) -> None:
+    parameter = SearchParameter.model_validate({
+        key: declaration[key]
+        for key in SearchParameter.model_fields
+        if key in declaration
+    })
+    if parameter.type == "integer":
+        valid_type = isinstance(value, int) and not isinstance(value, bool)
+    elif parameter.type == "number":
+        valid_type = isinstance(value, (int, float)) and not isinstance(value, bool)
+    elif parameter.type == "boolean":
+        valid_type = isinstance(value, bool)
+    else:
+        valid_type = parameter.choices is not None and value in parameter.choices
+    if not valid_type:
+        raise SchedulerError(f"benchmark parameter {name!r} has an invalid value")
+    if parameter.type not in {"integer", "number"}:
+        return
+    numeric = float(value)
+    assert parameter.minimum is not None and parameter.maximum is not None
+    if numeric < parameter.minimum or numeric > parameter.maximum:
+        raise SchedulerError(f"benchmark parameter {name!r} is outside its allowed range")
+    if parameter.step is not None:
+        steps = (numeric - parameter.minimum) / parameter.step
+        if abs(steps - round(steps)) > 1e-9:
+            raise SchedulerError(f"benchmark parameter {name!r} is not aligned to its step")
 
 
 def _attempt_count(session: Session, experiment_id: str) -> int:
@@ -355,7 +389,7 @@ def _create_candidate(
     if benchmark is None:
         raise SchedulerError("benchmark disappeared while scheduling")
     if spec.mode == ExperimentMode.SELECTION:
-        parameters = _selection_parameters(benchmark)
+        parameters = _selection_parameters(benchmark, spec.selection_parameters)
     config_payload = {
         "benchmark": benchmark.manifest_digest,
         "parameters": parameters,

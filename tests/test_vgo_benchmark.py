@@ -8,6 +8,7 @@ import tarfile
 from pathlib import Path
 
 import pytest
+from looper_api.app import _normalize_create_request
 from looper_api.benchmark_compatibility import target_compatibility
 from looper_api.benchmark_packages import build_directory_package
 from looper_api.models import BenchmarkRecord, TargetRecord
@@ -28,7 +29,7 @@ def load_module(name: str, path: Path):
 
 
 def test_vgo_is_seeded_as_a_real_selection_benchmark(db_session) -> None:
-    record = db_session.get(BenchmarkRecord, "looper.vgo.variability@1.1.2")
+    record = db_session.get(BenchmarkRecord, "looper.vgo.variability@1.1.3")
     assert record is not None
     view = benchmark_view(record)
     assert view["selectionReady"] is True
@@ -40,6 +41,7 @@ def test_vgo_is_seeded_as_a_real_selection_benchmark(db_session) -> None:
     parameters = record.manifest_json["spec"]["parameters"]
     assert parameters["diagnostic_scale_percent"]["default"] == 10
     assert parameters["ab_blocks"]["default"] == 5
+    assert parameters["warmups"]["default"] == 1
     assert record.manifest_json["spec"]["x-extensions"]["selectionDefaults"]["repeats"] == 1
     assert view["deploymentRequirements"] == [
         "linux",
@@ -56,6 +58,42 @@ def test_vgo_is_seeded_as_a_real_selection_benchmark(db_session) -> None:
         "ubuntu-22.04",
     ]
     assert target_compatibility(record.manifest_json, target) == []
+
+
+def test_vgo_quick_feasibility_parameters_only_apply_to_requested_study(db_session) -> None:
+    record = db_session.get(BenchmarkRecord, "looper.vgo.variability@1.1.3")
+    target = db_session.get(TargetRecord, "local")
+    assert record is not None and target is not None
+    target.capabilities_json = sorted(set(target.capabilities_json) | {
+        "root", "ubuntu-22.04", "perf", "vgo-runtime", "parboil-2.5",
+        "sharp", "sharp-3.0.0", "p7zip", "tcmalloc",
+    })
+    target.inventory_json = {**target.inventory_json, "logical_cpus": 8, "memory_gib": 16}
+
+    request = _normalize_create_request({
+        "mode": "selection",
+        "name": "VGO 7-Zip 快速可行性测试",
+        "benchmarkId": record.benchmark_id,
+        "benchmarkVersion": record.version,
+        "targetIds": [target.id],
+        "workloadIds": ["7z"],
+        "selectionParameters": {
+            "diagnostic_scale_percent": 1,
+            "ab_blocks": 2,
+            "warmups": 0,
+        },
+    }, db_session)
+
+    assert request.spec.workload_ids == ["7z"]
+    assert request.spec.selection_parameters == {
+        "diagnostic_scale_percent": 1,
+        "ab_blocks": 2,
+        "warmups": 0,
+    }
+    defaults = record.manifest_json["spec"]["parameters"]
+    assert defaults["diagnostic_scale_percent"]["default"] == 10
+    assert defaults["ab_blocks"]["default"] == 5
+    assert defaults["warmups"]["default"] == 1
 
     provisioning = record.manifest_json["spec"]["runtime"]["provisioning"]
     assert "perf" not in provisioning["hostCapabilities"]
@@ -299,8 +337,19 @@ def test_vgo_partial_gate_keeps_sad_hard_blocked(tmp_path: Path) -> None:
         producer.require_machine_gate(source_root, "sad")
 
 
-def test_vgo_minimal_plan_is_ten_percent_and_balanced() -> None:
+def test_vgo_quick_round_and_ten_percent_reference_are_balanced() -> None:
     producer = load_module("vgo_producer_plan_test", PACKAGE_ROOT / "producer.py")
+
+    assert producer.scaled_plan("7z", 1, 2) == {
+        "baseline": 6,
+        "profile": 3,
+        "mitigated": 6,
+        "rollback": 3,
+        "blocks": 2,
+        "perConditionPerBlock": 3,
+    }
+    quick_orders = producer.balanced_orders("7z", 2, 2026)
+    assert sorted(quick_orders) == ["baseline-first", "mitigated-first"]
 
     assert producer.scaled_plan("matmul", 10, 5) == {
         "baseline": 30,
@@ -321,6 +370,21 @@ def test_vgo_minimal_plan_is_ten_percent_and_balanced() -> None:
     orders = producer.balanced_orders("lbm", 5, 2026)
     assert orders == producer.balanced_orders("lbm", 5, 2026)
     assert abs(orders.count("baseline-first") - orders.count("mitigated-first")) == 1
+
+
+def test_vgo_7z_uses_wall_time_instead_of_constant_avr_usage() -> None:
+    normalizer = load_module("vgo_normalizer_7z_timing_test", PACKAGE_ROOT / "normalizer.py")
+    rows = [
+        {"app_metric": "100.000000000", "wall_time_s": "36.68"},
+        {"app_metric": "100.000000000", "wall_time_s": "36.50"},
+        {"app_metric": "100.000000000", "wall_time_s": "36.49"},
+    ]
+
+    values = [normalizer.measurement_value(row, "7z") for row in rows]
+
+    assert values == [36.68, 36.5, 36.49]
+    assert normalizer.describe(values)["coefficientOfVariation"] > 0
+    assert normalizer.measurement_value(rows[0], "matmul") == 100.0
 
 
 def test_vgo_normalizer_emits_variability_metrics_from_original_csv(

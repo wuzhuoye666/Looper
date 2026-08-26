@@ -52,7 +52,11 @@ function advisorResponse(
     category: categories[index].category,
     label: categories[index].label,
     reason: "测试推荐理由 " + id,
-    scores: { scenarioRank: 0, performance: 200 + index, hourlyPrice: 3.04, valuePerYuan: 65.8 },
+    scores: {
+      scenarioRank: 0, scenarioFit: 100, performance: 70 + index,
+      costEfficiency: 80 - index, costControl: 60 - index,
+      categoryScore: 82 + index, hourlyPrice: 3.04, valuePerYuan: 23.5,
+    },
     item: makeItem(id, provider, region, zone, aggregate),
     price: { hourlyAmount: "3.040", monthlyAmount: "2219.2", currency: "CNY", source: "live" },
   }));
@@ -182,6 +186,49 @@ describe('阿里云 ECS 选型助手', () => {
     expect(requests[0].exactMemoryGib).toBeUndefined();
   });
 
+  it('每月和每小时预算均可填写，并相互自动换算后提交月预算', async () => {
+    const requests: Array<Record<string, unknown>> = [];
+    vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(_input).includes('/cloud/selection-advisor/quote')) {
+        const quoteBody = JSON.parse(String(init?.body || '{}')) as Record<string, unknown>;
+        return response(selectionQuoteResponse(quoteBody));
+      }
+      const body = JSON.parse(String(init?.body || '{}')) as Record<string, unknown>;
+      requests.push(body);
+      return response(advisorResponse(0));
+    }));
+    renderAdvisor();
+    fireEvent.click(screen.getByRole('button', { name: /数据库/ }));
+
+    const monthlyBudget = screen.getByLabelText('每月预算');
+    const hourlyBudget = screen.getByLabelText('每小时预算');
+    expect(monthlyBudget).not.toHaveAttribute('readonly');
+    expect(hourlyBudget).not.toHaveAttribute('readonly');
+    expect(monthlyBudget).toHaveValue(null);
+    expect(hourlyBudget).toHaveValue(null);
+    expect(screen.getByRole('button', { name: /继续设置部署约束/ })).toBeEnabled();
+
+    fireEvent.change(monthlyBudget, { target: { value: '730' } });
+    expect(monthlyBudget).toHaveValue(730);
+    expect(hourlyBudget).toHaveValue(1);
+
+    fireEvent.change(hourlyBudget, { target: { value: '1.25' } });
+    expect(hourlyBudget).toHaveValue(1.25);
+    expect(monthlyBudget).toHaveValue(912.5);
+
+    fireEvent.change(hourlyBudget, { target: { value: '' } });
+    expect(monthlyBudget).toHaveValue(null);
+    expect(hourlyBudget).toHaveValue(null);
+    fireEvent.change(monthlyBudget, { target: { value: '912.5' } });
+
+    fireEvent.click(screen.getByRole('button', { name: /继续设置部署约束/ }));
+    fireEvent.change(screen.getByLabelText('助手地域'), { target: { value: 'cn-test' } });
+    fireEvent.click(screen.getByRole('button', { name: /查看推荐结果/ }));
+
+    await waitFor(() => expect(requests).toHaveLength(1));
+    expect(requests[0].budgetMonthlyCny).toBe(912.5);
+  });
+
   it('按前序答案展示分支、精确筛选并加载更多候选', async () => {
     const requests: Array<Record<string, unknown>> = [];
     vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
@@ -208,6 +255,7 @@ describe('阿里云 ECS 选型助手', () => {
     expect(view.container.querySelector('.advisor-results')).toBeInTheDocument();
     expect(view.container.querySelector('.advisor-market-layout')).not.toHaveClass('questionnaire');
     expect(screen.getByText('ecs.i9i.xlarge')).toBeInTheDocument();
+    expect(screen.getAllByLabelText('推荐评分构成')).toHaveLength(3);
     expect(screen.getAllByLabelText(/实时价约 3\.04 元每小时，月约 2,219 元/)[0]).toBeInTheDocument();
     expect(screen.getAllByText('月约 ¥2,219')[0]).toBeInTheDocument();
     expect(screen.getAllByText(/本地存储型 · 本地 SSD 型 i9i/)[0]).toBeInTheDocument();
@@ -215,6 +263,19 @@ describe('阿里云 ECS 选型助手', () => {
       primaryScenario: 'database', sizingMode: 'exact', exactCpu: 8, exactMemoryGib: 32,
       localStorage: 'required', codeAvailability: 'available', architecture: 'x86', offset: 0, limit: 20,
     });
+
+    const algorithmHelp = screen.getByRole('button', { name: '查看推荐算法说明' });
+    expect(algorithmHelp).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByRole('region', { name: '推荐算法说明' })).not.toBeInTheDocument();
+    fireEvent.click(algorithmHelp);
+    expect(screen.getByRole('button', { name: '收起推荐算法说明' })).toHaveAttribute('aria-expanded', 'true');
+    const algorithmPanel = screen.getByRole('region', { name: '推荐算法说明' });
+    expect(algorithmPanel).toHaveTextContent('90% × 场景加权资源百分位 + 10% × 规格代数百分位');
+    expect(algorithmPanel).toHaveTextContent('场景 35% + 容量 25% + 效率 25% + 成本 15%');
+    expect(algorithmPanel).toHaveTextContent('能力/价格');
+    expect(algorithmPanel).toHaveTextContent('容量性能前约 30%');
+    fireEvent.click(screen.getByRole('button', { name: '收起推荐算法说明' }));
+    expect(screen.queryByRole('region', { name: '推荐算法说明' })).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: '查看全部候选（21 台）' }));
     fireEvent.change(screen.getByLabelText('搜索候选机型'), { target: { value: 'ecs.i8i' } });

@@ -28,6 +28,18 @@ def number(row: dict[str, str], key: str) -> float | None:
     return value if math.isfinite(value) else None
 
 
+def measurement_value(row: dict[str, str], workload: str) -> float | None:
+    """Return the duration used by the cross-condition variability analysis.
+
+    p7zip prints ``Avr:`` with CPU usage as its first numeric column.  The
+    vendored VGO runner historically stored that constant (usually 100) in
+    ``app_metric``.  Its separately measured wall clock duration is the real
+    comparable timing signal and is already retained in every raw CSV row.
+    """
+
+    return number(row, "wall_time_s") if workload == "7z" else number(row, "app_metric")
+
+
 def percentile(values: list[float], percentile_value: int) -> float:
     if len(values) == 1:
         return values[0]
@@ -74,7 +86,7 @@ def observation(
 
 
 def valid(row: dict[str, str], workload: str) -> bool:
-    metric = number(row, "app_metric")
+    metric = measurement_value(row, workload)
     return (
         row.get("benchmark") == workload
         and row.get("exit_code") == "0"
@@ -183,7 +195,7 @@ def main() -> int:
 
     phase_statistics: dict[str, Any] = {}
     for name, group in valid_groups.items():
-        values = [float(row["app_metric"]) for row in group]
+        values = [value for row in group if (value := measurement_value(row, workload)) is not None]
         if values:
             phase_statistics[name] = describe(values)
 
@@ -323,7 +335,11 @@ def main() -> int:
         ]
         sample_offset = 0
         for condition in ("baseline", "mitigated"):
-            values = [float(row["app_metric"]) for row in valid_groups[condition]]
+            values = [
+                value
+                for row in valid_groups[condition]
+                if (value := measurement_value(row, workload)) is not None
+            ]
             metric_rows.extend(
                 observation(
                     "runtime_seconds",
