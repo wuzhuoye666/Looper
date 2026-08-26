@@ -26,6 +26,7 @@ describe('侧栏选型分组导航', () => {
     fireEvent.click(withoutCode);
     expect(screen.getByRole('link', { name: '场景目录' })).toHaveAttribute('href', '/benchmarks');
     expect(screen.getByRole('link', { name: '候选资源' })).toHaveAttribute('href', '/targets');
+    expect(screen.queryByRole('link', { name: '实负载调优' })).not.toBeInTheDocument();
     fireEvent.click(withCode);
     expect(screen.queryByRole('link', { name: '动态接口发现' })).not.toBeInTheDocument();
     expect(screen.getByRole('link', { name: '场景目录' })).toBeInTheDocument();

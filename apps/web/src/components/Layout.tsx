@@ -1,4 +1,4 @@
-import { Activity, Boxes, Braces, ChevronDown, ChevronLeft, Cloud, Code2, Gauge, GitCompareArrows, Menu, Plus, Server, SlidersHorizontal, TestTubeDiagonal, WandSparkles } from 'lucide-react';
+import { Activity, Boxes, Braces, ChevronDown, ChevronLeft, Cloud, Code2, Gauge, GitCompareArrows, Menu, Plus, Server, TestTubeDiagonal, WandSparkles } from 'lucide-react';
 import { useLayoutEffect, useState } from 'react';
 import { resolveApiUrl } from '../lib/api';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
@@ -25,7 +25,6 @@ const selectionGroups = [
     items: [
       { to: '/benchmarks', label: '场景目录', icon: Boxes },
       { to: '/targets', label: '候选资源', icon: Server },
-      { to: '/optimization', label: '实负载调优', icon: SlidersHorizontal },
     ],
   },
 ] as const;
