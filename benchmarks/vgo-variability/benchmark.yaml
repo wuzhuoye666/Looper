@@ -3,7 +3,7 @@ kind: Benchmark
 metadata:
   id: looper.vgo.variability
   name: VGO 性能波动与稳定性测试
-  version: 1.1.3
+  version: 1.1.4
   description: "使用 VGO 原始 run_case.sh/run_case.py 执行完整波动诊断：正常测试默认采用论文正式轮次的 10%，包含 profile、基线/优化平衡区块和 rollback；输出 CV、典型耗时、尾部耗时及优化对比。创建研究时可仅为一次可行性验证显式选择快速方案，不会改变正常默认值。"
   license: INTERNAL
   source:

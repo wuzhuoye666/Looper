@@ -5,7 +5,7 @@
 ## 执行边界
 
 - 目标机：Ubuntu 22.04、x86_64、至少 8 个逻辑 CPU 和约 16 GiB 内存。
-- 权限：需要可无密码执行的 `sudo`。Matmul、7-Zip 和 LBM 接受原复现包的 `PARTIAL GO`，此时 profile 自动退化到软件 perf 事件并明确标记能力边界；SAD 因为需要修改并恢复 THP，仍必须通过包含硬件 perf 事件和 THP 可逆写入的 `FULL GO`。
+- 权限：需要可无密码执行的 `sudo`。Matmul、7-Zip 和 LBM 接受原复现包的 `PARTIAL GO`，此时 profile 自动退化到软件 perf 事件并明确标记能力边界；SAD 在 THP 可读、可逆写入时也允许以受限方法适配运行。缺少硬件 perf 时会明确标记为 `software-events-only`，不能宣称完成论文中的 dTLB 硬件事件归因。
 - 准备：用户只需选择 VGO 和已连接的干净 Ubuntu 22.04 机器。Worker 自动下发套件，`prepare.py` 校验固定源码快照，然后调用原复现包的 `check_environment.sh`、`setup_ubuntu.sh`、`validate_machine.sh` 和 Matmul calibration；`perf`、Parboil、SHARP、p7zip 和 tcmalloc 均在这一步自动安装或构建。
 - 测量：`producer.py` 只负责编排，实际 workload 由固定快照中的 `run_case.sh/run_case.py` 执行。长阶段执行期间，适配器每发现一个新增 CSV 样本就实时输出 workload、阶段样本数、总样本数和已耗时；即使暂时没有新样本，也至少每 30 秒输出一次心跳，避免终端和运行状态看起来停滞。
 - 结果：`normalizer.py` 从原始 VGO CSV 计算基线/优化 CV、中位数、P95、改善比例、rollback 漂移、正确率和 CPU steal P95；`vgo-diagnostics.json` 还会汇总 CSV 中所有可用 perf、进程、内存、THP 和环境参数。

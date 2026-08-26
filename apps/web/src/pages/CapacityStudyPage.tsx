@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { AlertTriangle, ArrowLeft, ArrowRight, Check, CheckCircle2, ChevronRight, Circle, Clock3, Code2, Gauge, LoaderCircle, Play, RefreshCw, RotateCcw, Server, ShieldCheck, Square, Trash2 } from 'lucide-react';
+import { AlertTriangle, ArrowLeft, ArrowRight, Check, CheckCircle2, ChevronRight, Circle, Clock3, Code2, Gauge, LoaderCircle, Play, RefreshCw, RotateCcw, Server, ShieldCheck, Sparkles, Square, Trash2 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { BackLink } from '../components/Layout';
@@ -182,7 +182,7 @@ export function CapacityStudyPage() {
       <BuildStep draft={draft} sourceAvailable={study.sourceArchive.status === 'retained'} pending={actionPending === 'build-repair'} onRepair={() => void repairBuild()} onChange={changeDraft}/>
     )}
     {step === 1 && (
-      <ScenarioStepEditor draft={draft} selected={selected} selectedId={selectedStepId} setSelectedId={setSelectedStepId} onChange={changeDraft}/>
+      <ScenarioStepEditor draft={draft} generation={study.execution.scenarioGeneration} selected={selected} selectedId={selectedStepId} setSelectedId={setSelectedStepId} onChange={changeDraft}/>
     )}
     {step === 2 && (
       <SloStep draft={draft} onChange={changeDraft}/>
@@ -211,11 +211,12 @@ function BuildStep({ draft, sourceAvailable, pending, onRepair, onChange }: { dr
   </section>;
 }
 
-function ScenarioStepEditor({ draft, selected, selectedId, setSelectedId, onChange }: { draft: CapacityDraft; selected?: CapacityScenarioStep; selectedId: string; setSelectedId: (id: string) => void; onChange: (mutator: (draft: CapacityDraft) => void) => void }) {
+function ScenarioStepEditor({ draft, generation, selected, selectedId, setSelectedId, onChange }: { draft: CapacityDraft; generation?: CapacityStudy['execution']['scenarioGeneration']; selected?: CapacityScenarioStep; selectedId: string; setSelectedId: (id: string) => void; onChange: (mutator: (draft: CapacityDraft) => void) => void }) {
   function update(mutator: (step: CapacityScenarioStep) => void) { if (!selected) return; onChange(next => { const item = next.scenario.steps.find(value => value.id === selected.id); if (item) mutator(item); }); }
   function move(offset: number) { if (!selected) return; onChange(next => { const index = next.scenario.steps.findIndex(item => item.id === selected.id); const destination = index + offset; if (index < 0 || destination < 0 || destination >= next.scenario.steps.length) return; [next.scenario.steps[index], next.scenario.steps[destination]] = [next.scenario.steps[destination], next.scenario.steps[index]]; }); }
   function remove() { if (!selected) return; onChange(next => { next.scenario.steps = next.scenario.steps.filter(item => item.id !== selected.id); }); const remaining = draft.scenario.steps.filter(item => item.id !== selected.id); setSelectedId(remaining[0]?.id || ''); }
   return <section className="capacity-wizard-panel"><div className="capacity-step-heading"><div><span>STEP 2</span><h2>编排一次完整业务迭代</h2><p>接口按左到右执行；一次链路全部通过才计为成功业务容量。</p></div><span>{draft.scenario.steps.length} 个接口</span></div>
+    {generation?.mode === 'agent-selected+script-validated' && <div className="notice info capacity-scenario-agent"><Sparkles size={18}/><div><strong>Agent 已自动生成可执行业务链路</strong><p>已从 {generation.discoveredInterfaceCount} 个发现接口中选择 {generation.selectedInterfaceCount} 个，并补全请求体、变量提取、认证和断言；其余 {generation.omittedInterfaceIds.length} 个接口不会进入本次施压。你只需审核，无需从零设计。</p><small>{generation.rationale}</small></div></div>}
     <div className="scenario-workbench"><div className="scenario-canvas" aria-label="业务流程链">{draft.scenario.steps.map((item, index) => <div className="scenario-node-wrap" key={item.id}><button type="button" className={`scenario-node ${selectedId === item.id ? 'active' : ''}`} onClick={() => setSelectedId(item.id)}><small>{index + 1}</small><strong>{item.label}</strong><code>{item.method} {item.path}</code>{isWrite(item) && <span>写操作</span>}</button>{index < draft.scenario.steps.length - 1 && <ArrowRight size={18}/>}</div>)}</div>
       {selected ? <aside className="scenario-drawer"><div className="scenario-drawer-heading"><div><small>接口节点</small><strong>{selected.label}</strong></div><div><button className="icon-button" type="button" onClick={() => move(-1)} aria-label="前移"><ArrowLeft size={15}/></button><button className="icon-button" type="button" onClick={() => move(1)} aria-label="后移"><ArrowRight size={15}/></button><button className="icon-button danger" type="button" onClick={remove} aria-label="删除节点"><Trash2 size={15}/></button></div></div>
         <label><span>步骤名称</span><input value={selected.label} onChange={event => update(item => { item.label = event.target.value; })}/></label><div className="capacity-inline-fields"><label><span>方法</span><select value={selected.method} onChange={event => update(item => { item.method = event.target.value; })}>{['GET','POST','PUT','PATCH','DELETE','HEAD'].map(method => <option key={method}>{method}</option>)}</select></label><label><span>路径</span><input value={selected.path} onChange={event => update(item => { item.path = event.target.value; })}/></label></div>

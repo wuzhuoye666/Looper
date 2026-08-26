@@ -137,7 +137,7 @@ describe('选型研究 Benchmark 目录', () => {
     expect(repeats).toHaveAttribute('min', '1');
   });
 
-  it('VGO 快速方案可仅为当次研究选择 LBM 和 SAD', async () => {
+  it('VGO 快速方案放在执行方式顶部并默认覆盖全部四项 workload', async () => {
     renderPage();
     fireEvent.change(screen.getByLabelText('研究名称 *'), { target: { value: 'VGO 快速验证' } });
     fireEvent.click(screen.getByRole('button', { name: /下一步/ }));
@@ -153,19 +153,23 @@ describe('选型研究 Benchmark 目录', () => {
     fireEvent.click(await screen.findByRole('radio'));
     fireEvent.click(screen.getByRole('button', { name: /下一步/ }));
 
-    const quick = await screen.findByRole('checkbox', { name: /仅本次快速可行性测试/ });
+    const normal = await screen.findByRole('radio', { name: /完整测试/ });
+    const quick = screen.getByRole('radio', { name: /快速验证/ });
+    expect(normal).toBeChecked();
     expect(quick).not.toBeChecked();
     fireEvent.click(quick);
-    fireEvent.click(screen.getByRole('checkbox', { name: '7-Zip' }));
-    fireEvent.click(screen.getByRole('checkbox', { name: 'LBM' }));
-    fireEvent.click(screen.getByRole('checkbox', { name: /SAD/ }));
+    expect(screen.getByRole('checkbox', { name: /Matmul/ })).toBeChecked();
+    expect(screen.getByRole('checkbox', { name: /7-Zip/ })).toBeChecked();
+    expect(screen.getByRole('checkbox', { name: /LBM/ })).toBeChecked();
+    expect(screen.getByRole('checkbox', { name: /SAD/ })).toBeChecked();
+    expect(screen.getByText('4/4 项')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: '保存选型研究' }));
 
     await waitFor(() => {
       const createCall = vi.mocked(fetch).mock.calls.find(([, init]) => init?.method === 'POST');
       expect(createCall).toBeDefined();
       const payload = JSON.parse(String(createCall?.[1]?.body));
-      expect(payload.workloadIds).toEqual(['lbm', 'sad']);
+      expect(payload.workloadIds).toEqual(['matmul', '7z', 'lbm', 'sad']);
       expect(payload.selectionParameters).toEqual({
         diagnostic_scale_percent: 1,
         ab_blocks: 2,

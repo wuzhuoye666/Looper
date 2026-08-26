@@ -21,12 +21,24 @@ def test_deepseek_key_round_trip_is_encrypted_at_rest(tmp_path) -> None:
 
     assert store.load() == secret
     assert secret.encode() not in settings.deepseek_credential_store_path.read_bytes()
-    assert secret.encode() not in settings.deepseek_credential_key_path.read_bytes()
-    if sys.platform == "win32":
-        assert settings.deepseek_credential_key_path.read_bytes().startswith(b"dpapi-v1:")
-    else:
+    assert secret.encode() not in store.stable_key_path.read_bytes()
+    assert settings.deepseek_credential_store_path.read_bytes().startswith(b"stable-v1:")
+    if sys.platform != "win32":
         assert settings.deepseek_credential_store_path.stat().st_mode & 0o077 == 0
-        assert settings.deepseek_credential_key_path.stat().st_mode & 0o077 == 0
+        assert store.stable_key_path.stat().st_mode & 0o077 == 0
+
+
+def test_unreadable_legacy_dpapi_key_does_not_break_readiness(tmp_path) -> None:
+    settings = Settings(data_dir=tmp_path)
+    settings.deepseek_credential_key_path.write_bytes(b"dpapi-v1:not-valid-base64")
+    settings.deepseek_credential_store_path.write_bytes(b"legacy-ciphertext")
+
+    assert effective_deepseek_key(settings) == ("", None)
+
+    store = EncryptedDeepSeekCredentialStore(settings)
+    store.save("replacement-key-value-123456789")
+    assert store.load() == "replacement-key-value-123456789"
+    assert settings.deepseek_credential_key_path.read_bytes() == b"dpapi-v1:not-valid-base64"
 
 
 def test_stored_deepseek_key_overrides_environment_and_delete_restores_it(tmp_path) -> None:

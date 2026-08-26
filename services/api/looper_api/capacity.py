@@ -7,6 +7,7 @@ import re
 import shlex
 import shutil
 import threading
+from contextlib import suppress
 from pathlib import Path, PurePosixPath
 from typing import Any, Literal
 from urllib.parse import urlparse
@@ -272,6 +273,22 @@ class BuildAgentOutput(CapacityModel):
     evidence: list[BuildEvidence]
 
 
+class CapacityPlanAgentOutput(CapacityModel):
+    build: BuildAgentOutput
+    scenario: ScenarioPlan
+    scenario_rationale: str = Field(alias="scenarioRationale", min_length=1, max_length=4000)
+
+
+class GeneratedCapacityPlan(CapacityModel):
+    build: BuildPlan
+    scenario: ScenarioPlan
+    scenario_rationale: str = Field(alias="scenarioRationale")
+    omitted_interface_ids: list[str] = Field(alias="omittedInterfaceIds")
+    scenario_mode: Literal["agent-selected", "deterministic-fallback"] = Field(
+        default="agent-selected", alias="scenarioMode"
+    )
+
+
 def _strip_json(content: str) -> str:
     normalized = content.strip()
     if normalized.startswith("```"):
@@ -281,6 +298,357 @@ def _strip_json(content: str) -> str:
     first = normalized.find("{")
     last = normalized.rfind("}")
     return normalized[first : last + 1] if first != -1 and last > first else normalized
+
+
+def _load_agent_json(content: str) -> Any:
+    """Parse JSON-mode output with a safe fallback for JSON-like mappings."""
+    normalized = _strip_json(content)
+    try:
+        return json.loads(normalized)
+    except json.JSONDecodeError as json_error:
+        if normalized.startswith("{{") and normalized.endswith("}}"):
+            normalized = normalized[1:-1]
+            try:
+                return json.loads(normalized)
+            except json.JSONDecodeError:
+                pass
+        parsed = yaml.safe_load(normalized)
+        if not isinstance(parsed, dict):
+            raise json_error
+        return parsed
+
+
+def _normalize_agent_payload(payload: Any) -> Any:
+    """Normalize compact assertion shorthands before strict model validation."""
+    if not isinstance(payload, dict):
+        return payload
+    scenario = payload.get("scenario")
+    if not isinstance(scenario, dict):
+        return payload
+    steps = scenario.get("steps")
+    if not isinstance(steps, list):
+        return payload
+    for step in steps:
+        if not isinstance(step, dict) or not isinstance(step.get("assertions"), list):
+            continue
+        normalized: list[Any] = []
+        for assertion in step["assertions"]:
+            if not isinstance(assertion, dict) or "kind" in assertion:
+                normalized.append(assertion)
+                continue
+            if "status" in assertion:
+                normalized.append(
+                    {"kind": "status", "field": "status", "expected": assertion["status"]}
+                )
+                continue
+            if "json-exists" in assertion:
+                normalized.append(
+                    {
+                        "kind": "json-exists",
+                        "field": assertion["json-exists"],
+                        "expected": True,
+                    }
+                )
+                continue
+            if "json-equals" in assertion:
+                field = assertion["json-equals"]
+                expected = assertion.get("expected")
+                if isinstance(field, dict) and len(field) == 1:
+                    field, expected = next(iter(field.items()))
+                normalized.append(
+                    {"kind": "json-equals", "field": field, "expected": expected}
+                )
+                continue
+            normalized.append(assertion)
+        step["assertions"] = normalized
+    return payload
+
+
+_SCENARIO_VARIABLE = re.compile(r"\{\{([A-Za-z_][A-Za-z0-9_]*)\}\}")
+_BRACED_ROUTE_PARAMETER = re.compile(r"\{[^{}]+\}")
+_COLON_ROUTE_PARAMETER = re.compile(r"(?<=/):[A-Za-z_][A-Za-z0-9_]*")
+
+
+def _scenario_contract_view(contract: dict[str, Any] | None) -> dict[str, Any]:
+    interfaces = ((contract or {}).get("spec") or {}).get("interfaces") or []
+    fields = (
+        "id",
+        "method",
+        "path",
+        "summary",
+        "parameters",
+        "requestBody",
+        "responses",
+        "authentication",
+        "sideEffect",
+        "unresolved",
+    )
+    return {
+        "interfaces": [
+            {field: interface.get(field) for field in fields if field in interface}
+            for interface in interfaces
+        ]
+    }
+
+
+def _scenario_strings(value: Any) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, list):
+        return [item for entry in value for item in _scenario_strings(entry)]
+    if isinstance(value, dict):
+        return [item for entry in value.values() for item in _scenario_strings(entry)]
+    return []
+
+
+def _route_shape(value: str) -> str:
+    rendered = _SCENARIO_VARIABLE.sub("__PARAM__", value)
+    rendered = _BRACED_ROUTE_PARAMETER.sub("__PARAM__", rendered)
+    return _COLON_ROUTE_PARAMETER.sub("__PARAM__", rendered)
+
+
+def _normalize_agent_scenario(
+    scenario: ScenarioPlan, contract: dict[str, Any] | None
+) -> ScenarioPlan:
+    interfaces = {
+        str(item.get("id")): item
+        for item in _scenario_contract_view(contract)["interfaces"]
+        if item.get("id")
+    }
+    normalized = scenario.model_copy(deep=True)
+    for index, step in enumerate(normalized.steps, 1):
+        interface = interfaces.get(step.interface_id)
+        step.id = f"step-{index}"
+        if interface is None:
+            continue
+        step.method = str(interface.get("method") or step.method).upper()
+        step.side_effect = str(interface.get("sideEffect") or step.side_effect)
+        if not step.label.strip():
+            step.label = str(interface.get("summary") or interface.get("path") or step.path)
+    return normalized
+
+
+def _scenario_plan_errors(
+    scenario: ScenarioPlan, contract: dict[str, Any] | None
+) -> list[str]:
+    interfaces = {
+        str(item.get("id")): item
+        for item in _scenario_contract_view(contract)["interfaces"]
+        if item.get("id")
+    }
+    errors: list[str] = []
+    if not 1 <= len(scenario.steps) <= 8:
+        errors.append("scenario must select between 1 and 8 representative interfaces")
+    seen_interfaces: set[str] = set()
+    available_variables = {"attempt_id", "iteration"}
+    has_write = False
+    for index, step in enumerate(scenario.steps, 1):
+        prefix = f"scenario step {index}"
+        interface = interfaces.get(step.interface_id)
+        if interface is None:
+            errors.append(f"{prefix} references an unknown interfaceId")
+            continue
+        if step.interface_id in seen_interfaces:
+            errors.append(f"{prefix} duplicates interfaceId {step.interface_id}")
+        seen_interfaces.add(step.interface_id)
+        expected_method = str(interface.get("method") or "").upper()
+        expected_path = str(interface.get("path") or "")
+        if step.method != expected_method:
+            errors.append(f"{prefix} method must remain {expected_method}")
+        if _route_shape(step.path) != _route_shape(expected_path):
+            errors.append(f"{prefix} path does not match discovered route {expected_path}")
+        route_has_parameters = bool(
+            _BRACED_ROUTE_PARAMETER.search(expected_path)
+            or _COLON_ROUTE_PARAMETER.search(expected_path)
+        )
+        if route_has_parameters and not _SCENARIO_VARIABLE.search(step.path):
+            errors.append(f"{prefix} must bind every path parameter from a prior extraction")
+
+        referenced = {
+            name
+            for value in _scenario_strings(
+                {"path": step.path, "headers": step.headers, "body": step.body}
+            )
+            for name in _SCENARIO_VARIABLE.findall(value)
+        }
+        missing = sorted(referenced - available_variables)
+        if missing:
+            errors.append(f"{prefix} references variables before extraction: {', '.join(missing)}")
+
+        request_body = interface.get("requestBody") or {}
+        if request_body.get("required") and step.body in (None, {}):
+            errors.append(f"{prefix} requires a concrete request body")
+
+        success_statuses = {
+            int(response["statusCode"])
+            for response in interface.get("responses") or []
+            if str(response.get("statusCode") or "").isdigit()
+            and 200 <= int(response["statusCode"]) < 400
+        }
+        status_assertions = [item for item in step.assertions if item.kind == "status"]
+        if not status_assertions:
+            errors.append(f"{prefix} must assert a successful HTTP status")
+        else:
+            try:
+                asserted_status = int(status_assertions[0].expected)
+            except (TypeError, ValueError):
+                errors.append(f"{prefix} status assertion must be an integer")
+            else:
+                if success_statuses and asserted_status not in success_statuses:
+                    errors.append(
+                        f"{prefix} status assertion is not a documented success response"
+                    )
+
+        authentication = " ".join(str(item) for item in interface.get("authentication") or [])
+        if "bearer" in authentication.casefold():
+            authorization = next(
+                (value for key, value in step.headers.items() if key.casefold() == "authorization"),
+                "",
+            )
+            if not authorization or (
+                not _SCENARIO_VARIABLE.search(authorization)
+                and not authorization.startswith("secret://")
+            ):
+                errors.append(f"{prefix} must bind bearer authentication from a prior token")
+
+        for name, field in step.extract.items():
+            if not name.strip() or not field.strip():
+                errors.append(f"{prefix} contains an empty response extraction")
+            else:
+                available_variables.add(name)
+        has_write = has_write or (
+            step.method not in {"GET", "HEAD", "OPTIONS"}
+            or step.side_effect not in {"none", "read"}
+        )
+    if has_write and scenario.reset_strategy == "none":
+        errors.append("a scenario containing writes must select an isolated reset strategy")
+    if scenario.reset_strategy == "custom" and not scenario.reset_command.strip():
+        errors.append("custom reset strategy requires a command")
+    return list(dict.fromkeys(errors))
+
+
+def _contract_body_example(interface: dict[str, Any]) -> dict[str, str]:
+    schema = (interface.get("requestBody") or {}).get("schema") or {}
+    description = str(schema.get("description") or "")
+    match = re.search(r"\{([^{}]+)\}", description)
+    fields = [item.strip() for item in match.group(1).split(",")] if match else []
+    body: dict[str, str] = {}
+    for field in fields:
+        lowered = field.casefold()
+        if "email" in lowered:
+            body[field] = "looper_{{attempt_id}}_{{iteration}}@example.invalid"
+        elif "password" in lowered:
+            body[field] = "LooperTest!{{attempt_id}}-{{iteration}}"
+        elif "username" in lowered or lowered == "name":
+            body[field] = "looper_{{attempt_id}}_{{iteration}}"
+        else:
+            body[field] = f"{field}-{{{{attempt_id}}}}-{{{{iteration}}}}"
+    return body
+
+
+def _fallback_representative_scenario(contract: dict[str, Any] | None) -> ScenarioPlan:
+    interfaces = _scenario_contract_view(contract)["interfaces"]
+    register = next(
+        (
+            item
+            for item in interfaces
+            if item.get("method") == "POST"
+            and "register" in f"{item.get('path', '')} {item.get('summary', '')}".casefold()
+        ),
+        None,
+    )
+    bearer_read = next(
+        (
+            item
+            for item in interfaces
+            if item.get("method") == "GET"
+            and "bearer" in " ".join(item.get("authentication") or []).casefold()
+            and not _BRACED_ROUTE_PARAMETER.search(str(item.get("path") or ""))
+            and not _COLON_ROUTE_PARAMETER.search(str(item.get("path") or ""))
+        ),
+        None,
+    )
+    selected = [item for item in (register, bearer_read) if item is not None]
+    if not selected:
+        selected = [
+            item
+            for item in interfaces
+            if item.get("method") == "GET"
+            and not (item.get("authentication") or [])
+            and not _BRACED_ROUTE_PARAMETER.search(str(item.get("path") or ""))
+            and not _COLON_ROUTE_PARAMETER.search(str(item.get("path") or ""))
+        ][:1]
+    steps: list[ScenarioStep] = []
+    for index, interface in enumerate(selected, 1):
+        responses = interface.get("responses") or []
+        expected = next(
+            (
+                int(item["statusCode"])
+                for item in responses
+                if str(item.get("statusCode") or "").isdigit()
+                and 200 <= int(item["statusCode"]) < 400
+            ),
+            200,
+        )
+        is_register = interface is register
+        headers = (
+            {"Authorization": "Bearer {{access_token}}"}
+            if "bearer" in " ".join(interface.get("authentication") or []).casefold()
+            else {}
+        )
+        assertions = [ScenarioAssertion(kind="status", field="status", expected=expected)]
+        extract = {"access_token": "accessToken"} if is_register else {}
+        if is_register:
+            assertions.append(
+                ScenarioAssertion(kind="json-exists", field="accessToken", expected=True)
+            )
+        steps.append(
+            ScenarioStep(
+                id=f"step-{index}",
+                interfaceId=str(interface["id"]),
+                label=str(interface.get("summary") or interface.get("path")),
+                method=str(interface.get("method") or "GET"),
+                path=str(interface.get("path") or "/"),
+                headers=headers,
+                body=_contract_body_example(interface)
+                if interface.get("requestBody")
+                else None,
+                extract=extract,
+                assertions=assertions,
+                sideEffect=str(interface.get("sideEffect") or "unknown"),
+            )
+        )
+    if not steps:
+        raise CapacityError(
+            "no safe representative interface could be selected",
+            status_code=422,
+            code="capacity_scenario_unavailable",
+        )
+    return ScenarioPlan(
+        steps=steps,
+        resetStrategy="compose-recreate"
+        if any(step.method not in {"GET", "HEAD", "OPTIONS"} for step in steps)
+        else "none",
+    )
+
+
+def _validated_agent_build(
+    output: BuildAgentOutput, workspace: SourceWorkspace
+) -> BuildPlan:
+    for evidence in output.evidence:
+        source = workspace.files.get(evidence.file)
+        line_count = len(source.splitlines()) if source is not None else 0
+        if (
+            source is None
+            or evidence.end_line < evidence.start_line
+            or evidence.end_line > line_count
+        ):
+            raise ValueError("invalid build-plan evidence")
+    build = BuildPlan(**output.model_dump(by_alias=True), approved=False)
+    safety = _build_plan_constraints(build)
+    if safety:
+        build.unresolved.extend(item for item in safety if item not in build.unresolved)
+    return build
 
 
 def _build_plan_constraints(plan: BuildPlan) -> list[str]:
@@ -584,7 +952,8 @@ async def run_build_plan_harness(
     client: httpx.AsyncClient | None = None,
     *,
     previous_plan: BuildPlan | None = None,
-) -> BuildPlan:
+    interface_contract: dict[str, Any] | None = None,
+) -> BuildPlan | GeneratedCapacityPlan:
     if not settings.deepseek_api_key.strip():
         raise CapacityError(
             "DeepSeek is not configured for build-plan generation",
@@ -604,13 +973,32 @@ async def run_build_plan_harness(
         {
             "role": "system",
             "content": (
-                "You are a deployment-plan agent. Inspect source only through the supplied "
-                "read-only tools. Do not execute code. Produce a minimal isolated Dockerfile "
-                "and Docker Compose plan for a disposable capacity-test environment. Never "
+                "You are a deployment and HTTP business-scenario planning agent. Inspect source "
+                "only through the supplied read-only tools. Do not execute code. Produce a "
+                "minimal isolated Dockerfile and Docker Compose plan for a disposable "
+                "capacity-test environment. Never "
                 "use privileged, host network/PID, Docker socket, or absolute host bind mounts. "
-                "Do not invent missing commands: list uncertainty in unresolved. Return one JSON "
-                "object with dockerfile, compose, startCommand, healthPath, servicePort, "
-                "dependencies, unresolved, and evidence[{file,startLine,endLine}]."
+                "Also select one representative executable business iteration from the supplied "
+                "interface contract instead of copying every discovered endpoint. Prefer 2-6 "
+                "steps: create or authenticate when necessary, extract tokens and resource IDs, "
+                "then perform representative reads or bounded writes. Avoid password reset, email, "
+                "administrative, destructive, duplicate, and unbindable path-parameter endpoints. "
+                "Fill concrete JSON bodies. Use {{attempt_id}} and {{iteration}} to make created "
+                "identities unique. Bind response data with extract and reuse it as "
+                "{{variable}} in later paths, headers, or bodies. Bearer endpoints must use an "
+                "Authorization header "
+                "fed by a prior token extraction. Every step must include a documented successful "
+                "status assertion and useful json-exists/json-equals assertions when supported. "
+                "Every assertion must use {kind,field,expected}; for example "
+                "{\"kind\":\"status\",\"field\":\"status\",\"expected\":200} and "
+                "{\"kind\":\"json-exists\",\"field\":\"accessToken\",\"expected\":true}. "
+                "Select compose-recreate when any step writes. Do not invent missing commands or "
+                "request fields: inspect their source and report deployment uncertainty in "
+                "build.unresolved. Return one JSON object shaped exactly as "
+                "{build:{dockerfile,compose,startCommand,healthPath,servicePort,dependencies,"
+                "unresolved,evidence:[{file,startLine,endLine}]},scenario:{steps:[{id,"
+                "interfaceId,label,method,path,headers,body,extract,assertions,sideEffect}],"
+                "resetStrategy,resetCommand},scenarioRationale}."
             ),
         },
         {
@@ -618,13 +1006,19 @@ async def run_build_plan_harness(
             "content": (
                 "Determine how this application is built and started for an isolated HTTP "
                 "capacity test. Inspect dependency manifests, existing container files, server "
-                "entrypoints and health endpoints. Return JSON only after reading source files."
+                "entrypoints and health endpoints. Then inspect request DTOs, authentication "
+                "responses, and controller behavior needed to make the selected scenario "
+                "executable. "
+                "Discovered interface contract:\n"
+                + json.dumps(_scenario_contract_view(interface_contract), ensure_ascii=False)
+                + "\nReturn JSON only after reading source files."
                 + repair_context
             ),
         },
     ]
     trace_count = 0
     repairs = 0
+    last_valid_build: BuildPlan | None = None
     owns_client = client is None
     http = client or httpx.AsyncClient(timeout=httpx.Timeout(120, connect=15))
     try:
@@ -688,22 +1082,41 @@ async def run_build_plan_harness(
                     code="deepseek_skipped_source_tools",
                 )
             try:
-                output = BuildAgentOutput.model_validate(json.loads(_strip_json(content)))
-                for evidence in output.evidence:
-                    source = workspace.files.get(evidence.file)
-                    line_count = len(source.splitlines()) if source is not None else 0
-                    if (
-                        source is None
-                        or evidence.end_line < evidence.start_line
-                        or evidence.end_line > line_count
-                    ):
-                        raise ValueError("invalid build-plan evidence")
-                plan = BuildPlan(**output.model_dump(by_alias=True), approved=False)
-                safety = _build_plan_constraints(plan)
-                if safety:
-                    plan.unresolved.extend(item for item in safety if item not in plan.unresolved)
-                return plan
-            except (ValidationError, ValueError, json.JSONDecodeError) as error:
+                normalized_payload = _normalize_agent_payload(_load_agent_json(content))
+                if isinstance(normalized_payload, dict) and isinstance(
+                    normalized_payload.get("build"), dict
+                ):
+                    with suppress(ValidationError, ValueError):
+                        last_valid_build = _validated_agent_build(
+                            BuildAgentOutput.model_validate(normalized_payload["build"]),
+                            workspace,
+                        )
+                output = CapacityPlanAgentOutput.model_validate(
+                    normalized_payload
+                )
+                build = _validated_agent_build(output.build, workspace)
+                scenario = _normalize_agent_scenario(output.scenario, interface_contract)
+                scenario_errors = _scenario_plan_errors(scenario, interface_contract)
+                if scenario_errors:
+                    raise ValueError("; ".join(scenario_errors))
+                selected = {step.interface_id for step in scenario.steps}
+                omitted = [
+                    str(item["id"])
+                    for item in _scenario_contract_view(interface_contract)["interfaces"]
+                    if item.get("id") and str(item["id"]) not in selected
+                ]
+                return GeneratedCapacityPlan(
+                    build=build,
+                    scenario=scenario,
+                    scenarioRationale=output.scenario_rationale,
+                    omittedInterfaceIds=omitted,
+                )
+            except (
+                ValidationError,
+                ValueError,
+                json.JSONDecodeError,
+                yaml.YAMLError,
+            ) as error:
                 if repairs < 2:
                     repairs += 1
                     messages.extend(
@@ -720,8 +1133,31 @@ async def run_build_plan_harness(
                         ]
                     )
                     continue
+                if last_valid_build is not None:
+                    scenario = _fallback_representative_scenario(interface_contract)
+                    scenario_errors = _scenario_plan_errors(scenario, interface_contract)
+                    if not scenario_errors:
+                        selected = {step.interface_id for step in scenario.steps}
+                        omitted = [
+                            str(item["id"])
+                            for item in _scenario_contract_view(interface_contract)[
+                                "interfaces"
+                            ]
+                            if item.get("id") and str(item["id"]) not in selected
+                        ]
+                        return GeneratedCapacityPlan(
+                            build=last_valid_build,
+                            scenario=scenario,
+                            scenarioRationale=(
+                                "Agent 构建方案已通过验证；业务链路因模型输出合同连续失败，"
+                                "已从接口合同确定性生成最小认证读链路。"
+                            ),
+                            omittedInterfaceIds=omitted,
+                            scenarioMode="deterministic-fallback",
+                        )
                 raise CapacityError(
-                    "DeepSeek build plan failed contract validation",
+                    "DeepSeek build plan failed contract validation: "
+                    f"{str(error)[:600]}; output starts with {content[:240]!r}",
                     status_code=502,
                     code="deepseek_build_plan_invalid",
                 ) from error
@@ -806,12 +1242,42 @@ async def create_capacity_study(
         raise CapacityError("capacity testing requires a completed non-empty interface contract")
     archive = _retained_source_archive(discovery, settings)
     workspace = SourceWorkspace.from_zip(archive, settings)
-    build = run_build_plan_script(
+    generated = await run_build_plan_harness(
         workspace,
-        await run_build_plan_harness(workspace, settings, client),
+        settings,
+        client,
+        interface_contract=discovery.contract_json,
     )
+    if isinstance(generated, GeneratedCapacityPlan):
+        source_build = generated.build
+        scenario = generated.scenario
+        scenario_generation = {
+            "mode": f"{generated.scenario_mode}+script-validated",
+            "provider": "deepseek",
+            "model": settings.deepseek_model,
+            "selectedInterfaceCount": len(scenario.steps),
+            "discoveredInterfaceCount": len(
+                ((discovery.contract_json or {}).get("spec") or {}).get("interfaces") or []
+            ),
+            "omittedInterfaceIds": generated.omitted_interface_ids,
+            "rationale": generated.scenario_rationale,
+        }
+    else:
+        # Compatibility fallback for deterministic test doubles and older internal callers.
+        # The production Agent contract always returns GeneratedCapacityPlan.
+        source_build = generated
+        scenario = ScenarioPlan(steps=_default_steps(discovery))
+        scenario_generation = {
+            "mode": "legacy-contract-fallback",
+            "provider": "deterministic",
+            "selectedInterfaceCount": len(scenario.steps),
+            "discoveredInterfaceCount": len(scenario.steps),
+            "omittedInterfaceIds": [],
+            "rationale": "Agent scenario generation was unavailable to this internal caller.",
+        }
+    build = run_build_plan_script(workspace, source_build)
     now = utc_now()
-    draft = CapacityDraft(build=build, scenario=ScenarioPlan(steps=_default_steps(discovery)))
+    draft = CapacityDraft(build=build, scenario=scenario)
     record = CapacityStudyRecord(
         id=new_id("capacity"),
         discovery_id=discovery.id,
@@ -824,6 +1290,7 @@ async def create_capacity_study(
         execution_json={
             "phases": [],
             "runs": [],
+            "scenarioGeneration": scenario_generation,
             "buildValidations": [
                 {
                     "attempt": 1,
@@ -889,14 +1356,18 @@ async def repair_capacity_build_plan(
         and validations[-1].get("agentUsed")
     )
     if repaired.unresolved and not repeated_failure:
+        generated_repair = await run_build_plan_harness(
+            workspace,
+            settings,
+            client,
+            previous_plan=repaired,
+            interface_contract=discovery.contract_json,
+        )
         repaired = run_build_plan_script(
             workspace,
-            await run_build_plan_harness(
-                workspace,
-                settings,
-                client,
-                previous_plan=repaired,
-            ),
+            generated_repair.build
+            if isinstance(generated_repair, GeneratedCapacityPlan)
+            else generated_repair,
         )
         agent_used = True
         failure_signature = canonical_digest({"blockers": repaired.unresolved})
@@ -1299,7 +1770,7 @@ def capacity_view(
         now = utc_now()
         retained = discovery.archive_retained_until
         comparable_now = now.replace(tzinfo=None) if retained and retained.tzinfo is None else now
-        exists = settings is None or EncryptedSourceArchiveStore(settings).exists(discovery.id)
+        exists = settings is None or EncryptedSourceArchiveStore(settings).available(discovery.id)
         if discovery.archive_deleted_at is not None:
             status = "deleted"
         elif retained is not None and retained > comparable_now and exists:
@@ -1312,7 +1783,7 @@ def capacity_view(
             "status": status,
             "expiresAt": retained.isoformat() if retained else None,
             "keyProtection": (
-                EncryptedSourceArchiveStore(settings).key_protection()
+                EncryptedSourceArchiveStore(settings).key_protection(discovery.id)
                 if settings is not None and status == "retained"
                 else None
             ),

@@ -25,6 +25,7 @@ test-results/
 
 # Looper runtime
 .looper/
+.artifacts/
 .looper-*.log
 .env
 *.db

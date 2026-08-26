@@ -692,7 +692,10 @@ def discovery_view(
             comparable_now = comparable_now.replace(tzinfo=None)
         if retained_until <= comparable_now:
             archive_status = "expired"
-        elif settings is not None and not EncryptedSourceArchiveStore(settings).exists(record.id):
+        elif (
+            settings is not None
+            and not EncryptedSourceArchiveStore(settings).available(record.id)
+        ):
             archive_status = "unavailable"
         else:
             archive_status = "retained"
@@ -721,7 +724,7 @@ def discovery_view(
             "deleteReason": record.archive_delete_reason,
             "encryptedAtRest": archive_status == "retained",
             "keyProtection": (
-                EncryptedSourceArchiveStore(settings).key_protection()
+                EncryptedSourceArchiveStore(settings).key_protection(record.id)
                 if settings is not None and archive_status == "retained"
                 else None
             ),

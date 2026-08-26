@@ -133,6 +133,27 @@ it('普通用户可运行脚本诊断构建阻断项，无需编辑 Dockerfile',
   expect(JSON.parse(String(repair?.[1]?.body))).toEqual({ expectedRevision: 1 });
 });
 
+it('展示 Agent 自动筛选和补全业务链路的结果', async () => {
+  current = study({
+    currentStep: 1,
+    execution: {
+      phases: [], runs: [],
+      scenarioGeneration: {
+        mode: 'agent-selected+script-validated', provider: 'deepseek', model: 'test',
+        selectedInterfaceCount: 1, discoveredInterfaceCount: 41,
+        omittedInterfaceIds: Array.from({ length: 40 }, (_, index) => `omitted-${index}`),
+        rationale: '选择可生成唯一输入的注册接口，并串联鉴权读取。',
+      },
+    },
+  });
+  renderRoute('/capacity/capacity_test');
+
+  expect(await screen.findByText('Agent 已自动生成可执行业务链路')).toBeInTheDocument();
+  expect(screen.getByText(/已从 41 个发现接口中选择 1 个/)).toBeInTheDocument();
+  expect(screen.getByText(/其余 40 个接口不会进入本次施压/)).toBeInTheDocument();
+  expect(screen.getByText('选择可生成唯一输入的注册接口，并串联鉴权读取。')).toBeInTheDocument();
+});
+
 it('完成后默认展示领导区间，并可切换工程证据与清理审计', async () => {
   const completed = study({
     status: 'completed', currentStep: 4,

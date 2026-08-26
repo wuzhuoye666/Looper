@@ -18,6 +18,7 @@ from looper_api.config import Settings
 
 _DPAPI_PREFIX = b"dpapi-v1:"
 _FILE_PREFIX = b"file-v1:"
+_STABLE_CIPHERTEXT_PREFIX = b"stable-v1:"
 
 
 class SourceArchiveError(RuntimeError):
@@ -119,6 +120,7 @@ class EncryptedSourceArchiveStore:
 
     def __init__(self, settings: Settings) -> None:
         self.key_path = settings.source_archive_key_path
+        self.stable_key_path = self.key_path.with_name(f"{self.key_path.name}.stable-v1")
         self.root = settings.source_archive_dir
         self.retention_seconds = settings.source_archive_retention_seconds
 
@@ -158,6 +160,35 @@ class EncryptedSourceArchiveStore:
         self._restrict(self.key_path)
         return key
 
+    def _stable_key(self, *, create: bool) -> bytes:
+        if self.stable_key_path.exists():
+            key = _decode_key(self.stable_key_path.read_bytes().strip())
+            try:
+                Fernet(key)
+            except (TypeError, ValueError) as error:
+                raise SourceArchiveError("stable source archive key is invalid") from error
+            return key
+        if not create:
+            raise SourceArchiveError("stable source archive key is missing")
+        self.stable_key_path.parent.mkdir(parents=True, exist_ok=True)
+        key = Fernet.generate_key()
+        try:
+            descriptor = os.open(
+                self.stable_key_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600
+            )
+        except FileExistsError:
+            return self._stable_key(create=False)
+        try:
+            with os.fdopen(descriptor, "wb") as stream:
+                stream.write(_FILE_PREFIX + key + b"\n")
+                stream.flush()
+                os.fsync(stream.fileno())
+        except Exception:
+            self.stable_key_path.unlink(missing_ok=True)
+            raise
+        self._restrict(self.stable_key_path)
+        return key
+
     def path(self, discovery_id: str) -> Path:
         if not discovery_id.startswith("discovery_") or any(
             part in discovery_id for part in ("/", "\\", "..")
@@ -167,7 +198,9 @@ class EncryptedSourceArchiveStore:
 
     def save(self, discovery_id: str, payload: bytes) -> datetime:
         with self._lock:
-            ciphertext = Fernet(self._key(create=True)).encrypt(payload)
+            ciphertext = _STABLE_CIPHERTEXT_PREFIX + Fernet(
+                self._stable_key(create=True)
+            ).encrypt(payload)
             self.root.mkdir(parents=True, exist_ok=True)
             destination = self.path(discovery_id)
             temporary = destination.with_name(f".{destination.name}.tmp")
@@ -190,7 +223,13 @@ class EncryptedSourceArchiveStore:
             if not path.is_file():
                 raise SourceArchiveError("retained source archive is unavailable")
             try:
-                return Fernet(self._key(create=False)).decrypt(path.read_bytes())
+                ciphertext = path.read_bytes()
+                if ciphertext.startswith(_STABLE_CIPHERTEXT_PREFIX):
+                    key = self._stable_key(create=False)
+                    ciphertext = ciphertext.removeprefix(_STABLE_CIPHERTEXT_PREFIX)
+                else:
+                    key = self._key(create=False)
+                return Fernet(key).decrypt(ciphertext)
             except (InvalidToken, OSError, ValueError) as error:
                 raise SourceArchiveError(
                     "retained source archive could not be decrypted"
@@ -206,10 +245,33 @@ class EncryptedSourceArchiveStore:
     def exists(self, discovery_id: str) -> bool:
         return self.path(discovery_id).is_file()
 
-    def key_protection(self) -> str:
-        if not self.key_path.is_file():
+    def available(self, discovery_id: str) -> bool:
+        """Report whether the archive has a key usable by this service identity."""
+        path = self.path(discovery_id)
+        if not path.is_file():
+            return False
+        try:
+            if path.read_bytes()[: len(_STABLE_CIPHERTEXT_PREFIX)] == _STABLE_CIPHERTEXT_PREFIX:
+                self._stable_key(create=False)
+            else:
+                self._key(create=False)
+        except (SourceArchiveError, OSError):
+            return False
+        return True
+
+    def key_protection(self, discovery_id: str | None = None) -> str:
+        key_path = self.key_path
+        if discovery_id is not None:
+            archive_path = self.path(discovery_id)
+            try:
+                prefix = archive_path.read_bytes()[: len(_STABLE_CIPHERTEXT_PREFIX)]
+                if prefix == _STABLE_CIPHERTEXT_PREFIX:
+                    key_path = self.stable_key_path
+            except OSError:
+                return "unavailable"
+        if not key_path.is_file():
             return "unavailable"
-        payload = self.key_path.read_bytes().strip()
+        payload = key_path.read_bytes().strip()
         if payload.startswith(_DPAPI_PREFIX):
             return "windows-dpapi"
         if payload.startswith(_FILE_PREFIX):

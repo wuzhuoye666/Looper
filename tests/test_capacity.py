@@ -166,6 +166,100 @@ def test_source_archive_is_encrypted_expires_and_requires_same_digest(
     assert source.archive_delete_reason == "retention_expired"
 
 
+def test_source_archive_store_preserves_unreadable_legacy_key_and_recovers(
+    tmp_path: Path,
+) -> None:
+    settings = _settings(tmp_path)
+    store = EncryptedSourceArchiveStore(settings)
+    settings.source_archive_key_path.write_bytes(b"dpapi-v1:not-valid-base64")
+    legacy_id = "discovery_legacy"
+    store.root.mkdir(parents=True, exist_ok=True)
+    store.path(legacy_id).write_bytes(b"legacy-ciphertext")
+
+    assert store.available(legacy_id) is False
+
+    replacement_id = "discovery_replacement"
+    store.save(replacement_id, b"replacement archive")
+    assert store.available(replacement_id) is True
+    assert store.load(replacement_id) == b"replacement archive"
+    assert settings.source_archive_key_path.read_bytes() == b"dpapi-v1:not-valid-base64"
+    assert store.key_protection(replacement_id) == "owner-key-file"
+
+
+def test_agent_json_parser_tolerates_duplicated_outer_braces() -> None:
+    assert capacity._load_agent_json('{{"build": {"servicePort": 8080}}}') == {
+        "build": {"servicePort": 8080}
+    }
+    assert capacity._load_agent_json("{build: {servicePort: 8080}}") == {
+        "build": {"servicePort": 8080}
+    }
+
+
+def test_agent_payload_normalizes_compact_assertions() -> None:
+    payload = {
+        "scenario": {
+            "steps": [
+                {
+                    "assertions": [
+                        {"status": 200},
+                        {"json-exists": "accessToken"},
+                        {"json-equals": {"role": "USER"}},
+                    ]
+                }
+            ]
+        }
+    }
+    assertions = capacity._normalize_agent_payload(payload)["scenario"]["steps"][0][
+        "assertions"
+    ]
+    assert assertions == [
+        {"kind": "status", "field": "status", "expected": 200},
+        {"kind": "json-exists", "field": "accessToken", "expected": True},
+        {"kind": "json-equals", "field": "role", "expected": "USER"},
+    ]
+
+
+def test_fallback_scenario_selects_registration_and_authenticated_read() -> None:
+    contract = {
+        "spec": {
+            "interfaces": [
+                {
+                    "id": "register",
+                    "method": "POST",
+                    "path": "/api/auth/register",
+                    "summary": "Register user",
+                    "requestBody": {
+                        "required": True,
+                        "schema": {"description": "AuthRequest{username,email,password}"},
+                    },
+                    "responses": [{"statusCode": "200"}],
+                    "authentication": [],
+                    "sideEffect": "write",
+                },
+                {
+                    "id": "list",
+                    "method": "GET",
+                    "path": "/api/exercises",
+                    "summary": "List exercises",
+                    "requestBody": None,
+                    "responses": [{"statusCode": "200"}],
+                    "authentication": ["bearer JWT"],
+                    "sideEffect": "read",
+                },
+            ]
+        }
+    }
+
+    scenario = capacity._fallback_representative_scenario(contract)
+
+    assert [step.interface_id for step in scenario.steps] == ["register", "list"]
+    assert scenario.steps[0].body["email"].endswith("@example.invalid")
+    assert scenario.steps[0].extract == {"access_token": "accessToken"}
+    assert scenario.steps[1].headers == {"Authorization": "Bearer {{access_token}}"}
+    assert scenario.reset_strategy == "compose-recreate"
+    assert capacity._scenario_plan_errors(scenario, contract) == []
+
+
 @pytest.mark.asyncio
 async def test_capacity_draft_revision_is_atomic_across_sessions(
     db_session: object, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -203,6 +297,97 @@ async def test_capacity_draft_revision_is_atomic_across_sessions(
             )
         assert conflict.value.status_code == 409
         assert conflict.value.code == "capacity_revision_conflict"
+
+
+@pytest.mark.asyncio
+async def test_agent_generated_scenario_replaces_all_interface_default(
+    db_session: object, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = _settings(tmp_path)
+    source, _payload = _source(db_session, settings)
+    generated_scenario = capacity.ScenarioPlan(
+        steps=[
+            capacity.ScenarioStep(
+                id="agent-step",
+                interfaceId="create-order",
+                label="创建一笔隔离订单",
+                method="POST",
+                path="/orders",
+                headers={},
+                body={"requestId": "{{attempt_id}}-{{iteration}}"},
+                extract={"order_id": "id"},
+                assertions=[
+                    capacity.ScenarioAssertion(kind="status", expected=200),
+                    capacity.ScenarioAssertion(kind="json-exists", field="id"),
+                ],
+                sideEffect="write",
+            )
+        ],
+        resetStrategy="compose-recreate",
+    )
+
+    async def build(*_args: object, **_kwargs: object) -> capacity.GeneratedCapacityPlan:
+        return capacity.GeneratedCapacityPlan(
+            build=_build_plan(),
+            scenario=generated_scenario,
+            scenarioRationale="选择可生成唯一输入的订单创建接口。",
+            omittedInterfaceIds=[],
+        )
+
+    monkeypatch.setattr(capacity, "run_build_plan_harness", build)
+    study = await create_capacity_study(db_session, source, settings)  # type: ignore[arg-type]
+    draft = CapacityDraft.model_validate(study.draft_json)
+
+    assert [step.interface_id for step in draft.scenario.steps] == ["create-order"]
+    assert draft.scenario.steps[0].body == {
+        "requestId": "{{attempt_id}}-{{iteration}}"
+    }
+    assert draft.scenario.reset_strategy == "compose-recreate"
+    assert study.execution_json["scenarioGeneration"] == {
+        "mode": "agent-selected+script-validated",
+        "provider": "deepseek",
+        "model": "test",
+        "selectedInterfaceCount": 1,
+        "discoveredInterfaceCount": 1,
+        "omittedInterfaceIds": [],
+        "rationale": "选择可生成唯一输入的订单创建接口。",
+    }
+
+
+def test_agent_scenario_requires_prior_bearer_extraction() -> None:
+    contract = {
+        "spec": {
+            "interfaces": [
+                {
+                    "id": "private-list",
+                    "method": "GET",
+                    "path": "/orders",
+                    "summary": "订单列表",
+                    "responses": [{"statusCode": "200"}],
+                    "authentication": ["bearer JWT"],
+                    "sideEffect": "read",
+                }
+            ]
+        }
+    }
+    scenario = capacity.ScenarioPlan(
+        steps=[
+            capacity.ScenarioStep(
+                id="step-1",
+                interfaceId="private-list",
+                label="订单列表",
+                method="GET",
+                path="/orders",
+                headers={},
+                assertions=[capacity.ScenarioAssertion(kind="status", expected=200)],
+                sideEffect="read",
+            )
+        ]
+    )
+
+    assert capacity._scenario_plan_errors(scenario, contract) == [
+        "scenario step 1 must bind bearer authentication from a prior token"
+    ]
 
 
 @pytest.mark.asyncio

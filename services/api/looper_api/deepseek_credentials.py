@@ -15,6 +15,7 @@ from looper_api.config import Settings
 
 _DPAPI_PREFIX = b"dpapi-v1:"
 _FILE_PREFIX = b"file-v1:"
+_STABLE_CIPHERTEXT_PREFIX = b"stable-v1:"
 
 
 class DeepSeekCredentialError(RuntimeError):
@@ -89,6 +90,7 @@ class EncryptedDeepSeekCredentialStore:
 
     def __init__(self, settings: Settings) -> None:
         self.key_path = settings.deepseek_credential_key_path
+        self.stable_key_path = self.key_path.with_name(f"{self.key_path.name}.stable-v1")
         self.store_path = settings.deepseek_credential_store_path
 
     @staticmethod
@@ -127,6 +129,38 @@ class EncryptedDeepSeekCredentialStore:
         self._restrict(self.key_path)
         return key
 
+    def _stable_key(self, *, create: bool) -> bytes:
+        """Return a service-restart-safe owner-only key without changing legacy files."""
+        if self.stable_key_path.exists():
+            key = _decode_key(self.stable_key_path.read_bytes().strip())
+            try:
+                Fernet(key)
+            except (TypeError, ValueError) as error:
+                raise DeepSeekCredentialError(
+                    "stable DeepSeek credential key is invalid"
+                ) from error
+            return key
+        if not create:
+            raise DeepSeekCredentialError("stable DeepSeek credential key is missing")
+        self.stable_key_path.parent.mkdir(parents=True, exist_ok=True)
+        key = Fernet.generate_key()
+        try:
+            descriptor = os.open(
+                self.stable_key_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600
+            )
+        except FileExistsError:
+            return self._stable_key(create=False)
+        try:
+            with os.fdopen(descriptor, "wb") as stream:
+                stream.write(_FILE_PREFIX + key + b"\n")
+                stream.flush()
+                os.fsync(stream.fileno())
+        except Exception:
+            self.stable_key_path.unlink(missing_ok=True)
+            raise
+        self._restrict(self.stable_key_path)
+        return key
+
     def exists(self) -> bool:
         return self.store_path.is_file()
 
@@ -135,7 +169,12 @@ class EncryptedDeepSeekCredentialStore:
         if len(value) < 20 or len(value) > 512 or "\n" in value or "\r" in value:
             raise DeepSeekCredentialError("DeepSeek API key must contain 20 to 512 characters")
         with self._lock:
-            ciphertext = Fernet(self._key(create=True)).encrypt(value.encode("utf-8"))
+            # New writes use a restricted local key file. Legacy DPAPI key/ciphertext
+            # remains readable when its original Windows profile is available, while a
+            # changed service identity can recover by saving the credential again.
+            ciphertext = _STABLE_CIPHERTEXT_PREFIX + Fernet(
+                self._stable_key(create=True)
+            ).encrypt(value.encode("utf-8"))
             self.store_path.parent.mkdir(parents=True, exist_ok=True)
             temporary = self.store_path.with_name(f".{self.store_path.name}.tmp")
             try:
@@ -157,9 +196,13 @@ class EncryptedDeepSeekCredentialStore:
             return None
         with self._lock:
             try:
-                plaintext = Fernet(self._key(create=False)).decrypt(
-                    self.store_path.read_bytes().strip()
-                )
+                ciphertext = self.store_path.read_bytes().strip()
+                if ciphertext.startswith(_STABLE_CIPHERTEXT_PREFIX):
+                    key = self._stable_key(create=False)
+                    ciphertext = ciphertext.removeprefix(_STABLE_CIPHERTEXT_PREFIX)
+                else:
+                    key = self._key(create=False)
+                plaintext = Fernet(key).decrypt(ciphertext)
                 return plaintext.decode("utf-8")
             except (InvalidToken, UnicodeError, OSError, ValueError) as error:
                 raise DeepSeekCredentialError(
@@ -175,7 +218,12 @@ class EncryptedDeepSeekCredentialStore:
 
 def effective_deepseek_key(settings: Settings) -> tuple[str, str | None]:
     store = EncryptedDeepSeekCredentialStore(settings)
-    stored = store.load()
+    try:
+        stored = store.load()
+    except DeepSeekCredentialError:
+        # A DPAPI key tied to an old Windows identity must not make discovery history
+        # unavailable. The operator can save the provider key again to migrate it.
+        stored = None
     if stored:
         return stored, "stored"
     environment = settings.deepseek_api_key.strip()

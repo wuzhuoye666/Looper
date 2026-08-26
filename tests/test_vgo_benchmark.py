@@ -29,7 +29,7 @@ def load_module(name: str, path: Path):
 
 
 def test_vgo_is_seeded_as_a_real_selection_benchmark(db_session) -> None:
-    record = db_session.get(BenchmarkRecord, "looper.vgo.variability@1.1.3")
+    record = db_session.get(BenchmarkRecord, "looper.vgo.variability@1.1.4")
     assert record is not None
     view = benchmark_view(record)
     assert view["selectionReady"] is True
@@ -61,7 +61,7 @@ def test_vgo_is_seeded_as_a_real_selection_benchmark(db_session) -> None:
 
 
 def test_vgo_quick_feasibility_parameters_only_apply_to_requested_study(db_session) -> None:
-    record = db_session.get(BenchmarkRecord, "looper.vgo.variability@1.1.3")
+    record = db_session.get(BenchmarkRecord, "looper.vgo.variability@1.1.4")
     target = db_session.get(TargetRecord, "local")
     assert record is not None and target is not None
     target.capabilities_json = sorted(set(target.capabilities_json) | {
@@ -323,7 +323,7 @@ def test_vgo_producer_invokes_original_entry_point_and_keeps_other_attempts(
     assert not (source_root / "data" / "raw" / "looper_attempt-1_lease-7").exists()
 
 
-def test_vgo_partial_gate_keeps_sad_hard_blocked(tmp_path: Path) -> None:
+def test_vgo_partial_gate_allows_sad_only_with_reversible_thp(tmp_path: Path) -> None:
     producer = load_module("vgo_producer_gate_test", PACKAGE_ROOT / "producer.py")
     source_root = tmp_path / "vgo-source"
     gate = source_root / "data" / "metadata" / "gate.env"
@@ -333,8 +333,17 @@ def test_vgo_partial_gate_keeps_sad_hard_blocked(tmp_path: Path) -> None:
     assert producer.require_machine_gate(source_root, "matmul") == "partial"
     assert producer.require_machine_gate(source_root, "7z") == "partial"
     assert producer.require_machine_gate(source_root, "lbm") == "partial"
-    with pytest.raises(RuntimeError, match="SAD requires the original VGO full gate"):
+    with pytest.raises(RuntimeError, match="reversibly writable THP"):
         producer.require_machine_gate(source_root, "sad")
+
+    gate.write_text(
+        "VGO_FULL_GO=0\n"
+        "VGO_PARTIAL_GO=1\n"
+        "VGO_THP_READABLE=1\n"
+        "VGO_THP_WRITABLE=1\n",
+        encoding="utf-8",
+    )
+    assert producer.require_machine_gate(source_root, "sad") == "partial"
 
 
 def test_vgo_quick_round_and_ten_percent_reference_are_balanced() -> None:

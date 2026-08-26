@@ -25,10 +25,12 @@ const INTERNAL_BENCHMARK_IDS = new Set(['looper.fixture.config-driven', 'looper.
 const VGO_BENCHMARK_ID = 'looper.vgo.variability';
 const VGO_QUICK_PARAMETERS = { diagnostic_scale_percent: 1, ab_blocks: 2, warmups: 0 };
 const VGO_QUICK_WORKLOADS = [
-  { id: '7z', label: '7-Zip' },
-  { id: 'lbm', label: 'LBM' },
-  { id: 'sad', label: 'SAD（需要完整机器门禁）' },
+  { id: 'matmul', label: 'Matmul', detail: '内存分配波动' },
+  { id: '7z', label: '7-Zip', detail: '单线程波动' },
+  { id: 'lbm', label: 'LBM', detail: 'CPU 调度波动' },
+  { id: 'sad', label: 'SAD', detail: '内存局部性 · 需要完整机器门禁' },
 ];
+const VGO_ALL_WORKLOAD_IDS = VGO_QUICK_WORKLOADS.map(workload => workload.id);
 type AdvisorProvider = Extract<CloudProviderId, 'tencent' | 'alibaba'>;
 type AdvisorProviderState = { region: string; zone: string; selection: CloudInstanceType | null };
 const ADVISOR_PROVIDERS: Array<{ id: AdvisorProvider; label: string }> = [
@@ -79,7 +81,7 @@ export function CreateExperimentPage() {
     targetBindings: {} as Record<string, { variantId: string; label: string; placementPairId: string }>,
     inputBindings: {} as Record<string, { reference: string; digest: string }>,
     quickFeasibility: false,
-    quickWorkloadIds: ['7z'] as string[],
+    quickWorkloadIds: [...VGO_ALL_WORKLOAD_IDS] as string[],
     ...FALLBACK_SELECTION_DEFAULTS,
   });
   const benchmarks = useQuery({ queryKey: ['benchmarks'], queryFn: api.benchmarks });
@@ -303,7 +305,7 @@ export function CreateExperimentPage() {
                 targetBindings: {},
                 inputBindings: {},
                 quickFeasibility: false,
-                quickWorkloadIds: ['7z'],
+                quickWorkloadIds: [...VGO_ALL_WORKLOAD_IDS],
               }));
             }}>
               {!selectableBenchmarks.length && <option value="">暂无可直接运行的测试套件</option>}
@@ -361,26 +363,41 @@ export function CreateExperimentPage() {
             <label><span>{input.id} · {inputKindLabel(input.kind)}{input.required ? ' *' : ''}</span><input required={input.required} type={input.kind === 'secret' ? 'password' : 'text'} value={form.inputBindings[input.id]?.reference || ''} onChange={event => updateInputBinding(input.id, 'reference', event.target.value)} placeholder={input.kind === 'secret' ? '受管密钥引用' : '资源地址或目标设备引用'} /><small>{input.description || '运行前由调度器校验绑定类型；只传递引用，不在测试合同中保存内容。'}</small></label>
             {input.digestRequired && <label><span>SHA-256 摘要 *</span><input required value={form.inputBindings[input.id]?.digest || ''} onChange={event => updateInputBinding(input.id, 'digest', event.target.value)} placeholder="sha256:…" pattern="sha256:[0-9a-f]{64}" /></label>}
           </div>)}
+          {selectedBenchmark?.id === VGO_BENCHMARK_ID && <section className="full vgo-execution-plan" aria-labelledby="vgo-execution-plan-title">
+            <header><div><strong id="vgo-execution-plan-title">选择执行方案</strong><small>先选择测试强度，再确认本次覆盖的 VGO 工作负载。</small></div></header>
+            <div className="vgo-execution-plan-options" role="radiogroup" aria-label="VGO 执行方案">
+              <label className={!form.quickFeasibility ? 'selected' : ''}>
+                <input type="radio" name="vgo-execution-plan" checked={!form.quickFeasibility} onChange={() => setForm(current => ({ ...current, quickFeasibility: false }))} />
+                <span><strong>完整测试</strong><small>10% 采样 · 5 个平衡区块 · 1 次预热</small></span>
+                <em>正式结论</em>
+              </label>
+              <label className={form.quickFeasibility ? 'selected quick' : ''}>
+                <input type="radio" name="vgo-execution-plan" checked={form.quickFeasibility} onChange={() => setForm(current => ({ ...current, quickFeasibility: true, quickWorkloadIds: current.quickWorkloadIds.length ? current.quickWorkloadIds : [...VGO_ALL_WORKLOAD_IDS] }))} />
+                <span><strong>快速验证</strong><small>1% 采样 · 2 个平衡区块 · 0 次预热</small></span>
+                <em>仅本次</em>
+              </label>
+            </div>
+            {form.quickFeasibility && <div className="quick-workload-panel">
+              <div className="quick-workload-heading"><div><strong>快速验证范围</strong><small>默认覆盖 VGO 全部 4 个工作负载，也可以按需取消。</small></div><span>{form.quickWorkloadIds.length}/4 项</span></div>
+              <div className="quick-workload-options" role="group" aria-label="本次快速测试负载">
+                {VGO_QUICK_WORKLOADS.map(workload => <label key={workload.id} className={form.quickWorkloadIds.includes(workload.id) ? 'selected' : ''}>
+                  <input type="checkbox" checked={form.quickWorkloadIds.includes(workload.id)} onChange={event => setForm(current => ({
+                    ...current,
+                    quickWorkloadIds: event.target.checked
+                      ? VGO_ALL_WORKLOAD_IDS.filter(id => [...current.quickWorkloadIds, workload.id].includes(id))
+                      : current.quickWorkloadIds.filter(id => id !== workload.id),
+                  }))} />
+                  <span><strong>{workload.label}</strong><small>{workload.detail}</small></span>
+                </label>)}
+              </div>
+              {form.quickWorkloadIds.length === 0 && <small className="quick-workload-error">至少选择一个快速测试负载。</small>}
+              {form.quickWorkloadIds.includes('sad') && <small className="quick-workload-warning">SAD 会修改并恢复 THP；目标机必须具备硬件 perf 和可写 THP，否则该项会被安全门禁拒绝。</small>}
+            </div>}
+          </section>}
           <label><span>每个目标重复数</span><input type="number" min={Math.min(3, selectionDefaults(selectedBenchmark).repeats)} max="50" value={form.repeats} onChange={event => update('repeats', Number(event.target.value))} /></label>
           <label><span>最长测试时间（秒）</span><input type="number" min="300" max="31536000" value={form.timeout} onChange={event => update('timeout', Number(event.target.value))} /></label>
           <label><span>测试顺序随机种子</span><input type="number" min="0" value={form.seed} onChange={event => update('seed', Number(event.target.value))} /></label>
           <label><span>对比单位</span><input value="时间分块 · 配对对照" readOnly /></label>
-          {selectedBenchmark?.id === VGO_BENCHMARK_ID && <div className="full quick-feasibility-option">
-            <label><span><input type="checkbox" checked={form.quickFeasibility} onChange={event => setForm(current => ({ ...current, quickFeasibility: event.target.checked }))} /> 仅本次快速可行性测试</span></label>
-            <small>仅为这条研究使用 1% 采样、2 个平衡区块、0 次预热；每个所选 workload 共 18 个样本。正常测试仍使用 10% 采样、5 个区块、1 次预热。</small>
-            {form.quickFeasibility && <div className="quick-workload-options" role="group" aria-label="本次快速测试负载">
-              {VGO_QUICK_WORKLOADS.map(workload => <label key={workload.id}>
-                <input type="checkbox" checked={form.quickWorkloadIds.includes(workload.id)} onChange={event => setForm(current => ({
-                  ...current,
-                  quickWorkloadIds: event.target.checked
-                    ? [...current.quickWorkloadIds, workload.id]
-                    : current.quickWorkloadIds.filter(id => id !== workload.id),
-                }))} />
-                <span>{workload.label}</span>
-              </label>)}
-              {form.quickWorkloadIds.length === 0 && <small>至少选择一个快速测试负载。</small>}
-            </div>}
-          </div>}
         </div>
         <div className="review-strip">
           <div><span>测试套件</span><strong>{selectedBenchmark ? benchmarkName(selectedBenchmark) : '未选择'}</strong></div>

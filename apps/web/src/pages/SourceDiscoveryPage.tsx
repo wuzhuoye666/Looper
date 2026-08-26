@@ -102,7 +102,7 @@ export function SourceDiscoveryPage() {
           <label><span>新的 DeepSeek API Key</span><input type="password" value={keyDraft} onChange={event => { setKeyDraft(event.target.value); setKeyMessage(''); }} autoComplete="new-password" placeholder="输入后由后端加密保存"/></label>
           <div className="deepseek-config-actions"><button className="button primary" type="button" disabled={savingKey || keyDraft.trim().length < 20} onClick={() => void saveKey()}><KeyRound size={15}/>{savingKey ? '处理中…' : '加密保存'}</button><button className="button secondary danger" type="button" disabled={savingKey || providerConfig?.source !== 'stored'} onClick={() => void deleteKey()}><Trash2 size={15}/>删除已保存 Key</button></div>
           {keyMessage && <div className="deepseek-key-message" role="status">{keyMessage}</div>}
-          <small className="deepseek-config-note">Linux 使用 0600 权限的独立 Fernet 密钥与密文文件；Windows 额外用当前服务账户的 DPAPI 保护 Fernet 密钥。API 永不返回明文。</small>
+          <small className="deepseek-config-note">凭据使用独立 Fernet 密钥与密文文件保存，并将本地密钥限制为仅服务账户可读；旧版 Windows DPAPI 凭据仍可兼容读取。API 永不返回明文。</small>
         </div>
       </section>
       <section className="panel discovery-upload-panel">

@@ -60,10 +60,15 @@ def require_machine_gate(source_root: Path, workload: str) -> str:
     if gate.get("VGO_PARTIAL_GO") != "1":
         raise RuntimeError("the original VGO machine gate did not permit diagnosis execution")
     if workload == "sad" and gate.get("VGO_FULL_GO") != "1":
-        raise RuntimeError(
-            "SAD requires the original VGO full gate because this workload changes and "
-            "restores THP state; choose a target with hardware perf and writable THP"
+        thp_reversible = (
+            gate.get("VGO_THP_READABLE") == "1"
+            and gate.get("VGO_THP_WRITABLE") == "1"
         )
+        if not thp_reversible:
+            raise RuntimeError(
+                "SAD requires readable and reversibly writable THP state; choose a target "
+                "that permits changing and restoring transparent huge pages"
+            )
     return "full" if gate.get("VGO_FULL_GO") == "1" else "partial"
 
 
