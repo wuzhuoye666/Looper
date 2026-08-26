@@ -8,7 +8,8 @@ import type {
   BenchmarkTargetOptions, Target, TargetDestroyPreview, TargetDestroyResult, VariabilityData, SystemOptimizationStudy, SystemOptimizationAuthorizationProfile,
 } from './types';
 
-export const API_BASE = (import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000/api/v1').replace(/\/$/, '');
+const DEFAULT_API_BASE = import.meta.env.PROD ? '/api/v1' : 'http://127.0.0.1:8000/api/v1';
+export const API_BASE = (import.meta.env.VITE_API_BASE_URL || DEFAULT_API_BASE).replace(/\/$/, '');
 
 export function resolveApiUrl(value = API_BASE, origin = window.location.origin) {
   return new URL(value, origin);
